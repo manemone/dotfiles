@@ -8,8 +8,9 @@ endif
 
 call neobundle#rc(expand('~/.vim/bundle/'))
 
-NeoBundle 'surround.vim'      " add/remove parens/tags easily
-NeoBundle 'tomasr/molokai'    " colorscheme
+if filereadable(expand('~/.vimrc.plugin'))
+  source ~/.vimrc.plugin  " Plugins to install
+endif
 
 filetype plugin indent on
 
