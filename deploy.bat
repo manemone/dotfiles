@@ -20,6 +20,9 @@ mklink %USERPROFILE%\.vimrc %CD%\.vimrc
 if exist %USERPROFILE%\.vimrc.plugin del %USERPROFILE%\.vimrc.plugin
 mklink %USERPROFILE%\.vimrc.plugin %CD%\.vimrc.plugin
 
+if exist %USERPROFILE%\.gvimrc del %USERPROFILE%\.gvimrc
+mklink %USERPROFILE%\.gvimrc %CD%\.gvimrc
+
 if exist %USERPROFILE%\.vim rmdir /s /q %USERPROFILE%\.vim
 mklink /d %USERPROFILE%\.vim %CD%\.vim
 cls
