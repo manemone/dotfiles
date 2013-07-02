@@ -15,13 +15,13 @@ pushd %0\..
 
 rem 設定ファイルを配置
 if exist %USERPROFILE%\.vimrc del %USERPROFILE%\.vimrc
-mklink %USERPROFILE%\.vimrc .\.vimrc
+mklink %USERPROFILE%\.vimrc %CD%\.vimrc
 
 if exist %USERPROFILE%\.vimrc.plugin del %USERPROFILE%\.vimrc.plugin
-mklink %USERPROFILE%\.vimrc.plugin .\.vimrc.plugin
+mklink %USERPROFILE%\.vimrc.plugin %CD%\.vimrc.plugin
 
 if exist %USERPROFILE%\.vim rmdir /s /q %USERPROFILE%\.vim
-mklink /d %USERPROFILE%\.vim .\.vim
+mklink /d %USERPROFILE%\.vim %CD%\.vim
 cls
 
 pause
