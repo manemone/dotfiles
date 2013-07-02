@@ -8,6 +8,26 @@ syntax on
 "colorscheme solarized
 "colorscheme molokai
 
+" neobundle -----------
+set nocompatible
+filetype off
+
+if has('vim_starting')
+  set runtimepath+=~/.vim/bundle/neobundle.vim/
+endif
+
+call neobundle#rc(expand('~/.vim/bundle/'))
+
+NeoBundle 'surround.vim'    " add/remove parens/tags easily
+
+filetype plugin indent on
+
+if neobundle#exists_not_installed_bundles()
+  echomsg 'Not installed bundles : ' .
+  \ string(neobundle#get_not_installed_bundle_names())
+  echomsg 'Please execute ":NeoBundleInstall" command.'
+endif
+
 "------ indent --------
 set autoindent
 set smartindent
