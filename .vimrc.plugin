@@ -1,0 +1,2 @@
+NeoBundle 'surround.vim'      " add/remove parens/tags easily
+NeoBundle 'tomasr/molokai'    " colorscheme
