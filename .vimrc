@@ -1,13 +1,3 @@
-"------ pathogen -------
-"call pathogen#runtime_append_all_bundles()
-
-set t_Co=256
-syntax on
-"set background=dark
-"let g:solarized_termcolors=256
-"colorscheme solarized
-"colorscheme molokai
-
 " neobundle -----------
 set nocompatible
 filetype off
@@ -18,7 +8,8 @@ endif
 
 call neobundle#rc(expand('~/.vim/bundle/'))
 
-NeoBundle 'surround.vim'    " add/remove parens/tags easily
+NeoBundle 'surround.vim'      " add/remove parens/tags easily
+NeoBundle 'tomasr/molokai'    " colorscheme
 
 filetype plugin indent on
 
@@ -27,6 +18,14 @@ if neobundle#exists_not_installed_bundles()
   \ string(neobundle#get_not_installed_bundle_names())
   echomsg 'Please execute ":NeoBundleInstall" command.'
 endif
+" --------------------
+
+set t_Co=256
+syntax on
+"set background=dark
+"let g:solarized_termcolors=256
+"colorscheme solarized
+colorscheme molokai
 
 "------ indent --------
 set autoindent
