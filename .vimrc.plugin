@@ -1,2 +1,18 @@
 NeoBundle 'surround.vim'      " add/remove parens/tags easily
 NeoBundle 'tomasr/molokai'    " colorscheme
+NeoBundle 'altercation/solarized'   " colorscheme
+
+NeoBundle 'alpaca-tc/alpaca_powertabline'
+NeoBundle 'Lokaltog/powerline', { 'rtp' : 'powerline/bindings/vim'}
+
+NeoBundle 'slim-template/vim-slim'
+
+" Markdown のブラウザプレビュー
+NeoBundle 'tyru/open-browser.vim'
+NeoBundle 'thinca/vim-quickrun'
+NeoBundle 'tpope/vim-markdown'
+NeoBundle 'Markdown'
+NeoBundle 'suan/vim-instant-markdown'
+
+" CoffeeScript サポート
+NeoBundle "kchmck/vim-coffee-script"

@@ -1,2 +1,4 @@
-set guifont=Envy\ Code\ R:h9
-set guifontwide=Ricty:h9
+set guifont=Envy\ Code\ R\ for\ Powerline:h12
+set guifontwide=Ricty\ for\ Powerline:h12
+
+set background=dark
