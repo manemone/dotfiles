@@ -16,3 +16,6 @@ NeoBundle 'suan/vim-instant-markdown'
 
 " CoffeeScript サポート
 NeoBundle "kchmck/vim-coffee-script"
+
+" 文法チェック
+NeoBundle "scrooloose/syntastic"
