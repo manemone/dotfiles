@@ -185,3 +185,7 @@ augroup AlpacaTags
     " autocmd BufWritePost * TagsUpdate
   endif
 augroup END
+
+" Syntastic ------------------------------------------------- "
+let g:syntastic_mode_map = { 'mode': 'passive', 'active_filetypes': ['ruby'] }
+let g:syntastic_ruby_checkers = ['rubocop']  " you need to install rubocop gem

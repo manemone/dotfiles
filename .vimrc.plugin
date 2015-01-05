@@ -20,3 +20,6 @@ NeoBundle "kchmck/vim-coffee-script"
 " rails
 NeoBundle 'Shougo/unite.vim'
 NeoBundle 'alpaca-tc/alpaca_tags'
+
+" 文法チェック
+NeoBundle "scrooloose/syntastic"
