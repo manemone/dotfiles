@@ -16,3 +16,7 @@ NeoBundle 'suan/vim-instant-markdown'
 
 " CoffeeScript サポート
 NeoBundle "kchmck/vim-coffee-script"
+
+" rails
+NeoBundle 'Shougo/unite.vim'
+NeoBundle 'alpaca-tc/alpaca_tags'
