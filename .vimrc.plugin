@@ -24,3 +24,12 @@ NeoBundle 'tpope/vim-rails'
 
 " 文法チェック
 NeoBundle "scrooloose/syntastic"
+
+" 補完
+NeoBundle "Shougo/neocomplete.vim"
+NeoBundle 'Shougo/vimproc', {
+  \ 'build' : {
+  \     'mac' : 'make -f make_mac.mak',
+  \     'unix' : 'make -f make_unix.mak',
+  \    },
+  \ }
