@@ -219,3 +219,6 @@ NeoBundleLazy 'junegunn/vim-easy-align', {
 vmap <Enter> <Plug>(EasyAlign)
 nmap <Leader>a <Plug>(EasyAlign)
 " }}}
+
+" hilight matched pattern
+set hlsearch
