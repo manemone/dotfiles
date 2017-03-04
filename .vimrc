@@ -196,7 +196,8 @@ NeoBundleLazy 'supermomonga/neocomplete-rsense.vim', { 'autoload' : {
   \ 'filetypes': 'ruby',
   \ }}
 
-let g:neocomplete#enable_at_startup = 1
+let g:neocomplete#enable_at_startup = 0
+let g:neocomplete#enable_camel_case_completion = 0
 
 " .や::を入力したときにオムニ補完が有効になるようにする
 if !exists('g:neocomplete#force_omni_input_patterns')
@@ -206,3 +207,15 @@ let g:neocomplete#force_omni_input_patterns.ruby = '[^.*\t]\.\w*\|\h\w*::'
 
 " 環境変数RSENSE_HOMEに'/usr/local/bin/rsense'を指定しても動く
 let g:neocomplete#sources#rsense#home_directory = '/usr/local/bin/rsense'
+
+" テキスト整形
+NeoBundleLazy 'junegunn/vim-easy-align', {
+      \ 'autoload': {
+      \   'commands' : ['EasyAlign'],
+      \   'mappings' : ['<Plug>(EasyAlign)'],
+      \ }}
+
+" vim-easy-align {{{
+vmap <Enter> <Plug>(EasyAlign)
+nmap <Leader>a <Plug>(EasyAlign)
+" }}}

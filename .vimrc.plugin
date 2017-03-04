@@ -33,3 +33,9 @@ NeoBundle 'Shougo/vimproc', {
   \     'unix' : 'make -f make_unix.mak',
   \    },
   \ }
+
+" テキスト整形
+NeoBundle "junegunn/vim-easy-align"
+
+" キャメル／スネーク変換
+NeoBundle 'tpope/vim-abolish'
