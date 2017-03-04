@@ -39,3 +39,7 @@ NeoBundle "junegunn/vim-easy-align"
 
 " キャメル／スネーク変換
 NeoBundle 'tpope/vim-abolish'
+
+" Rust syntax
+NeoBundle 'rust-lang/rust.vim'
+NeoBundle 'cespare/vim-toml'
