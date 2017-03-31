@@ -43,3 +43,8 @@ NeoBundle 'tpope/vim-abolish'
 " Rust syntax
 NeoBundle 'rust-lang/rust.vim'
 NeoBundle 'cespare/vim-toml'
+
+" Swift syntax
+" You have to clone the repo manually
+" See: http://qiita.com/shotat/items/7302f937ae623ccc154a
+NeoBundle 'apple-swift', {'type': 'nosync', 'base': '~/.vim/bundle/manual'}
