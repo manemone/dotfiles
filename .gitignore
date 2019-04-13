@@ -34,7 +34,3 @@ Icon
 Session.vim
 .netrwhist
 *~
-
-# NeoBundle でインストールしたファイルは無視する
-.vim/bundle/*
-!.vim/bundle/neobundle.vim
