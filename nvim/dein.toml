@@ -1,0 +1,20 @@
+[[plugins]]
+repo = 'shougo/dein.vim'
+
+[[plugins]]
+repo = 'surround.vim'
+
+[[plugins]]
+repo = 'tomasr/molokai'
+
+[[plugins]]
+repo = 'vim-scripts/surround.vim'
+
+[[plugins]]
+repo = 'kchmck/vim-coffee-script'
+
+[[plugins]]
+repo = 'rust-lang/rust.vim'
+
+[[plugins]]
+repo = 'cespare/vim-toml'
