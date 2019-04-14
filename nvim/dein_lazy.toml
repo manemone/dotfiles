@@ -27,4 +27,4 @@ depends = ['neosnippet-snippets']
 repo = 'tbodt/deoplete-tabnine'
 on_i = 1
 depends = ['deoplete.nvim']
-build = 'install.sh'
+build = './install.sh'
