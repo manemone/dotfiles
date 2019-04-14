@@ -2,13 +2,10 @@
 repo = 'shougo/dein.vim'
 
 [[plugins]]
-repo = 'surround.vim'
+repo = 'tpope/vim-surround'
 
 [[plugins]]
 repo = 'tomasr/molokai'
-
-[[plugins]]
-repo = 'vim-scripts/surround.vim'
 
 [[plugins]]
 repo = 'kchmck/vim-coffee-script'
@@ -75,3 +72,6 @@ hook_add = '''
 
 [[plugins]]
 repo = 'cohama/lexima.vim'
+
+[[plugins]]
+repo = 'Shougo/neosnippet-snippets'

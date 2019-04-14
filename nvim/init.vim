@@ -11,6 +11,7 @@ if dein#load_state($HOME . '/.cache/dein')
   call dein#begin($HOME . '/.cache/dein')
 
   call dein#load_toml($HOME . '/.config/nvim/dein.toml', { 'lazy': 0 })
+  call dein#load_toml($HOME . '/.config/nvim/dein_lazy.toml', { 'lazy': 1 })
 
   " Required:
   call dein#end()
@@ -79,6 +80,10 @@ set smartcase
 
 " Return to head of document after hitting the tail
 set wrapscan
+
+" Show paired surrounding element
+set showmatch
+set matchtime=1
 
 " [NeoVim] Show the replacemnt result interactively
 set inccommand=split
