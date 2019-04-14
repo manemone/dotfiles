@@ -62,3 +62,6 @@ hook_add = '''
   let g:airline_symbols.linenr = '☰'
   let g:airline_symbols.maxlinenr = ''
 '''
+
+[[plugins]]
+repo = 'junegunn/vim-easy-align'
