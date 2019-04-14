@@ -84,9 +84,50 @@ set wrapscan
 set inccommand=split
 " ----------------------------------------
 
-" Buffer swithing ------------------------
+" Key mapping ----------------------------
+" Map Leader key
+let mapleader = "\<Space>"
+
+" Open new file
+nnoremap <Leader>o :CtrlP<CR>
+
+" Save current buffer
+nnoremap <Leader>w :w<CR>
+
+" Copy current selected text to system clipboard
+vmap <Leader>y "+y
+vmap <Leader>d "+d
+nmap <Leader>p "+p
+nmap <Leader>P "+P
+vmap <Leader>p "+p
+vmap <Leader>P "+P
+
+" Change to visual line mode
+nmap <Leader><Leader> V
+
+" Go to end op pasted text automatically
+vnoremap <silent> y y`]
+vnoremap <silent> p p`]
+nnoremap <silent> p p`]
+
+" Select pasted text quickly
+noremap gV `[v`]
+
+" Buffer swithing
 nnoremap <C-h> <C-w>h
 nnoremap <C-j> <C-w>j
 nnoremap <C-k> <C-w>k
 nnoremap <C-l> <C-w>l
+" ----------------------------------------
+
+" vp doesn't replace paste buffer --------
+function! RestoreRegister()
+  let @" = s:restore_reg
+  return ''
+endfunction
+function! s:Repl()
+  let s:restore_reg = @"
+  return "p@=RestoreRegister()\<cr>"
+endfunction
+vmap <silent> <expr> p <sid>Repl()
 " ----------------------------------------
