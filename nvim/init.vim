@@ -1,3 +1,19 @@
+" Python path ----------------------------
+if $PYENV_ROOT != ""
+  " Python 2
+  if filereadable($PYENV_ROOT . "/versions/neovim2/bin/python")
+    let g:python_host_prog = $PYENV_ROOT . "/versions/neovim2/bin/python"
+  endif
+
+  " Python 3
+  if filereadable($PYENV_ROOT . "/versions/neovim3/bin/python")
+    let g:python3_host_prog = $PYENV_ROOT . "/versions/neovim3/bin/python"
+  else
+    let g:python3_host_prog = system('echo -n "$(pyenv root)/versions/$(cat $(pyenv root)/version | head -n 1)/bin/python" || echo -n $(which python)')
+  endif
+endif
+" ----------------------------------------
+
 " dein Scripts ---------------------------
 if &compatible
   set nocompatible               " Be iMproved

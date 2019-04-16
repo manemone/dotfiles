@@ -72,6 +72,3 @@ hook_add = '''
 
 [[plugins]]
 repo = 'cohama/lexima.vim'
-
-[[plugins]]
-repo = 'Shougo/neosnippet-snippets'
