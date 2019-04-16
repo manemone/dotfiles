@@ -2,7 +2,8 @@
 ## Requirements
 * UNIX-like OS (Windows is not supported for now)
 * Python 3 (for deoplete)
-  - pyenv is redommended to manage Python versions
+  - pyenv and pyenv-virtualenv is redommended to manage Python versions
+  - deploy script will install specific version of python and create virtualenvs for neovim
 * The Silver Searcher
   - https://qiita.com/thermes/items/e1e0c94e2875df96921c
 

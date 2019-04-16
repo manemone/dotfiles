@@ -15,4 +15,19 @@ curl https://raw.githubusercontent.com/Shougo/dein.vim/master/bin/installer.sh >
 sh /tmp/dein_installer.sh ~/.cache/dein > /dev/null 2>&1
 
 # Install necessary software
-pip install neovim
+if [ -n "$PYENV_VIRTUALENV_INIT " ]; then
+  pyenv install 2.7.16
+  pyenv virtualenv 2.7.16 neovim2
+  pyenv activate neovim2
+  pip2 install neovim
+  pyenv which python
+
+  pyenv install 3.7.3
+  pyenv virtualenv 3.7.3 neovim3
+  pyenv activate neovim3
+  pip install neovim
+  pyenv which python
+else
+  pip install neovim
+fi
+gem install neovim
