@@ -15,3 +15,10 @@ The script does:
 ```bash
 $ ./deploy.sh
 ```
+
+## Setup credentials
+For `vim-rhubarb`, generate gihub access token [here](https://github.com/settings/tokens/new) and put it on `~/.netrc`.
+
+```bash
+$ echo 'machine api.github.com login <user> password <token>' >> ~/.netrc
+```
