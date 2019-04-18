@@ -1,5 +1,5 @@
 [[plugins]]
-repo = 'shougo/dein.vim'
+repo = "Shougo/dein.vim"
 
 [[plugins]]
 repo = 'tpope/vim-surround'
@@ -81,3 +81,11 @@ repo = "tpope/vim-fugitive"
 
 [[plugins]]
 repo = "tpope/vim-rhubarb"
+
+[[plugins]]
+repo = 'Shougo/denite.nvim'
+# hook_add = '''
+# 	let mapleader = "\<Space>"
+# 	"nnoremap <Leader>d :Denite -mode=normal buffer file/rec<CR>
+#   nnoremap <Leader>x :w<CR>
+# '''
