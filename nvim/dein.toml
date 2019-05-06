@@ -89,3 +89,6 @@ repo = 'Shougo/denite.nvim'
 # 	"nnoremap <Leader>d :Denite -mode=normal buffer file/rec<CR>
 #   nnoremap <Leader>x :w<CR>
 # '''
+
+[[plugins]]
+repo = 'tpope/vim-rails'
