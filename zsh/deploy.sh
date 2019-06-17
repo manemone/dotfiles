@@ -7,7 +7,3 @@ ln -fs ${REPO_DIR}/.zshrc $HOME/.zshrc
 
 # Install zplug
 curl -sL --proto-redir -all,https https://raw.githubusercontent.com/zplug/installer/master/installer.zsh| zsh
-
-# Install necessary software
-source $HOME/.zshrc
-zplug install
