@@ -37,9 +37,6 @@ alias ll='ls -alF'
 alias la='ls -A'
 alias l='ls -CF'
 
-# nodebrew
-export PATH=/usr/local/sbin:/usr/local/bin:/Users/kagetomo/.nodebrew/current/bin:/usr/bin:/bin:/usr/sbin:/sbin:/opt/X11/bin:/usr/texbin
-
 # rbenv
 export PATH="$HOME/.rbenv/bin:$PATH"
 eval "$(rbenv init -)"
@@ -70,3 +67,7 @@ eval "$(pyenv init -)"
 
 # NeoVim
 alias vim="nvim"
+
+# n (node.js version manager)
+export N_PREFIX="$HOME/.n"
+export PATH="$PATH:$N_PREFIX/bin"
