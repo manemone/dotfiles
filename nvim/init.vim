@@ -146,6 +146,20 @@ nnoremap <Leader>l <C-w>l
 
 nnoremap <Leader>d :Denite -mode=normal buffer file/rec<CR>
 nnoremap <Leader>g :Denite grep -mode=normal<CR>
+
+" Buffer resizing / moving
+nnoremap <Leader>+ <C-w>+
+nnoremap <Leader>- <C-w>-
+nnoremap <Leader>vm <C-w>_
+nnoremap <Leader>hm <C-w>|
+nnoremap <Leader>H <C-w>H
+nnoremap <Leader>J <C-w>J
+nnoremap <Leader>K <C-w>K
+nnoremap <Leader>L <C-w>L
+
+" Back to command mode from ternimal mode
+tnoremap <A-;> <C-\><C-n>
+tnoremap … <C-\><C-n>
 " ----------------------------------------
 
 " vp doesn't replace paste buffer --------
