@@ -67,6 +67,8 @@ eval "$(pyenv init -)"
 
 # NeoVim
 alias vim="nvim"
+alias vi="nvim"
+export EDITOR=nvim
 
 # n (node.js version manager)
 export N_PREFIX="$HOME/.n"
