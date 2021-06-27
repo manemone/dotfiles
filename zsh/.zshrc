@@ -54,9 +54,6 @@ export PATH=/usr/local/bin:$PATH
 alias be="bundle exec"
 alias bx="bundle exec"
 
-# connect to docker machine
-eval $(docker-machine env default)
-
 # Rust
 export PATH="$HOME/.cargo/bin:$PATH"
 
@@ -64,6 +61,7 @@ export PATH="$HOME/.cargo/bin:$PATH"
 export PYENV_ROOT="$HOME/.pyenv"
 export PATH="$PYENV_ROOT/bin:$PATH"
 eval "$(pyenv init -)"
+eval "$(pyenv virtualenv-init -)"
 
 # NeoVim
 alias vim="nvim"

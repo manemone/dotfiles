@@ -1,13 +1,9 @@
 [[plugins]]
-repo = 'Shougo/deoplete.nvim'
+repo = 'neoclide/coc.nvim'
+rev = 'release'
 on_i = 1
-hook_add = '''
-  let g:deoplete#enable_at_startup   = 1
-  let g:deoplete#auto_complete_delay = 5
-  inoremap <expr><tab> pumvisible() ? "\<C-n>" :
-          \ neosnippet#expandable_or_jumpable() ?
-          \    "\<Plug>(neosnippet_expand_or_jump)" : "\<tab>"
-'''
+merged = '0'
+hook_source = 'call coil398#init#coc#hook_source()'
 
 [[plugins]]
 repo = 'Shougo/neosnippet.vim'
@@ -35,12 +31,6 @@ hook_source = '''
     set conceallevel=2 concealcursor=niv
   endif
 '''
-
-[[plugins]]
-repo = 'tbodt/deoplete-tabnine'
-on_i = 1
-depends = ['deoplete.nvim']
-build = './install.sh'
 
 [[plugins]]
 repo = 'Shougo/neosnippet-snippets'
