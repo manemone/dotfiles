@@ -71,3 +71,11 @@ export EDITOR=nvim
 # n (node.js version manager)
 export N_PREFIX="$HOME/.n"
 export PATH="$PATH:$N_PREFIX/bin"
+
+# Google Cloud SDK
+if [ ! -f "$(brew --prefix)/Caskroom/google-cloud-sdk/latest/google-cloud-sdk/path.zsh.inc" ]; then
+  source "$(brew --prefix)/Caskroom/google-cloud-sdk/latest/google-cloud-sdk/path.zsh.inc"
+fi
+if [ ! -f "$(brew --prefix)/Caskroom/google-cloud-sdk/latest/google-cloud-sdk/completion.zsh.inc" ]; then
+  source "$(brew --prefix)/Caskroom/google-cloud-sdk/latest/google-cloud-sdk/completion.zsh.inc"
+fi
