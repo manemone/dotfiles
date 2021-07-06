@@ -13,6 +13,7 @@
   - On macOS with Homebrew installed, you can satisfy those requirements with following commands:
     ```
     $ brew install n
+    $ n stable
     ```
 * The Silver Searcher
   - https://qiita.com/thermes/items/e1e0c94e2875df96921c
@@ -23,7 +24,7 @@ The script does:
 - Install additional tools
 
 ```bash
-$ ./deploy.sh
+$ source ./deploy.sh
 ```
 
 ## Setup credentials
