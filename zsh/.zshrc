@@ -23,6 +23,15 @@ if ! command -v is_wsl >/dev/null 2>&1; then
   }
 fi
 
+# Fallback platform detection if helpers.sh didn't set CURRENT_PLATFORM
+if [ -z "${CURRENT_PLATFORM:-}" ]; then
+  case "$(uname -s)" in
+    Darwin)  CURRENT_PLATFORM='Mac' ;;
+    Linux*)  CURRENT_PLATFORM='Linux' ;;
+    *)       CURRENT_PLATFORM='Unknown' ;;
+  esac
+fi
+
 # =============================================================================
 # Antidote Plugin Manager
 # =============================================================================
@@ -36,6 +45,11 @@ fi
 
 # Initialize completion system (zplug used to do this; antidote doesn't)
 autoload -Uz compinit && compinit
+
+# History substring search keybindings
+# zsh-history-substring-search doesn't bind keys by itself — do it here.
+bindkey '^[[A' history-substring-search-up
+bindkey '^[[B' history-substring-search-down
 
 # =============================================================================
 # History

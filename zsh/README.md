@@ -107,9 +107,17 @@ antidote update
 ### Custom install location
 
 Set the `ANTIDOTE_HOME` environment variable to change where Antidote is installed
-(default: `~/.antidote`). This must be set **before** sourcing `.zshrc`:
+(default: `~/.antidote`). This must be set **before** running `deploy.sh` so that
+Antidote is cloned to the custom path:
 
 ```bash
 export ANTIDOTE_HOME="$HOME/.local/share/antidote"
-source ~/.zshrc
+./deploy.sh
+```
+
+The same variable must also be visible when `.zshrc` is sourced. To make it permanent,
+add it to your `~/.zshenv` (sourced before `.zshrc`):
+
+```bash
+echo 'export ANTIDOTE_HOME="$HOME/.local/share/antidote"' >> ~/.zshenv
 ```

@@ -29,10 +29,9 @@ ln -fs "${REPO_DIR}/.zsh_plugins.txt" "$HOME/.zsh_plugins.txt"
 ANTIDOTE_HOME="${ANTIDOTE_HOME:-$HOME/.antidote}"
 if [ ! -f "$ANTIDOTE_HOME/antidote.zsh" ]; then
   echo "Installing Antidote plugin manager..."
-  # Remove any broken partial clone before retrying
-  if [ -d "$ANTIDOTE_HOME/.git" ]; then
-    rm -rf "$ANTIDOTE_HOME"
-  fi
+  # Remove any broken/stale directory to allow clean clone
+  # (covers: empty dir, partial clone without .git, half-failed prior runs)
+  rm -rf "$ANTIDOTE_HOME"
   git clone --depth=1 https://github.com/mattmc3/antidote.git "$ANTIDOTE_HOME" || {
     echo "[ERROR] Failed to clone Antidote into $ANTIDOTE_HOME" >&2
     exit 1

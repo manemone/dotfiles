@@ -24,9 +24,6 @@ Install platform-specific system packages:
 - macOS: `brew bundle --file Brewfile`
 - Linux/WSL: `sudo apt install $(cat apt-packages.txt)`
 
-> **Note**: mise is not yet activated in the shell configuration. Currently
-> python/ruby/node from existing pyenv/rbenv/n will take precedence over mise.
-> Shell integration will be added in a follow-up PR.
 
 # Supported tools
 - NeoVim
