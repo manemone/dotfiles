@@ -7,8 +7,8 @@
 
 | 孫 | ブランチ | 内容 | 状況 |
 |---|---|---|---|
-| 1 | `ai/ai-repo-housekeeping` | 土台整理: .gitignore更新 + LICENSE追加 + サブモジュール除去 + vim/削除 | 🔄 実装中 |
-| 2 | `ai/mise-env-pinning` | miseによる環境固定化 + Brewfile + apt-packages | ⬜ 待機中 |
+| 1 | `ai/repo-structure-cleanup` | 土台整理: .gitignore更新 + LICENSE追加 + サブモジュール除去 + vim/削除 | ✅ PR #9 マージ済 |
+| 2 | `ai/ai-mise-env-pinning` | miseによる環境固定化 + Brewfile + apt-packages | ✅ PR #10 マージ済 |
 | 3 | `ai/zsh-antidote` | zsh: zplug→Antidote移行 + クロスプラットフォーム + バグ修正 | ⬜ 待機中 |
 | 4 | `ai/global-deploy` | 全体デプロイシステム + helpers.sh拡充 | ⬜ 待機中 |
 | 5 | `ai/tmux-cross-platform` | tmux: クロスプラットフォーム + 設定モダン化 | ⬜ 待機中 |

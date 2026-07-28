@@ -15,6 +15,14 @@ case "$(uname -s)" in
     ;;
 esac
 
+# is_wsl
+# Detect if running under Windows Subsystem for Linux (WSL).
+# Returns 0 if WSL, 1 otherwise.
+is_wsl() {
+  [ -n "${WSL_DISTRO_NAME:-}" ] && return 0
+  grep -qi microsoft /proc/version 2>/dev/null
+}
+
 # ensure_command <cmd> [hint]
 # Check if a command is available, print install instructions if not.
 # Returns 0 if found, 1 if not found.
