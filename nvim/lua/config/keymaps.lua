@@ -9,18 +9,8 @@ local opts = { noremap = true, silent = true }
 -- File operations
 map("n", "<Leader>w", "<Cmd>write<CR>", { desc = "Save buffer" })
 
--- Fuzzy finder (replaces Denite / CtrlP)
-map("n", "<Leader>o", "<Cmd>Telescope find_files<CR>", { desc = "Find files" })
-map("n", "<Leader>ff", "<Cmd>Telescope find_files<CR>", { desc = "Find files" })
-map("n", "<Leader>fg", "<Cmd>Telescope live_grep<CR>", { desc = "Live grep" })
-map("n", "<Leader>fb", "<Cmd>Telescope buffers<CR>", { desc = "Find buffers" })
-map("n", "<Leader>fh", "<Cmd>Telescope help_tags<CR>", { desc = "Help tags" })
-map("n", "<Leader>fd", "<Cmd>Telescope diagnostics<CR>", { desc = "Diagnostics" })
-map("n", "<Leader>fs", "<Cmd>Telescope lsp_document_symbols<CR>", { desc = "Document symbols" })
-
--- Denite migration: <Leader>d → buffers, <Leader>g → live_grep
-map("n", "<Leader>d", "<Cmd>Telescope buffers<CR>", { desc = "Buffers (was Denite)" })
-map("n", "<Leader>g", "<Cmd>Telescope live_grep<CR>", { desc = "Live grep (was Denite)" })
+-- NOTE: Telescope keymaps are defined in lua/plugins/telescope.lua (lazy.nvim `keys`).
+-- They are NOT duplicated here to avoid dead code from lazy-loading key override.
 
 -- Clipboard: system clipboard operations
 map("v", "<Leader>y", '"+y', { desc = "Yank to system clipboard" })
@@ -35,7 +25,8 @@ map("n", "<Leader><Leader>", "V", { desc = "Visual line mode" })
 
 -- Yank/paste: auto-goto end of changed text
 map("v", "y", "y`]", { desc = "Yank → end" })
-map("v", "p", "p`]", { desc = "Paste → end" })
+-- NOTE: Normal-mode "p" goes to end of pasted text.
+-- Visual-mode "p" is overridden below by the paste-without-overwriting-register mapping.
 map("n", "p", "p`]", { desc = "Paste → end" })
 
 -- Select pasted text

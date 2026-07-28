@@ -30,6 +30,8 @@
 | `vim-vue` | `treesitter` + `volar` LSP | Better Vue support |
 | `vim-rails` | — | Generic dotfiles don't need Rails specifics |
 | `typescript-vim` | `treesitter` | Treesitter handles syntax |
+| `rust-lang/rust.vim` | `treesitter` | Treesitter handles syntax |
+| `cespare/vim-toml` | `treesitter` | Treesitter handles syntax |
 | `context_filetype.vim` | — | LuaSnip doesn't need it |
 | `neosnippet-snippets` | `friendly-snippets` | VS Code-compatible snippet collection |
 

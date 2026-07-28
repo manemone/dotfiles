@@ -131,8 +131,12 @@ else
   if command -v mise >/dev/null 2>&1; then
     _python3=$(mise where python 2>/dev/null || true)
     if [ -n "$_python3" ]; then
-      "$_python3/bin/pip" install --quiet pynvim 2>/dev/null && \
+      if "$_python3/bin/pip" install --quiet pynvim 2>/dev/null; then
         log_ok "pynvim installed via mise Python at $_python3"
+      else
+        log_warn "Failed to install pynvim via mise Python. Falling back to system pip."
+        _python3=""  # clear to trigger system pip fallback
+      fi
     fi
   fi
   if [ -z "$_python3" ]; then
@@ -152,7 +156,7 @@ fi
 
 if command -v gem >/dev/null 2>&1; then
   if [ "${DRY_RUN:-0}" -eq 0 ]; then
-    gem install neovim 2>/dev/null || true
+    gem install neovim 2>/dev/null || log_warn "gem install neovim failed (Ruby may not be set up)"
   fi
 fi
 

@@ -8,7 +8,7 @@ return {
     delay = vim.o.timeoutlen,
     spec = {
       { "<Leader>c", group = "Code / Comment" },
-      { "<Leader>f", group = "Find / File" },
+      { "<Leader>f", group = "Find / Format" },
       { "<Leader>g", group = "Git" },
       { "<Leader>h", group = "Hunks (Git)" },
       { "<Leader>s", group = "Search / Surround" },

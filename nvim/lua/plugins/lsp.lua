@@ -29,7 +29,7 @@ return {
 
       -- Hover / signature
       map("n", "K", vim.lsp.buf.hover, "Hover")
-      map("i", "<C-k>", vim.lsp.buf.signature_help, "Signature help")
+      map("i", "<Leader>k", vim.lsp.buf.signature_help, "Signature help")
 
       -- Actions
       map("n", "<Leader>rn", vim.lsp.buf.rename, "Rename")
