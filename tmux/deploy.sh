@@ -11,21 +11,54 @@ FAIL=0
 # --- Symlink config ---
 symlink_backup "$SCRIPT_DIR/tmux.conf" "$HOME/.tmux.conf" || FAIL=1
 
-# --- Install tmux (macOS only via Homebrew) ---
-if is_macos; then
-  if [ "${DRY_RUN:-0}" -eq 1 ]; then
-    log_info "[DRY-RUN] Would run: brew install tmux reattach-to-user-namespace"
+# --- Install tmux ---
+install_tmux_macos() {
+  if command -v tmux >/dev/null 2>&1; then
+    log_info "tmux is already installed ($(tmux -V 2>&1))."
+    return 0
+  fi
+  log_info "Installing tmux via Homebrew..."
+  brew install tmux
+  log_ok "tmux installed."
+}
+
+install_tmux_linux() {
+  if command -v tmux >/dev/null 2>&1; then
+    log_info "tmux is already installed ($(tmux -V 2>&1))."
+    return 0
+  fi
+  # Prefer apt on Debian/Ubuntu; fall back to Homebrew
+  if command -v apt-get >/dev/null 2>&1; then
+    log_info "Installing tmux via apt..."
+    sudo apt-get update -qq && sudo apt-get install -y tmux
+    log_ok "tmux installed via apt."
+  elif command -v brew >/dev/null 2>&1; then
+    log_info "Installing tmux via Homebrew (Linux)..."
+    brew install tmux
+    log_ok "tmux installed via Homebrew."
   else
-    if command -v tmux >/dev/null 2>&1; then
-      log_info "tmux is already installed."
-    else
-      log_info "Installing tmux via Homebrew..."
-      brew install tmux reattach-to-user-namespace
-      log_ok "tmux installed."
+    log_warn "Could not install tmux automatically."
+    log_warn "Install manually: https://github.com/tmux/tmux/wiki/Installing"
+  fi
+}
+
+if [ "${DRY_RUN:-0}" -eq 1 ]; then
+  log_info "[DRY-RUN] Would install tmux for platform: $CURRENT_PLATFORM"
+else
+  if is_macos; then
+    install_tmux_macos
+  elif is_linux; then
+    install_tmux_linux
+    if is_wsl; then
+      log_info "WSL detected: tmux clipboard integration uses xclip or wl-copy."
+      log_info "  Install xclip:  sudo apt install xclip"
+      log_info "  Or use Windows Terminal / WSLg for automatic clipboard passthrough."
+    fi
+  else
+    if ! command -v tmux >/dev/null 2>&1; then
+      log_warn "tmux is not installed. Install via your package manager."
     fi
   fi
-elif ! command -v tmux >/dev/null 2>&1; then
-  log_warn "tmux is not installed. Install via your package manager."
 fi
 
 if [ "$FAIL" -ne 0 ]; then
