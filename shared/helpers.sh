@@ -164,7 +164,7 @@ symlink_backup() {
       if [ "${BACKUP:-1}" -eq 0 ]; then
         printf '[DRY-RUN] rm -f %s\n' "$_dst"
       else
-        printf '[DRY-RUN] mv %s %s.backup\n' "$_dst" "$_dst"
+        printf '[DRY-RUN] mv %s %s\n' "$_dst" "$(_backup_dst "$_dst")"
       fi
     fi
     printf '[DRY-RUN] ln -fs %s %s\n' "$_src" "$_dst"
@@ -243,12 +243,13 @@ symlink_restore() {
 
   # Restore the *original* backup (dst.backup) first; if that doesn't exist,
   # pick the oldest timestamped backup (first in glob order = earliest).
+  # Use -e || -L to also match backup files that are symlinks or broken symlinks.
   _restore=""
-  if [ -e "$_dst.backup" ]; then
+  if [ -e "$_dst.backup" ] || [ -L "$_dst.backup" ]; then
     _restore="$_dst.backup"
   else
     for _cand in "$_dst.backup."*; do
-      [ -e "$_cand" ] || continue
+      [ -e "$_cand" ] || [ -L "$_cand" ] || continue
       _restore="$_cand"
       break
     done
