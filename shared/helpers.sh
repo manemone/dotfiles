@@ -48,7 +48,7 @@ resolve_tools() {
   _rt_var="${2:-TOOLS}"
 
   if [ -z "$_rt_only" ]; then
-    printf '%s=\"%s\"\n' "$_rt_var" "$AVAILABLE_TOOLS"
+    printf '%s="%s"\n' "$_rt_var" "$AVAILABLE_TOOLS"
     return 0
   fi
 
@@ -78,7 +78,7 @@ resolve_tools() {
   IFS="$_rt_oldifs"
 
   _rt_result=$(printf '%s' "$_rt_result" | sed 's/^[[:space:]]*//')
-  printf '%s=\"%s\"\n' "$_rt_var" "$_rt_result"
+  printf '%s="%s"\n' "$_rt_var" "$_rt_result"
   return 0
 }
 
