@@ -7,13 +7,13 @@
 
 | 孫 | ブランチ | 内容 | 状況 |
 |---|---|---|---|
-| 1 | `ai/ai-repo-housekeeping` | 土台整理: .gitignore更新 + LICENSE追加 + サブモジュール整理 | 🔄 実装中 |
+| 1 | `ai/ai-repo-housekeeping` | 土台整理: .gitignore更新 + LICENSE追加 + サブモジュール除去 + vim/削除 | 🔄 実装中 |
 | 2 | `ai/mise-env-pinning` | miseによる環境固定化 + Brewfile + apt-packages | ⬜ 待機中 |
 | 3 | `ai/zsh-antidote` | zsh: zplug→Antidote移行 + クロスプラットフォーム + バグ修正 | ⬜ 待機中 |
 | 4 | `ai/global-deploy` | 全体デプロイシステム + helpers.sh拡充 | ⬜ 待機中 |
 | 5 | `ai/tmux-cross-platform` | tmux: クロスプラットフォーム + 設定モダン化 | ⬜ 待機中 |
 | 6 | `ai/nvim-lazy` | nvim: dein.vim→lazy.nvim移行 + built-in優先 + Lua化 | ⬜ 待機中 |
-| 7 | `ai/remove-legacy-vim` | 古いVim設定を削除しNeoVimに一本化 | ⬜ 待機中 |
+| 7 | `ai/vim-purge` | vim/ 削除の後始末（サブモジュール除去・vim/削除は孫1で完了） | ⬜ 待機中 |
 | 8 | `ai/docs-overhaul` | 全README書き直し | ⬜ 待機中 |
 
 ## 孫1用プロンプト:
@@ -38,11 +38,13 @@
 MITライセンスを追加
 
 #### 3. .gitmodules の neobundle エントリを削除
-- neobundle.vim のサブモジュールエントリを削除（孫7と連携）
-- .gitmodules が空になったら削除
+- neobundle.vim のサブモジュールを完全に除去（gitlink + .gitmodules）
+- vim/ ディレクトリを削除（NeoBundleが使えなくなったため孫7から前倒し）
+- トップレベルREADMEからVimを削除
 
 ### 検証
 - `git status` がクリーン
+- `git submodule status` が正常終了（exit 0）
 - `.gitignore` に個人パス参照がない
 - `LICENSE` ファイルが存在する
 ```
@@ -347,36 +349,29 @@ source "$SCRIPT_DIR/../shared/helpers.sh"
 ## タスク: 古いVim設定を削除しNeoVimに一本化する
 
 ### 現状
-- `vim/` ディレクトリ: NeoBundle（メンテナンス停止）ベースの古いVim設定
-- twitvim, LaTeX, RSense, Syntastic, neocomplete など全滅したプラグイン多数
-- deploy.bat (Windows Vista+用) あり
-- `.gitmodules` に neobundle.vim サブモジュール参照あり
+- `vim/` ディレクトリ: 孫1で削除済み
+- deploy.bat 削除済み
+- `.gitmodules` の neobundle サブモジュールは孫1で除去済み
 
 ### やること
 
-1. **vim/ ディレクトリを完全削除**
-   ```bash
-   git rm -r vim/
-   ```
+1. **vim/ 削除の後始末**
+   - 孫1で既に `git rm -r vim/` 済みのため、このステップはスキップ
 
-2. **サブモジュールを完全に除去**
-   ```bash
-   git submodule deinit -f vim/.vim/bundle/neobundle.vim
-   git rm -f vim/.vim/bundle/neobundle.vim
-   # .gitmodules から neobundle エントリを削除
-   # .git/config からも手動で削除が必要なら対応
-   ```
+2. **サブモジュール除去の後始末**
+   - 孫1で `git rm --cached` + `.gitmodules` 削除済みのため、このステップはスキップ
 
 3. **.gitignore 更新**
-   - `!.vim/bundle/neobundle.vim` の行を削除
+   - 孫1で `.gitignore` の vim セクションは維持（swapファイル等の除外パターンは引き続き有効）
+   - `!.vim/bundle/neobundle.vim` の行は孫1で削除済み（vim/ごと消えたため）
 
 4. **トップレベルREADMEの更新**
-   - Supported toolsからVimを削除
-   - （READMEの完全リニューアルは孫8でやるので、ここではVim削除のみ）
+   - 孫1で Supported tools から Vim を削除済み
+   - （READMEの完全リニューアルは孫8でやる）
 
 ### 検証
-- `git status` で vim/ が完全に消えていること
-- `.gitmodules` が空またはneobundleエントリなしであること
+- `git status` で vim/ が存在しないこと
+- `.gitmodules` が存在しないこと
 - 作業ツリーがクリーンであること
 ```
 
