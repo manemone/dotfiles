@@ -1,28 +1,91 @@
-# Setup
+# Zsh Setup
+
 ## Requirements
-* UNIX-like OS (Windows is not supported for now)
-* Z shell
+
+- **Zsh** (5.0+)
+- **Git** — for plugin installation
+- **curl** — for optional tool installers
+- **mise** (optional) — version manager for runtime tools
+
+## What's Included
+
+| Feature | Details |
+|---|---|
+| Plugin manager | [Antidote](https://github.com/mattmc3/antidote) |
+| Theme | [Pure](https://github.com/sindresorhus/pure) |
+| Plugins | syntax highlighting, autosuggestions, history search, completions, 256color |
+| Version managers | rbenv, pyenv, n (auto-detected, skipped if not installed) |
+| Editor | NeoVim aliases (`vim`/`vi` → `nvim`) |
+| Cloud | Google Cloud SDK (auto-detected) |
+| Language | Rust, Ruby, Python, Node.js PATH setup (skipped if not installed) |
 
 ## Installation
+
+### 1. Install Zsh
+
+#### macOS
+```bash
+brew install zsh
+```
+
+#### Linux (Debian/Ubuntu)
+```bash
+sudo apt install zsh
+```
+
+#### WSL (Windows Subsystem for Linux)
+```bash
+sudo apt install zsh
+```
+
+### 2. Set Zsh as default shell
+
+```bash
+chsh -s "$(which zsh)"
+```
+
+### 3. Run the deploy script
+
+```bash
+cd zsh
+./deploy.sh
+```
+
+The script will:
+- Create symlinks for `.zshrc` and `.zsh_plugins.txt`
+- Install [Antidote](https://github.com/mattmc3/antidote) via `git clone`
+- Warn if optional tools (rbenv, pyenv, n, mise) are missing
+
+### 4. Open a new shell
+
+```bash
+exec zsh
+```
+
+Antidote will automatically install plugins declared in `~/.zsh_plugins.txt` on first run.
+No interactive prompts — it just works.
+
+## Platform Notes
+
 ### macOS
-#### Install zsh
+- Homebrew paths are auto-detected for both Apple Silicon (`/opt/homebrew`) and Intel (`/usr/local`)
+- PostgreSQL `PGDATA` is set to `/usr/local/var/postgres` if the directory exists
+
+### Linux
+- Homebrew path defaults to `/home/linuxbrew/.linuxbrew`
+- PostgreSQL `PGDATA` is **not** set
+
+### WSL
+- Treated as Linux; macOS-specific settings (PostgreSQL PGDATA) are skipped
+- Works the same as native Linux otherwise
+
+## Plugin Management
+
+Plugins are declared in `~/.zsh_plugins.txt` (symlinked from this repo).
+To add or remove a plugin, edit `zsh/.zsh_plugins.txt` and reload:
+
 ```bash
-$ brew install zsh
+source ~/.zshrc
 ```
 
-#### Set zsh as default shell
-```bash
-$ sudo sh -c "echo '/usr/local/zsh' > /etc/shells"
-```
-
-#### Run the deploy script
-The script does:
-- puts some symlinks to the appropriate locations
-- Install additional tools using [zplug](https://github.com/zplug/zplug)
-
-```bash
-$ ./deploy.sh
-```
-
-#### Open new shell
-zplug will confirm you to install additional software. Answer it yes.
+Or start a new shell. Antidote handles install/update automatically.

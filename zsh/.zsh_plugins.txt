@@ -1,0 +1,13 @@
+# Theme
+sindresorhus/pure kind:fpath
+
+# Syntax highlighting
+zsh-users/zsh-syntax-highlighting
+
+# History search
+zsh-users/zsh-history-substring-search
+
+# Completion
+zsh-users/zsh-autosuggestions
+zsh-users/zsh-completions
+chrissicool/zsh-256color
