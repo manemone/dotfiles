@@ -13,7 +13,7 @@
 | 4 | `ai/deploy-unified-setup` | 全体デプロイシステム + helpers.sh拡充 | ✅ PR #12 マージ済 |
 | 5 | `ai/ai-tmux-cross-platform` | tmux: クロスプラットフォーム + 設定モダン化 | ✅ PR #13 マージ済 |
 | 6 | `ai/nvim-lazy-migration` | nvim: dein.vim→lazy.nvim移行 + built-in優先 + Lua化 | ✅ PR #14 マージ済 |
-| 7 | `ai/vim-purge` | vim/ 削除の後始末（サブモジュール除去・vim/削除は孫1で完了） | 🔄 PR作成中 |
+| 7 | `ai/vim-purge` | vim/ 削除の後始末（サブモジュール除去・vim/削除は孫1で完了） | 🔄 PR #15 レビュー中 |
 | 8 | `ai/docs-overhaul` | 全README書き直し | ⬜ 待機中 |
 
 ## 孫1用プロンプト:
