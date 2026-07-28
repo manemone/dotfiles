@@ -9,22 +9,29 @@ DOTFILES_DIR="${_ZSHRC_PATH:h:h}"
 unset _ZSHRC_PATH
 
 # =============================================================================
-# Source shared helpers (CURRENT_PLATFORM, is_wsl, ensure_command)
-# Note: only CURRENT_PLATFORM is actively used in this file.
-# is_wsl and ensure_command are available for interactive use but not called here.
+# Source shared helpers (CURRENT_PLATFORM, is_macos, is_linux, is_wsl, etc.)
 # =============================================================================
 if [ -f "$DOTFILES_DIR/shared/helpers.sh" ]; then
   source "$DOTFILES_DIR/shared/helpers.sh"
 fi
 
-# Fallback platform detection if helpers.sh didn't set CURRENT_PLATFORM
+# Fallback platform detection and helpers if shared/helpers.sh is unavailable.
 if [ -z "${CURRENT_PLATFORM:-}" ]; then
   case "$(uname -s)" in
-    Darwin)  CURRENT_PLATFORM='Mac' ;;
-    Linux*)  CURRENT_PLATFORM='Linux' ;;
-    *)       CURRENT_PLATFORM='Unknown' ;;
+    Darwin)  CURRENT_PLATFORM='macos' ;;
+    Linux*)  CURRENT_PLATFORM='linux' ;;
+    *)       CURRENT_PLATFORM='unknown' ;;
   esac
 fi
+
+# Fallback functions (defined only when helpers.sh didn't provide them)
+if ! command -v is_macos >/dev/null 2>&1; then
+  is_macos() { [ "$CURRENT_PLATFORM" = "macos" ]; }
+  is_linux() { [ "$CURRENT_PLATFORM" = "linux" ]; }
+fi
+
+# helpers.sh exports AVAILABLE_TOOLS which we don't need in an interactive shell.
+unset AVAILABLE_TOOLS 2>/dev/null || true
 
 # =============================================================================
 # Antidote Plugin Manager
@@ -81,24 +88,21 @@ alias webrick="ruby -rwebrick -e 'WEBrick::HTTPServer.new(:DocumentRoot => \"./\
 # =============================================================================
 # Platform-specific Homebrew PATH
 # =============================================================================
-case "$CURRENT_PLATFORM" in
-  Mac)
-    if [ -d /opt/homebrew/bin ]; then
-      # Apple Silicon
-      export PATH="/opt/homebrew/bin:$PATH"
-    elif [ -d /usr/local/bin ]; then
-      # Intel Mac
-      export PATH="/usr/local/bin:$PATH"
-    fi
-    ;;
-  Linux)
-    if [ -d /home/linuxbrew/.linuxbrew/bin ]; then
-      export PATH="/home/linuxbrew/.linuxbrew/bin:$PATH"
-    elif [ -d /usr/local/bin ]; then
-      export PATH="/usr/local/bin:$PATH"
-    fi
-    ;;
-esac
+if is_macos; then
+  if [ -d /opt/homebrew/bin ]; then
+    # Apple Silicon
+    export PATH="/opt/homebrew/bin:$PATH"
+  elif [ -d /usr/local/bin ]; then
+    # Intel Mac
+    export PATH="/usr/local/bin:$PATH"
+  fi
+elif is_linux; then
+  if [ -d /home/linuxbrew/.linuxbrew/bin ]; then
+    export PATH="/home/linuxbrew/.linuxbrew/bin:$PATH"
+  elif [ -d /usr/local/bin ]; then
+    export PATH="/usr/local/bin:$PATH"
+  fi
+fi
 
 # =============================================================================
 # rbenv (Ruby) - skip if not installed
@@ -137,7 +141,7 @@ fi
 # =============================================================================
 # PostgreSQL (macOS only — WSL and Linux skip)
 # =============================================================================
-if [ "$CURRENT_PLATFORM" = "Mac" ] && [ -d /usr/local/var/postgres ]; then
+if is_macos && [ -d /usr/local/var/postgres ]; then
   export PGDATA=/usr/local/var/postgres
 fi
 
