@@ -26,6 +26,11 @@ return {
     -- ── mini.ai (better text objects — used by mini.surround) ──────────
     require("mini.ai").setup()
 
+    -- ── mini.align (replaces junegunn/vim-easy-align) ──────────────────
+    -- ga  — align operator: gaip= aligns the paragraph on "="
+    -- gA  — same, with interactive preview
+    require("mini.align").setup()
+
     -- ── mini.icons (for lualine, telescope, etc.) ──────────────────────
     require("mini.icons").setup()
 

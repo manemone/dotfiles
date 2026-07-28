@@ -10,8 +10,6 @@ return {
     "WhoIsSethDaniel/mason-tool-installer.nvim",
   },
   config = function()
-    local lspconfig = require("lspconfig")
-
     -- ── LSP keymaps (on_attach) ──────────────────────────────────────────
 
     local on_attach = function(client, bufnr)
@@ -131,7 +129,10 @@ return {
         "zls",
         "marksman",
       },
-      automatic_installation = true,
+      -- mason-lspconfig v2 enables every installed server automatically
+      -- via vim.lsp.enable(); per-server settings come from vim.lsp.config
+      -- below.
+      automatic_enable = true,
     })
 
     -- ── mason-tool-installer (auto-install formatters/linters) ────────────
@@ -149,43 +150,28 @@ return {
 
     -- ── Server configs ────────────────────────────────────────────────────
 
-    -- Default handler: apply on_attach + capabilities to every LSP
-    local default_handler = function(server_name)
-      lspconfig[server_name].setup({
-        on_attach = on_attach,
-        capabilities = capabilities,
-      })
-    end
+    -- Defaults applied to every server. mason-lspconfig v2 replaced
+    -- setup_handlers() with vim.lsp.config()/vim.lsp.enable(), so shared
+    -- settings go into the "*" pseudo-server.
+    vim.lsp.config("*", {
+      on_attach = on_attach,
+      capabilities = capabilities,
+    })
 
-    -- Auto-setup servers installed by mason
-    require("mason-lspconfig").setup_handlers({
-      -- First entry is the default handler
-      default_handler,
-      -- Custom overrides per server
-      ["lua_ls"] = function()
-        lspconfig.lua_ls.setup({
-          on_attach = on_attach,
-          capabilities = capabilities,
-          settings = {
-            Lua = {
-              runtime = { version = "LuaJIT" },
-              diagnostics = { globals = { "vim" } },
-              workspace = {
-                library = vim.api.nvim_get_runtime_file("", true),
-                checkThirdParty = false,
-              },
-              telemetry = { enable = false },
-              completion = { callSnippet = "Replace" },
-            },
+    -- Per-server overrides (merged on top of "*")
+    vim.lsp.config("lua_ls", {
+      settings = {
+        Lua = {
+          runtime = { version = "LuaJIT" },
+          diagnostics = { globals = { "vim" } },
+          workspace = {
+            library = vim.api.nvim_get_runtime_file("", true),
+            checkThirdParty = false,
           },
-        })
-      end,
-      ["ts_ls"] = function()
-        lspconfig.ts_ls.setup({
-          on_attach = on_attach,
-          capabilities = capabilities,
-        })
-      end,
+          telemetry = { enable = false },
+          completion = { callSnippet = "Replace" },
+        },
+      },
     })
   end,
 }

@@ -2,10 +2,13 @@
 
 return {
   "nvim-treesitter/nvim-treesitter",
+  -- Pin to the module-based branch. The `main` branch is a rewrite that
+  -- dropped `nvim-treesitter.configs` and every module configured below.
+  branch = "master",
   build = ":TSUpdate",
   event = { "BufReadPost", "BufNewFile" },
   dependencies = {
-    "nvim-treesitter/nvim-treesitter-textobjects",
+    { "nvim-treesitter/nvim-treesitter-textobjects", branch = "master" },
   },
   opts = {
     ensure_installed = {
@@ -46,6 +49,19 @@ return {
     },
     indent = {
       enable = true,
+    },
+    -- Incremental selection (replaces terryma/vim-expand-region).
+    -- Keys match the old dein.toml mappings: v expands, <C-v> shrinks.
+    -- Expansion follows the syntax tree, so it grows word → expression →
+    -- argument → call → function rather than by regex heuristics.
+    incremental_selection = {
+      enable = true,
+      keymaps = {
+        init_selection = "v",
+        node_incremental = "v",
+        node_decremental = "<C-v>",
+        scope_incremental = false,
+      },
     },
     textobjects = {
       select = {
