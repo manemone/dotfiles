@@ -98,6 +98,20 @@ Plugins are loaded in order; `syntax-highlighting` must be second-to-last and `h
 | Rust PATH | `$HOME/.cargo/bin` | `$HOME/.cargo/bin` |
 | Google Cloud SDK | Auto-detected (Homebrew Cask + manual install paths) | Auto-detected |
 
+### PATH Additions (auto-detected)
+
+Each entry is added only when the directory exists, so machines without a given
+tool are unaffected. These are prepended **after** the version managers, so
+hand-written scripts take precedence over shims.
+
+| Directory | Contents |
+|---|---|
+| `$HOME/bin` | Personal scripts |
+| `$HOME/.local/bin` | User-local executables (`pip --user`, manual symlinks) |
+| `$HOME/go/bin` | Go binaries (also sets `GOPATH`) |
+| `$HOME/.opencode/bin` | opencode CLI |
+| `$HOME/.cargo/bin` | Rust toolchain |
+
 ### History
 
 - File: `~/.zsh_history`
@@ -105,6 +119,32 @@ Plugins are loaded in order; `syntax-highlighting` must be second-to-last and `h
 - Options: `SHARE_HISTORY`, `HIST_IGNORE_DUPS`, `HIST_IGNORE_SPACE`, `HIST_VERIFY`
 
 ## 4. Customization
+
+### Machine-Local Settings (`~/.zshrc.local`)
+
+`.zshrc` sources `~/.zshrc.local` as its **last** step, if the file exists. This
+file is deliberately **not** tracked in this repository.
+
+Use it for anything that belongs to one machine only:
+
+- Host addresses that differ per machine (VM IPs, WSL host routes)
+- API keys and tokens — keeping them here means they never reach the shared
+  repository or its history
+- Work-only paths, proxies, or company-internal endpoints
+- One-off overrides of anything set in `.zshrc`
+
+```bash
+cat >> ~/.zshrc.local <<'EOF'
+export SOME_SERVICE_TOKEN="..."
+export PATH="$HOME/work-tools/bin:$PATH"
+EOF
+
+source ~/.zshrc
+```
+
+Because it is sourced last, it can override any variable, alias, or PATH entry
+set earlier. Anything that should apply to *every* machine belongs in
+`zsh/.zshrc` instead, guarded by an existence check.
 
 ### Adding / Removing Plugins
 
@@ -181,3 +221,19 @@ Then restart your shell. `.zshrc` activates mise automatically once it's on PATH
 ### rbenv / pyenv / n warnings on deploy
 
 These are non-fatal warnings. The tools are optional — `.zshrc` skips their config blocks if they're not installed.
+
+### "command not found" after switching from bash
+
+`~/.bashrc` is not read by zsh, so any PATH entry or export that lived only
+there is gone once zsh becomes the login shell. Compare the two in a clean
+environment — without `env -i` the child shell inherits the parent's exports and
+everything looks fine even when it isn't:
+
+```bash
+env -i HOME="$HOME" TERM=xterm USER="$USER" zsh -l -i -c 'echo $PATH' | tr ':' '\n'
+```
+
+Then decide where each missing entry belongs:
+
+- Useful on every machine → add to `zsh/.zshrc` with an existence guard
+- Specific to this machine → add to `~/.zshrc.local`
