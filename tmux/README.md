@@ -43,10 +43,10 @@ Prefix: `C-q` (Ctrl+q)
 
 | Key | Action |
 |-----|--------|
-| `Prefix h` / `←` | Select pane left |
-| `Prefix j` / `↓` | Select pane down |
-| `Prefix k` / `↑` | Select pane up |
-| `Prefix l` / `→` | Select pane right |
+| `Prefix h` | Select pane left |
+| `Prefix j` | Select pane down |
+| `Prefix k` | Select pane up |
+| `Prefix l` | Select pane right |
 | `Prefix \|` | Split horizontally |
 | `Prefix -` | Split vertically |
 | `Prefix H` | Resize pane left (+5) |
@@ -63,7 +63,7 @@ Prefix: `C-q` (Ctrl+q)
 | `Ctrl+v` | Block selection (rectangle) |
 | `y` | Copy selection |
 | `Y` | Copy whole line |
-| `Mouse drag` | Copy to system clipboard |
+| `Mouse drag` (in copy mode) | Copy selection to system clipboard (macOS: pbcopy, Linux: xclip/wl-copy) |
 
 ### General
 
