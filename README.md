@@ -2,9 +2,8 @@
 Easily deployable setting files
 
 # Supported tools
-- Vim
 - NeoVim
-- Z Sehll
+- Z Shell
 
 # After cloning this repo
 Follow the instructions in README.md in each subdirectory.
