@@ -1,7 +1,10 @@
 #!/bin/sh
 
-REPO_DIR=$(cd $(dirname $0); pwd)
+REPO_DIR=$(cd "$(dirname "$0")"; pwd)
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/nvim"
+
+. "$REPO_DIR/../shared/helpers.sh"
+ensure_command mise "curl https://mise.run | sh" || exit 1
 
 mkdir -p $CONFIG_DIR
 

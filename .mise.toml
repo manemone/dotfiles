@@ -1,0 +1,9 @@
+[tools]
+python = "3.12"
+node = "22"
+ruby = "3.3"
+rust = "1.97"
+neovim = "0.12"
+ripgrep = "15.2"
+fd = "10.4"
+lazygit = "0.63"

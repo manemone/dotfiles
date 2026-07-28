@@ -1,0 +1,5 @@
+tap "homebrew/bundle"
+brew "zsh"
+brew "tmux"
+brew "git"
+brew "curl"

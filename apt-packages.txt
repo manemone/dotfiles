@@ -1,0 +1,5 @@
+zsh
+tmux
+git
+curl
+build-essential

@@ -1,9 +1,9 @@
 #!/bin/sh
 
-REPO_DIR=$(cd $(dirname $0); pwd)
+REPO_DIR=$(cd "$(dirname "$0")"; pwd)
 CONFIG_DIR=$HOME
 
-source $REPO_DIR/../shared/helpers.sh
+. "$REPO_DIR/../shared/helpers.sh"
 
 # Copy setting files
 ln -fs ${REPO_DIR}/tmux.conf $CONFIG_DIR/.tmux.conf
