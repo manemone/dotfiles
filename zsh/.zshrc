@@ -10,17 +10,11 @@ unset _ZSHRC_PATH
 
 # =============================================================================
 # Source shared helpers (CURRENT_PLATFORM, is_wsl, ensure_command)
+# Note: only CURRENT_PLATFORM is actively used in this file.
+# is_wsl and ensure_command are available for interactive use but not called here.
 # =============================================================================
 if [ -f "$DOTFILES_DIR/shared/helpers.sh" ]; then
   source "$DOTFILES_DIR/shared/helpers.sh"
-fi
-
-# Fallback WSL detection if helpers.sh is unavailable
-# (minimum fallback — keep in sync with shared/helpers.sh)
-if ! command -v is_wsl >/dev/null 2>&1; then
-  is_wsl() {
-    [ -n "${WSL_DISTRO_NAME:-}" ] || grep -qi microsoft /proc/version 2>/dev/null
-  }
 fi
 
 # Fallback platform detection if helpers.sh didn't set CURRENT_PLATFORM
@@ -40,7 +34,7 @@ if [ -f "$ANTIDOTE_HOME/antidote.zsh" ] && [ -f "$HOME/.zsh_plugins.txt" ]; then
   source "$ANTIDOTE_HOME/antidote.zsh"
   antidote load "$HOME/.zsh_plugins.txt"
 else
-  print -ru2 -- "zshrc: Antidote not set up. Run <dotfiles>/zsh/deploy.sh"
+  print -ru2 -- "zshrc: Antidote not set up. Run ${DOTFILES_DIR}/zsh/deploy.sh"
 fi
 
 # Initialize completion system (zplug used to do this; antidote doesn't)
@@ -48,8 +42,11 @@ autoload -Uz compinit && compinit
 
 # History substring search keybindings
 # zsh-history-substring-search doesn't bind keys by itself — do it here.
-bindkey '^[[A' history-substring-search-up
-bindkey '^[[B' history-substring-search-down
+# Guard against unavailable widget (e.g. Antidote not installed).
+if (( $+functions[history-substring-search-up] )); then
+  bindkey '^[[A' history-substring-search-up
+  bindkey '^[[B' history-substring-search-down
+fi
 
 # =============================================================================
 # History

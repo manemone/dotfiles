@@ -24,7 +24,6 @@ Install platform-specific system packages:
 - macOS: `brew bundle --file Brewfile`
 - Linux/WSL: `sudo apt install $(cat apt-packages.txt)`
 
-
 # Supported tools
 - NeoVim
 - Z Shell
