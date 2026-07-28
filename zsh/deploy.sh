@@ -6,6 +6,8 @@ SCRIPT_DIR=$(cd "$(dirname "$0")"; pwd)
 log_hr
 log_info "Deploying: zsh"
 
+FAIL=0
+
 # --- Required tools ---
 ensure_command zsh "Install zsh via your package manager" || exit 1
 ensure_command git "Install git via your package manager" || exit 1
@@ -23,8 +25,8 @@ if ! command -v mise >/dev/null 2>&1; then
 fi
 
 # --- Symlink config files ---
-symlink_backup "$SCRIPT_DIR/.zshrc"           "$HOME/.zshrc"
-symlink_backup "$SCRIPT_DIR/.zsh_plugins.txt" "$HOME/.zsh_plugins.txt"
+symlink_backup "$SCRIPT_DIR/.zshrc"           "$HOME/.zshrc"           || FAIL=1
+symlink_backup "$SCRIPT_DIR/.zsh_plugins.txt" "$HOME/.zsh_plugins.txt" || FAIL=1
 
 # --- Install Antidote plugin manager ---
 ANTIDOTE_HOME="${ANTIDOTE_HOME:-$HOME/.antidote}"
@@ -54,4 +56,8 @@ else
   log_info "Antidote is already installed at $ANTIDOTE_HOME"
 fi
 
+if [ "$FAIL" -ne 0 ]; then
+  log_error "zsh deployment completed with errors."
+  exit 1
+fi
 log_ok "zsh deployment complete."

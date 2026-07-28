@@ -20,9 +20,9 @@ fi
 # Fallback platform detection if helpers.sh didn't set CURRENT_PLATFORM
 if [ -z "${CURRENT_PLATFORM:-}" ]; then
   case "$(uname -s)" in
-    Darwin)  CURRENT_PLATFORM='Mac' ;;
-    Linux*)  CURRENT_PLATFORM='Linux' ;;
-    *)       CURRENT_PLATFORM='Unknown' ;;
+    Darwin)  CURRENT_PLATFORM='macos' ;;
+    Linux*)  CURRENT_PLATFORM='linux' ;;
+    *)       CURRENT_PLATFORM='unknown' ;;
   esac
 fi
 
@@ -81,24 +81,24 @@ alias webrick="ruby -rwebrick -e 'WEBrick::HTTPServer.new(:DocumentRoot => \"./\
 # =============================================================================
 # Platform-specific Homebrew PATH
 # =============================================================================
-case "$CURRENT_PLATFORM" in
-  Mac)
-    if [ -d /opt/homebrew/bin ]; then
-      # Apple Silicon
-      export PATH="/opt/homebrew/bin:$PATH"
-    elif [ -d /usr/local/bin ]; then
-      # Intel Mac
-      export PATH="/usr/local/bin:$PATH"
-    fi
-    ;;
-  Linux)
-    if [ -d /home/linuxbrew/.linuxbrew/bin ]; then
-      export PATH="/home/linuxbrew/.linuxbrew/bin:$PATH"
-    elif [ -d /usr/local/bin ]; then
-      export PATH="/usr/local/bin:$PATH"
-    fi
-    ;;
-esac
+# =============================================================================
+# Platform-specific Homebrew PATH
+# =============================================================================
+if is_macos; then
+  if [ -d /opt/homebrew/bin ]; then
+    # Apple Silicon
+    export PATH="/opt/homebrew/bin:$PATH"
+  elif [ -d /usr/local/bin ]; then
+    # Intel Mac
+    export PATH="/usr/local/bin:$PATH"
+  fi
+elif is_linux; then
+  if [ -d /home/linuxbrew/.linuxbrew/bin ]; then
+    export PATH="/home/linuxbrew/.linuxbrew/bin:$PATH"
+  elif [ -d /usr/local/bin ]; then
+    export PATH="/usr/local/bin:$PATH"
+  fi
+fi
 
 # =============================================================================
 # rbenv (Ruby) - skip if not installed
@@ -137,7 +137,7 @@ fi
 # =============================================================================
 # PostgreSQL (macOS only — WSL and Linux skip)
 # =============================================================================
-if [ "$CURRENT_PLATFORM" = "Mac" ] && [ -d /usr/local/var/postgres ]; then
+if is_macos && [ -d /usr/local/var/postgres ]; then
   export PGDATA=/usr/local/var/postgres
 fi
 

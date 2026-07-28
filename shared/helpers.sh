@@ -31,14 +31,20 @@ is_wsl() {
   grep -qi microsoft /proc/version 2>/dev/null
 }
 
-# ── Logging (colorised when stdout is a terminal) ─────────────────────
+# Canonical list of available tools.  deploy-all.sh and uninstall.sh
+# both source this file, so the list is defined once.
+AVAILABLE_TOOLS="zsh nvim tmux"
 
+# ── Logging (colourised when the output fd is a terminal) ─────────────
+
+# _can_color <fd>
+# Returns 0 if fd is a terminal and NO_COLOR is unset.
 _can_color() {
-  [ -t 1 ] && [ -z "${NO_COLOR:-}" ]
+  [ -t "$1" ] && [ -z "${NO_COLOR:-}" ]
 }
 
 log_info() {
-  if _can_color; then
+  if _can_color 1; then
     printf '\033[36m[INFO]\033[m %s\n' "$*"
   else
     printf '[INFO] %s\n' "$*"
@@ -46,7 +52,7 @@ log_info() {
 }
 
 log_warn() {
-  if _can_color; then
+  if _can_color 2; then
     printf '\033[33m[WARN]\033[m %s\n' "$*" >&2
   else
     printf '[WARN] %s\n' "$*" >&2
@@ -54,7 +60,7 @@ log_warn() {
 }
 
 log_error() {
-  if _can_color; then
+  if _can_color 2; then
     printf '\033[31m[ERROR]\033[m %s\n' "$*" >&2
   else
     printf '[ERROR] %s\n' "$*" >&2
@@ -62,16 +68,16 @@ log_error() {
 }
 
 log_ok() {
-  if _can_color; then
+  if _can_color 1; then
     printf '\033[32m[OK]\033[m %s\n' "$*"
   else
     printf '[OK] %s\n' "$*"
   fi
 }
 
-# Print a horizontal rule (useful for section breaks)
+# Print a horizontal rule (ASCII for portability, 50 chars wide).
 log_hr() {
-  printf '――――――――――――――――――――――――――――――――――――――――――――――――――\n'
+  printf '%s\n' '--------------------------------------------------'
 }
 
 # ── Command helpers ───────────────────────────────────────────────────
@@ -125,10 +131,24 @@ get_brew_prefix() {
 
 # ── Filesystem helpers ────────────────────────────────────────────────
 
+# _backup_dst <dst>
+# Print a safe backup path for dst.  If dst.backup doesn't exist, use it
+# as-is; otherwise append a timestamp to avoid overwriting a previous
+# backup.
+_backup_dst() {
+  _bd="$1.backup"
+  if [ ! -e "$_bd" ] && [ ! -L "$_bd" ]; then
+    printf '%s' "$_bd"
+  else
+    printf '%s.%s' "$_bd" "$(date +%Y%m%d%H%M%S)"
+  fi
+}
+
 # symlink_backup <src> <dst>
 # Create a symlink dst → src.  If dst already exists (and is not already
-# the correct symlink), move it to dst.backup first.
+# the correct symlink), move it to a backup path first.
 # If DRY_RUN is set to 1, only print what would be done.
+# If BACKUP is set to 0, existing files are removed instead of backed up.
 symlink_backup() {
   _src="$1"
   _dst="$2"
@@ -156,13 +176,22 @@ symlink_backup() {
     }
   fi
 
-  # Back up existing file / symlink
+  # Handle existing file / symlink
   if [ -e "$_dst" ] || [ -L "$_dst" ]; then
-    log_warn "Backing up existing: $_dst → $_dst.backup"
-    mv "$_dst" "$_dst.backup" || {
-      log_error "Failed to back up: $_dst"
-      return 1
-    }
+    if [ "${BACKUP:-1}" -eq 0 ]; then
+      log_warn "Removing existing (backup disabled): $_dst"
+      rm -f "$_dst" || {
+        log_error "Failed to remove: $_dst"
+        return 1
+      }
+    else
+      _backup_path="$(_backup_dst "$_dst")"
+      log_warn "Backing up existing: $_dst → $_backup_path"
+      mv "$_dst" "$_backup_path" || {
+        log_error "Failed to back up: $_dst"
+        return 1
+      }
+    fi
   fi
 
   ln -fs "$_src" "$_dst" || {
@@ -170,10 +199,12 @@ symlink_backup() {
     return 1
   }
   log_ok "Linked: $_dst → $_src"
+  return 0
 }
 
 # symlink_restore <dst>
-# Remove the symlink at dst and restore from dst.backup if it exists.
+# Remove the symlink at dst and restore from a .backup* file if one exists.
+# If dst is a real file (not a symlink), skip to avoid overwriting user data.
 # Used by uninstall.sh.
 symlink_restore() {
   _dst="$1"
@@ -182,7 +213,7 @@ symlink_restore() {
     if [ -L "$_dst" ]; then
       printf '[DRY-RUN] rm %s\n' "$_dst"
     fi
-    if [ -e "$_dst.backup" ]; then
+    if [ -e "$_dst.backup" ] || [ -L "$_dst.backup" ]; then
       printf '[DRY-RUN] mv %s.backup %s\n' "$_dst" "$_dst"
     fi
     return 0
@@ -190,9 +221,19 @@ symlink_restore() {
 
   if [ -L "$_dst" ]; then
     rm "$_dst" && log_info "Removed symlink: $_dst"
+  elif [ -e "$_dst" ]; then
+    log_warn "Skipping restore — real file exists at $_dst (not a symlink)"
+    return 0
   fi
 
-  if [ -e "$_dst.backup" ]; then
-    mv "$_dst.backup" "$_dst" && log_ok "Restored backup: $_dst"
+  # Find the latest backup (dst.backup or dst.backup.YYYYmmddHHMMSS)
+  _latest=""
+  for _cand in "$_dst.backup" "$_dst.backup."*; do
+    [ -e "$_cand" ] || continue
+    _latest="$_cand"
+  done
+  if [ -n "$_latest" ]; then
+    mv "$_latest" "$_dst" && log_ok "Restored backup: $_dst (from $_latest)"
   fi
+  return 0
 }

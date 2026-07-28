@@ -18,24 +18,24 @@ SCRIPT_DIR=$(cd "$(dirname "$0")"; pwd)
 DRY_RUN=0
 FORCE=0
 ONLY_TOOLS=""
-AVAILABLE_TOOLS="zsh nvim tmux"
 
-# ── Known symlinks per tool (dst only — src is inferred from the link target) ──
-# Each tool entry lists the symlink destinations that deploy creates.
-KNOWN_LINKS_zsh="
-$HOME/.zshrc
-$HOME/.zsh_plugins.txt
-"
+# ── Known symlinks per tool (dst only) ────────────────────────────────
+# Each tool entry lists one symlink destination per line.
+# Use printf so the trailing-newline line-continuation works portably.
+KNOWN_LINKS_zsh=$(printf '%s\n' \
+  "$HOME/.zshrc" \
+  "$HOME/.zsh_plugins.txt" \
+)
 
-KNOWN_LINKS_nvim="
-${XDG_CONFIG_HOME:-$HOME/.config}/nvim/init.vim
-${XDG_CONFIG_HOME:-$HOME/.config}/nvim/dein.toml
-${XDG_CONFIG_HOME:-$HOME/.config}/nvim/dein_lazy.toml
-"
+KNOWN_LINKS_nvim=$(printf '%s\n' \
+  "${XDG_CONFIG_HOME:-$HOME/.config}/nvim/init.vim" \
+  "${XDG_CONFIG_HOME:-$HOME/.config}/nvim/dein.toml" \
+  "${XDG_CONFIG_HOME:-$HOME/.config}/nvim/dein_lazy.toml" \
+)
 
-KNOWN_LINKS_tmux="
-$HOME/.tmux.conf
-"
+KNOWN_LINKS_tmux=$(printf '%s\n' \
+  "$HOME/.tmux.conf" \
+)
 
 # ── Usage ─────────────────────────────────────────────────────────────
 
@@ -61,6 +61,10 @@ while [ $# -gt 0 ]; do
     --dry-run)    DRY_RUN=1 ;;
     --force)      FORCE=1 ;;
     --only)
+      if [ $# -lt 2 ]; then
+        log_error "--only requires a comma-separated list of tools."
+        exit 1
+      fi
       ONLY_TOOLS="$2"; shift ;;
     --help|-h)    usage; exit 0 ;;
     *)
@@ -70,7 +74,7 @@ while [ $# -gt 0 ]; do
   shift
 done
 
-# ── Resolve tool list ─────────────────────────────────────────────────
+# ── Resolve tool list (with dedup) ────────────────────────────────────
 
 if [ -n "$ONLY_TOOLS" ]; then
   TOOLS=""
@@ -82,8 +86,11 @@ if [ -n "$ONLY_TOOLS" ]; then
     _found=0
     for _a in $AVAILABLE_TOOLS; do
       if [ "$_t" = "$_a" ]; then
-        TOOLS="$TOOLS $_t"
-        _found=1; break
+        case " $TOOLS " in
+          *" $_t "*) _found=1 ;;
+          *) TOOLS="$TOOLS $_t"; _found=1 ;;
+        esac
+        break
       fi
     done
     if [ "$_found" -eq 0 ]; then
@@ -104,14 +111,22 @@ log_hr
 if [ "$DRY_RUN" -eq 1 ]; then
   log_warn "DRY RUN MODE — no changes will be made."
 fi
-log_info "Uninstalling tools: $TOOLS"
+log_info "Uninstalling tools:$TOOLS"
 printf '\n'
 
-# ── Confirmation ──────────────────────────────────────────────────────
+# ── Confirmation (only in interactive mode, never in dry-run) ─────────
 
-if [ "$FORCE" -eq 0 ]; then
+if [ "$FORCE" -eq 0 ] && [ "$DRY_RUN" -eq 0 ]; then
+  if [ ! -t 0 ]; then
+    log_error "stdin is not a terminal. Use --force to uninstall non-interactively."
+    exit 1
+  fi
   printf 'Proceed with uninstall? [y/N] '
-  read -r _answer
+  read -r _answer || {
+    printf '\n'
+    log_warn "Aborted (EOF on stdin)."
+    exit 1
+  }
   case "$_answer" in
     [Yy]|[Yy][Ee][Ss]) ;;
     *) log_warn "Aborted."; exit 0 ;;
@@ -122,35 +137,44 @@ fi
 # ── Process each tool ─────────────────────────────────────────────────
 
 export DRY_RUN
+OVERALL_OK=0
 
 for _tool in $TOOLS; do
   log_hr
   log_info "Uninstalling: $_tool"
 
-  # Get the list of known links for this tool via eval
+  # Get the list of known links for this tool
   _links_var="KNOWN_LINKS_$_tool"
-  eval "_links=\$$_links_var"
+  eval "_links=\${$_links_var:-}"
+  if [ -z "$_links" ]; then
+    log_warn "No link list defined for '$_tool'. Skipping."
+    continue
+  fi
 
+  # Iterate over links, one per line (IFS=newline to handle whitespace paths)
+  _OLDIFS="$IFS"
+  IFS='
+'
   for _dst in $_links; do
-    if [ -L "$_dst" ]; then
-      symlink_restore "$_dst"
-    elif [ -e "$_dst.backup" ]; then
-      # Link gone but backup exists — restore anyway
-      if [ "${DRY_RUN:-0}" -eq 1 ]; then
-        printf '[DRY-RUN] mv %s.backup %s\n' "$_dst" "$_dst"
-      else
-        mv "$_dst.backup" "$_dst" && log_ok "Restored backup: $_dst"
-      fi
-    else
-      log_info "Nothing to do for: $_dst"
-    fi
+    IFS="$_OLDIFS"
+    [ -z "$_dst" ] && continue  # skip blank lines
+    symlink_restore "$_dst" || OVERALL_OK=1
+    IFS='
+'
   done
+  IFS="$_OLDIFS"
 done
 
 # ── Summary ───────────────────────────────────────────────────────────
 
 printf '\n'
 log_hr
-log_ok "Uninstall complete."
+if [ "$OVERALL_OK" -eq 0 ]; then
+  log_ok "Uninstall complete."
+else
+  log_warn "Uninstall finished with some errors. Check the output above."
+fi
 log_warn "Note: Installed packages (zsh, tmux, etc.) were not removed."
 log_warn "Note: Plugin managers (Antidote, dein.vim) were not removed."
+
+exit "$OVERALL_OK"

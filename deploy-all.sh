@@ -26,8 +26,6 @@ FORCE=0
 BACKUP=1
 ONLY_TOOLS=""
 
-AVAILABLE_TOOLS="zsh nvim tmux"
-
 # ── Usage ─────────────────────────────────────────────────────────────
 
 usage() {
@@ -90,7 +88,7 @@ while [ $# -gt 0 ]; do
   shift
 done
 
-# ── Resolve tool list ─────────────────────────────────────────────────
+# ── Resolve tool list (with dedup) ────────────────────────────────────
 
 if [ -n "$ONLY_TOOLS" ]; then
   TOOLS=""
@@ -102,8 +100,11 @@ if [ -n "$ONLY_TOOLS" ]; then
     _found=0
     for _a in $AVAILABLE_TOOLS; do
       if [ "$_t" = "$_a" ]; then
-        TOOLS="$TOOLS $_t"
-        _found=1
+        # Dedup: skip if already in TOOLS
+        case " $TOOLS " in
+          *" $_t "*) _found=1 ;;
+          *) TOOLS="$TOOLS $_t"; _found=1 ;;
+        esac
         break
       fi
     done
@@ -129,14 +130,23 @@ log_info "Platform: $(uname -s) ($(uname -m))"
 if is_wsl; then
   log_info "WSL:      detected"
 fi
-log_info "Tools:    $TOOLS"
+log_info "Tools:   $TOOLS"
 printf '\n'
 
-# ── Confirmation (unless --force) ─────────────────────────────────────
+# ── Confirmation (only in interactive mode, never in dry-run) ─────────
 
-if [ "$FORCE" -eq 0 ]; then
+if [ "$FORCE" -eq 0 ] && [ "$DRY_RUN" -eq 0 ]; then
+  # Refuse to proceed when stdin is not a terminal (pipe / cron / CI).
+  if [ ! -t 0 ]; then
+    log_error "stdin is not a terminal. Use --force to deploy non-interactively."
+    exit 1
+  fi
   printf 'Proceed with deployment? [Y/n] '
-  read -r _answer
+  read -r _answer || {
+    printf '\n'
+    log_warn "Aborted (EOF on stdin)."
+    exit 1
+  }
   case "$_answer" in
     [Nn]|[Nn][Oo])
       log_warn "Aborted."
@@ -161,12 +171,16 @@ for _tool in $TOOLS; do
     continue
   fi
 
-  # Per-tool confirmation in interactive mode
+  # Per-tool confirmation in interactive mode (never in dry-run)
   if [ "$FORCE" -eq 0 ] && [ "$DRY_RUN" -eq 0 ]; then
-    printf 'Deploy %s? [Y/n/skip all/q] ' "$_tool"
-    read -r _answer
+    printf 'Deploy %s? [Y/n/s/q] ' "$_tool"
+    read -r _answer || {
+      printf '\n'
+      log_warn "Aborted (EOF on stdin)."
+      exit 1
+    }
     case "$_answer" in
-      [Ss])
+      [Ss]|[Ss][Kk][Ii][Pp]*)
         log_info "Skipping remaining tools."
         break
         ;;
@@ -196,3 +210,5 @@ if [ "$OVERALL_OK" -eq 0 ]; then
 else
   log_warn "Deployment finished with some errors. Check the output above."
 fi
+
+exit "$OVERALL_OK"
