@@ -7,7 +7,7 @@
 
 | 孫 | ブランチ | 内容 | 状況 |
 |---|---|---|---|
-| 1 | `ai/repo-housekeeping` | 土台整理: .gitignore更新 + LICENSE追加 + サブモジュール整理 | ⬜ 待機中 |
+| 1 | `ai/ai-repo-housekeeping` | 土台整理: .gitignore更新 + LICENSE追加 + サブモジュール整理 | 🔄 実装中 |
 | 2 | `ai/mise-env-pinning` | miseによる環境固定化 + Brewfile + apt-packages | ⬜ 待機中 |
 | 3 | `ai/zsh-antidote` | zsh: zplug→Antidote移行 + クロスプラットフォーム + バグ修正 | ⬜ 待機中 |
 | 4 | `ai/global-deploy` | 全体デプロイシステム + helpers.sh拡充 | ⬜ 待機中 |
