@@ -1,0 +1,9 @@
+[tools]
+python = "3.12"
+node = "22"
+ruby = "3.3"
+rust = "latest"
+neovim = "latest"
+ripgrep = "latest"
+fd = "latest"
+lazygit = "latest"

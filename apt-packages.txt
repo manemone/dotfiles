@@ -1,0 +1,8 @@
+zsh
+tmux
+ripgrep
+fd-find
+lazygit
+git
+curl
+build-essential

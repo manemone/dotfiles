@@ -5,6 +5,8 @@ CONFIG_DIR=$HOME
 
 source $REPO_DIR/../shared/helpers.sh
 
+ensure_command mise
+
 # Copy setting files
 ln -fs ${REPO_DIR}/tmux.conf $CONFIG_DIR/.tmux.conf
 
