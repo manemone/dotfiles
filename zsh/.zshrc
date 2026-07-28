@@ -38,13 +38,9 @@ else
 fi
 
 # Initialize completion system (zplug used to do this; antidote doesn't)
-# On macOS with Homebrew, /opt/homebrew/share is often group-writable,
-# which triggers compinit's "insecure directories" warning on every shell start.
-# Disable compfix to suppress the noisy (and in this context, expected) prompt.
-if [ "$CURRENT_PLATFORM" = "Mac" ]; then
-  ZSH_DISABLE_COMPFIX="true"
-fi
-autoload -Uz compinit && compinit
+# Use -i to silently skip insecure directories (common on macOS with Homebrew
+# where /opt/homebrew/share may be group-writable).
+autoload -Uz compinit && compinit -i
 
 # History substring search keybindings
 # zsh-history-substring-search doesn't bind keys by itself — do it here.
