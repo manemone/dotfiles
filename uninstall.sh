@@ -28,9 +28,9 @@ KNOWN_LINKS_zsh=$(printf '%s\n' \
 )
 
 KNOWN_LINKS_nvim=$(printf '%s\n' \
-  "${XDG_CONFIG_HOME:-$HOME/.config}/nvim/init.vim" \
-  "${XDG_CONFIG_HOME:-$HOME/.config}/nvim/dein.toml" \
-  "${XDG_CONFIG_HOME:-$HOME/.config}/nvim/dein_lazy.toml" \
+  "${XDG_CONFIG_HOME:-$HOME/.config}/nvim/init.lua" \
+  "${XDG_CONFIG_HOME:-$HOME/.config}/nvim/lua" \
+  "${XDG_CONFIG_HOME:-$HOME/.config}/nvim/lazy-lock.json" \
 )
 
 KNOWN_LINKS_tmux=$(printf '%s\n' \
@@ -175,6 +175,6 @@ else
   log_warn "Uninstall finished with some errors. Check the output above."
 fi
 log_warn "Note: Installed packages (zsh, tmux, etc.) were not removed."
-log_warn "Note: Plugin managers (Antidote, dein.vim) were not removed."
+log_warn "Note: Plugin managers (Antidote, lazy.nvim) were not removed."
 
 exit "$OVERALL_OK"
