@@ -11,8 +11,8 @@
 | 2 | `ai/ai-mise-env-pinning` | miseによる環境固定化 + Brewfile + apt-packages | ✅ PR #10 マージ済 |
 | 3 | `ai/ai-zsh-antidote` | zsh: zplug→Antidote移行 + クロスプラットフォーム + バグ修正 | ✅ PR #11 マージ済 |
 | 4 | `ai/deploy-unified-setup` | 全体デプロイシステム + helpers.sh拡充 | ✅ PR #12 マージ済 |
-| 5 | `ai/ai-tmux-cross-platform` | tmux: クロスプラットフォーム + 設定モダン化 | 🔄 実装中 |
-| 6 | `ai/ai-nvim-lazy` | nvim: dein.vim→lazy.nvim移行 + built-in優先 + Lua化 | 🔄 実装中 |
+| 5 | `ai/ai-tmux-cross-platform` | tmux: クロスプラットフォーム + 設定モダン化 | ✅ PR #13 マージ済 |
+| 6 | `ai/nvim-lazy-migration` | nvim: dein.vim→lazy.nvim移行 + built-in優先 + Lua化 | ✅ PR #14 マージ済 |
 | 7 | `ai/vim-purge` | vim/ 削除の後始末（サブモジュール除去・vim/削除は孫1で完了） | ⬜ 待機中 |
 | 8 | `ai/docs-overhaul` | 全README書き直し | ⬜ 待機中 |
 
