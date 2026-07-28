@@ -30,7 +30,7 @@ Install platform-specific system packages:
 
 # Supported tools
 - NeoVim
-- Z Sehll
+- Z Shell
 
 # After cloning this repo
 Follow the instructions in README.md in each subdirectory.
