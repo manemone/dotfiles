@@ -7,7 +7,7 @@ local opt = vim.opt
 
 opt.termguicolors = true         -- 24-bit color (required by modern colorschemes)
 opt.number = true                -- show line numbers
-opt.relativenumber = true        -- relative line numbers (modern convenience)
+opt.relativenumber = false       -- absolute numbers, as in the original init.vim
 opt.signcolumn = "yes"           -- always show sign column (LSP/gitsigns gutter)
 opt.cursorline = true            -- highlight current line
 opt.showmatch = true             -- briefly jump to matching bracket
@@ -39,11 +39,6 @@ opt.wrapscan = true              -- wrap around EOF when searching
 
 opt.clipboard = "unnamed,unnamedplus"  -- yank/paste to/from system clipboard (* and + registers)
 
--- ── Splits ─────────────────────────────────────────────────────────────
-
-opt.splitbelow = true            -- :split opens below current window
-opt.splitright = true            -- :vsplit opens right of current window
-
 -- ── Scrolling ──────────────────────────────────────────────────────────
 
 opt.scrolloff = 4                -- keep 4 lines visible above/below cursor
@@ -51,7 +46,9 @@ opt.sidescrolloff = 8            -- keep 8 columns visible left/right of cursor
 
 -- ── Misc ───────────────────────────────────────────────────────────────
 
-opt.mouse = "a"                  -- enable mouse in all modes
+-- Mouse off. NeoVim defaults to "nvi", so this must be set explicitly rather
+-- than omitted — leaving it unset keeps the mouse grabbing terminal selection.
+opt.mouse = ""
 opt.backup = false               -- no backup files
 opt.swapfile = false             -- no swap files (use undo history instead)
 opt.undofile = true              -- persistent undo
