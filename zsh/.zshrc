@@ -9,15 +9,13 @@ DOTFILES_DIR="${_ZSHRC_PATH:h:h}"
 unset _ZSHRC_PATH
 
 # =============================================================================
-# Source shared helpers (CURRENT_PLATFORM, is_wsl, ensure_command)
-# Note: only CURRENT_PLATFORM is actively used in this file.
-# is_wsl and ensure_command are available for interactive use but not called here.
+# Source shared helpers (CURRENT_PLATFORM, is_macos, is_linux, is_wsl, etc.)
 # =============================================================================
 if [ -f "$DOTFILES_DIR/shared/helpers.sh" ]; then
   source "$DOTFILES_DIR/shared/helpers.sh"
 fi
 
-# Fallback platform detection if helpers.sh didn't set CURRENT_PLATFORM
+# Fallback platform detection and helpers if shared/helpers.sh is unavailable.
 if [ -z "${CURRENT_PLATFORM:-}" ]; then
   case "$(uname -s)" in
     Darwin)  CURRENT_PLATFORM='macos' ;;
@@ -25,6 +23,15 @@ if [ -z "${CURRENT_PLATFORM:-}" ]; then
     *)       CURRENT_PLATFORM='unknown' ;;
   esac
 fi
+
+# Fallback functions (defined only when helpers.sh didn't provide them)
+if ! command -v is_macos >/dev/null 2>&1; then
+  is_macos() { [ "$CURRENT_PLATFORM" = "macos" ]; }
+  is_linux() { [ "$CURRENT_PLATFORM" = "linux" ]; }
+fi
+
+# helpers.sh exports AVAILABLE_TOOLS which we don't need in an interactive shell.
+unset AVAILABLE_TOOLS 2>/dev/null || true
 
 # =============================================================================
 # Antidote Plugin Manager
@@ -78,9 +85,6 @@ fi
 # one-liner httpd
 alias webrick="ruby -rwebrick -e 'WEBrick::HTTPServer.new(:DocumentRoot => \"./\", :Port => 8000).start'"
 
-# =============================================================================
-# Platform-specific Homebrew PATH
-# =============================================================================
 # =============================================================================
 # Platform-specific Homebrew PATH
 # =============================================================================

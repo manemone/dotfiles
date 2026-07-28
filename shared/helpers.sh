@@ -133,14 +133,14 @@ get_brew_prefix() {
 
 # _backup_dst <dst>
 # Print a safe backup path for dst.  If dst.backup doesn't exist, use it
-# as-is; otherwise append a timestamp to avoid overwriting a previous
-# backup.
+# as-is; otherwise append a timestamp + PID to avoid overwriting a previous
+# backup (PID included to prevent same-second collisions).
 _backup_dst() {
   _bd="$1.backup"
   if [ ! -e "$_bd" ] && [ ! -L "$_bd" ]; then
     printf '%s' "$_bd"
   else
-    printf '%s.%s' "$_bd" "$(date +%Y%m%d%H%M%S)"
+    printf '%s.%s.%s' "$_bd" "$(date +%Y%m%d%H%M%S)" "$$"
   fi
 }
 
@@ -161,7 +161,11 @@ symlink_backup() {
 
   if [ "${DRY_RUN:-0}" -eq 1 ]; then
     if [ -e "$_dst" ] || [ -L "$_dst" ]; then
-      printf '[DRY-RUN] mv %s %s.backup\n' "$_dst" "$_dst"
+      if [ "${BACKUP:-1}" -eq 0 ]; then
+        printf '[DRY-RUN] rm -f %s\n' "$_dst"
+      else
+        printf '[DRY-RUN] mv %s %s.backup\n' "$_dst" "$_dst"
+      fi
     fi
     printf '[DRY-RUN] ln -fs %s %s\n' "$_src" "$_dst"
     return 0
@@ -205,6 +209,8 @@ symlink_backup() {
 # symlink_restore <dst>
 # Remove the symlink at dst and restore from a .backup* file if one exists.
 # If dst is a real file (not a symlink), skip to avoid overwriting user data.
+# Restores the *original* backup (dst.backup without timestamp) if available;
+# otherwise falls back to the oldest timestamped backup.
 # Used by uninstall.sh.
 symlink_restore() {
   _dst="$1"
@@ -212,6 +218,8 @@ symlink_restore() {
   if [ "${DRY_RUN:-0}" -eq 1 ]; then
     if [ -L "$_dst" ]; then
       printf '[DRY-RUN] rm %s\n' "$_dst"
+    elif [ -e "$_dst" ]; then
+      printf '[DRY-RUN] (skip — real file exists at %s)\n' "$_dst"
     fi
     if [ -e "$_dst.backup" ] || [ -L "$_dst.backup" ]; then
       printf '[DRY-RUN] mv %s.backup %s\n' "$_dst" "$_dst"
@@ -219,21 +227,41 @@ symlink_restore() {
     return 0
   fi
 
+  _fail=0
+
   if [ -L "$_dst" ]; then
-    rm "$_dst" && log_info "Removed symlink: $_dst"
+    if rm "$_dst"; then
+      log_info "Removed symlink: $_dst"
+    else
+      log_error "Failed to remove symlink: $_dst"
+      _fail=1
+    fi
   elif [ -e "$_dst" ]; then
     log_warn "Skipping restore — real file exists at $_dst (not a symlink)"
     return 0
   fi
 
-  # Find the latest backup (dst.backup or dst.backup.YYYYmmddHHMMSS)
-  _latest=""
-  for _cand in "$_dst.backup" "$_dst.backup."*; do
-    [ -e "$_cand" ] || continue
-    _latest="$_cand"
-  done
-  if [ -n "$_latest" ]; then
-    mv "$_latest" "$_dst" && log_ok "Restored backup: $_dst (from $_latest)"
+  # Restore the *original* backup (dst.backup) first; if that doesn't exist,
+  # pick the oldest timestamped backup (first in glob order = earliest).
+  _restore=""
+  if [ -e "$_dst.backup" ]; then
+    _restore="$_dst.backup"
+  else
+    for _cand in "$_dst.backup."*; do
+      [ -e "$_cand" ] || continue
+      _restore="$_cand"
+      break
+    done
   fi
-  return 0
+
+  if [ -n "$_restore" ]; then
+    if mv "$_restore" "$_dst"; then
+      log_ok "Restored backup: $_dst (from $_restore)"
+    else
+      log_error "Failed to restore backup: $_restore → $_dst"
+      _fail=1
+    fi
+  fi
+
+  return "$_fail"
 }
