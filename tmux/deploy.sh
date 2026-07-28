@@ -1,6 +1,6 @@
 #!/bin/sh
 
-REPO_DIR=$(cd $(dirname $0); pwd)
+REPO_DIR=$(cd "$(dirname "$0")"; pwd)
 CONFIG_DIR=$HOME
 
 . "$REPO_DIR/../shared/helpers.sh"

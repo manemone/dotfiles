@@ -5,21 +5,22 @@ Easily deployable setting files
 This project uses [mise](https://mise.jdx.dev/) to manage tool versions
 (Python, Node.js, Ruby, Rust, neovim, ripgrep, fd, lazygit).
 
-## Install mise
+## 1. Install mise
 ```sh
 curl https://mise.run | sh
 ```
-macOS: `brew install mise`
-Linux: see https://mise.jdx.dev/getting-started.html for installation options.
+macOS alternative: `brew install mise`
+For other Linux installation options, see https://mise.jdx.dev/getting-started.html.
 
-## Bootstrap
-After installing mise, run the following to install all required tools:
+## 2. Clone and bootstrap
 ```sh
+git clone https://github.com/manemone/dotfiles.git ~/dotfiles
+cd ~/dotfiles
 mise trust
 mise install
 ```
 
-Platform-specific system packages are also needed:
+Install platform-specific system packages:
 - macOS: `brew bundle --file Brewfile`
 - Linux/WSL: `sudo apt install $(cat apt-packages.txt)`
 

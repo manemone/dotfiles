@@ -1,5 +1,4 @@
 tap "homebrew/bundle"
-brew "mise"
 brew "zsh"
 brew "tmux"
 brew "git"
