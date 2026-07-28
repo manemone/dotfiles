@@ -55,7 +55,8 @@ opt.mouse = "a"                  -- enable mouse in all modes
 opt.backup = false               -- no backup files
 opt.swapfile = false             -- no swap files (use undo history instead)
 opt.undofile = true              -- persistent undo
-opt.undodir = vim.fn.stdpath("data") .. "/undo"
+local undodir = vim.fn.stdpath("data") .. "/undo"
+opt.undodir = undodir
 opt.timeoutlen = 300             -- ms to wait for a mapped key sequence
 opt.updatetime = 200             -- ms before CursorHold triggers (faster for LSP/gitsigns)
 opt.completeopt = { "menu", "menuone", "noselect" }
@@ -63,4 +64,4 @@ opt.shortmess:append("c")        -- hide completion messages
 opt.sessionoptions = "buffers,curdir,folds,help,tabpages,winsize"
 
 -- Ensure undo directory exists
-vim.fn.mkdir(opt.undodir:get(), "p")
+vim.fn.mkdir(undodir, "p")
