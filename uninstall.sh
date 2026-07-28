@@ -76,33 +76,7 @@ done
 
 # ── Resolve tool list (with dedup) ────────────────────────────────────
 
-if [ -n "$ONLY_TOOLS" ]; then
-  TOOLS=""
-  _OLDIFS="$IFS"
-  IFS=','
-  for _t in $ONLY_TOOLS; do
-    IFS="$_OLDIFS"
-    _t=$(printf '%s' "$_t" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
-    _found=0
-    for _a in $AVAILABLE_TOOLS; do
-      if [ "$_t" = "$_a" ]; then
-        case " $TOOLS " in
-          *" $_t "*) _found=1 ;;
-          *) TOOLS="$TOOLS $_t"; _found=1 ;;
-        esac
-        break
-      fi
-    done
-    if [ "$_found" -eq 0 ]; then
-      log_error "Unknown tool: '$_t'. Available: $AVAILABLE_TOOLS"
-      exit 1
-    fi
-    IFS=','
-  done
-  IFS="$_OLDIFS"
-else
-  TOOLS="$AVAILABLE_TOOLS"
-fi
+eval "$(resolve_tools "$ONLY_TOOLS" "TOOLS")"
 
 # ── Banner ────────────────────────────────────────────────────────────
 
@@ -143,7 +117,13 @@ for _tool in $TOOLS; do
   log_hr
   log_info "Uninstalling: $_tool"
 
-  # Get the list of known links for this tool
+  # Get the list of known links for this tool.
+  # Guard: $_tool is validated by resolve_tools() above but we
+  # double-check it contains only alphanumeric characters before
+  # using it in a dynamic variable name to prevent injection.
+  case "$_tool" in
+    *[!a-zA-Z0-9_]*) log_error "Invalid tool name: '$_tool'"; continue ;;
+  esac
   _links_var="KNOWN_LINKS_$_tool"
   eval "_links=\${$_links_var:-}"
   if [ -z "$_links" ]; then

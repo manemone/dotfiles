@@ -90,34 +90,7 @@ done
 
 # ── Resolve tool list (with dedup) ────────────────────────────────────
 
-if [ -n "$ONLY_TOOLS" ]; then
-  TOOLS=""
-  _OLDIFS="$IFS"
-  IFS=','
-  for _t in $ONLY_TOOLS; do
-    IFS="$_OLDIFS"
-    _t=$(printf '%s' "$_t" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//') # trim
-    _found=0
-    for _a in $AVAILABLE_TOOLS; do
-      if [ "$_t" = "$_a" ]; then
-        # Dedup: skip if already in TOOLS
-        case " $TOOLS " in
-          *" $_t "*) _found=1 ;;
-          *) TOOLS="$TOOLS $_t"; _found=1 ;;
-        esac
-        break
-      fi
-    done
-    if [ "$_found" -eq 0 ]; then
-      log_error "Unknown tool: '$_t'. Available: $AVAILABLE_TOOLS"
-      exit 1
-    fi
-    IFS=','
-  done
-  IFS="$_OLDIFS"
-else
-  TOOLS="$AVAILABLE_TOOLS"
-fi
+eval "$(resolve_tools "$ONLY_TOOLS" "TOOLS")"
 
 # ── Banner ────────────────────────────────────────────────────────────
 

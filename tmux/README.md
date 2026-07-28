@@ -17,6 +17,12 @@ brew install tmux reattach-to-user-namespace
 
 `reattach-to-user-namespace` enables system clipboard access from tmux on macOS.
 
+The status bar displays Wi-Fi SSID and battery level on macOS via `#(wifi)` and `#(battery --tmux)`. These require additional Homebrew packages:
+```bash
+brew install wifi-password battery
+```
+If these commands are absent, the status bar falls back to showing only the date/time without error.
+
 **Linux (Ubuntu/Debian)**
 ```bash
 sudo apt update && sudo apt install tmux xclip

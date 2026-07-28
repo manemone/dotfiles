@@ -36,7 +36,7 @@ if [ ! -f "$ANTIDOTE_HOME/antidote.zsh" ]; then
   else
     log_info "Installing Antidote plugin manager..."
     if [ -d "$ANTIDOTE_HOME" ]; then
-      if [ -d "$ANTIDOTE_HOME/.git" ]; then
+      if [ -d "$ANTIDOTE_HOME/.git" ] && [ -f "$ANTIDOTE_HOME/antidote.zsh" ]; then
         rm -rf "$ANTIDOTE_HOME"
       elif [ -z "$(ls -A "$ANTIDOTE_HOME" 2>/dev/null)" ]; then
         rmdir "$ANTIDOTE_HOME"

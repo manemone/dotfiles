@@ -35,6 +35,53 @@ is_wsl() {
 # both source this file, so the list is defined once.
 AVAILABLE_TOOLS="zsh nvim tmux"
 
+# resolve_tools <only_tools> <var_name>
+# Resolves a comma-separated tool filter against AVAILABLE_TOOLS.
+# Sets the caller's variable named <var_name> to the space-separated
+# list of validated, deduplicated tools.  Exits with an error message
+# if any requested tool is unknown.
+#
+# Usage (caller must eval the output):
+#   eval "$(resolve_tools "$ONLY_TOOLS" "TOOLS")"
+resolve_tools() {
+  _rt_only="${1:-}"
+  _rt_var="${2:-TOOLS}"
+
+  if [ -z "$_rt_only" ]; then
+    printf '%s=\"%s\"\n' "$_rt_var" "$AVAILABLE_TOOLS"
+    return 0
+  fi
+
+  _rt_result=""
+  _rt_oldifs="$IFS"
+  IFS=','
+  for _rt_t in $_rt_only; do
+    IFS="$_rt_oldifs"
+    _rt_t=$(printf '%s' "$_rt_t" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+    _rt_found=0
+    for _rt_a in $AVAILABLE_TOOLS; do
+      if [ "$_rt_t" = "$_rt_a" ]; then
+        case " $_rt_result " in
+          *" $_rt_t "*) _rt_found=1 ;;
+          *) _rt_result="$_rt_result $_rt_t"; _rt_found=1 ;;
+        esac
+        break
+      fi
+    done
+    if [ "$_rt_found" -eq 0 ]; then
+      printf 'log_error "Unknown tool: '\''%s'\''. Available: %s"\n' "$_rt_t" "$AVAILABLE_TOOLS" >&2
+      printf 'exit 1\n' >&2
+      return 1
+    fi
+    IFS=','
+  done
+  IFS="$_rt_oldifs"
+
+  _rt_result=$(printf '%s' "$_rt_result" | sed 's/^[[:space:]]*//')
+  printf '%s=\"%s\"\n' "$_rt_var" "$_rt_result"
+  return 0
+}
+
 # ── Logging (colourised when the output fd is a terminal) ─────────────
 
 # _can_color <fd>

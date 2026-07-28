@@ -142,9 +142,9 @@ else
   if [ -z "$_python3" ]; then
     # Fall back to any available pip3
     if command -v pip3 >/dev/null 2>&1; then
-      pip3 install --quiet pynvim 2>/dev/null && log_ok "pynvim installed via system pip3"
+      pip3 install --quiet --user pynvim 2>/dev/null && log_ok "pynvim installed via system pip3"
     elif command -v pip >/dev/null 2>&1; then
-      pip install --quiet pynvim 2>/dev/null && log_ok "pynvim installed via system pip"
+      pip install --quiet --user pynvim 2>/dev/null && log_ok "pynvim installed via system pip"
     else
       log_warn "No Python/pip found. Python provider not set up."
       log_warn 'Install Python 3 via mise: mise use python@latest'
@@ -156,7 +156,7 @@ fi
 
 if command -v gem >/dev/null 2>&1; then
   if [ "${DRY_RUN:-0}" -eq 0 ]; then
-    gem install neovim 2>/dev/null || log_warn "gem install neovim failed (Ruby may not be set up)"
+    gem install --user-install neovim 2>/dev/null || log_warn "gem install neovim failed (Ruby may not be set up)"
   fi
 fi
 

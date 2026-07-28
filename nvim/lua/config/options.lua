@@ -37,7 +37,7 @@ opt.wrapscan = true              -- wrap around EOF when searching
 
 -- ── Clipboard ──────────────────────────────────────────────────────────
 
-opt.clipboard = "unnamedplus"    -- yank/paste to/from system clipboard (+ register)
+opt.clipboard = "unnamed,unnamedplus"  -- yank/paste to/from system clipboard (* and + registers)
 
 -- ── Splits ─────────────────────────────────────────────────────────────
 
