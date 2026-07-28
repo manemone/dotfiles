@@ -1,31 +1,30 @@
 #!/bin/sh
 
-if [ "$(uname)" == 'Darwin' ]; then
-  CURRENT_PLATFORM='Mac'
-elif [ "$(expr substr $(uname -s) 1 5)" == 'Linux' ]; then
-  CURRENT_PLATFORM='Linux'
-elif [ "$(expr substr $(uname -s) 1 10)" == 'MINGW32_NT' ]; then
-  CURRENT_PLATFORM='Cygwin'
-else
-  CURRENT_PLATFORM='Unknown'
-fi
+case "$(uname -s)" in
+  Darwin)
+    CURRENT_PLATFORM='Mac'
+    ;;
+  Linux*)
+    CURRENT_PLATFORM='Linux'
+    ;;
+  MINGW32_NT*)
+    CURRENT_PLATFORM='Cygwin'
+    ;;
+  *)
+    CURRENT_PLATFORM='Unknown'
+    ;;
+esac
 
-# Check if a command is available, print install instructions if not
+# ensure_command <cmd> [hint]
+# Check if a command is available, print install instructions if not.
+# Returns 0 if found, 1 if not found.
 ensure_command() {
-  if ! command -v "$1" >/dev/null 2>&1; then
-    echo "[ERROR] '$1' is not installed."
-    echo "Install it with one of the following:"
-    case "$1" in
-      mise)
-        echo "  curl https://mise.run | sh"
-        echo "  or: brew install mise"
-        echo "  or: apt install mise"
-        ;;
-      *)
-        echo "  (no install hint for '$1')"
-        ;;
-    esac
-    return 1
+  if command -v "$1" >/dev/null 2>&1; then
+    return 0
   fi
-  return 0
+  echo "[ERROR] '$1' is not installed." >&2
+  if [ -n "$2" ]; then
+    echo "Install: $2" >&2
+  fi
+  return 1
 }
