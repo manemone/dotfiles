@@ -7,16 +7,115 @@
 
 | 孫 | ブランチ | 内容 | 状況 |
 |---|---|---|---|
-| 1 | `ai/zsh-antidote` | zsh: zplug→Antidote移行 + クロスプラットフォーム + バグ修正 | ⬜ 待機中 |
-| 2 | `ai/nvim-lazy` | nvim: dein.vim→lazy.nvim移行 + built-in優先 + Lua化 | ⬜ 待機中 |
-| 3 | `ai/tmux-cross-platform` | tmux: クロスプラットフォーム + 設定モダン化 | ⬜ 待機中 |
-| 4 | `ai/remove-legacy-vim` | 古いVim設定を削除しNeoVimに一本化 | ⬜ 待機中 |
-| 5 | `ai/mise-env-pinning` | miseによる環境固定化 + Brewfile + apt-packages | ⬜ 待機中 |
-| 6 | `ai/global-deploy` | 全体デプロイシステム + helpers.sh拡充 | ⬜ 待機中 |
-| 7 | `ai/docs-overhaul` | 全README書き直し | ⬜ 待機中 |
-| 8 | `ai/repo-housekeeping` | .gitignore整理 + LICENSE追加 + サブモジュール整理 | ⬜ 待機中 |
+| 1 | `ai/repo-housekeeping` | 土台整理: .gitignore更新 + LICENSE追加 + サブモジュール整理 | ⬜ 待機中 |
+| 2 | `ai/mise-env-pinning` | miseによる環境固定化 + Brewfile + apt-packages | ⬜ 待機中 |
+| 3 | `ai/zsh-antidote` | zsh: zplug→Antidote移行 + クロスプラットフォーム + バグ修正 | ⬜ 待機中 |
+| 4 | `ai/global-deploy` | 全体デプロイシステム + helpers.sh拡充 | ⬜ 待機中 |
+| 5 | `ai/tmux-cross-platform` | tmux: クロスプラットフォーム + 設定モダン化 | ⬜ 待機中 |
+| 6 | `ai/nvim-lazy` | nvim: dein.vim→lazy.nvim移行 + built-in優先 + Lua化 | ⬜ 待機中 |
+| 7 | `ai/remove-legacy-vim` | 古いVim設定を削除しNeoVimに一本化 | ⬜ 待機中 |
+| 8 | `ai/docs-overhaul` | 全README書き直し | ⬜ 待機中 |
 
 ## 孫1用プロンプト:
+
+```
+## タスク: リポジトリ構造自体を整理する
+
+### 現状
+- `.gitignore`: `/home/k.hamada/` の個人パスがコメントに残っている
+- ライセンスファイルなし
+- `.gitmodules` に死んだ neobundle.vim サブモジュール参照あり
+
+### やること
+
+#### 1. .gitignore を更新
+- `/home/k.hamada/.gitignore-boilerplates/` の参照コメント行を削除
+- セクションコメントを "Global" → シンプルに
+- mise関連のエントリを追加（必要なら）
+- `.claude/` を ignore に追加（AIツールの作業ディレクトリ）
+
+#### 2. LICENSE ファイル追加
+MITライセンスを追加
+
+#### 3. .gitmodules の neobundle エントリを削除
+- neobundle.vim のサブモジュールエントリを削除（孫7と連携）
+- .gitmodules が空になったら削除
+
+### 検証
+- `git status` がクリーン
+- `.gitignore` に個人パス参照がない
+- `LICENSE` ファイルが存在する
+```
+
+## 孫2用プロンプト:
+
+```
+## タスク: miseによる環境固定化を導入する
+
+### 現状
+- 前提ソフトウェア（Python, Node, Ruby等）のバージョン指定が一切ない
+- macOSのHomebrew前提で、Linux向けのパッケージリストがない
+- 各ツールのdeploy.shが個別にソフトウェア存在チェックをしているが非統一
+
+### やること
+
+#### 1. .mise.toml 作成
+リポジトリのルートに `.mise.toml` を作成:
+```toml
+[tools]
+python = "3.12"
+node = "22"
+ruby = "3.3"
+rust = "latest"
+neovim = "latest"
+ripgrep = "latest"
+fd = "latest"
+lazygit = "latest"
+```
+
+#### 2. Brewfile 作成 (macOS用)
+リポジトリのルートに `Brewfile` を作成:
+```
+tap "homebrew/bundle"
+brew "mise"
+brew "zsh"
+brew "tmux"
+brew "neovim"
+brew "ripgrep"
+brew "fd"
+brew "lazygit"
+brew "git"
+brew "curl"
+```
+
+#### 3. apt-packages.txt 作成 (Linux/WSL用)
+リポジトリのルートに `apt-packages.txt` を作成:
+```
+zsh
+tmux
+ripgrep
+fd-find
+lazygit
+git
+curl
+build-essential
+```
+
+#### 4. 各deploy.shにmiseチェック追加
+- `ensure_command mise` 的なチェック
+- miseがない場合はインストール手順を表示
+
+#### 5. READMEにmiseインストール手順追加
+- curl https://mise.run | sh
+- または brew install mise / apt install mise
+
+### 重要なファイル（新規作成）
+- `.mise.toml`
+- `Brewfile`
+- `apt-packages.txt`
+```
+
+## 孫3用プロンプト:
 
 ```
 ## タスク: zshをzplugからAntidoteに移行し、クロスプラットフォーム対応する
@@ -76,7 +175,91 @@
 - `shared/helpers.sh` — 共有ヘルパー
 ```
 
-## 孫2用プロンプト:
+## 孫4用プロンプト:
+
+```
+## タスク: リポジトリ全体を統一的にセットアップできる仕組みを作る
+
+### 現状
+- 各ツールのdeploy.shを個別に実行する必要がある
+- `shared/helpers.sh` は最低限のプラットフォーム判定のみ
+- バックアップやドライラン機能がない
+- deployスクリプト間でコードの重複が多い
+
+### やること
+
+#### 1. shared/helpers.sh を拡充
+以下の関数を追加:
+- `log_info()`, `log_warn()`, `log_error()` — カラー付きログ出力
+- `is_macos()`, `is_linux()`, `is_wsl()` — プラットフォーム判定（WSL追加）
+- `ensure_command <cmd> [hint]` — コマンド存在チェック、なければインストール方法表示
+- `symlink_backup <src> <dst>` — 既存ファイルを .backup に退避してからシンボリックリンク
+- `get_brew_prefix()` — OSに応じたbrewプレフィックスを返す
+
+#### 2. 各ツールのdeploy.shを helpers.sh を使う形に統一
+すべてのdeploy.shが以下をsourceする:
+```bash
+SCRIPT_DIR=$(cd $(dirname $0); pwd)
+source "$SCRIPT_DIR/../shared/helpers.sh"
+```
+
+#### 3. トップレベル deploy-all.sh 新規作成
+- `--dry-run`: 実際の変更なしで実行計画を表示
+- `--only <tools>`: カンマ区切りで特定ツールのみ（例: `--only zsh,nvim`）
+- `--backup`: 既存設定を自動バックアップ
+- `--force`: 確認なしで実行
+- デフォルトでは対話的に進行
+- カラーログ出力で進行状況を表示
+
+#### 4. (オプション) uninstall.sh 作成
+- 作成したシンボリックリンクを削除
+- バックアップから復元（可能なら）
+
+### 重要なファイル
+- `shared/helpers.sh` — 拡充
+- `deploy-all.sh` — 新規作成（リポジトリルート）
+- 各ツールの `deploy.sh` — helpers.shを使う形に統一
+```
+
+## 孫5用プロンプト:
+
+```
+## タスク: tmux設定をクロスプラットフォーム対応しモダン化する
+
+### 現状
+- `tmux/tmux.conf`: macOSハードコード（`/usr/local/bin/zsh`, `reattach-to-user-namespace`, `#(wifi)`, `#(battery --tmux)`）
+- `tmux/deploy.sh`: macOSのみbrewインストール
+- `tmux/README.md`: Qiitaリンクのみの簡素な内容
+
+### やること
+
+#### 1. tmux.conf の修正
+- `default-shell /usr/local/bin/zsh` → `default-shell "#{SHELL}"` で動的解決
+- `default-terminal screen-256color` → `default-terminal "tmux-256color"`
+- `reattach-to-user-namespace pbcopy` → `if-shell 'test "$(uname)" = Darwin'` でmacOSのみ
+- `#(wifi)` と `#(battery --tmux)` → OS判定付きフォールバック（macOSのみ、Linuxでは非表示）
+- マウスホイールバインディングをtmux 3.3+構文に更新
+- ステータスバー: 使えないコマンドを除去、シンプルに
+- `C-q` prefixは維持（既存ユーザーのため）
+
+#### 2. deploy.sh の修正
+- `helpers.sh` のプラットフォーム判定を使う
+- macOS: `brew install tmux`
+- Linux: `sudo apt install -y tmux` または brew
+- WSL向けヒント表示
+
+#### 3. README.md 書き直し
+- 前提: tmux 3.3+
+- macOS / Linux / WSL のインストール手順
+- キーバインド一覧表
+
+### 重要なファイル
+- `tmux/tmux.conf` — メイン設定
+- `tmux/deploy.sh` — デプロイスクリプト
+- `tmux/README.md` — ドキュメント
+```
+
+## 孫6用プロンプト:
 
 ```
 ## タスク: NeoVimをdein.vimからlazy.nvimに移行し、NeoVim組み込み機能を最大限活用する
@@ -158,45 +341,7 @@
    - built-in優先の設計思想を明記
 ```
 
-## 孫3用プロンプト:
-
-```
-## タスク: tmux設定をクロスプラットフォーム対応しモダン化する
-
-### 現状
-- `tmux/tmux.conf`: macOSハードコード（`/usr/local/bin/zsh`, `reattach-to-user-namespace`, `#(wifi)`, `#(battery --tmux)`）
-- `tmux/deploy.sh`: macOSのみbrewインストール
-- `tmux/README.md`: Qiitaリンクのみの簡素な内容
-
-### やること
-
-#### 1. tmux.conf の修正
-- `default-shell /usr/local/bin/zsh` → `default-shell "#{SHELL}"` で動的解決
-- `default-terminal screen-256color` → `default-terminal "tmux-256color"`
-- `reattach-to-user-namespace pbcopy` → `if-shell 'test "$(uname)" = Darwin'` でmacOSのみ
-- `#(wifi)` と `#(battery --tmux)` → OS判定付きフォールバック（macOSのみ、Linuxでは非表示）
-- マウスホイールバインディングをtmux 3.3+構文に更新
-- ステータスバー: 使えないコマンドを除去、シンプルに
-- `C-q` prefixは維持（既存ユーザーのため）
-
-#### 2. deploy.sh の修正
-- `helpers.sh` のプラットフォーム判定を使う
-- macOS: `brew install tmux`
-- Linux: `sudo apt install -y tmux` または brew
-- WSL向けヒント表示
-
-#### 3. README.md 書き直し
-- 前提: tmux 3.3+
-- macOS / Linux / WSL のインストール手順
-- キーバインド一覧表
-
-### 重要なファイル
-- `tmux/tmux.conf` — メイン設定
-- `tmux/deploy.sh` — デプロイスクリプト
-- `tmux/README.md` — ドキュメント
-```
-
-## 孫4用プロンプト:
+## 孫7用プロンプト:
 
 ```
 ## タスク: 古いVim設定を削除しNeoVimに一本化する
@@ -227,7 +372,7 @@
 
 4. **トップレベルREADMEの更新**
    - Supported toolsからVimを削除
-   - （READMEの完全リニューアルは孫7でやるので、ここではVim削除のみ）
+   - （READMEの完全リニューアルは孫8でやるので、ここではVim削除のみ）
 
 ### 検証
 - `git status` で vim/ が完全に消えていること
@@ -235,121 +380,7 @@
 - 作業ツリーがクリーンであること
 ```
 
-## 孫5用プロンプト:
-
-```
-## タスク: miseによる環境固定化を導入する
-
-### 現状
-- 前提ソフトウェア（Python, Node, Ruby等）のバージョン指定が一切ない
-- macOSのHomebrew前提で、Linux向けのパッケージリストがない
-- 各ツールのdeploy.shが個別にソフトウェア存在チェックをしているが非統一
-
-### やること
-
-#### 1. .mise.toml 作成
-リポジトリのルートに `.mise.toml` を作成:
-```toml
-[tools]
-python = "3.12"
-node = "22"
-ruby = "3.3"
-rust = "latest"
-neovim = "latest"
-ripgrep = "latest"
-fd = "latest"
-lazygit = "latest"
-```
-
-#### 2. Brewfile 作成 (macOS用)
-リポジトリのルートに `Brewfile` を作成:
-```
-tap "homebrew/bundle"
-brew "mise"
-brew "zsh"
-brew "tmux"
-brew "neovim"
-brew "ripgrep"
-brew "fd"
-brew "lazygit"
-brew "git"
-brew "curl"
-```
-
-#### 3. apt-packages.txt 作成 (Linux/WSL用)
-リポジトリのルートに `apt-packages.txt` を作成:
-```
-zsh
-tmux
-ripgrep
-fd-find
-lazygit
-git
-curl
-build-essential
-```
-
-#### 4. 各deploy.shにmiseチェック追加
-- `ensure_command mise` 的なチェック
-- miseがない場合はインストール手順を表示
-
-#### 5. READMEにmiseインストール手順追加
-- curl https://mise.run | sh
-- または brew install mise / apt install mise
-
-### 重要なファイル（新規作成）
-- `.mise.toml`
-- `Brewfile`
-- `apt-packages.txt`
-```
-
-## 孫6用プロンプト:
-
-```
-## タスク: リポジトリ全体を統一的にセットアップできる仕組みを作る
-
-### 現状
-- 各ツールのdeploy.shを個別に実行する必要がある
-- `shared/helpers.sh` は最低限のプラットフォーム判定のみ
-- バックアップやドライラン機能がない
-- deployスクリプト間でコードの重複が多い
-
-### やること
-
-#### 1. shared/helpers.sh を拡充
-以下の関数を追加:
-- `log_info()`, `log_warn()`, `log_error()` — カラー付きログ出力
-- `is_macos()`, `is_linux()`, `is_wsl()` — プラットフォーム判定（WSL追加）
-- `ensure_command <cmd> [hint]` — コマンド存在チェック、なければインストール方法表示
-- `symlink_backup <src> <dst>` — 既存ファイルを .backup に退避してからシンボリックリンク
-- `get_brew_prefix()` — OSに応じたbrewプレフィックスを返す
-
-#### 2. 各ツールのdeploy.shを helpers.sh を使う形に統一
-すべてのdeploy.shが以下をsourceする:
-```bash
-SCRIPT_DIR=$(cd $(dirname $0); pwd)
-source "$SCRIPT_DIR/../shared/helpers.sh"
-```
-
-#### 3. トップレベル deploy-all.sh 新規作成
-- `--dry-run`: 実際の変更なしで実行計画を表示
-- `--only <tools>`: カンマ区切りで特定ツールのみ（例: `--only zsh,nvim`）
-- `--backup`: 既存設定を自動バックアップ
-- `--force`: 確認なしで実行
-- デフォルトでは対話的に進行
-- カラーログ出力で進行状況を表示
-
-#### 4. (オプション) uninstall.sh 作成
-- 作成したシンボリックリンクを削除
-- バックアップから復元（可能なら）
-
-### 重要なファイル
-- `shared/helpers.sh` — 拡充
-- `deploy-all.sh` — 新規作成（リポジトリルート）
-- 各ツールの `deploy.sh` — helpers.shを使う形に統一
-```
-
-## 孫7用プロンプト:
+## 孫8用プロンプト:
 
 ```
 ## タスク: READMEとドキュメントを全面的に書き直す
@@ -404,39 +435,4 @@ cd ~/.dotfiles
 - Qiitaリンク（情報が古い）
 - 死んだツールへの参照
 - 間違ったコマンド（`source ./deploy.sh` 等）
-```
-
-## 孫8用プロンプト:
-
-```
-## タスク: リポジトリ構造自体を整理する
-
-### 現状
-- `.gitignore`: `/home/k.hamada/` の個人パスがコメントに残っている
-- ライセンスファイルなし
-- `.gitmodules` に死んだ neobundle.vim サブモジュール参照あり
-- ブランチ戦略が不明確
-
-### やること
-
-#### 1. .gitignore を更新
-- `/home/k.hamada/.gitignore-boilerplates/` の参照コメント行を削除
-- セクションコメントを "Global" → シンプルに
-- mise関連のエントリを追加（必要なら）
-- `.claude/` を ignore に追加（AIツールの作業ディレクトリ）
-
-#### 2. LICENSE ファイル追加
-MITライセンスを追加
-
-#### 3. .gitmodules の neobundle エントリを削除
-- neobundle.vim のサブモジュールエントリを削除（孫4と連携）
-- .gitmodules が空になったら削除
-
-#### 4. masterワークツリーの .gitignore と .gitmodules も更新
-master側にも同じ修正を適用（またはmasterでは削除のみで新ファイル追加はしない。housekeeping→masterのマージ時に反映される）
-
-### 検証
-- `git status` がクリーン
-- `.gitignore` に個人パス参照がない
-- `LICENSE` ファイルが存在する
 ```
