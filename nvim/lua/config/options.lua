@@ -50,7 +50,8 @@ opt.sidescrolloff = 8            -- keep 8 columns visible left/right of cursor
 -- than omitted — leaving it unset keeps the mouse grabbing terminal selection.
 opt.mouse = ""
 opt.backup = false               -- no backup files
-opt.swapfile = false             -- no swap files (use undo history instead)
+-- swapfile is left at NeoVim's default (on). It is what recovers unsaved work
+-- after a crash; undofile only persists history for files already written.
 opt.undofile = true              -- persistent undo
 local undodir = vim.fn.stdpath("data") .. "/undo"
 opt.undodir = undodir
