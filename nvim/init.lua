@@ -68,6 +68,7 @@ if not (vim.uv or vim.loop).fs_stat(lazypath) then
       { "Check your network connection or install lazy.nvim manually:\n", "WarningMsg" },
       { "  git clone --filter=blob:none https://github.com/folke/lazy.nvim.git --branch=stable " .. lazypath, "MoreMsg" },
     }, true, {})
+    return
   end
 end
 vim.opt.rtp:prepend(lazypath)

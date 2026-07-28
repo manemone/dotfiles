@@ -70,7 +70,7 @@ resolve_tools() {
     done
     if [ "$_rt_found" -eq 0 ]; then
       printf 'log_error "Unknown tool: '\''%s'\''. Available: %s"\n' "$_rt_t" "$AVAILABLE_TOOLS" >&2
-      printf 'exit 1\n' >&2
+      printf 'exit 1\n'
       return 1
     fi
     IFS=','
