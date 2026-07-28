@@ -68,10 +68,14 @@ Options can be combined:
 ```
 ~/.dotfiles/
 ├── deploy-all.sh              # Unified deployment orchestrator
-├── uninstall.sh               # Clean removal of all symlinks and configs
+├── uninstall.sh               # Clean removal of known symlinks, restores backups where available
 ├── Brewfile                   # macOS Homebrew packages (zsh, tmux, git, curl)
 ├── apt-packages.txt           # Linux APT packages
 ├── .mise.toml                 # Runtime versions (python, node, ruby, rust, neovim, ripgrep, fd, lazygit)
+├── .gitignore                 # Git ignore rules
+├── LICENSE                    # MIT License
+├── docs/                      # Planning documents
+│   └── planning/
 ├── shared/
 │   └── helpers.sh             # Shared shell functions (logging, symlinks, platform detection)
 ├── zsh/
@@ -102,7 +106,9 @@ Options can be combined:
 ./uninstall.sh --only tmux   # Uninstall a specific tool
 ```
 
-The uninstall script removes symlinks and restores backed-up config files.
+The uninstall script removes **known symlinks** and restores backed-up config files (`*.backup`).
+Note: `--only nvim` currently removes legacy dein.vim symlinks; lazy.nvim symlinks (`init.lua`, `lua/`, `lazy-lock.json`) are not yet tracked.
+See each tool's deploy script for the full list of files it creates.
 
 ## Next Steps
 

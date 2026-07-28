@@ -56,14 +56,16 @@ On first shell launch, Antidote automatically clones all plugins declared in `~/
 
 ### Theme & Plugins
 
-| Feature | Plugin |
-|---|---|
-| Theme | [Pure](https://github.com/sindresorhus/pure) — minimal, async prompt |
-| Syntax highlighting | `zsh-users/zsh-syntax-highlighting` |
-| Autosuggestions | `zsh-users/zsh-autosuggestions` |
-| History search | `zsh-users/zsh-history-substring-search` |
-| Completions | `zsh-users/zsh-completions` |
-| 256-color | `chrissicool/zsh-256color` |
+Plugins are loaded in order; `syntax-highlighting` must be second-to-last and `history-substring-search` must be last.
+
+| Order | Feature | Plugin |
+|---|---|---|
+| 1 | Theme | [Pure](https://github.com/sindresorhus/pure) — minimal, async prompt |
+| 2 | Completions | `zsh-users/zsh-completions` |
+| 3 | 256-color | `chrissicool/zsh-256color` |
+| 4 | Autosuggestions | `zsh-users/zsh-autosuggestions` |
+| 5 | Syntax highlighting | `zsh-users/zsh-syntax-highlighting` (must be second-to-last) |
+| 6 | History search | `zsh-users/zsh-history-substring-search` (must be last) |
 
 ### Aliases
 

@@ -135,6 +135,34 @@ After first launch:
         └── fugitive.lua       # Git commands
 ```
 
+### Keybindings Reference
+
+| Key | Mode | Action |
+|---|---|---|
+| `<Space>` | n | Leader key |
+| `<Leader>ff` | n | Find files (Telescope) |
+| `<Leader>fg` | n | Live grep (Telescope) |
+| `<Leader>fb` | n | Browse buffers (Telescope) |
+| `<Leader>fh` | n | Help tags (Telescope) |
+| `<Leader>fd` | n | Diagnostics (Telescope) |
+| `<Leader>fs` | n | Document symbols (Telescope) |
+| `<Leader>w` | n | Save buffer |
+| `<Leader>/` | n, v | Toggle comment (built-in `gcc` / `gc`) |
+| `<Leader>y` | v | Yank to system clipboard |
+| `<Leader>p` | n, v | Paste from system clipboard |
+| `<Leader>rn` | n | Rename symbol (LSP) |
+| `<Leader>ca` | n | Code action (LSP) |
+| `<Leader>f` | n, v | Format (LSP) |
+| `gd` | n | Go to definition |
+| `gr` | n | Go to references |
+| `K` | n | Hover (LSP) |
+| `[d` / `]d` | n | Previous / next diagnostic |
+| `<C-h/j/k/l>` | n | Window navigation |
+| `<A-;>` / `<Esc>` | t | Exit terminal mode |
+
+Full keymaps in `lua/config/keymaps.lua` and `lua/plugins/lsp.lua`.
+Press `<Space>` and wait for which-key popup to discover available shortcuts.
+
 ## 4. Customization
 
 ### Adding Plugins
