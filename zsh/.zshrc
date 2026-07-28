@@ -153,6 +153,32 @@ if [ -d "$HOME/.cargo/bin" ]; then
 fi
 
 # =============================================================================
+# Go
+# =============================================================================
+if [ -d "$HOME/go" ]; then
+  export GOPATH="$HOME/go"
+  [ -d "$GOPATH/bin" ] && export PATH="$GOPATH/bin:$PATH"
+fi
+
+# =============================================================================
+# opencode
+# =============================================================================
+if [ -d "$HOME/.opencode/bin" ]; then
+  export PATH="$HOME/.opencode/bin:$PATH"
+fi
+
+# =============================================================================
+# User binaries
+# =============================================================================
+# Added after the version managers so hand-written scripts win over shims.
+if [ -d "$HOME/bin" ]; then
+  export PATH="$HOME/bin:$PATH"
+fi
+if [ -d "$HOME/.local/bin" ]; then
+  export PATH="$HOME/.local/bin:$PATH"
+fi
+
+# =============================================================================
 # Google Cloud SDK
 # =============================================================================
 # Search candidates: brew cask symlink, brew cask realpath, manual installs.
@@ -185,4 +211,15 @@ unset _gcloud_candidates _brew_prefix _dir
 # mise activates last so its shims take precedence for Python/Ruby/Node.
 if command -v mise >/dev/null 2>&1; then
   eval "$(mise activate zsh)"
+fi
+
+# =============================================================================
+# Machine-local overrides
+# =============================================================================
+# ~/.zshrc.local is intentionally NOT tracked in this repository. Put anything
+# specific to one machine there — host addresses, API keys, work-only paths —
+# so it never reaches the shared history. Sourced last, so it can override
+# everything above.
+if [ -f "$HOME/.zshrc.local" ]; then
+  source "$HOME/.zshrc.local"
 fi
