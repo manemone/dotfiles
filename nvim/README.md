@@ -151,8 +151,8 @@ After first launch:
 | `<Leader>y` | v | Yank to system clipboard |
 | `<Leader>p` | n, v | Paste from system clipboard |
 | `<Leader>rn` | n | Rename symbol (LSP) |
-| `<Leader>ca` | n | Code action (LSP) |
-| `<Leader>f` | n, v | Format (LSP) |
+| `<Leader>ca` | n, v | Code action (LSP) |
+| `<Leader>f` | n | Format (LSP) |
 | `gd` | n | Go to definition |
 | `gr` | n | Go to references |
 | `K` | n | Hover (LSP) |
