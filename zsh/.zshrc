@@ -1,20 +1,25 @@
 # =============================================================================
 # Resolve dotfiles directory (follows symlinks from ~/.zshrc)
 # =============================================================================
-_ZSHCONFIG_DIR="${0:A:h}"
-DOTFILES_DIR="${_ZSHCONFIG_DIR:h}"
+# Use %x prompt expansion to get the sourced file path.
+# This works regardless of FUNCTION_ARGZERO / POSIX_ARGZERO settings,
+# unlike $0 which depends on those options.
+_ZSHRC_PATH="${${(%):-%x}:A}"
+DOTFILES_DIR="${_ZSHRC_PATH:h:h}"
+unset _ZSHRC_PATH
 
 # =============================================================================
-# Source shared helpers (is_wsl, CURRENT_PLATFORM, ensure_command)
+# Source shared helpers (CURRENT_PLATFORM, is_wsl, ensure_command)
 # =============================================================================
 if [ -f "$DOTFILES_DIR/shared/helpers.sh" ]; then
   source "$DOTFILES_DIR/shared/helpers.sh"
 fi
 
 # Fallback WSL detection if helpers.sh is unavailable
+# (minimum fallback — keep in sync with shared/helpers.sh)
 if ! command -v is_wsl >/dev/null 2>&1; then
   is_wsl() {
-    [ -n "${WSL_DISTRO_NAME}" ] || grep -qi microsoft /proc/version 2>/dev/null
+    [ -n "${WSL_DISTRO_NAME:-}" ] || grep -qi microsoft /proc/version 2>/dev/null
   }
 fi
 
@@ -22,16 +27,23 @@ fi
 # Antidote Plugin Manager
 # =============================================================================
 ANTIDOTE_HOME="${ANTIDOTE_HOME:-$HOME/.antidote}"
-if [ -f "$ANTIDOTE_HOME/antidote.zsh" ]; then
+if [ -f "$ANTIDOTE_HOME/antidote.zsh" ] && [ -f "$HOME/.zsh_plugins.txt" ]; then
   source "$ANTIDOTE_HOME/antidote.zsh"
   antidote load "$HOME/.zsh_plugins.txt"
+else
+  print -ru2 -- "zshrc: Antidote not set up. Run <dotfiles>/zsh/deploy.sh"
 fi
+
+# Initialize completion system (zplug used to do this; antidote doesn't)
+autoload -Uz compinit && compinit
 
 # =============================================================================
 # History
 # =============================================================================
-HISTSIZE=1000
-HISTFILESIZE=2000
+HISTFILE="$HOME/.zsh_history"
+HISTSIZE=10000
+SAVEHIST=10000
+setopt SHARE_HISTORY HIST_IGNORE_DUPS HIST_IGNORE_SPACE HIST_VERIFY
 
 # =============================================================================
 # Aliases
@@ -43,10 +55,12 @@ alias l='ls -CF'
 alias be="bundle exec"
 alias bx="bundle exec"
 
-# NeoVim
-alias vim="nvim"
-alias vi="nvim"
-export EDITOR=nvim
+# NeoVim (only if installed)
+if command -v nvim >/dev/null 2>&1; then
+  alias vim="nvim"
+  alias vi="nvim"
+  export EDITOR=nvim
+fi
 
 # one-liner httpd
 alias webrick="ruby -rwebrick -e 'WEBrick::HTTPServer.new(:DocumentRoot => \"./\", :Port => 8000).start'"
@@ -54,8 +68,8 @@ alias webrick="ruby -rwebrick -e 'WEBrick::HTTPServer.new(:DocumentRoot => \"./\
 # =============================================================================
 # Platform-specific Homebrew PATH
 # =============================================================================
-case "$(uname -s)" in
-  Darwin)
+case "$CURRENT_PLATFORM" in
+  Mac)
     if [ -d /opt/homebrew/bin ]; then
       # Apple Silicon
       export PATH="/opt/homebrew/bin:$PATH"
@@ -76,20 +90,25 @@ esac
 # =============================================================================
 # rbenv (Ruby) - skip if not installed
 # =============================================================================
-if command -v rbenv >/dev/null 2>&1; then
+if [ -d "$HOME/.rbenv/bin" ]; then
   export PATH="$HOME/.rbenv/bin:$PATH"
+fi
+if command -v rbenv >/dev/null 2>&1; then
   eval "$(rbenv init -)"
 fi
 
 # =============================================================================
 # pyenv (Python) - skip if not installed
 # =============================================================================
-if command -v pyenv >/dev/null 2>&1; then
-  export PYENV_ROOT="$HOME/.pyenv"
+export PYENV_ROOT="${PYENV_ROOT:-$HOME/.pyenv}"
+if [ -d "$PYENV_ROOT/bin" ]; then
   export PATH="$PYENV_ROOT/bin:$PATH"
+fi
+if command -v pyenv >/dev/null 2>&1; then
   eval "$(pyenv init --path)"
   eval "$(pyenv init -)"
-  if pyenv commands 2>/dev/null | grep -q virtualenv-init; then
+  # Check for pyenv-virtualenv via directory, not subprocess
+  if [ -d "$PYENV_ROOT/plugins/pyenv-virtualenv" ]; then
     eval "$(pyenv virtualenv-init -)"
   fi
 fi
@@ -103,9 +122,9 @@ if [ -d "$HOME/.n" ]; then
 fi
 
 # =============================================================================
-# PostgreSQL (macOS only — skip on WSL/Linux)
+# PostgreSQL (macOS only — WSL and Linux skip)
 # =============================================================================
-if ! is_wsl && [ "$(uname -s)" = "Darwin" ] && [ -d /usr/local/var/postgres ]; then
+if [ "$CURRENT_PLATFORM" = "Mac" ] && [ -d /usr/local/var/postgres ]; then
   export PGDATA=/usr/local/var/postgres
 fi
 
@@ -119,26 +138,34 @@ fi
 # =============================================================================
 # Google Cloud SDK
 # =============================================================================
-# Try Homebrew-installed SDK first, then fall back to manual installation paths
-_gcloud_sdk_path=""
+# Search candidates: brew cask symlink, brew cask realpath, manual installs.
+# brew --prefix (no formula name) is called once for performance.
+_gcloud_candidates=()
 if command -v brew >/dev/null 2>&1; then
-  _gcloud_sdk_path="$(brew --prefix google-cloud-sdk 2>/dev/null)"
+  _brew_prefix="$(brew --prefix)"
+  _gcloud_candidates+=(
+    "$_brew_prefix/share/google-cloud-sdk"
+    "$_brew_prefix/Caskroom/google-cloud-sdk/latest/google-cloud-sdk"
+  )
 fi
+_gcloud_candidates+=(
+  /usr/local/share/google-cloud-sdk
+  "$HOME/google-cloud-sdk"
+)
 
-if [ -n "$_gcloud_sdk_path" ] && [ -f "$_gcloud_sdk_path/path.zsh.inc" ]; then
-  source "$_gcloud_sdk_path/path.zsh.inc"
-elif [ -f /usr/local/share/google-cloud-sdk/path.zsh.inc ]; then
-  source /usr/local/share/google-cloud-sdk/path.zsh.inc
-elif [ -f "$HOME/google-cloud-sdk/path.zsh.inc" ]; then
-  source "$HOME/google-cloud-sdk/path.zsh.inc"
+for _dir in $_gcloud_candidates; do
+  if [ -f "$_dir/path.zsh.inc" ]; then
+    source "$_dir/path.zsh.inc"
+    [ -f "$_dir/completion.zsh.inc" ] && source "$_dir/completion.zsh.inc"
+    break
+  fi
+done
+unset _gcloud_candidates _brew_prefix _dir
+
+# =============================================================================
+# mise version manager (if installed)
+# =============================================================================
+# mise activates last so its shims take precedence for Python/Ruby/Node.
+if command -v mise >/dev/null 2>&1; then
+  eval "$(mise activate zsh)"
 fi
-
-if [ -n "$_gcloud_sdk_path" ] && [ -f "$_gcloud_sdk_path/completion.zsh.inc" ]; then
-  source "$_gcloud_sdk_path/completion.zsh.inc"
-elif [ -f /usr/local/share/google-cloud-sdk/completion.zsh.inc ]; then
-  source /usr/local/share/google-cloud-sdk/completion.zsh.inc
-elif [ -f "$HOME/google-cloud-sdk/completion.zsh.inc" ]; then
-  source "$HOME/google-cloud-sdk/completion.zsh.inc"
-fi
-
-unset _gcloud_sdk_path

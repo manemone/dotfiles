@@ -1,13 +1,15 @@
 # Theme
-sindresorhus/pure kind:fpath
-
-# Syntax highlighting
-zsh-users/zsh-syntax-highlighting
-
-# History search
-zsh-users/zsh-history-substring-search
+sindresorhus/pure
 
 # Completion
-zsh-users/zsh-autosuggestions
 zsh-users/zsh-completions
 chrissicool/zsh-256color
+
+# Autosuggestions
+zsh-users/zsh-autosuggestions
+
+# Syntax highlighting (must be second to last)
+zsh-users/zsh-syntax-highlighting
+
+# History search (must come after syntax highlighting)
+zsh-users/zsh-history-substring-search

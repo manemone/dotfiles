@@ -2,10 +2,8 @@
 
 ## Requirements
 
-- **Zsh** (5.0+)
+- **Zsh** (5.4.2+) — required by Antidote and Pure
 - **Git** — for plugin installation
-- **curl** — for optional tool installers
-- **mise** (optional) — version manager for runtime tools
 
 ## What's Included
 
@@ -14,8 +12,8 @@
 | Plugin manager | [Antidote](https://github.com/mattmc3/antidote) |
 | Theme | [Pure](https://github.com/sindresorhus/pure) |
 | Plugins | syntax highlighting, autosuggestions, history search, completions, 256color |
-| Version managers | rbenv, pyenv, n (auto-detected, skipped if not installed) |
-| Editor | NeoVim aliases (`vim`/`vi` → `nvim`) |
+| Version managers | rbenv, pyenv, n, mise (auto-detected, skipped if not installed) |
+| Editor | NeoVim aliases (`vim`/`vi` → `nvim`, skipped if not installed) |
 | Cloud | Google Cloud SDK (auto-detected) |
 | Language | Rust, Ruby, Python, Node.js PATH setup (skipped if not installed) |
 
@@ -40,7 +38,16 @@ sudo apt install zsh
 
 ### 2. Set Zsh as default shell
 
+First, register the shell path if needed (macOS with Homebrew):
+
 ```bash
+# macOS: Homebrew zsh is not in /etc/shells by default
+sudo sh -c "echo $(brew --prefix)/bin/zsh >> /etc/shells"
+chsh -s "$(brew --prefix)/bin/zsh"
+```
+
+```bash
+# Linux / WSL
 chsh -s "$(which zsh)"
 ```
 
@@ -62,8 +69,7 @@ The script will:
 exec zsh
 ```
 
-Antidote will automatically install plugins declared in `~/.zsh_plugins.txt` on first run.
-No interactive prompts — it just works.
+Antidote will automatically clone plugins declared in `~/.zsh_plugins.txt` on first run.
 
 ## Platform Notes
 
@@ -88,4 +94,22 @@ To add or remove a plugin, edit `zsh/.zsh_plugins.txt` and reload:
 source ~/.zshrc
 ```
 
-Or start a new shell. Antidote handles install/update automatically.
+Or start a new shell.
+
+### Updating plugins
+
+Antidote does **not** update plugins automatically. To update all plugins:
+
+```bash
+antidote update
+```
+
+### Custom install location
+
+Set the `ANTIDOTE_HOME` environment variable to change where Antidote is installed
+(default: `~/.antidote`). This must be set **before** sourcing `.zshrc`:
+
+```bash
+export ANTIDOTE_HOME="$HOME/.local/share/antidote"
+source ~/.zshrc
+```

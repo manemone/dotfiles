@@ -19,7 +19,7 @@ esac
 # Detect if running under Windows Subsystem for Linux (WSL).
 # Returns 0 if WSL, 1 otherwise.
 is_wsl() {
-  [ -n "${WSL_DISTRO_NAME}" ] && return 0
+  [ -n "${WSL_DISTRO_NAME:-}" ] && return 0
   grep -qi microsoft /proc/version 2>/dev/null
 }
 
