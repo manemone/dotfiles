@@ -172,11 +172,23 @@ for _tool in $TOOLS; do
       IFS="$_OLDIFS"
       [ -z "$_dst" ] && continue
 
-      # Step 1: Always safety-backup the current file before touching it
+      # Step 1: Find deploy-time backup BEFORE creating any new files
+      # (the glob in the else branch would otherwise match the safety backup
+      #  we're about to create).
+      _restore=""
+      if [ -e "$_dst.backup" ] || [ -L "$_dst.backup" ]; then
+        _restore="$_dst.backup"
+      else
+        for _cand in "$_dst.backup."*; do
+          [ -e "$_cand" ] || [ -L "$_cand" ] || continue
+          _restore="$_cand"
+          break
+        done
+      fi
+
+      # Step 2: Always safety-backup the current file before touching it
       # (so user edits made after deploy are never lost, even on new machines
       #  where no deploy-time .backup exists).
-      # Use a timestamped suffix so it never collides with the deploy-time
-      # .backup file that the restore step below looks for.
       _safety_path="${_dst}.backup.$(date +%Y%m%d%H%M%S).$$"
 
       if [ -f "$_dst" ] || [ -L "$_dst" ]; then
@@ -193,17 +205,7 @@ for _tool in $TOOLS; do
         fi
       fi
 
-      # Step 2: Try to restore the deploy-time backup (original user settings)
-      _restore=""
-      if [ -e "$_dst.backup" ] || [ -L "$_dst.backup" ]; then
-        _restore="$_dst.backup"
-      else
-        for _cand in "$_dst.backup."*; do
-          [ -e "$_cand" ] || [ -L "$_cand" ] || continue
-          _restore="$_cand"
-          break
-        done
-      fi
+      # Step 3: Restore the deploy-time backup (if found in Step 1)
 
       if [ -n "$_restore" ]; then
         if [ "${DRY_RUN:-0}" -eq 1 ]; then
