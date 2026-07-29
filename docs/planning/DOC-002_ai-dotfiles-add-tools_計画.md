@@ -1,0 +1,261 @@
+# 計画書: 自作ツールの dotfiles への移行
+
+傘ブランチ: `ai/dotfiles-add-tools`
+ターゲット: `master`
+
+## 概要
+
+マシン上に散在する自作ツール（ocw, claude-ds, Claude Code スキル）を dotfiles リポジトリに統合する。
+新しいツールディレクトリ `bin/` と `claude/` を追加し、既存の deploy-all.sh フレームワークに乗せる。
+
+## 孫ブランチ進捗
+
+| 孫 | ブランチ | 内容 | 状況 |
+|---|---|---|---|
+| 0 | `ai/ph-00-bin` | `bin/` ディレクトリ追加。ocw（デフォルトコマンドを claude に修正）、claude-ds、deploy.sh、README.md | ⬜ 待機中 |
+| 1 | `ai/ph-01-claude-config` | `claude/` ディレクトリ追加。CLAUDE.md、settings.json（汎用設定のみ）、deploy.sh、README.md | ⬜ 待機中 |
+| 2 | `ai/ph-02-claude-skills` | `claude/skills/` に pr-review-loop と umbrella-orchestrator を移行 | ⬜ 待機中 |
+| 3 | `ai/ph-03-shared-update` | `shared/helpers.sh` の AVAILABLE_TOOLS に `bin claude` を追加 | ⬜ 待機中 |
+| 4 | `ai/ph-04-docs` | README.md 更新、deploy-all.sh での統合確認 | ⬜ 待機中 |
+
+## 依存関係
+
+```
+ph-00-bin ─────────────────────┐
+ph-01-claude-config ──┬────────┼── ph-03-shared-update ── ph-04-docs
+ph-02-claude-skills ──┘        │   (孫2 は孫1 の claude/deploy.sh を拡張するため、
+                               │    マージ順は 孫1→孫2 であること)
+                               │
+                               └── (孫0 と孫1/孫2 は独立)
+```
+
+## 除外するもの
+
+- herdr スキル (`~/.agents/skills/herdr/`): Herdr が管理
+- herdr-agent-state.sh (`~/.claude/hooks/`): Herdr が管理
+- `permissions.allow`: マシン固有パス多数のため（ユーザーは `settings.local.json` で追加する）
+- `permissions.additionalDirectories`: 同上
+- hooks: herdr-agent-state.sh のみで Herdr 管理下のため（ユーザーは `settings.local.json` で追加する）
+
+## ローカル拡張の基本方針
+
+各ツールはユーザーがマシン固有の設定を追加できるよう、以下の拡張ポイントを確保する:
+
+| ツール | 拡張メカニズム | ドキュメント |
+|--------|--------------|------------|
+| bin (ocw) | 環境変数 `OCW_COMMANDER_COMMAND`, `OCW_IMPLEMENTER_COMMAND`, `OCW_REVIEWER_COMMAND` | README に記載 |
+| claude (CLAUDE.md) | symlink 先を直接編集すれば即反映 | README に記載 |
+| claude (settings.json) | `~/.claude/settings.local.json` で上書き・追加。permissions の merge には既知のバグあり（replace される場合がある）、注意点を README に記載 | README に記載 |
+| claude/skills | スキルは**個別 symlink**。`~/.claude/skills/` に手動で置いた独自スキルと共存可能。deploy.sh は `claude/skills/` 内の全ディレクトリを自動検出 | README に記載 |
+| shared/helpers.sh | AVAILABLE_TOOLS 編集はファイル1行変更で済む。必要に応じてユーザーが直接編集 | README に記載 |
+
+## 孫0用プロンプト:
+
+```
+## タスク: bin/ ディレクトリを追加し自作ツールを移行する
+
+### やること
+
+#### 1. bin/ ディレクトリ構造を作成
+```
+bin/
+├── ocw
+├── claude-ds
+├── deploy.sh
+└── README.md
+```
+
+#### 2. ocw スクリプト
+- `~/bin/ocw` からコピー
+- **デフォルトの `OCW_COMMANDER_COMMAND` と `OCW_IMPLEMENTER_COMMAND` を `claude` に変更する**
+  - 現在の `claude-ds` を `claude` に修正
+- それ以外の機能は現状維持
+- 環境変数による上書き設計は維持（ユーザーは `export OCW_COMMANDER_COMMAND=claude-ds` で戻せる）
+
+#### 3. claude-ds スクリプト
+- `~/bin/claude-ds` からコピー
+- 現状維持でOK
+- `DEEPSEEK_API_KEY_FILE` 環境変数で API キー設定可（デフォルト `~/.config/deepseek/api_key`）
+
+#### 4. deploy.sh
+- `~/bin/` に symlink を作成
+- `~/bin/` ディレクトリがなければ作成
+- `shared/helpers.sh` を source して使う
+- 既存の deploy.sh（zsh/, nvim/, tmux/）のパターンに従う
+- **AVAILABLE_TOOLS にはまだ追加しない**（孫3で対応）
+
+#### 5. README.md
+- ocw と claude-ds の説明
+- セットアップ手順
+- 他のツールディレクトリのREADMEフォーマットに合わせる
+
+### 重要なファイル（新規作成）
+- `bin/ocw`
+- `bin/claude-ds`
+- `bin/deploy.sh`
+- `bin/README.md`
+```
+
+## 孫1用プロンプト:
+
+```
+## タスク: claude/ ディレクトリを追加し Claude Code 設定を移行する
+
+### やること
+
+#### 1. claude/ ディレクトリ構造を作成
+```
+claude/
+├── CLAUDE.md
+├── settings.json
+├── deploy.sh
+└── README.md
+```
+
+#### 2. CLAUDE.md
+- `~/.claude/CLAUDE.md` から内容をコピー（現在の個人設定をそのまま移行）
+- デプロイ先: `~/.claude/CLAUDE.md` への symlink
+
+#### 3. settings.json
+- `~/.claude/settings.json` からコピーし、以下を**除去**（マシン固有のため）:
+  - `permissions.allow`（33件、すべて特定パス）
+  - `permissions.additionalDirectories`
+  - `hooks`（herdr-agent-state.sh のみで Herdr 管理下）
+- 以下の汎用設定は**保持**:
+  - `permissions.deny`（.env, .ssh, .aws 等のセキュリティポリシー、全マシン共通）
+  - `permissions.ask`（危険コマンドパターン、全マシン共通）
+  - `permissions.defaultMode`
+  - `model`
+  - `language`
+  - `effortLevel`
+  - `theme`
+  - `editorMode`
+  - `autoCompactEnabled`
+  - `switchModelsOnFlag`
+  - `skipWorkflowUsageWarning`
+- デプロイ先: `~/.claude/settings.json` への symlink
+
+#### 4. deploy.sh
+- `shared/helpers.sh` を source して使う
+- 各ファイルを `~/.claude/` に symlink
+- 既存の deploy.sh パターンに従う
+
+#### 5. README.md
+- CLAUDE.md と settings.json の説明
+- セットアップ手順
+- **「マシン固有設定の追加」セクションを必須で記載**:
+  - `~/.claude/settings.local.json` を作成することで settings.json を上書き・拡張できること
+  - `permissions.allow` の追加方法（具体例付き）
+  - hooks の追加方法
+  - model/theme の上書き方法
+  - **既知の注意点**: `permissions` は deep merge されず replace される場合があるバグ。`permissions.deny` を settings.local.json に書く場合は `settings.json` 側の deny もコピーしてから追加すること
+  - CLAUDE.md は直接編集してOK（個人設定のため）
+
+### 重要なファイル（新規作成）
+- `claude/CLAUDE.md`
+- `claude/settings.json`
+- `claude/deploy.sh`
+- `claude/README.md`
+```
+
+## 孫2用プロンプト:
+
+```
+## タスク: Claude Code スキルを dotfiles に移行する
+
+### やること
+
+#### 1. claude/skills/ ディレクトリ構造を作成
+```
+claude/skills/
+├── pr-review-loop/
+│   └── SKILL.md
+└── umbrella-orchestrator/
+    └── SKILL.md
+```
+
+#### 2. pr-review-loop スキル
+- `~/.claude/skills/pr-review-loop/SKILL.md` から内容をコピー
+- 現状維持でOK
+
+#### 3. umbrella-orchestrator スキル
+- `~/.claude/skills/umbrella-orchestrator/SKILL.md` から内容をコピー
+- 現状維持でOK
+
+#### 4. デプロイ設計（重要）
+- **ディレクトリ全体 symlink は禁止。** `~/.claude/skills → repo/claude/skills` にすると、Herdr 管理の herdr スキルやユーザー独自スキルが消える
+- **スキルごとに個別 symlink する**:
+  ```
+  ~/.claude/skills/pr-review-loop → repo/claude/skills/pr-review-loop
+  ~/.claude/skills/umbrella-orchestrator → repo/claude/skills/umbrella-orchestrator
+  ~/.claude/skills/herdr → (そのまま、Herdr管理)
+  ```
+- **claude/deploy.sh を拡張**し、`claude/skills/` 内の全ディレクトリを自動検出して個別 symlink するロジックを追加する
+- こうすることで将来スキルが増えても deploy.sh を修正する必要がなくなる
+
+#### 5. 注意
+- **herdr スキルは対象外**（Herdr 管理下のため。`~/.claude/skills/herdr/` は手付かずで残る）
+
+#### 6. claude/README.md への追記
+- 独自スキルの追加方法: `~/.claude/skills/my-skill/SKILL.md` を手動で作るだけ
+- deploy.sh が上書きしないことを明記
+
+### 重要なファイル
+- `claude/skills/pr-review-loop/SKILL.md`（新規）
+- `claude/skills/umbrella-orchestrator/SKILL.md`（新規）
+- `claude/deploy.sh`（拡張: スキル自動検出 + 個別 symlink ロジック追加）
+- `claude/README.md`（追記）
+```
+
+## 孫3用プロンプト:
+
+```
+## タスク: shared/helpers.sh の AVAILABLE_TOOLS を更新する
+
+### やること
+
+#### 1. shared/helpers.sh の AVAILABLE_TOOLS を拡張
+現在:
+```bash
+AVAILABLE_TOOLS="zsh nvim tmux"
+```
+これを以下に変更:
+```bash
+AVAILABLE_TOOLS="zsh nvim tmux bin claude"
+```
+
+#### 2. 影響確認
+- `deploy-all.sh` の `--only` フィルタで `bin` と `claude` が指定可能になることを確認
+- 既存の挙動が壊れないことを確認（zsh, nvim, tmux が引き続き動作する）
+
+### 重要なファイル（変更）
+- `shared/helpers.sh` — AVAILABLE_TOOLS の1行変更のみ
+```
+
+## 孫4用プロンプト:
+
+```
+## タスク: README 更新と全体統合確認
+
+### やること
+
+#### 1. ルート README.md の Supported Tools テーブルに bin と claude を追加
+現在のテーブルに以下を追加:
+- bin（自作CLIツール: ocw, claude-ds）
+- claude（Claude Code 設定とスキル）
+
+#### 2. deploy-all.sh から全 deploy.sh が正しく呼ばれることを確認
+- `bin/deploy.sh` が deploy-all.sh から呼ばれること
+- `claude/deploy.sh` が deploy-all.sh から呼ばれること
+- `--only bin`, `--only claude`, `--only bin,claude` が正しく動作すること
+- 全ツール一括デプロイが正常に完了すること
+
+#### 3. ドキュメントの整合性確認
+- 全READMEのフォーマット統一
+- リンク切れがないこと
+- 手順の正確性
+
+### 重要なファイル（変更）
+- `README.md` — Supported Tools テーブル更新
+- `deploy-all.sh` — 必要に応じて更新
+```
