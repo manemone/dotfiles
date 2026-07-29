@@ -173,6 +173,17 @@ SKILLS_DST_DIR="$CLAUDE_DIR/skills"
 SKILLS_BACKUP_DIR="$CLAUDE_DIR/skills-backup"
 _skills_fail=0
 
+# Guard: ~/.claude/skills must NOT be a directory-wide symlink.
+# If it is, the per-skill symlink logic below would mv files out of the
+# repo (since $_skill_dst and $_skill_src resolve to the same path) and
+# the stale-cleanup pass would delete the repo-side SKILL.md files.
+if [ -L "$SKILLS_DST_DIR" ]; then
+  log_error "$SKILLS_DST_DIR is a symlink — directory-wide skill symlinks are not supported."
+  log_error "Remove it first: rm \"$SKILLS_DST_DIR\""
+  log_error "Then re-run deploy.  Herdr-managed and user-owned skills will be untouched."
+  _skills_fail=1
+fi
+
 if [ -d "$SKILLS_SRC_DIR" ]; then
   log_hr
   log_info "Deploying: claude/skills"
@@ -198,6 +209,14 @@ if [ -d "$SKILLS_SRC_DIR" ]; then
       # target is clean and consistent with other links (e.g. CLAUDE.md).
       _skill_src="$SKILLS_SRC_DIR/$_skill_name"
       _skill_dst="$SKILLS_DST_DIR/$_skill_name"
+
+      # Safety: if dst and src resolve to the same path, skip to avoid
+      # moving repo-side files or creating self-referential symlinks.
+      if [ "$_skill_dst" = "$_skill_src" ]; then
+        log_warn "Skipping $_skill_name — destination equals source (possible directory-wide symlink?)."
+        log_warn "  Remove the symlink at $SKILLS_DST_DIR first, then re-run deploy."
+        continue
+      fi
 
       # Already correct symlink?
       if [ -L "$_skill_dst" ] && [ "$(readlink "$_skill_dst")" = "$_skill_src" ]; then
@@ -279,7 +298,9 @@ fi
 
 # Merge skills failure into main FAIL flag (do NOT exit early — settings.json
 # may have succeeded even if skills had an issue, and vice versa).
-[ "$_skills_fail" -ne 0 ] && FAIL=1
+if [ "$_skills_fail" -ne 0 ]; then
+  FAIL=1
+fi
 
 if [ "$FAIL" -ne 0 ]; then
   log_error "claude deployment completed with errors."

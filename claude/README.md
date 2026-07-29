@@ -92,7 +92,7 @@ Claude Code のカスタムスキル。`claude/skills/` 配下の各スキルデ
 **重要**: `claude/skills/` 配下と同名のファイル／ディレクトリが既に `~/.claude/skills/` にある場合、`~/.claude/skills-backup/` に退避されます。
 退避からの復元は手動で行ってください:
 ```bash
-mv ~/.claude/skills-backup/<name>.<timestamp> ~/.claude/skills/<name>
+mv ~/.claude/skills-backup/<name>.<timestamp>.<pid> ~/.claude/skills/<name>
 ```
 
 **独自スキルの追加方法:**
