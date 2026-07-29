@@ -1,0 +1,704 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+USE_HERDR=false
+
+COMMANDER_COMMAND="${OCW_COMMANDER_COMMAND:-claude}"
+IMPLEMENTER_COMMAND="${OCW_IMPLEMENTER_COMMAND:-claude}"
+REVIEWER_COMMAND="${OCW_REVIEWER_COMMAND:-claude}"
+
+HERDR_SETUP_WORKSPACE_ID=""
+HERDR_SETUP_COMMANDER_PANE_ID=""
+HERDR_SETUP_IMPLEMENTER_PANE_ID=""
+HERDR_SETUP_REVIEWER_PANE_ID=""
+
+usage() {
+  cat <<'USAGE'
+usage:
+  ocw [-H|--herdr] <worktree-name> [base-ref]
+  ocw [-H|--herdr] new <worktree-name> [base-ref]
+  ocw new [-H|--herdr] <worktree-name> [base-ref]
+  ocw rm <worktree-name>
+  ocw rm -f <worktree-name>
+  ocw ls
+
+create behavior:
+  default
+    create a worktree and open it in VS Code
+
+  -H, --herdr
+    create a worktree
+    register it in Herdr
+    create commander/implementer/reviewer panes
+    start claude / claude / claude
+    focus the Herdr workspace
+    open VS Code
+
+examples:
+  ocw dataset-importer
+  ocw --herdr optimize-generation
+  ocw new --herdr caption-parser origin/main
+  ocw rm dataset-importer
+  ocw rm -f failed-experiment
+  ocw ls
+
+environment:
+  OCW_COMMANDER_COMMAND
+    default: claude
+
+  OCW_IMPLEMENTER_COMMAND
+    default: claude
+
+  OCW_REVIEWER_COMMAND
+    default: claude
+USAGE
+}
+
+die() {
+  echo "error: $*" >&2
+  exit 1
+}
+
+warn() {
+  echo "warning: $*" >&2
+}
+
+require_command() {
+  command -v "$1" >/dev/null 2>&1 ||
+    die "required command not found: $1"
+}
+
+normalize_name() {
+  printf '%s\n' "$1" |
+    tr '[:upper:]' '[:lower:]' |
+    sed -E 's/[^a-z0-9._-]+/-/g' |
+    sed -E 's/^-+|-+$//g'
+}
+
+json_nested_field() {
+  local json="$1"
+  local container="$2"
+  local field="$3"
+
+  python3 - "$container" "$field" 3<<<"$json" <<'PY'
+import json
+import os
+import sys
+
+container = sys.argv[1]
+field = sys.argv[2]
+
+with os.fdopen(3) as stream:
+    data = json.load(stream)
+
+
+def walk(value):
+    if isinstance(value, dict):
+        candidate = value.get(container)
+
+        if isinstance(candidate, dict):
+            result = candidate.get(field)
+
+            if result is not None:
+                print(result)
+                return True
+
+        for child in value.values():
+            if walk(child):
+                return True
+
+    elif isinstance(value, list):
+        for child in value:
+            if walk(child):
+                return True
+
+    return False
+
+
+if not walk(data):
+    raise SystemExit(1)
+PY
+}
+
+
+herdr_server_running() {
+  command -v herdr >/dev/null 2>&1 &&
+    herdr status server >/dev/null 2>&1
+}
+
+require_herdr_ready() {
+  require_command herdr
+  require_command python3
+
+  herdr_server_running ||
+    die "Herdr server is not running. Start or attach first with: herdr"
+}
+
+invocation_root=""
+repo_root=""
+project_dir=""
+repo_name=""
+
+init_repo_context() {
+  invocation_root="$(
+    git rev-parse --show-toplevel 2>/dev/null
+  )" || die "run ocw from inside a Git worktree"
+
+  repo_root="$(
+    git -C "$invocation_root" worktree list --porcelain |
+      awk '
+        /^worktree / {
+          sub(/^worktree /, "")
+          print
+          exit
+        }
+      '
+  )"
+
+  [ -n "$repo_root" ] ||
+    die "could not determine the main worktree"
+
+  project_dir="$(dirname "$repo_root")"
+  repo_name="$(basename "$project_dir")"
+}
+
+open_vscode() {
+  local worktree_dir="$1"
+
+  if ! command -v code >/dev/null 2>&1; then
+    warn "VS Code CLI 'code' was not found"
+    return 0
+  fi
+
+  code "$worktree_dir" ||
+    warn "failed to open VS Code"
+}
+
+setup_herdr_workspace() {
+  local worktree_dir="$1"
+  local workspace_label="$2"
+
+  local open_json=""
+  local split_json=""
+  local tab_id=""
+
+  HERDR_SETUP_WORKSPACE_ID=""
+  HERDR_SETUP_COMMANDER_PANE_ID=""
+  HERDR_SETUP_IMPLEMENTER_PANE_ID=""
+  HERDR_SETUP_REVIEWER_PANE_ID=""
+
+  open_json="$(
+  herdr workspace create \
+    --cwd "$worktree_dir" \
+    --label "$workspace_label" \
+    --no-focus
+  )" || return 1
+
+  HERDR_SETUP_WORKSPACE_ID="$(
+    json_nested_field \
+      "$open_json" \
+      workspace \
+      workspace_id
+  )" || {
+    echo "error: could not read workspace_id from Herdr response" >&2
+    echo "$open_json" >&2
+    return 1
+  }
+
+  HERDR_SETUP_COMMANDER_PANE_ID="$(
+    json_nested_field \
+      "$open_json" \
+      root_pane \
+      pane_id
+  )" || {
+    echo "error: could not read root pane ID from Herdr response" >&2
+    echo "$open_json" >&2
+    return 1
+  }
+
+  tab_id="$(
+    json_nested_field \
+      "$open_json" \
+      tab \
+      tab_id
+  )" || {
+    echo "error: could not read tab ID from Herdr response" >&2
+    echo "$open_json" >&2
+    return 1
+  }
+
+  herdr tab rename "$tab_id" agents >/dev/null ||
+    return 1
+
+  herdr pane rename \
+    "$HERDR_SETUP_COMMANDER_PANE_ID" \
+    commander \
+    >/dev/null ||
+    return 1
+
+  # Split commander right → implementer
+  split_json="$(
+    herdr pane split \
+      "$HERDR_SETUP_COMMANDER_PANE_ID" \
+      --direction right \
+      --cwd "$worktree_dir" \
+      --no-focus
+  )" || return 1
+
+  HERDR_SETUP_IMPLEMENTER_PANE_ID="$(
+    json_nested_field \
+      "$split_json" \
+      pane \
+      pane_id
+  )" || {
+    echo "error: could not read implementer pane ID from Herdr response" >&2
+    echo "$split_json" >&2
+    return 1
+  }
+
+  herdr pane rename \
+    "$HERDR_SETUP_IMPLEMENTER_PANE_ID" \
+    implementer \
+    >/dev/null ||
+    return 1
+
+  # Split implementer right → reviewer
+  split_json="$(
+    herdr pane split \
+      "$HERDR_SETUP_IMPLEMENTER_PANE_ID" \
+      --direction right \
+      --cwd "$worktree_dir" \
+      --no-focus
+  )" || return 1
+
+  HERDR_SETUP_REVIEWER_PANE_ID="$(
+    json_nested_field \
+      "$split_json" \
+      pane \
+      pane_id
+  )" || {
+    echo "error: could not read reviewer pane ID from Herdr response" >&2
+    echo "$split_json" >&2
+    return 1
+  }
+
+  herdr pane rename \
+    "$HERDR_SETUP_REVIEWER_PANE_ID" \
+    reviewer \
+    >/dev/null ||
+    return 1
+
+  herdr pane run \
+    "$HERDR_SETUP_COMMANDER_PANE_ID" \
+    "$COMMANDER_COMMAND" \
+    >/dev/null ||
+    return 1
+
+  herdr pane run \
+    "$HERDR_SETUP_IMPLEMENTER_PANE_ID" \
+    "$IMPLEMENTER_COMMAND" \
+    >/dev/null ||
+    return 1
+
+  herdr pane run \
+    "$HERDR_SETUP_REVIEWER_PANE_ID" \
+    "$REVIEWER_COMMAND" \
+    >/dev/null ||
+    return 1
+
+  herdr workspace focus \
+    "$HERDR_SETUP_WORKSPACE_ID" \
+    >/dev/null ||
+    return 1
+}
+
+rollback_created_worktree() {
+  local worktree_dir="$1"
+  local branch="$2"
+
+  echo "error: Herdr setup failed; rolling back" >&2
+
+  set +e
+
+  if [ -n "$HERDR_SETUP_WORKSPACE_ID" ] &&
+    herdr_server_running
+  then
+    herdr workspace close \
+      "$HERDR_SETUP_WORKSPACE_ID" \
+      >/dev/null 2>&1
+  fi
+
+  if git -C "$repo_root" worktree list --porcelain |
+    grep -Fqx "worktree ${worktree_dir}"
+  then
+    git -C "$repo_root" \
+      worktree remove --force "$worktree_dir" \
+      >/dev/null 2>&1
+  fi
+
+  if git -C "$repo_root" \
+    show-ref --verify --quiet "refs/heads/${branch}"
+  then
+    git -C "$repo_root" \
+      branch -D "$branch" \
+      >/dev/null 2>&1
+  fi
+
+  set -e
+}
+
+create_worktree() {
+  local task_name="${1:-}"
+  local base_ref="${2:-}"
+
+  if [ -z "$base_ref" ]; then
+    base_ref="$(
+      git -C "$repo_root" symbolic-ref refs/remotes/origin/HEAD 2>/dev/null |
+        sed 's|.*/||'
+    )"
+    [ -n "$base_ref" ] || base_ref="main"
+  fi
+
+  [ -n "$task_name" ] || {
+    usage
+    exit 1
+  }
+
+  [ "$#" -le 2 ] ||
+    die "too many arguments for create"
+
+  local slug=""
+  local branch=""
+  local worktree_dir=""
+  local workspace_label=""
+
+  slug="$(normalize_name "$task_name")"
+
+  [ -n "$slug" ] ||
+    die "worktree name became empty"
+
+  branch="ai/${slug}"
+  worktree_dir="${project_dir}/${slug}"
+  workspace_label="${repo_name} / ${slug}"
+
+  echo "repo:        ${repo_name}"
+  echo "main dir:    ${repo_root}"
+  echo "branch:      ${branch}"
+  echo "worktree:    ${worktree_dir}"
+  echo "base:        ${base_ref}"
+  echo "herdr:       ${USE_HERDR}"
+
+  if git -C "$repo_root" \
+    show-ref --verify --quiet "refs/heads/${branch}"
+  then
+    die "branch already exists: ${branch}"
+  fi
+
+  [ ! -e "$worktree_dir" ] ||
+    die "worktree dir already exists: ${worktree_dir}"
+
+  if [ "$USE_HERDR" = "true" ]; then
+    require_herdr_ready
+  fi
+
+  git -C "$repo_root" \
+    worktree add \
+    -b "$branch" \
+    "$worktree_dir" \
+    "$base_ref"
+
+  if [ "$USE_HERDR" = "true" ]; then
+    local setup_status=0
+
+    set +e
+    setup_herdr_workspace \
+      "$worktree_dir" \
+      "$workspace_label"
+    setup_status="$?"
+    set -e
+
+    if [ "$setup_status" -ne 0 ]; then
+      rollback_created_worktree \
+        "$worktree_dir" \
+        "$branch"
+
+      exit "$setup_status"
+    fi
+
+    echo "workspace:   ${HERDR_SETUP_WORKSPACE_ID}"
+    echo "commander:   ${HERDR_SETUP_COMMANDER_PANE_ID}"
+    echo "implementer: ${HERDR_SETUP_IMPLEMENTER_PANE_ID}"
+    echo "reviewer:    ${HERDR_SETUP_REVIEWER_PANE_ID}"
+  else
+    open_vscode "$worktree_dir"
+  fi
+}
+
+json_workspace_ids() {
+  local json="$1"
+
+  python3 - 3<<<"$json" <<'PY'
+import json
+import os
+
+with os.fdopen(3) as stream:
+    data = json.load(stream)
+
+
+def walk(value):
+    if isinstance(value, dict):
+        workspaces = value.get("workspaces")
+
+        if isinstance(workspaces, list):
+            for workspace in workspaces:
+                if isinstance(workspace, dict):
+                    workspace_id = workspace.get("workspace_id")
+
+                    if workspace_id:
+                        print(workspace_id)
+            return True
+
+        for child in value.values():
+            if walk(child):
+                return True
+
+    elif isinstance(value, list):
+        for child in value:
+            if walk(child):
+                return True
+
+    return False
+
+
+if not walk(data):
+    raise SystemExit(1)
+PY
+}
+
+json_has_pane_cwd() {
+  local json="$1"
+  local target_path="$2"
+
+  python3 - "$target_path" 3<<<"$json" <<'PY'
+import json
+import os
+import sys
+
+target = os.path.realpath(sys.argv[1])
+
+with os.fdopen(3) as stream:
+    data = json.load(stream)
+
+
+def walk(value):
+    if isinstance(value, dict):
+        pane_id = value.get("pane_id")
+        cwd = value.get("cwd")
+
+        if (
+            pane_id
+            and cwd
+            and os.path.realpath(cwd) == target
+        ):
+            return True
+
+        for child in value.values():
+            if walk(child):
+                return True
+
+    elif isinstance(value, list):
+        for child in value:
+            if walk(child):
+                return True
+
+    return False
+
+
+raise SystemExit(0 if walk(data) else 1)
+PY
+}
+
+close_herdr_workspaces_for_checkout() {
+  local worktree_dir="$1"
+
+  herdr_server_running ||
+    return 0
+
+  require_command python3
+
+  local workspace_json=""
+  local workspace_ids=""
+
+  if ! workspace_json="$(
+    herdr workspace list
+  )"; then
+    warn "could not query Herdr workspaces; continuing with Git removal"
+    return 0
+  fi
+
+  if ! workspace_ids="$(
+    json_workspace_ids "$workspace_json"
+  )"; then
+    warn "could not parse Herdr workspace list"
+    return 0
+  fi
+
+  while IFS= read -r workspace_id; do
+    [ -n "$workspace_id" ] ||
+      continue
+
+    local pane_json=""
+
+    if ! pane_json="$(
+      herdr pane list \
+        --workspace "$workspace_id"
+    )"; then
+      warn "could not inspect Herdr workspace: ${workspace_id}"
+      continue
+    fi
+
+    if json_has_pane_cwd \
+      "$pane_json" \
+      "$worktree_dir"
+    then
+      echo "closing Herdr workspace: ${workspace_id}"
+
+      herdr workspace close \
+        "$workspace_id" \
+        >/dev/null ||
+        warn "failed to close Herdr workspace: ${workspace_id}"
+    fi
+  done <<<"$workspace_ids"
+}
+
+remove_worktree() {
+  local force="false"
+
+  if [ "${1:-}" = "-f" ] ||
+    [ "${1:-}" = "--force" ]
+  then
+    force="true"
+    shift
+  fi
+
+  local task_name="${1:-}"
+
+  [ -n "$task_name" ] || {
+    usage
+    exit 1
+  }
+
+  [ "$#" -le 1 ] ||
+    die "too many arguments for remove"
+
+  local slug=""
+  local branch=""
+  local worktree_dir=""
+
+  slug="$(normalize_name "$task_name")"
+
+  [ -n "$slug" ] ||
+    die "worktree name became empty"
+
+  branch="ai/${slug}"
+  worktree_dir="${project_dir}/${slug}"
+
+  echo "repo:      ${repo_name}"
+  echo "remove:    ${worktree_dir}"
+  echo "branch:    ${branch}"
+  echo "force:     ${force}"
+
+  if [[ "$(realpath -m "$invocation_root")" == "$(realpath -m "$worktree_dir")" ]]; then
+    echo "error: do not remove the current worktree" >&2
+    echo "move to main first:" >&2
+    echo "  cd ${repo_root}" >&2
+    echo "  ocw rm ${slug}" >&2
+    exit 1
+  fi
+
+  [ -d "$worktree_dir" ] ||
+    die "worktree dir does not exist: ${worktree_dir}"
+
+  if [ "$force" = "false" ]; then
+    if [ -n "$(git -C "$worktree_dir" status --porcelain)" ]; then
+      die "worktree has uncommitted or untracked changes: ${worktree_dir}"
+    fi
+
+    if ! git -C "$repo_root" \
+      merge-base --is-ancestor "$branch" HEAD
+    then
+      die "branch is not merged into the current main checkout: ${branch}"
+    fi
+  fi
+
+  close_herdr_workspaces_for_checkout "$worktree_dir"
+
+  if [ "$force" = "true" ]; then
+    git -C "$repo_root" \
+      worktree remove --force "$worktree_dir"
+
+    git -C "$repo_root" \
+      branch -D "$branch"
+  else
+    git -C "$repo_root" \
+      worktree remove "$worktree_dir"
+
+    git -C "$repo_root" \
+      branch -d "$branch"
+  fi
+}
+
+while [ "${1:-}" = "-H" ] ||
+  [ "${1:-}" = "--herdr" ]
+do
+  USE_HERDR=true
+  shift
+done
+
+cmd="${1:-}"
+
+[ -n "$cmd" ] || {
+  usage
+  exit 1
+}
+
+case "$cmd" in
+  ls)
+    shift
+
+    [ "$#" -eq 0 ] ||
+      die "ocw ls does not accept arguments"
+
+    init_repo_context
+    git -C "$repo_root" worktree list
+    ;;
+
+  new)
+    shift
+
+    while [ "${1:-}" = "-H" ] ||
+      [ "${1:-}" = "--herdr" ]
+    do
+      USE_HERDR=true
+      shift
+    done
+
+    init_repo_context
+    create_worktree "$@"
+    ;;
+
+  rm | remove)
+    shift
+    init_repo_context
+    remove_worktree "$@"
+    ;;
+
+  help | -h | --help)
+    usage
+    ;;
+
+  *)
+    init_repo_context
+    create_worktree "$@"
+    ;;
+esac

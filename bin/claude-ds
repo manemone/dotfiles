@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+KEY_FILE="${DEEPSEEK_API_KEY_FILE:-$HOME/.config/deepseek/api_key}"
+
+if ! command -v claude >/dev/null 2>&1; then
+  echo "Error: claude command not found in PATH." >&2
+  exit 1
+fi
+
+if [ ! -f "$KEY_FILE" ]; then
+  echo "Error: DeepSeek API key file not found: $KEY_FILE" >&2
+  echo "Create it with:" >&2
+  echo "  mkdir -p ~/.config/deepseek" >&2
+  echo "  nano ~/.config/deepseek/api_key" >&2
+  echo "  chmod 600 ~/.config/deepseek/api_key" >&2
+  exit 1
+fi
+
+DEEPSEEK_API_KEY="$(tr -d '\r\n' < "$KEY_FILE")"
+
+if [ -z "$DEEPSEEK_API_KEY" ]; then
+  echo "Error: DeepSeek API key file is empty: $KEY_FILE" >&2
+  exit 1
+fi
+
+exec env \
+  ANTHROPIC_BASE_URL="https://api.deepseek.com/anthropic" \
+  ANTHROPIC_AUTH_TOKEN="$DEEPSEEK_API_KEY" \
+  ANTHROPIC_MODEL="deepseek-v4-pro[1m]" \
+  ANTHROPIC_DEFAULT_OPUS_MODEL="deepseek-v4-pro[1m]" \
+  ANTHROPIC_DEFAULT_SONNET_MODEL="deepseek-v4-pro[1m]" \
+  ANTHROPIC_DEFAULT_HAIKU_MODEL="deepseek-v4-flash" \
+  CLAUDE_CODE_SUBAGENT_MODEL="deepseek-v4-flash" \
+  claude "$@"
