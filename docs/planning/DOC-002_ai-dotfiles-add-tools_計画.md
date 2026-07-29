@@ -104,6 +104,10 @@ bin/
 
 ## 孫1用プロンプト:
 
+> ※ この節は着手時のプロンプトの記録です。`settings.local.json` 方式は実装レビューで
+> 「ユーザーレベルでは読まれない」ことが実測で判明したため、`claude/settings.machine.json`
+> マージ方式に変更しました。現行仕様は `claude/README.md` を参照してください。
+
 ```
 ## タスク: claude/ ディレクトリを追加し Claude Code 設定を移行する
 
