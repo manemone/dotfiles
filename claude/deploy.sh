@@ -119,7 +119,9 @@ PYEOF
               log_error "Failed to write settings.json"
               FAIL=1
             }
-            log_ok "Generated merged settings.json → $SETTINGS_DST"
+            if [ "$FAIL" -eq 0 ]; then
+              log_ok "Generated merged settings.json → $SETTINGS_DST"
+            fi
           fi
         fi
       fi
@@ -151,7 +153,9 @@ else
           log_error "Failed to copy settings.json"
           FAIL=1
         }
-        log_ok "Copied settings.json → $SETTINGS_DST"
+        if [ "$FAIL" -eq 0 ]; then
+          log_ok "Copied settings.json → $SETTINGS_DST"
+        fi
       fi
     fi
   fi

@@ -201,15 +201,16 @@ vim ~/.dotfiles/claude/CLAUDE.md
 
 ## 5. Troubleshooting
 
-### `settings.json` の変更が反映されない
+### `~/.claude/settings.json` の変更を反映したい
 
-Claude Code は起動時に設定を読み込みます。`~/.claude/settings.json` を直接編集したら Claude Code を再起動してください。
+Claude Code は起動時に設定を読み込みます。
 
-リポジトリ側の `claude/settings.json` を編集した場合、変更を反映するには**再デプロイ**が必要です:
-
-```bash
-cd ~/.dotfiles/claude && ./deploy.sh
-```
+- **マシン固有の設定を追加・変更する** → `claude/settings.machine.json` を編集して再デプロイ:
+  ```bash
+  cd ~/.dotfiles/claude && ./deploy.sh
+  ```
+- **`~/.claude/settings.json` を何らかの理由で直接編集した** → Claude Code を再起動。
+  ただし次回 `deploy.sh` 実行時に上書きされるため、恒久的な変更は `settings.machine.json` に転記してください。
 
 ### `settings.machine.json` の変更が反映されない
 

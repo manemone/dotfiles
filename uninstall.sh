@@ -172,21 +172,26 @@ for _tool in $TOOLS; do
       IFS="$_OLDIFS"
       [ -z "$_dst" ] && continue
 
-      if [ "${DRY_RUN:-0}" -eq 1 ]; then
-        if [ -L "$_dst" ]; then
-          printf '[DRY-RUN] rm %s\n' "$_dst"
-        elif [ -f "$_dst" ]; then
-          printf '[DRY-RUN] rm %s\n' "$_dst"
-        fi
-      else
-        if [ -L "$_dst" ]; then
-          rm -f "$_dst" && log_info "Removed generated symlink: $_dst"
-        elif [ -f "$_dst" ]; then
-          rm -f "$_dst" && log_info "Removed generated file: $_dst"
+      # Step 1: Always safety-backup the current file before touching it
+      # (so user edits made after deploy are never lost, even on new machines
+      #  where no deploy-time .backup exists)
+      _safety_path="$(_backup_dst "$_dst")"
+
+      if [ -f "$_dst" ] || [ -L "$_dst" ]; then
+        if [ "${DRY_RUN:-0}" -eq 1 ]; then
+          printf '[DRY-RUN] mv %s %s (safety backup)\n' "$_dst" "$_safety_path"
+        else
+          mv "$_dst" "$_safety_path" && log_info "Safety backup: $_dst → $_safety_path" || {
+            log_error "Failed to back up: $_dst"
+            OVERALL_OK=1
+            IFS='
+'
+            continue
+          }
         fi
       fi
 
-      # Restore backup if present (original or oldest timestamped)
+      # Step 2: Try to restore the deploy-time backup (original user settings)
       _restore=""
       if [ -e "$_dst.backup" ] || [ -L "$_dst.backup" ]; then
         _restore="$_dst.backup"
@@ -203,12 +208,14 @@ for _tool in $TOOLS; do
           printf '[DRY-RUN] mv %s %s\n' "$_restore" "$_dst"
         else
           if mv "$_restore" "$_dst"; then
-            log_ok "Restored backup: $_dst (from $_restore)"
+            log_ok "Restored deploy-time backup: $_dst (from $_restore)"
           else
             log_error "Failed to restore backup: $_restore → $_dst"
             OVERALL_OK=1
           fi
         fi
+      else
+        log_info "No deploy-time backup for $_dst — safety backup preserved."
       fi
       IFS='
 '

@@ -283,7 +283,7 @@ c) **動作確認チェックリスト**:
 - [ ] `~/bin/ocw` が実行可能で `claude` がデフォルトコマンドになっている
 - [ ] `~/bin/claude-ds` が実行可能
 - [ ] `~/.claude/CLAUDE.md` が symlink で内容が正しい
-- [ ] `~/.claude/settings.json` が symlink で汎用設定のみ含まれている（allowリストがない）
+- [ ] `~/.claude/settings.json` が deploy.sh で生成された実ファイルで汎用設定のみ含まれている（allowリストがない）
 - [ ] `~/.claude/skills/pr-review-loop/SKILL.md` が symlink で存在
 - [ ] `~/.claude/skills/umbrella-orchestrator/SKILL.md` が symlink で存在
 - [ ] `~/.claude/skills/herdr/` が手付かずで残っている（削除されていない）
