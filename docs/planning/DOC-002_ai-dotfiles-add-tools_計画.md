@@ -14,7 +14,7 @@
 |---|---|---|---|
 | 0 | `ai/ph-00-bin` | `bin/` ディレクトリ追加。ocw（デフォルトコマンドを claude に修正）、claude-ds、deploy.sh、README.md | 🔄 実装中 |
 | 1 | `ai/ph-01-claude-config` | `claude/` ディレクトリ追加。CLAUDE.md、settings.json（汎用設定のみ）、deploy.sh、README.md | 🔄 実装中 |
-| 2 | `ai/ph-02-claude-skills` | `claude/skills/` に pr-review-loop と umbrella-orchestrator を移行 | ⬜ 待機中 |
+| 2 | `ai/ph-02-claude-skills` | `claude/skills/` に pr-review-loop と umbrella-orchestrator を移行 | 🔄 実装中 |
 | 3 | `ai/ph-03-shared-update` | `shared/helpers.sh` の AVAILABLE_TOOLS に `bin claude` を追加 | ⬜ 待機中 |
 | 4 | `ai/ph-04-docs` | README.md 更新、deploy-all.sh での統合確認 | ⬜ 待機中 |
 
