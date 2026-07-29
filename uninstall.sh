@@ -187,7 +187,7 @@ for _tool in $TOOLS; do
           # Pick the oldest backup (first in glob order) — same policy as
           # symlink_restore for .backup files.
           for _cand in "$HOME/.claude/skills-backup/$_skill_name".*; do
-            [ -e "$_cand" ] || continue
+            [ -e "$_cand" ] || [ -L "$_cand" ] || continue
             if [ "${DRY_RUN:-0}" -eq 1 ]; then
               printf '[DRY-RUN] mv %s %s\n' "$_cand" "$_skill_link"
             else
