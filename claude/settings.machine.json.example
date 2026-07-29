@@ -1,0 +1,31 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash",
+      "Read",
+      "Edit",
+      "WebFetch",
+      "Read(//home/user/projects/**)",
+      "Bash(git checkout *)",
+      "Bash(git fetch *)",
+      "Bash(git branch *)"
+    ],
+    "additionalDirectories": [
+      "/home/user/projects/example"
+    ]
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash '/path/to/your/hook.sh' session",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

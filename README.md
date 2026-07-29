@@ -9,6 +9,8 @@ Easily deployable, cross-platform dotfiles managed with [mise](https://mise.jdx.
 | **Zsh** | Shell | [Antidote](https://github.com/mattmc3/antidote) |
 | **NeoVim** | Editor | [lazy.nvim](https://github.com/folke/lazy.nvim) |
 | **tmux** | Terminal multiplexer | — (built-in) |
+| **bin** | Custom CLI tools (ocw, claude-ds) | — (standalone scripts) |
+| **claude** | Claude Code config & skills | — (built-in) |
 
 ## Supported Platforms
 
@@ -78,6 +80,18 @@ Options can be combined:
 │   └── planning/
 ├── shared/
 │   └── helpers.sh             # Shared shell functions (logging, symlinks, platform detection)
+├── bin/
+│   ├── ocw                    # Git worktree manager with Herdr integration
+│   ├── claude-ds              # Claude Code via DeepSeek API wrapper
+│   ├── deploy.sh              # bin deployment script
+│   └── README.md
+├── claude/
+│   ├── CLAUDE.md              # Claude Code global personal instructions
+│   ├── settings.json          # Claude Code base settings (no machine-specific config)
+│   ├── settings.machine.json.example  # Template for machine-specific overrides
+│   ├── deploy.sh              # claude deployment script
+│   ├── skills/                # Claude Code custom skills (auto-detected)
+│   └── README.md
 ├── zsh/
 │   ├── .zshrc                 # Shell configuration
 │   ├── .zsh_plugins.txt       # Antidote plugin declarations
@@ -114,6 +128,8 @@ See each tool's deploy script for the full list of files it creates.
 
 See each tool's README for detailed configuration and troubleshooting:
 
+- [bin/README.md](bin/README.md) — CLI tools (ocw worktree manager, claude-ds DeepSeek wrapper)
+- [claude/README.md](claude/README.md) — Claude Code config, skills, machine-specific customization
 - [zsh/README.md](zsh/README.md) — shell setup, plugin management, aliases, version managers
 - [nvim/README.md](nvim/README.md) — editor setup, LSP servers, keybindings, plugins
 - [tmux/README.md](tmux/README.md) — multiplexer setup, Vim-style keybindings, clipboard

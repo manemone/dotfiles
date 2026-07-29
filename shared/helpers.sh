@@ -33,7 +33,7 @@ is_wsl() {
 
 # Canonical list of available tools.  deploy-all.sh and uninstall.sh
 # both source this file, so the list is defined once.
-AVAILABLE_TOOLS="zsh nvim tmux"
+AVAILABLE_TOOLS="zsh nvim tmux bin claude"
 
 # resolve_tools <only_tools> <var_name>
 # Resolves a comma-separated tool filter against AVAILABLE_TOOLS.
@@ -178,11 +178,11 @@ get_brew_prefix() {
 
 # ── Filesystem helpers ────────────────────────────────────────────────
 
-# _backup_dst <dst>
+# backup_dst <dst>
 # Print a safe backup path for dst.  If dst.backup doesn't exist, use it
 # as-is; otherwise append a timestamp + PID to avoid overwriting a previous
 # backup (PID included to prevent same-second collisions).
-_backup_dst() {
+backup_dst() {
   _bd="$1.backup"
   if [ ! -e "$_bd" ] && [ ! -L "$_bd" ]; then
     printf '%s' "$_bd"
@@ -211,7 +211,7 @@ symlink_backup() {
       if [ "${BACKUP:-1}" -eq 0 ]; then
         printf '[DRY-RUN] rm -f %s\n' "$_dst"
       else
-        printf '[DRY-RUN] mv %s %s\n' "$_dst" "$(_backup_dst "$_dst")"
+        printf '[DRY-RUN] mv %s %s\n' "$_dst" "$(backup_dst "$_dst")"
       fi
     fi
     printf '[DRY-RUN] ln -fs %s %s\n' "$_src" "$_dst"
@@ -236,7 +236,7 @@ symlink_backup() {
         return 1
       }
     else
-      _backup_path="$(_backup_dst "$_dst")"
+      _backup_path="$(backup_dst "$_dst")"
       log_warn "Backing up existing: $_dst → $_backup_path"
       mv "$_dst" "$_backup_path" || {
         log_error "Failed to back up: $_dst"
