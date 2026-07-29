@@ -37,6 +37,11 @@ KNOWN_LINKS_tmux=$(printf '%s\n' \
   "$HOME/.tmux.conf" \
 )
 
+KNOWN_LINKS_bin=$(printf '%s\n' \
+  "$HOME/bin/ocw" \
+  "$HOME/bin/claude-ds" \
+)
+
 # ── Usage ─────────────────────────────────────────────────────────────
 
 usage() {
