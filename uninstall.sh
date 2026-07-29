@@ -44,6 +44,11 @@ KNOWN_LINKS_bin=$(printf '%s\n' \
 
 KNOWN_LINKS_claude=$(printf '%s\n' \
   "$HOME/.claude/CLAUDE.md" \
+)
+
+# settings.json is a generated file (not a symlink) — handled separately.
+# symlink_restore would skip it because it's a real file.
+KNOWN_GENERATED_claude=$(printf '%s\n' \
   "$HOME/.claude/settings.json" \
 )
 
@@ -136,22 +141,79 @@ for _tool in $TOOLS; do
   esac
   _links_var="KNOWN_LINKS_$_tool"
   eval "_links=\${$_links_var:-}"
-  if [ -z "$_links" ]; then
+  _gen_var="KNOWN_GENERATED_$_tool"
+  eval "_generated=\${$_gen_var:-}"
+
+  if [ -z "$_links" ] && [ -z "$_generated" ]; then
     log_warn "No link list defined for '$_tool'. Skipping."
     continue
   fi
 
   # Iterate over links, one per line (IFS=newline to handle whitespace paths)
   _OLDIFS="$IFS"
-  IFS='
-'
-  for _dst in $_links; do
-    IFS="$_OLDIFS"
-    [ -z "$_dst" ] && continue  # skip blank lines
-    symlink_restore "$_dst" || OVERALL_OK=1
+  if [ -n "$_links" ]; then
     IFS='
 '
-  done
+    for _dst in $_links; do
+      IFS="$_OLDIFS"
+      [ -z "$_dst" ] && continue  # skip blank lines
+      symlink_restore "$_dst" || OVERALL_OK=1
+      IFS='
+'
+    done
+  fi
+  IFS="$_OLDIFS"
+
+  # Handle generated files (real files, not symlinks — e.g. claude/settings.json)
+  if [ -n "$_generated" ]; then
+    IFS='
+'
+    for _dst in $_generated; do
+      IFS="$_OLDIFS"
+      [ -z "$_dst" ] && continue
+
+      if [ "${DRY_RUN:-0}" -eq 1 ]; then
+        if [ -L "$_dst" ]; then
+          printf '[DRY-RUN] rm %s\n' "$_dst"
+        elif [ -f "$_dst" ]; then
+          printf '[DRY-RUN] rm %s\n' "$_dst"
+        fi
+      else
+        if [ -L "$_dst" ]; then
+          rm -f "$_dst" && log_info "Removed generated symlink: $_dst"
+        elif [ -f "$_dst" ]; then
+          rm -f "$_dst" && log_info "Removed generated file: $_dst"
+        fi
+      fi
+
+      # Restore backup if present (original or oldest timestamped)
+      _restore=""
+      if [ -e "$_dst.backup" ] || [ -L "$_dst.backup" ]; then
+        _restore="$_dst.backup"
+      else
+        for _cand in "$_dst.backup."*; do
+          [ -e "$_cand" ] || [ -L "$_cand" ] || continue
+          _restore="$_cand"
+          break
+        done
+      fi
+
+      if [ -n "$_restore" ]; then
+        if [ "${DRY_RUN:-0}" -eq 1 ]; then
+          printf '[DRY-RUN] mv %s %s\n' "$_restore" "$_dst"
+        else
+          if mv "$_restore" "$_dst"; then
+            log_ok "Restored backup: $_dst (from $_restore)"
+          else
+            log_error "Failed to restore backup: $_restore → $_dst"
+            OVERALL_OK=1
+          fi
+        fi
+      fi
+      IFS='
+'
+    done
+  fi
   IFS="$_OLDIFS"
 done
 

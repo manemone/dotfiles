@@ -116,10 +116,9 @@ vim settings.machine.json
 ```
 
 マージの仕組み:
-- `settings.json`（ベース）に `deny` と `ask` が定義されている
-- `settings.machine.json` に `allow` だけを書けば、`deny` と `ask` はベース側の値が維持される
-- 各トップレベルキー内で shallow merge（dict 同士は `.update()`）される
-- `permissions` キー全体が replace されることはない（python で key-by-key マージするため）
+- `settings.json`（ベース）の上に `settings.machine.json` を shallow merge
+- `permissions` 内のリストキー（`allow`, `deny`, `ask`）は**結合**（重複除去、machine 側の項目が末尾に追加）
+- それ以外のキーは machine 側の値で上書き
 
 ### 4.3 `hooks` の追加
 
@@ -204,7 +203,13 @@ vim ~/.dotfiles/claude/CLAUDE.md
 
 ### `settings.json` の変更が反映されない
 
-Claude Code は起動時に設定を読み込みます。`settings.json` を編集したら Claude Code を再起動してください。
+Claude Code は起動時に設定を読み込みます。`~/.claude/settings.json` を直接編集したら Claude Code を再起動してください。
+
+リポジトリ側の `claude/settings.json` を編集した場合、変更を反映するには**再デプロイ**が必要です:
+
+```bash
+cd ~/.dotfiles/claude && ./deploy.sh
+```
 
 ### `settings.machine.json` の変更が反映されない
 

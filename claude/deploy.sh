@@ -56,42 +56,72 @@ if [ -f "$MACHINE_SRC" ]; then
       log_error "Install python3, or remove claude/settings.machine.json to deploy base settings only."
       FAIL=1
     else
-      # Backup existing settings.json if it is a real file (not a symlink)
-      # and differs from what we're about to generate.
-      if [ -f "$SETTINGS_DST" ] && [ ! -L "$SETTINGS_DST" ]; then
-        _backup_path="$(_backup_dst "$SETTINGS_DST")"
-        log_warn "Backing up existing settings.json → $_backup_path"
-        cp "$SETTINGS_DST" "$_backup_path" || {
-          log_error "Failed to back up existing settings.json"
-          FAIL=1
-        }
-      fi
+      MERGE_TMP="$SETTINGS_DST.tmp.$$"
 
-      # Merge: base settings + machine overrides (top-level shallow merge)
-      python3 -c "
+      # Merge: base settings + machine overrides.
+      # List-valued keys within "permissions" (allow, deny, ask) are concatenated;
+      # all other keys use shallow .update() semantics (machine wins).
+      python3 - "$SETTINGS_SRC" "$MACHINE_SRC" "$MERGE_TMP" << 'PYEOF'
 import json, sys
 
-with open('$SETTINGS_SRC') as f:
+with open(sys.argv[1]) as f:
     base = json.load(f)
-with open('$MACHINE_SRC') as f:
+with open(sys.argv[2]) as f:
     machine = json.load(f)
 
-# Shallow merge: machine top-level keys override base
+LIST_KEYS = {'allow', 'deny', 'ask'}
+
 for key in machine:
-    if key in base and isinstance(base[key], dict) and isinstance(machine[key], dict):
+    if key == 'permissions' and isinstance(base.get(key), dict) and isinstance(machine[key], dict):
+        for subkey in machine[key]:
+            if subkey in LIST_KEYS and isinstance(base[key].get(subkey), list) and isinstance(machine[key][subkey], list):
+                # Concatenate lists (deduplicate preserving order)
+                seen = set(base[key][subkey])
+                for item in machine[key][subkey]:
+                    if item not in seen:
+                        base[key][subkey].append(item)
+                        seen.add(item)
+            else:
+                base[key][subkey] = machine[key][subkey]
+    elif key in base and isinstance(base[key], dict) and isinstance(machine[key], dict):
         base[key].update(machine[key])
     else:
         base[key] = machine[key]
 
-with open('$SETTINGS_DST', 'w') as f:
+with open(sys.argv[3], 'w') as f:
     json.dump(base, f, indent=2)
     f.write('\n')
-" || {
+PYEOF
+      _merge_rc=$?
+
+      if [ $_merge_rc -ne 0 ]; then
         log_error "Failed to merge settings. Check settings.machine.json is valid JSON."
+        rm -f "$MERGE_TMP"
         FAIL=1
-      }
-      if [ "$FAIL" -eq 0 ]; then
-        log_ok "Generated merged settings.json → $SETTINGS_DST"
+      else
+        # Compare with existing file — skip if identical
+        if [ -f "$SETTINGS_DST" ] && cmp -s "$MERGE_TMP" "$SETTINGS_DST" 2>/dev/null; then
+          log_info "settings.json is already up to date (unchanged)."
+          rm -f "$MERGE_TMP"
+        else
+          # Back up existing if present
+          if [ -f "$SETTINGS_DST" ]; then
+            _backup_path="$(_backup_dst "$SETTINGS_DST")"
+            log_warn "Backing up existing settings.json → $_backup_path"
+            mv "$SETTINGS_DST" "$_backup_path" || {
+              log_error "Failed to back up existing settings.json"
+              rm -f "$MERGE_TMP"
+              FAIL=1
+            }
+          fi
+          if [ "$FAIL" -eq 0 ]; then
+            mv "$MERGE_TMP" "$SETTINGS_DST" || {
+              log_error "Failed to write settings.json"
+              FAIL=1
+            }
+            log_ok "Generated merged settings.json → $SETTINGS_DST"
+          fi
+        fi
       fi
     fi
   fi
@@ -99,25 +129,31 @@ else
   if [ "${DRY_RUN:-0}" -eq 1 ]; then
     log_info "[DRY-RUN] Would copy settings.json → $SETTINGS_DST"
   else
-    # Warn if existing settings.json has local modifications
-    if [ -f "$SETTINGS_DST" ] && [ ! -L "$SETTINGS_DST" ]; then
-      if ! cmp -s "$SETTINGS_SRC" "$SETTINGS_DST" 2>/dev/null; then
-        _backup_path="$(_backup_dst "$SETTINGS_DST")"
-        log_warn "Existing settings.json has local modifications."
-        log_warn "Backing up → $_backup_path"
-        cp "$SETTINGS_DST" "$_backup_path" || {
-          log_error "Failed to back up existing settings.json"
+    # Compare with existing — skip if identical
+    if [ -f "$SETTINGS_DST" ] && cmp -s "$SETTINGS_SRC" "$SETTINGS_DST" 2>/dev/null; then
+      log_info "settings.json is already up to date (unchanged)."
+    else
+      # Back up existing if it differs from base
+      if [ -f "$SETTINGS_DST" ] && [ ! -L "$SETTINGS_DST" ]; then
+        if ! cmp -s "$SETTINGS_SRC" "$SETTINGS_DST" 2>/dev/null; then
+          _backup_path="$(_backup_dst "$SETTINGS_DST")"
+          log_warn "Existing settings.json has local modifications — backing up → $_backup_path"
+          mv "$SETTINGS_DST" "$_backup_path" || {
+            log_error "Failed to back up existing settings.json"
+            FAIL=1
+          }
+          log_warn "To preserve custom settings across deploys, create claude/settings.machine.json"
+          log_warn "from claude/settings.machine.json.example and add your overrides there."
+        fi
+      fi
+      if [ "$FAIL" -eq 0 ]; then
+        cp "$SETTINGS_SRC" "$SETTINGS_DST" || {
+          log_error "Failed to copy settings.json"
           FAIL=1
         }
-        log_warn "To preserve custom settings, create claude/settings.machine.json"
-        log_warn "from claude/settings.machine.json.example before next deploy."
+        log_ok "Copied settings.json → $SETTINGS_DST"
       fi
     fi
-    cp "$SETTINGS_SRC" "$SETTINGS_DST" || {
-      log_error "Failed to copy settings.json"
-      FAIL=1
-    }
-    log_ok "Copied settings.json → $SETTINGS_DST"
   fi
 fi
 
