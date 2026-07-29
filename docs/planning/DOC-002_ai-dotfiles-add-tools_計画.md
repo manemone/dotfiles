@@ -14,19 +14,25 @@
 |---|---|---|---|
 | 0 | `ai/ph-00-bin` | `bin/` ディレクトリ追加。ocw（デフォルトコマンドを claude に修正）、claude-ds、deploy.sh、README.md | 🔄 実装中 |
 | 1 | `ai/ph-01-claude-config` | `claude/` ディレクトリ追加。CLAUDE.md、settings.json（汎用設定のみ）、deploy.sh、README.md | ⬜ 待機中 |
-| 2 | `ai/ph-02-claude-skills` | `claude/skills/` に pr-review-loop と umbrella-orchestrator を移行 | ⬜ 待機中 |
-| 3 | `ai/ph-03-shared-update` | `shared/helpers.sh` の AVAILABLE_TOOLS に `bin claude` を追加 | ⬜ 待機中 |
-| 4 | `ai/ph-04-docs` | README.md 更新、deploy-all.sh での統合確認 | ⬜ 待機中 |
+| 2 | `ai/ph-02-claude-skills` | `claude/skills/` に pr-review-loop と umbrella-orchestrator を移行（**孫1マージ後に着手**） | ⬜ 待機中 |
+| 3 | `ai/ph-03-shared-update` | `shared/helpers.sh` の AVAILABLE_TOOLS に `bin claude` を追加 | ⬜ 待機中（孫0,1,2マージ待ち） |
+| 4 | `ai/ph-04-docs` | README.md 更新、deploy-all.sh での統合確認、実マシンデプロイテスト | ⬜ 待機中（全孫マージ待ち） |
 
-## 依存関係
+## 依存関係と実行順序
 
 ```
-ph-00-bin ─────────────────────┐
-ph-01-claude-config ──┬────────┼── ph-03-shared-update ── ph-04-docs
-ph-02-claude-skills ──┘        │   (孫2 は孫1 の claude/deploy.sh を拡張するため、
-                               │    マージ順は 孫1→孫2 であること)
-                               │
-                               └── (孫0 と孫1/孫2 は独立)
+フェーズ1（並列可）:
+  孫0 (bin/)     ← 独立。~/bin/ の ocw, claude-ds をコピー
+  孫1 (claude/)  ← 独立。~/.claude/ の CLAUDE.md, settings.json をコピー
+
+フェーズ2（孫1マージ後に着手）:
+  孫2 (skills)   ← 孫1 の claude/deploy.sh を拡張するため、孫1マージ必須
+
+フェーズ3（孫0,1,2 全マージ後に着手）:
+  孫3 (shared)   ← AVAILABLE_TOOLS に bin claude 追加
+
+フェーズ4（全孫マージ後に着手）:
+  孫4 (docs+test) ← ドキュメント更新 + 実マシンデプロイテスト
 ```
 
 ## 除外するもの
@@ -260,7 +266,6 @@ AVAILABLE_TOOLS="zsh nvim tmux bin claude"
 
 a) **事前バックアップ**:
 ```bash
-# 既存のファイルをバックアップ
 mkdir -p ~/dotfiles-backup-$(date +%Y%m%d)
 cp ~/bin/ocw ~/dotfiles-backup-$(date +%Y%m%d)/ 2>/dev/null
 cp ~/bin/claude-ds ~/dotfiles-backup-$(date +%Y%m%d)/ 2>/dev/null
@@ -274,14 +279,14 @@ b) **デプロイ実行**:
 ./deploy-all.sh --only bin,claude --force
 ```
 
-c) **動作確認項目**:
+c) **動作確認チェックリスト**:
 - [ ] `~/bin/ocw` が実行可能で `claude` がデフォルトコマンドになっている
 - [ ] `~/bin/claude-ds` が実行可能
 - [ ] `~/.claude/CLAUDE.md` が symlink で内容が正しい
-- [ ] `~/.claude/settings.json` が symlink で汎用設定のみ含まれている
+- [ ] `~/.claude/settings.json` が symlink で汎用設定のみ含まれている（allowリストがない）
 - [ ] `~/.claude/skills/pr-review-loop/SKILL.md` が symlink で存在
 - [ ] `~/.claude/skills/umbrella-orchestrator/SKILL.md` が symlink で存在
-- [ ] `~/.claude/skills/herdr/` が手付かずで残っている（削除されてない）
+- [ ] `~/.claude/skills/herdr/` が手付かずで残っている（削除されていない）
 - [ ] `deploy-all.sh --only zsh,nvim,tmux` が従来通り動作（bin/claude追加で壊れてない）
 - [ ] `deploy-all.sh` 全ツール一括が正常完了
 
