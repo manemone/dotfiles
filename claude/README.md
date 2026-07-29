@@ -28,6 +28,7 @@ cd ~/.dotfiles/claude
 # 2. Verify
 ls -la ~/.claude/CLAUDE.md         # symlink
 ls -la ~/.claude/settings.json     # 実ファイル（deploy.sh が生成）
+ls -la ~/.claude/skills/           # 各スキルが symlink（herdr など独自スキルは残る）
 ```
 
 The deploy script:
@@ -85,13 +86,19 @@ Claude Code のカスタムスキル。`claude/skills/` 配下の各スキルデ
 
 - **ディレクトリ全体 symlink は禁止。** `~/.claude/skills` をまとめて symlink すると、Herdr 管理の `herdr` スキルやユーザー独自スキルが消えるため。
 - 代わりに **`claude/skills/` 内の全ディレクトリを自動検出**し、1スキルずつ個別 symlink する。
-- これにより、Herdr 管理のスキルや手動追加した独自スキルと安全に共存できる。
-- 将来スキルが増えても deploy.sh の修正は不要（自動検出のため）。
+- これにより、Herdr 管理のスキルや手動追加した独自スキルと安全に共存できる（**`claude/skills/` 配下と同名でない限り**）。
+- 将来スキルが増えても deploy.sh の修正は不要（自動検出のため）。スキルを削除・リネームした場合も、deploy.sh が自動的に古い symlink を掃除する。
+
+**重要**: `claude/skills/` 配下と同名のファイル／ディレクトリが既に `~/.claude/skills/` にある場合、`~/.claude/skills-backup/` に退避されます。
+退避からの復元は手動で行ってください:
+```bash
+mv ~/.claude/skills-backup/<name>.<timestamp> ~/.claude/skills/<name>
+```
 
 **独自スキルの追加方法:**
 
 `~/.claude/skills/` に手動でディレクトリを作り `SKILL.md` を置くだけでよい。
-deploy.sh はリポジトリ管理下のスキルのみを symlink し、手動追加したスキルには一切触れない。
+deploy.sh はリポジトリ管理下のスキルのみを symlink し、**同名衝突がない限り**手動追加したスキルには触れない。
 
 ```bash
 # 独自スキルを追加

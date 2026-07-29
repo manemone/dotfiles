@@ -154,7 +154,14 @@ Herdr があると自動化度が上がるが、必須ではない。
 2. **マージ済み孫を検証**
    - 傘ブランチに checkout
    - `git pull --rebase`
-   - `bundle exec rubocop` + `bundle exec rspec`
+   - プロジェクトの言語を自動検出し、該当する lint / test を実行（pr-review-loop Phase 0.5 と同じ方式）:
+     - `Gemfile` があれば `bundle exec rubocop` + `bundle exec rspec`
+     - `pyproject.toml` / `setup.py` / `setup.cfg` があれば `ruff check` + `python -m pytest`
+     - `package.json` があれば `npx eslint .` + `npx jest`
+     - `go.mod` があれば `go vet ./...` + `go test ./...`
+     - `Cargo.toml` があれば `cargo clippy --all-targets` + `cargo test`
+     - `.claude/pr-review.yml` の `lint_cmd` / `test_cmd` があればそれを最優先
+     - 検出できなければ検証をスキップ（失敗扱いにしない）
    - `bin/doc-id verify`（存在すれば）
 
 3. **計画書を更新**
@@ -275,8 +282,8 @@ herdr pane read <implementer-id> --source recent-unwrapped --lines 40
 
 | 状況 | 対応 |
 |------|------|
-| 計画書が見つからない | `docs/planning/DOC-*_傘ブランチ_*_計画.md` を探索 |
+| 計画書が見つからない | `docs/planning/DOC-*_計画.md` を探索 |
 | プロンプトセクション不在 | 人間に依頼 |
-| rubocop/rspec 失敗 | 人間に報告。計画書は更新しない |
+| lint/test 失敗 | 人間に報告。計画書は更新しない |
 | PR 番号不明 | `gh pr list --head <branch> --state merged` で再検索 |
 | 依存未解決 | ブロックしている孫の完了を待つよう案内 |

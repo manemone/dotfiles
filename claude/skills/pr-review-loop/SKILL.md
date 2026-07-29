@@ -201,10 +201,10 @@ ls docs/ 2>/dev/null || echo "NO_DOCS_DIR"
 
 ```bash
 cat > /tmp/review-request-$PR.md << 'REVIEW_EOF'
-# PR #$PR レビュー依頼
+# PR #{{PR}} レビュー依頼
 
-対象PR: $URL
-対象HEAD: $HEAD_SHA
+対象PR: {{URL}}
+対象HEAD: {{HEAD_SHA}}
 
 ## 最初のステップ
 1. リポジトリを確認
