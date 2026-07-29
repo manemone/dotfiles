@@ -14,19 +14,25 @@
 |---|---|---|---|
 | 0 | `ai/ph-00-bin` | `bin/` ディレクトリ追加。ocw（デフォルトコマンドを claude に修正）、claude-ds、deploy.sh、README.md | 🔄 実装中 |
 | 1 | `ai/ph-01-claude-config` | `claude/` ディレクトリ追加。CLAUDE.md、settings.json（汎用設定のみ）、deploy.sh、README.md | 🔄 実装中 |
-| 2 | `ai/ph-02-claude-skills` | `claude/skills/` に pr-review-loop と umbrella-orchestrator を移行 | 🔄 実装中 |
-| 3 | `ai/ph-03-shared-update` | `shared/helpers.sh` の AVAILABLE_TOOLS に `bin claude` を追加 | ⬜ 待機中 |
-| 4 | `ai/ph-04-docs` | README.md 更新、deploy-all.sh での統合確認 | ⬜ 待機中 |
+| 2 | `ai/ph-02-claude-skills` | `claude/skills/` に pr-review-loop と umbrella-orchestrator を移行（**孫1マージ後に着手**） | ⬜ 待機中 |
+| 3 | `ai/ph-03-shared-update` | `shared/helpers.sh` の AVAILABLE_TOOLS に `bin claude` を追加 | ⬜ 待機中（孫0,1,2マージ待ち） |
+| 4 | `ai/ph-04-docs` | README.md 更新、deploy-all.sh での統合確認、実マシンデプロイテスト | ⬜ 待機中（全孫マージ待ち） |
 
-## 依存関係
+## 依存関係と実行順序
 
 ```
-ph-00-bin ─────────────────────┐
-ph-01-claude-config ──┬────────┼── ph-03-shared-update ── ph-04-docs
-ph-02-claude-skills ──┘        │   (孫2 は孫1 の claude/deploy.sh を拡張するため、
-                               │    マージ順は 孫1→孫2 であること)
-                               │
-                               └── (孫0 と孫1/孫2 は独立)
+フェーズ1（並列可）:
+  孫0 (bin/)     ← 独立。~/bin/ の ocw, claude-ds をコピー
+  孫1 (claude/)  ← 独立。~/.claude/ の CLAUDE.md, settings.json をコピー
+
+フェーズ2（孫1マージ後に着手）:
+  孫2 (skills)   ← 孫1 の claude/deploy.sh を拡張するため、孫1マージ必須
+
+フェーズ3（孫0,1,2 全マージ後に着手）:
+  孫3 (shared)   ← AVAILABLE_TOOLS に bin claude 追加
+
+フェーズ4（全孫マージ後に着手）:
+  孫4 (docs+test) ← ドキュメント更新 + 実マシンデプロイテスト
 ```
 
 ## 除外するもの
