@@ -33,7 +33,7 @@ is_wsl() {
 
 # Canonical list of available tools.  deploy-all.sh and uninstall.sh
 # both source this file, so the list is defined once.
-AVAILABLE_TOOLS="zsh nvim tmux"
+AVAILABLE_TOOLS="zsh nvim tmux bin claude"
 
 # resolve_tools <only_tools> <var_name>
 # Resolves a comma-separated tool filter against AVAILABLE_TOOLS.
