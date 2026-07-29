@@ -42,6 +42,11 @@ KNOWN_LINKS_bin=$(printf '%s\n' \
   "$HOME/bin/claude-ds" \
 )
 
+KNOWN_LINKS_claude=$(printf '%s\n' \
+  "$HOME/.claude/CLAUDE.md" \
+  "$HOME/.claude/settings.json" \
+)
+
 # ── Usage ─────────────────────────────────────────────────────────────
 
 usage() {

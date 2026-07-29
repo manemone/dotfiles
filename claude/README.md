@@ -2,18 +2,20 @@
 
 ## Overview
 
-Claude Code の設定ファイル群。`~/.claude/` に symlink して使う。
+Claude Code の設定ファイル群。`~/.claude/` にデプロイして使う。
 
-| File | Purpose |
-|---|---|
-| `CLAUDE.md` | Claude Code の個人指示（プロジェクト横断で適用されるグローバル指示） |
-| `settings.json` | Claude Code の汎用設定（モデル、権限ポリシー、テーマ等）。マシン固有設定は**含まない** |
+| File | Purpose | Deploy Method |
+|---|---|---|
+| `CLAUDE.md` | Claude Code の個人指示（プロジェクト横断で適用されるグローバル指示） | symlink |
+| `settings.json` | Claude Code の汎用設定（モデル、権限ポリシー、テーマ等）。マシン固有設定は**含まない** | 生成（マージ） |
+| `settings.machine.json.example` | マシン固有設定のテンプレート。コピーして使う | （手動コピー） |
 
 ## 1. Requirements
 
 | Tool | Why | Install |
 |---|---|---|
 | **Claude Code** CLI | 設定ファイルの読み取り元 | `npm install -g @anthropic-ai/claude-code` |
+| **Python 3** | `settings.machine.json` とのマージ用（任意） | `mise use python@latest` |
 
 ## 2. Quick Start
 
@@ -23,14 +25,20 @@ cd ~/.dotfiles/claude
 ./deploy.sh
 
 # 2. Verify
-ls -la ~/.claude/CLAUDE.md
-ls -la ~/.claude/settings.json
+ls -la ~/.claude/CLAUDE.md         # symlink
+ls -la ~/.claude/settings.json     # 実ファイル（deploy.sh が生成）
 ```
 
 The deploy script:
-- Creates `~/.claude/` directory if missing
+- Creates `~/.claude/` directory with mode `700`（認証情報を置く可能性があるため）
 - Symlinks `CLAUDE.md` → `~/.claude/CLAUDE.md`
-- Symlinks `settings.json` → `~/.claude/settings.json`
+- Generates `~/.claude/settings.json` as a real file（※symlink ではない）:
+  - 通常時: `claude/settings.json` をそのままコピー
+  - `claude/settings.machine.json` が存在する場合: ベース設定にマシン固有設定をマージして出力
+
+> **⚠️ 重要**: deploy 実行時に既存の `~/.claude/settings.json` はバックアップ（`.backup` 付きで退避）されます。
+> `permissions.allow`（33件）、Herdr の `SessionStart` hook、`additionalDirectories` など
+> マシン固有の設定が失われるのを防ぐには、**deploy 前に `settings.machine.json` を作成**してください。
 
 ## 3. What's Included
 
@@ -59,24 +67,36 @@ Claude Code の設定ファイル。以下の汎用設定を含む（マシン�
 | `skipWorkflowUsageWarning` | `true` | ワークフロー警告スキップ |
 | `permissions.defaultMode` | `acceptEdits` | 権限のデフォルトモード |
 | `permissions.deny` | セキュリティポリシー（24件） | `.env`, `.ssh`, `.aws`, API キー等へのアクセスをブロック |
-| `permissions.ask` | 危険コマンドパターン（19件） | `git push --force`, `rm -rf`, `sudo` 等の実行前に確認 |
+| `permissions.ask` | 危険コマンドパターン（20件） | `git push --force`, `rm -rf`, `sudo` 等の実行前に確認 |
 
 ## 4. Customization — マシン固有設定の追加
 
-`settings.json` にはマシン固有の設定（`permissions.allow`、`additionalDirectories`、`hooks`）が含まれていません。これらは各マシンで `~/.claude/settings.local.json` を作成することで追加します。
+`settings.json` にはマシン固有の設定（`permissions.allow`、`additionalDirectories`、`hooks`）が含まれていません。
 
-### 4.1 `settings.local.json` の基本
+**Claude Code はユーザーレベルの `~/.claude/settings.local.json` を読み取りません。**
+（`--setting-sources` の `local` はプロジェクトレベルの `.claude/settings.local.json` を指します。）
 
-`settings.local.json` は `settings.json` とマージされて適用されます。同じキーがある場合は local 側が優先されます。
+代わりに `claude/settings.machine.json` を使います。deploy.sh がベース設定とマージして
+`~/.claude/settings.json` を生成します。
+
+### 4.1 初回セットアップ
 
 ```bash
-# ファイルが存在しない場合は作成
-touch ~/.claude/settings.local.json
+cd ~/.dotfiles/claude
+
+# テンプレートから settings.machine.json を作成
+cp settings.machine.json.example settings.machine.json
+
+# 自分の環境に合わせて編集
+vim settings.machine.json
+
+# デプロイ実行（ベース + machine をマージして ~/.claude/settings.json を生成）
+./deploy.sh
 ```
 
-### 4.2 `permissions.allow` の追加
+`settings.machine.json` は `.gitignore` で除外されているため、commit されません。
 
-プロジェクト固有のディレクトリに対する読み取り/実行権限を許可する例:
+### 4.2 `permissions.allow` の追加
 
 ```json
 {
@@ -94,6 +114,12 @@ touch ~/.claude/settings.local.json
   }
 }
 ```
+
+マージの仕組み:
+- `settings.json`（ベース）に `deny` と `ask` が定義されている
+- `settings.machine.json` に `allow` だけを書けば、`deny` と `ask` はベース側の値が維持される
+- 各トップレベルキー内で shallow merge（dict 同士は `.update()`）される
+- `permissions` キー全体が replace されることはない（python で key-by-key マージするため）
 
 ### 4.3 `hooks` の追加
 
@@ -118,6 +144,8 @@ touch ~/.claude/settings.local.json
 }
 ```
 
+> **注意**: Herdr の `herdr-agent-state.sh` hook が必要な場合は、これを含めてください。
+
 ### 4.4 `model` / `theme` の上書き
 
 ```json
@@ -127,40 +155,7 @@ touch ~/.claude/settings.local.json
 }
 ```
 
-### 4.5 ⚠️ 既知の注意点: `permissions` のマージバグ
-
-Claude Code には `permissions` キーが deep merge されず、**local 側の値で完全に replace される**バグが報告されています。
-
-**`permissions.deny` を `settings.local.json` に書く場合の対策:**
-
-`settings.json` 側の `deny` リストも含めて**すべてコピーしてから追加**してください。つまり:
-
-```json
-{
-  "permissions": {
-    "deny": [
-      "Read(./.env)",
-      "Read(./.env.*)",
-      "... (settings.json の deny をすべてコピー) ...",
-      "Edit(~/.netrc)",
-      "Read(./my-additional-secret/**)",
-      "Edit(./my-additional-secret/**)"
-    ],
-    "ask": [
-      "... (settings.json の ask をすべてコピー) ..."
-    ],
-    "allow": [
-      "... (必要な allow を列挙) ..."
-    ]
-  }
-}
-```
-
-`permissions` 全体を local に書く場合は、**3つのキー（allow, deny, ask）をすべて明示的に記述する**必要があります。1つでも欠けると、そのキーは空として扱われます。
-
-> **推奨**: できるだけ `permissions.allow` のみを local に書くことで、deny/ask は settings.json の値が維持されます。deny/ask のカスタマイズが必要な場合のみ、上記の全コピー戦略を使ってください。
-
-### 4.6 `additionalDirectories` の追加
+### 4.5 `additionalDirectories` の追加
 
 ```json
 {
@@ -172,7 +167,28 @@ Claude Code には `permissions` キーが deep merge されず、**local 側の
 }
 ```
 
-### 4.7 CLAUDE.md の直接編集
+### 4.6 `defaultMode` の上書き
+
+```json
+{
+  "permissions": {
+    "defaultMode": "acceptEdits"
+  }
+}
+```
+
+### 4.7 設定の反映確認
+
+`settings.machine.json` を編集した後は、再デプロイで反映されます:
+
+```bash
+cd ~/.dotfiles/claude
+./deploy.sh
+```
+
+Claude Code は起動時に設定を読み込むため、設定変更後は Claude Code を再起動してください。
+
+### 4.8 CLAUDE.md の直接編集
 
 CLAUDE.md は個人設定のため、symlink 先を直接編集して問題ありません。リポジトリ側のファイルに即反映されます。
 
@@ -190,23 +206,52 @@ vim ~/.dotfiles/claude/CLAUDE.md
 
 Claude Code は起動時に設定を読み込みます。`settings.json` を編集したら Claude Code を再起動してください。
 
-### `settings.local.json` が読み込まれない
+### `settings.machine.json` の変更が反映されない
 
-以下を確認してください:
-1. ファイルが `~/.claude/settings.local.json` に存在するか
-2. JSON として valid か（`python3 -m json.tool ~/.claude/settings.local.json` で確認）
-3. 権限が適切か（`ls -la ~/.claude/settings.local.json`）
+`settings.machine.json` を編集した後は、**必ず再デプロイ**してください。
+deploy.sh がその時点の `settings.machine.json` を読み取って `~/.claude/settings.json` を再生成します。
 
-### `permissions.deny` が効かない / 上書きされてしまう
+```bash
+cd ~/.dotfiles/claude && ./deploy.sh
+```
 
-セクション 4.5 の既知のバグを参照してください。`permissions` を `settings.local.json` に書く場合は、3つのキー（allow, deny, ask）すべてを明示的に記述する必要があります。
+### デプロイで既存設定が消えた
+
+deploy.sh は既存の `~/.claude/settings.json` を `.backup` 付きで退避します。
+退避されたファイルから設定を確認し、`settings.machine.json` に転記してください:
+
+```bash
+# バックアップを確認
+ls -la ~/.claude/settings.json.backup*
+
+# バックアップから復元（必要に応じて）
+cp ~/.claude/settings.json.backup ~/.claude/settings.json
+```
+
+### `python3` がないと言われる
+
+`settings.machine.json` を使わない場合は python3 不要です（ベース設定がそのままコピーされます）。
+`settings.machine.json` によるマージを使う場合は python3 をインストールしてください:
+
+```bash
+mise use python@latest
+# または
+sudo apt install python3
+```
+
+### `settings.machine.json` が JSON として invalid
+
+```bash
+python3 -m json.tool claude/settings.machine.json
+```
+
+エラーが出たら JSON の構文を修正してください。
 
 ### symlink が壊れている
 
 ```bash
 # 確認
 ls -la ~/.claude/CLAUDE.md
-ls -la ~/.claude/settings.json
 
 # 修復
 cd ~/.dotfiles/claude

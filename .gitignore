@@ -22,3 +22,6 @@ Session.vim
 
 # AI tools
 /.claude/
+
+# Machine-specific Claude Code settings (not tracked — create from .example)
+claude/settings.machine.json
