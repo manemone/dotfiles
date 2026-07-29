@@ -46,6 +46,11 @@ KNOWN_LINKS_claude=$(printf '%s\n' \
   "$HOME/.claude/CLAUDE.md" \
 )
 
+# Skills are symlinked individually by deploy.sh (auto-detected from
+# claude/skills/).  We walk ~/.claude/skills/ at uninstall time and
+# restore any symlink whose target points into the repo's claude/skills/.
+KNOWN_SKILLS_SRC_claude="$SCRIPT_DIR/claude/skills"
+
 # settings.json is a generated file (not a symlink) — handled separately.
 # symlink_restore would skip it because it's a real file.
 KNOWN_GENERATED_claude=$(printf '%s\n' \
@@ -163,6 +168,42 @@ for _tool in $TOOLS; do
     done
   fi
   IFS="$_OLDIFS"
+
+  # --- claude skills: walk ~/.claude/skills/ for repo-owned symlinks ---
+  _skills_var="KNOWN_SKILLS_SRC_$_tool"
+  eval "_skills_src=\${$_skills_var:-}"
+
+  if [ -n "$_skills_src" ] && [ -d "$HOME/.claude/skills" ]; then
+    for _skill_link in "$HOME/.claude/skills"/*; do
+      [ -L "$_skill_link" ] || continue
+      _target=$(readlink "$_skill_link")
+      case "$_target" in
+        "$_skills_src"/*)
+          _skill_name=$(basename "$_skill_link")
+          symlink_restore "$_skill_link" || OVERALL_OK=1
+
+          # After removing the symlink, try to restore the original skill
+          # that deploy.sh backed up into ~/.claude/skills-backup/.
+          # Pick the oldest backup (first in glob order) — same policy as
+          # symlink_restore for .backup files.
+          for _cand in "$HOME/.claude/skills-backup/$_skill_name".*; do
+            [ -e "$_cand" ] || [ -L "$_cand" ] || continue
+            if [ "${DRY_RUN:-0}" -eq 1 ]; then
+              printf '[DRY-RUN] mv %s %s\n' "$_cand" "$_skill_link"
+            else
+              if mv "$_cand" "$_skill_link"; then
+                log_ok "Restored skill from backup: $_skill_link (from $(basename "$_cand"))"
+              else
+                log_error "Failed to restore skill backup: $_cand → $_skill_link"
+                OVERALL_OK=1
+              fi
+            fi
+            break
+          done
+          ;;
+      esac
+    done
+  fi
 
   # Handle generated files (real files, not symlinks — e.g. claude/settings.json)
   if [ -n "$_generated" ]; then

@@ -161,6 +161,147 @@ else
   fi
 fi
 
+# --- Deploy skills (individual symlinks per skill) ---
+# Directory-wide symlink (~/.claude/skills → repo/claude/skills) is forbidden
+# because it would wipe out Herdr-managed and user-owned skills.
+# Instead, each skill directory is symlinked individually so they coexist.
+#
+# Uses an independent _skills_fail flag so that a prior failure in CLAUDE.md
+# or settings.json does not silently skip skill deployment.
+SKILLS_SRC_DIR="$SCRIPT_DIR/skills"
+SKILLS_DST_DIR="$CLAUDE_DIR/skills"
+SKILLS_BACKUP_DIR="$CLAUDE_DIR/skills-backup"
+_skills_fail=0
+
+# Guard: ~/.claude/skills must NOT be a directory-wide symlink.
+# If it is, the per-skill symlink logic below would mv files out of the
+# repo (since $_skill_dst and $_skill_src resolve to the same path) and
+# the stale-cleanup pass would delete the repo-side SKILL.md files.
+if [ -L "$SKILLS_DST_DIR" ]; then
+  log_error "$SKILLS_DST_DIR is a symlink — directory-wide skill symlinks are not supported."
+  log_error "Remove it first: rm \"$SKILLS_DST_DIR\""
+  log_error "Then re-run deploy.  Herdr-managed and user-owned skills will be untouched."
+  _skills_fail=1
+fi
+
+if [ -d "$SKILLS_SRC_DIR" ]; then
+  log_hr
+  log_info "Deploying: claude/skills"
+
+  if [ ! -d "$SKILLS_DST_DIR" ]; then
+    if [ "${DRY_RUN:-0}" -eq 1 ]; then
+      log_info "[DRY-RUN] Would create directory: $SKILLS_DST_DIR"
+    else
+      log_info "Creating skills directory: $SKILLS_DST_DIR"
+      mkdir -p "$SKILLS_DST_DIR" || {
+        log_error "Failed to create skills directory: $SKILLS_DST_DIR"
+        _skills_fail=1
+      }
+    fi
+  fi
+
+  if [ "$_skills_fail" -eq 0 ]; then
+    _skill_count=0
+    for _skill_dir in "$SKILLS_SRC_DIR"/*/; do
+      [ -d "$_skill_dir" ] || continue
+      _skill_name=$(basename "$_skill_dir")
+      # Use $SKILLS_SRC_DIR/$_skill_name (no trailing slash) so the symlink
+      # target is clean and consistent with other links (e.g. CLAUDE.md).
+      _skill_src="$SKILLS_SRC_DIR/$_skill_name"
+      _skill_dst="$SKILLS_DST_DIR/$_skill_name"
+
+      # Safety: if dst and src resolve to the same path, skip to avoid
+      # moving repo-side files or creating self-referential symlinks.
+      if [ "$_skill_dst" = "$_skill_src" ]; then
+        log_warn "Skipping $_skill_name — destination equals source (possible directory-wide symlink?)."
+        log_warn "  Remove the symlink at $SKILLS_DST_DIR first, then re-run deploy."
+        continue
+      fi
+
+      # Already correct symlink?
+      if [ -L "$_skill_dst" ] && [ "$(readlink "$_skill_dst")" = "$_skill_src" ]; then
+        log_info "Already linked: $_skill_dst → $_skill_src"
+        _skill_count=$((_skill_count + 1))
+        continue
+      fi
+
+      # If an existing file / directory / different symlink is in the way,
+      # back it up OUTSIDE skills/ so it isn't picked up as a duplicate skill.
+      if [ -e "$_skill_dst" ] || [ -L "$_skill_dst" ]; then
+        if [ "${DRY_RUN:-0}" -eq 1 ]; then
+          log_info "[DRY-RUN] Would back up existing: $_skill_dst → $SKILLS_BACKUP_DIR/"
+        else
+          mkdir -p "$SKILLS_BACKUP_DIR" || {
+            log_error "Failed to create backup directory: $SKILLS_BACKUP_DIR"
+            _skills_fail=1
+            continue
+          }
+          _backup_name="${_skill_name}.$(date +%Y%m%d%H%M%S).$$"
+          log_warn "Backing up existing skill: $_skill_dst → $SKILLS_BACKUP_DIR/$_backup_name"
+          mv "$_skill_dst" "$SKILLS_BACKUP_DIR/$_backup_name" || {
+            log_error "Failed to back up: $_skill_dst"
+            _skills_fail=1
+            continue
+          }
+          log_info "  To restore: mv $SKILLS_BACKUP_DIR/$_backup_name $_skill_dst"
+        fi
+      fi
+
+      # Create symlink
+      if [ "${DRY_RUN:-0}" -eq 1 ]; then
+        log_info "[DRY-RUN] Would symlink: $_skill_dst → $_skill_src"
+        _skill_count=$((_skill_count + 1))
+      else
+        ln -fs "$_skill_src" "$_skill_dst" || {
+          log_error "Failed to symlink: $_skill_src → $_skill_dst"
+          _skills_fail=1
+          continue
+        }
+        log_ok "Linked: $_skill_dst → $_skill_src"
+        _skill_count=$((_skill_count + 1))
+      fi
+    done
+
+    if [ "$_skill_count" -eq 0 ]; then
+      log_warn "No skill directories found in $SKILLS_SRC_DIR"
+    else
+      log_ok "Deployed $_skill_count skill(s)"
+    fi
+
+    # Clean up stale symlinks inside ~/.claude/skills/ that point into
+    # SKILLS_SRC_DIR but whose targets no longer exist (renamed / removed).
+    # Only touches symlinks whose target starts with SKILLS_SRC_DIR, leaving
+    # user-owned and Herdr-managed symlinks alone.
+    for _dst_link in "$SKILLS_DST_DIR"/*; do
+      [ -L "$_dst_link" ] || continue
+      _target=$(readlink "$_dst_link")
+      case "$_target" in
+        "$SKILLS_SRC_DIR"/*)
+          if [ ! -d "$_target" ]; then
+            if [ "${DRY_RUN:-0}" -eq 1 ]; then
+              log_info "[DRY-RUN] Would remove stale skill symlink: $_dst_link → $_target"
+            else
+              log_warn "Removing stale skill symlink: $_dst_link → $_target"
+              rm -f "$_dst_link" || {
+                log_error "Failed to remove stale symlink: $_dst_link"
+                _skills_fail=1
+              }
+            fi
+          fi
+          ;;
+      esac
+    done
+  fi
+else
+  log_info "No skills directory — skipping skill deployment."
+fi
+
+# Merge skills failure into main FAIL flag (do NOT exit early — settings.json
+# may have succeeded even if skills had an issue, and vice versa).
+if [ "$_skills_fail" -ne 0 ]; then
+  FAIL=1
+fi
+
 if [ "$FAIL" -ne 0 ]; then
   log_error "claude deployment completed with errors."
   exit 1
