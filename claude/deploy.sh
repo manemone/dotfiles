@@ -106,7 +106,7 @@ PYEOF
         else
           # Back up existing if present
           if [ -f "$SETTINGS_DST" ]; then
-            _backup_path="$(_backup_dst "$SETTINGS_DST")"
+            _backup_path="$(backup_dst "$SETTINGS_DST")"
             log_warn "Backing up existing settings.json → $_backup_path"
             mv "$SETTINGS_DST" "$_backup_path" || {
               log_error "Failed to back up existing settings.json"
@@ -138,7 +138,7 @@ else
       # Back up existing if it differs from base
       if [ -f "$SETTINGS_DST" ] && [ ! -L "$SETTINGS_DST" ]; then
         if ! cmp -s "$SETTINGS_SRC" "$SETTINGS_DST" 2>/dev/null; then
-          _backup_path="$(_backup_dst "$SETTINGS_DST")"
+          _backup_path="$(backup_dst "$SETTINGS_DST")"
           log_warn "Existing settings.json has local modifications — backing up → $_backup_path"
           mv "$SETTINGS_DST" "$_backup_path" || {
             log_error "Failed to back up existing settings.json"

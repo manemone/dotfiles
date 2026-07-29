@@ -174,8 +174,10 @@ for _tool in $TOOLS; do
 
       # Step 1: Always safety-backup the current file before touching it
       # (so user edits made after deploy are never lost, even on new machines
-      #  where no deploy-time .backup exists)
-      _safety_path="$(_backup_dst "$_dst")"
+      #  where no deploy-time .backup exists).
+      # Use a timestamped suffix so it never collides with the deploy-time
+      # .backup file that the restore step below looks for.
+      _safety_path="${_dst}.backup.$(date +%Y%m%d%H%M%S).$$"
 
       if [ -f "$_dst" ] || [ -L "$_dst" ]; then
         if [ "${DRY_RUN:-0}" -eq 1 ]; then
