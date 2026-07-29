@@ -16,7 +16,7 @@
 | 1 | `ai/ph-01-claude-config` | `claude/` ディレクトリ追加。CLAUDE.md、settings.json（汎用設定のみ）、deploy.sh、README.md | ✅ PR #19 マージ済 |
 | 2 | `ai/ph-02-claude-skills` | `claude/skills/` に pr-review-loop と umbrella-orchestrator を移行（**孫1マージ後に着手**） | ✅ PR #20 マージ済 |
 | 3 | `ai/ph-03-shared-update` | `shared/helpers.sh` の AVAILABLE_TOOLS に `bin claude` を追加 | ✅ PR #21 マージ済 |
-| 4 | `ai/ph-04-docs` | README.md 更新、deploy-all.sh での統合確認、実マシンデプロイテスト | 🔄 実装中 |
+| 4 | `ai/ph-04-docs` | README.md 更新、deploy-all.sh での統合確認、実マシンデプロイテスト | ✅ PR #22 マージ済 |
 
 ## 依存関係と実行順序
 
