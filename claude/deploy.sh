@@ -135,8 +135,21 @@ else
     if [ -f "$SETTINGS_DST" ] && cmp -s "$SETTINGS_SRC" "$SETTINGS_DST" 2>/dev/null; then
       log_info "settings.json is already up to date (unchanged)."
     else
+      # Guard: ~/.claude/settings.json must NOT be a symlink.
+      # deploy.sh generates a real file (either by copying base settings or
+      # merging with settings.machine.json).  A symlink would be overwritten
+      # silently by cp below — warn and remove it first.
+      if [ -L "$SETTINGS_DST" ]; then
+        log_warn "settings.json is a symlink — removing to replace with generated file."
+        log_warn "  Symlink target was: $(readlink "$SETTINGS_DST")"
+        rm -f "$SETTINGS_DST" || {
+          log_error "Failed to remove symlink: $SETTINGS_DST"
+          FAIL=1
+        }
+      fi
+
       # Back up existing if it differs from base
-      if [ -f "$SETTINGS_DST" ] && [ ! -L "$SETTINGS_DST" ]; then
+      if [ -f "$SETTINGS_DST" ]; then
         if ! cmp -s "$SETTINGS_SRC" "$SETTINGS_DST" 2>/dev/null; then
           _backup_path="$(backup_dst "$SETTINGS_DST")"
           log_warn "Existing settings.json has local modifications — backing up → $_backup_path"

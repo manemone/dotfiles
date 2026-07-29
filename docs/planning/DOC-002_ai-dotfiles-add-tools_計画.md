@@ -39,9 +39,9 @@
 
 - herdr スキル (`~/.agents/skills/herdr/`): Herdr が管理
 - herdr-agent-state.sh (`~/.claude/hooks/`): Herdr が管理
-- `permissions.allow`: マシン固有パス多数のため（ユーザーは `settings.local.json` で追加する）
+- `permissions.allow`: マシン固有パス多数のため（ユーザーは `settings.machine.json` で追加する。deploy.sh がベース設定とマージ）
 - `permissions.additionalDirectories`: 同上
-- hooks: herdr-agent-state.sh のみで Herdr 管理下のため（ユーザーは `settings.local.json` で追加する）
+- hooks: herdr-agent-state.sh のみで Herdr 管理下のため（ユーザーは `settings.machine.json` で追加する。deploy.sh がベース設定とマージ）
 
 ## ローカル拡張の基本方針
 
