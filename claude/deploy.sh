@@ -161,6 +161,48 @@ else
   fi
 fi
 
+# --- Deploy skills (individual symlinks per skill) ---
+# Directory-wide symlink (~/.claude/skills → repo/claude/skills) is forbidden
+# because it would wipe out Herdr-managed and user-owned skills.
+# Instead, each skill directory is symlinked individually so they coexist.
+SKILLS_SRC_DIR="$SCRIPT_DIR/skills"
+SKILLS_DST_DIR="$CLAUDE_DIR/skills"
+
+if [ -d "$SKILLS_SRC_DIR" ]; then
+  log_hr
+  log_info "Deploying: claude/skills"
+
+  if [ ! -d "$SKILLS_DST_DIR" ]; then
+    if [ "${DRY_RUN:-0}" -eq 1 ]; then
+      log_info "[DRY-RUN] Would create directory: $SKILLS_DST_DIR"
+    else
+      log_info "Creating skills directory: $SKILLS_DST_DIR"
+      mkdir -p "$SKILLS_DST_DIR" || {
+        log_error "Failed to create skills directory: $SKILLS_DST_DIR"
+        FAIL=1
+      }
+    fi
+  fi
+
+  if [ "$FAIL" -eq 0 ]; then
+    _skill_count=0
+    for _skill_dir in "$SKILLS_SRC_DIR"/*/; do
+      [ -d "$_skill_dir" ] || continue
+      _skill_name=$(basename "$_skill_dir")
+      symlink_backup "$_skill_dir" "$SKILLS_DST_DIR/$_skill_name" || FAIL=1
+      _skill_count=$((_skill_count + 1))
+    done
+
+    if [ "$_skill_count" -eq 0 ]; then
+      log_warn "No skill directories found in $SKILLS_SRC_DIR"
+    else
+      log_ok "Deployed $_skill_count skill(s)"
+    fi
+  fi
+else
+  log_info "No skills directory — skipping skill deployment."
+fi
+
 if [ "$FAIL" -ne 0 ]; then
   log_error "claude deployment completed with errors."
   exit 1

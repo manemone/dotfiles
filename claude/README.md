@@ -8,6 +8,7 @@ Claude Code の設定ファイル群。`~/.claude/` にデプロイして使う�
 |---|---|---|
 | `CLAUDE.md` | Claude Code の個人指示（プロジェクト横断で適用されるグローバル指示） | symlink |
 | `settings.json` | Claude Code の汎用設定（モデル、権限ポリシー、テーマ等）。マシン固有設定は**含まない** | 生成（マージ） |
+| `skills/` | Claude Code スキル（`pr-review-loop`, `umbrella-orchestrator`） | スキルごとに個別 symlink |
 | `settings.machine.json.example` | マシン固有設定のテンプレート。コピーして使う | （手動コピー） |
 
 ## 1. Requirements
@@ -35,6 +36,7 @@ The deploy script:
 - Generates `~/.claude/settings.json` as a real file（※symlink ではない）:
   - 通常時: `claude/settings.json` をそのままコピー
   - `claude/settings.machine.json` が存在する場合: ベース設定にマシン固有設定をマージして出力
+- Auto-detects skill directories under `claude/skills/` and symlinks each individually → `~/.claude/skills/<name>/`
 
 > **⚠️ 重要**: deploy 実行時に既存の `~/.claude/settings.json` はバックアップ（`.backup` 付きで退避）されます。
 > `permissions.allow`（33件）、Herdr の `SessionStart` hook、`additionalDirectories` など
@@ -68,6 +70,51 @@ Claude Code の設定ファイル。以下の汎用設定を含む（マシン�
 | `permissions.defaultMode` | `acceptEdits` | 権限のデフォルトモード |
 | `permissions.deny` | セキュリティポリシー（24件） | `.env`, `.ssh`, `.aws`, API キー等へのアクセスをブロック |
 | `permissions.ask` | 危険コマンドパターン（20件） | `git push --force`, `rm -rf`, `sudo` 等の実行前に確認 |
+
+### 3.3 Skills
+
+Claude Code のカスタムスキル。`claude/skills/` 配下の各スキルディレクトリが
+`~/.claude/skills/<skill-name>/` に**個別 symlink** される。
+
+| Skill | Purpose |
+|---|---|
+| `pr-review-loop` | PRレビューサイクルを自動化。Herdr の reviewer エージェントと連携し、レビュー→修正→再レビューを承認まで繰り返す |
+| `umbrella-orchestrator` | 傘ブランチの孫ライフサイクル管理。計画書の読み取り、孫ブランチの spawn、マージ検出と検証、計画書更新を自動化 |
+
+**デプロイの仕組み:**
+
+- **ディレクトリ全体 symlink は禁止。** `~/.claude/skills` をまとめて symlink すると、Herdr 管理の `herdr` スキルやユーザー独自スキルが消えるため。
+- 代わりに **`claude/skills/` 内の全ディレクトリを自動検出**し、1スキルずつ個別 symlink する。
+- これにより、Herdr 管理のスキルや手動追加した独自スキルと安全に共存できる。
+- 将来スキルが増えても deploy.sh の修正は不要（自動検出のため）。
+
+**独自スキルの追加方法:**
+
+`~/.claude/skills/` に手動でディレクトリを作り `SKILL.md` を置くだけでよい。
+deploy.sh はリポジトリ管理下のスキルのみを symlink し、手動追加したスキルには一切触れない。
+
+```bash
+# 独自スキルを追加
+mkdir -p ~/.claude/skills/my-skill
+cat > ~/.claude/skills/my-skill/SKILL.md << 'EOF'
+---
+name: my-skill
+description: 自分のスキル
+---
+# My Skill
+...
+EOF
+```
+
+リポジトリ管理のスキルを増やす場合は、`claude/skills/` にディレクトリを追加するだけで
+次回 deploy 時に自動検出される。
+
+```bash
+# リポジトリ側に新しいスキルを追加
+mkdir -p claude/skills/new-skill
+# ... SKILL.md を作成 ...
+./deploy.sh  # 自動検出されて symlink が作られる
+```
 
 ## 4. Customization — マシン固有設定の追加
 
