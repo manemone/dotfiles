@@ -42,6 +42,16 @@ KNOWN_LINKS_bin=$(printf '%s\n' \
   "$HOME/bin/claude-ds" \
 )
 
+KNOWN_LINKS_claude=$(printf '%s\n' \
+  "$HOME/.claude/CLAUDE.md" \
+)
+
+# settings.json is a generated file (not a symlink) — handled separately.
+# symlink_restore would skip it because it's a real file.
+KNOWN_GENERATED_claude=$(printf '%s\n' \
+  "$HOME/.claude/settings.json" \
+)
+
 # ── Usage ─────────────────────────────────────────────────────────────
 
 usage() {
@@ -131,22 +141,90 @@ for _tool in $TOOLS; do
   esac
   _links_var="KNOWN_LINKS_$_tool"
   eval "_links=\${$_links_var:-}"
-  if [ -z "$_links" ]; then
+  _gen_var="KNOWN_GENERATED_$_tool"
+  eval "_generated=\${$_gen_var:-}"
+
+  if [ -z "$_links" ] && [ -z "$_generated" ]; then
     log_warn "No link list defined for '$_tool'. Skipping."
     continue
   fi
 
   # Iterate over links, one per line (IFS=newline to handle whitespace paths)
   _OLDIFS="$IFS"
-  IFS='
-'
-  for _dst in $_links; do
-    IFS="$_OLDIFS"
-    [ -z "$_dst" ] && continue  # skip blank lines
-    symlink_restore "$_dst" || OVERALL_OK=1
+  if [ -n "$_links" ]; then
     IFS='
 '
-  done
+    for _dst in $_links; do
+      IFS="$_OLDIFS"
+      [ -z "$_dst" ] && continue  # skip blank lines
+      symlink_restore "$_dst" || OVERALL_OK=1
+      IFS='
+'
+    done
+  fi
+  IFS="$_OLDIFS"
+
+  # Handle generated files (real files, not symlinks — e.g. claude/settings.json)
+  if [ -n "$_generated" ]; then
+    IFS='
+'
+    for _dst in $_generated; do
+      IFS="$_OLDIFS"
+      [ -z "$_dst" ] && continue
+
+      # Step 1: Find deploy-time backup BEFORE creating any new files
+      # (the glob in the else branch would otherwise match the safety backup
+      #  we're about to create).
+      _restore=""
+      if [ -e "$_dst.backup" ] || [ -L "$_dst.backup" ]; then
+        _restore="$_dst.backup"
+      else
+        for _cand in "$_dst.backup."*; do
+          [ -e "$_cand" ] || [ -L "$_cand" ] || continue
+          _restore="$_cand"
+          break
+        done
+      fi
+
+      # Step 2: Always safety-backup the current file before touching it
+      # (so user edits made after deploy are never lost, even on new machines
+      #  where no deploy-time .backup exists).
+      _safety_path="${_dst}.backup.$(date +%Y%m%d%H%M%S).$$"
+
+      if [ -f "$_dst" ] || [ -L "$_dst" ]; then
+        if [ "${DRY_RUN:-0}" -eq 1 ]; then
+          printf '[DRY-RUN] mv %s %s (safety backup)\n' "$_dst" "$_safety_path"
+        else
+          mv "$_dst" "$_safety_path" && log_info "Safety backup: $_dst → $_safety_path" || {
+            log_error "Failed to back up: $_dst"
+            OVERALL_OK=1
+            IFS='
+'
+            continue
+          }
+        fi
+      fi
+
+      # Step 3: Restore the deploy-time backup (if found in Step 1)
+
+      if [ -n "$_restore" ]; then
+        if [ "${DRY_RUN:-0}" -eq 1 ]; then
+          printf '[DRY-RUN] mv %s %s\n' "$_restore" "$_dst"
+        else
+          if mv "$_restore" "$_dst"; then
+            log_ok "Restored deploy-time backup: $_dst (from $_restore)"
+          else
+            log_error "Failed to restore backup: $_restore → $_dst"
+            OVERALL_OK=1
+          fi
+        fi
+      else
+        log_info "No deploy-time backup for $_dst — safety backup preserved."
+      fi
+      IFS='
+'
+    done
+  fi
   IFS="$_OLDIFS"
 done
 

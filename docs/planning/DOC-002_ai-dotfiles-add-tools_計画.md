@@ -51,7 +51,7 @@
 |--------|--------------|------------|
 | bin (ocw) | 環境変数 `OCW_COMMANDER_COMMAND`, `OCW_IMPLEMENTER_COMMAND`, `OCW_REVIEWER_COMMAND` | README に記載 |
 | claude (CLAUDE.md) | symlink 先を直接編集すれば即反映 | README に記載 |
-| claude (settings.json) | `~/.claude/settings.local.json` で上書き・追加。permissions の merge には既知のバグあり（replace される場合がある）、注意点を README に記載 | README に記載 |
+| claude (settings.json) | `claude/settings.machine.json` にマシン固有設定を記述。deploy.sh がベース設定とマージして `~/.claude/settings.json` を生成（実ファイル）。`~/.claude/settings.local.json` はユーザーレベルでは読まれないため非推奨 | README に記載 |
 | claude/skills | スキルは**個別 symlink**。`~/.claude/skills/` に手動で置いた独自スキルと共存可能。deploy.sh は `claude/skills/` 内の全ディレクトリを自動検出 | README に記載 |
 | shared/helpers.sh | AVAILABLE_TOOLS 編集はファイル1行変更で済む。必要に応じてユーザーが直接編集 | README に記載 |
 
@@ -103,6 +103,10 @@ bin/
 ```
 
 ## 孫1用プロンプト:
+
+> ※ この節は着手時のプロンプトの記録です。`settings.local.json` 方式は実装レビューで
+> 「ユーザーレベルでは読まれない」ことが実測で判明したため、`claude/settings.machine.json`
+> マージ方式に変更しました。現行仕様は `claude/README.md` を参照してください。
 
 ```
 ## タスク: claude/ ディレクトリを追加し Claude Code 設定を移行する
@@ -283,7 +287,7 @@ c) **動作確認チェックリスト**:
 - [ ] `~/bin/ocw` が実行可能で `claude` がデフォルトコマンドになっている
 - [ ] `~/bin/claude-ds` が実行可能
 - [ ] `~/.claude/CLAUDE.md` が symlink で内容が正しい
-- [ ] `~/.claude/settings.json` が symlink で汎用設定のみ含まれている（allowリストがない）
+- [ ] `~/.claude/settings.json` が deploy.sh で生成された実ファイルで汎用設定のみ含まれている（allowリストがない）
 - [ ] `~/.claude/skills/pr-review-loop/SKILL.md` が symlink で存在
 - [ ] `~/.claude/skills/umbrella-orchestrator/SKILL.md` が symlink で存在
 - [ ] `~/.claude/skills/herdr/` が手付かずで残っている（削除されていない）
