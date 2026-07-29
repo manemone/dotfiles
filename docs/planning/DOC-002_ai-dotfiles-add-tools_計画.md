@@ -235,7 +235,7 @@ AVAILABLE_TOOLS="zsh nvim tmux bin claude"
 ## 孫4用プロンプト:
 
 ```
-## タスク: README 更新と全体統合確認
+## タスク: README 更新、全体統合確認、実マシンデプロイテスト
 
 ### やること
 
@@ -254,6 +254,42 @@ AVAILABLE_TOOLS="zsh nvim tmux bin claude"
 - 全READMEのフォーマット統一
 - リンク切れがないこと
 - 手順の正確性
+
+#### 4. 実マシンデプロイテスト（最重要）
+**PRマージ前に、このマシンで実際にデプロイを試して動作確認する。**
+
+a) **事前バックアップ**:
+```bash
+mkdir -p ~/dotfiles-backup-$(date +%Y%m%d)
+cp ~/bin/ocw ~/dotfiles-backup-$(date +%Y%m%d)/ 2>/dev/null
+cp ~/bin/claude-ds ~/dotfiles-backup-$(date +%Y%m%d)/ 2>/dev/null
+cp ~/.claude/CLAUDE.md ~/dotfiles-backup-$(date +%Y%m%d)/ 2>/dev/null
+cp ~/.claude/settings.json ~/dotfiles-backup-$(date +%Y%m%d)/ 2>/dev/null
+cp -r ~/.claude/skills/ ~/dotfiles-backup-$(date +%Y%m%d)/skills/ 2>/dev/null
+```
+
+b) **デプロイ実行**:
+```bash
+./deploy-all.sh --only bin,claude --force
+```
+
+c) **動作確認チェックリスト**:
+- [ ] `~/bin/ocw` が実行可能で `claude` がデフォルトコマンドになっている
+- [ ] `~/bin/claude-ds` が実行可能
+- [ ] `~/.claude/CLAUDE.md` が symlink で内容が正しい
+- [ ] `~/.claude/settings.json` が symlink で汎用設定のみ含まれている（allowリストがない）
+- [ ] `~/.claude/skills/pr-review-loop/SKILL.md` が symlink で存在
+- [ ] `~/.claude/skills/umbrella-orchestrator/SKILL.md` が symlink で存在
+- [ ] `~/.claude/skills/herdr/` が手付かずで残っている（削除されていない）
+- [ ] `deploy-all.sh --only zsh,nvim,tmux` が従来通り動作（bin/claude追加で壊れてない）
+- [ ] `deploy-all.sh` 全ツール一括が正常完了
+
+d) **問題があれば修正**:
+- 動作確認で問題が見つかったら、このブランチで修正する
+- 修正後、再度デプロイテストを行う
+- すべてのチェック項目がパスするまで繰り返す
+
+e) **バックアップからの復元手順もREADMEに記載**（万一のため）
 
 ### 重要なファイル（変更）
 - `README.md` — Supported Tools テーブル更新
