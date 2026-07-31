@@ -1,7 +1,7 @@
 ---
 name: umbrella-orchestrator
 description: 傘ブランチの孫ライフサイクル管理。計画書の読み取り、孫ブランチのspawn、マージ検出と検証、計画書更新を自動化。
-argument-hint: "spawn <grandchild> | check | status | finalize"
+argument-hint: "spawn <grandchild> | check | status | finalize | autopilot"
 ---
 
 # Umbrella Orchestrator — 傘ブランチ自動化スキル
@@ -56,12 +56,23 @@ Herdr があると自動化度が上がるが、必須ではない。
 
 ## 3. コマンド
 
+| コマンド | 用途 |
+|----------|------|
+| (引数なし) | 進捗表示＋次の一手提案 |
+| `/status` | 進捗表示 |
+| `/spawn <N>` | 孫Nを spawn（手動進行） |
+| `/check` | PRマージ検出＋検証＋計画書更新 |
+| `/finalize` | 傘→main PR作成 |
+| `/autopilot` | 計画書作成後の全孫 spawn→finalize まで自動進行 |
+
 ### 3.0 引数なし（デフォルト）— 司令官モード
 
 `/umbrella-orchestrator` だけが呼ばれたときの挙動:
 
 1. **計画書を探して読み、進捗を表示**（`/status` と同じ）
-2. **次の一手を提案**: 未着手の孫があれば「`/spawn <N>` しますか？」、全孫マージ済みなら「`/finalize` しますか？」
+2. **次の一手を提案**:
+   - 未着手の孫があれば「`/spawn <N>` しますか？」または「`/autopilot` で全自動進行しますか？」
+   - 全孫マージ済みなら「`/finalize` しますか？」
 3. ユーザーが「はい」と言ったら該当コマンドを実行
 
 ### 3.1 `/status`
@@ -183,7 +194,142 @@ Herdr があると自動化度が上がるが、必須ではない。
 
 ### 3.4 `/finalize`
 
-全孫が `✅ マージ済` なら、傘→main PR 作成用プロンプトを生成して表示する。
+全孫が `✅ マージ済` なら、傘→main PR を implementer に作成させ、pr-review-loop で承認まで持っていく。
+
+**最重要: `/finalize` は「司令官自身がいるワークスペース」の implementer/reviewer で実行する。**
+孫 spawn で作られたワークスペース（w2G, w2H, w2J 等）は使わない。階層が違う。
+（孫→傘 は各孫ワークスペース、傘→main は司令官ワークスペース）
+
+**やること**:
+
+1. **司令官自身のワークスペースを特定**
+   ```bash
+   herdr pane list | python3 -c "
+   import sys, json
+   for p in json.load(sys.stdin)['result']['panes']:
+       if p.get('agent_status') == 'working':
+           print(f'MY_WORKSPACE={p[\"workspace_id\"]}')
+   "
+   ```
+   出力された `MY_WORKSPACE` が司令官のワークスペース。以後このワークスペースの implementer/reviewer を使う。
+
+2. **ペーン構成を確認**
+   ```bash
+   herdr pane list --workspace $MY_WORKSPACE
+   ```
+   - commander（司令官自身）、implementer、reviewer の3ペーンが揃っていることを確認
+   - 足りなければ `herdr pane split` で追加
+
+2. **implementer に最終PR作成プロンプトを送信**
+   - implementer が `idle` であることを確認
+   - 以下の情報を含むプロンプトを `herdr pane run` で送信:
+     - base: `<ベースブランチ>`、head: `<傘ブランチ名>`（ベースブランチは傘ブランチが追跡するリモートブランチから判定。`main`/`master` 等リポジトリごとに異なる）
+     - 変更概要（孫PR番号、変更ファイル数、テスト結果）
+     - reviewer ペーン ID
+     - PR説明文の作法（`DOC-2606281852_プルリクエストの作法.md` 参照指示）
+
+   **⚠️ プロンプトは短くする。** `herdr pane run` は文字を1文字ずつ打ち込むため、
+   長文プロンプトは途中で止まり届かない。要点だけを伝え、詳細は計画書を読ませる。
+
+   **推奨フォーマット**:
+   ```
+   herdr pane run <implementer-id> "最終PRを作成してください。base:<ベースブランチ> head:<傘ブランチ>。完了したらpr-review-loopを起動。reviewerは<reviewer-id>。計画書 docs/planning/DOC-XXXX_計画.md も参照。"
+   ```
+
+3. **implementer の起動を確認**
+   ```bash
+   herdr pane get <implementer-id>
+   ```
+   `agent_status: working` になれば成功。`idle` のままならプロンプトが届いていないので再送する。
+   （長すぎるのが原因なら短くする。届かない場合は Enter だけ先に送ってからプロンプトを送る。）
+
+4. **以降は自律運転**
+   - implementer が PR を作成し、`/pr-review-loop` を起動
+   - reviewer がレビューし、指摘があれば implementer が修正
+   - 承認されたら implementer が人間に「マージしてください」と依頼する
+   - 司令官は関与しない（PRマージは人間の仕事）
+
+**補足**:
+- 孫ブランチと異なり、新たな worktree は不要（傘ブランチそのものが作業ディレクトリ）
+- PR の向き先は **傘ブランチのベースブランチ**（孫は傘に向けるが、最終PRはベースブランチに向ける）。ベースブランチは `git rev-parse --abbrev-ref @{upstream}` から `origin/` を除いたもの、または計画書に明記されたものを使用する。リポジトリによって `main` や `master` 等異なるため、ハードコードしない
+- 司令官は実装もレビューもしない。implementer と reviewer に任せる
+
+### 3.5 `/autopilot`
+
+**前提**: 計画書が作成済みで、全孫のプロンプトが記述済みであること。
+
+計画書作成後の全工程（spawn → check → merge → next spawn → ... → finalize）を
+CronCreate による自動監視で進行させ、main マージ直前（finalize PR作成完了）まで自動化する。
+main へのマージは人間が手動で行う。
+
+**やること**:
+
+1. **計画書を読む**
+   - 孫ブランチ進捗テーブルから全孫のブランチ名・内容・状況を取得
+   - 傘ブランチ名を特定（現在のブランチまたは計画書から）
+
+2. **未着手の孫があれば最初の1件を spawn**
+   - `/spawn <N>` と同じ手順で `ocw -H` + プロンプト送信
+   - 計画書を「🔄 実装中」に更新して commit + push
+
+3. **CronCreate で自動進行ジョブを登録**（約10分おき、`:00` `:30` 回避で `3,13,23,33,43,53`）
+
+   以下のプロンプトを cron に設定する。`<計画書の絶対パス>` と `<傘ブランチ名>` と
+   `<司令官のworkspace_id>` は実際の値に置換すること：
+
+   ```
+   # 傘ブランチ自動進行 (autopilot)
+
+   計画書: <計画書の絶対パス>
+   傘ブランチ: <傘ブランチ名>
+
+   ## 手順
+
+   1. 計画書を読み、進捗テーブルから「現在アクティブな孫」を特定する
+      （🔄 実装中 が現在の孫、✅ マージ済 は完了）
+   2. アクティブな孫の implementer 状態を確認:
+      herdr pane list | python3で全workspaceのpaneを確認
+   3. PRが出ているか確認:
+      gh pr list --head <孫ブランチ名> --json number,title,state
+   4. PRがあれば review 状況を確認:
+      gh pr view <PR番号> --json reviews,state
+   5. レビューが APPROVED を含むならPRをマージ:
+      gh pr merge <PR番号> --squash --delete-branch
+   6. マージ後、傘ブランチで検証:
+      git pull --rebase origin <傘ブランチ>
+      bundle exec rubocop && bundle exec rspec && bin/doc-id verify
+   7. 検証通過後、計画書を「✅ PR #XX マージ済」に更新してcommit+push
+   8. 次の未着手の孫があれば spawn:
+      ocw -H <次の孫ブランチ名> <傘ブランチ>
+      implementerにプロンプト送信
+      計画書を「🔄 実装中」に更新してcommit+push
+   9. 全孫マージ済みなら finalize:
+      司令官自身のworkspaceを特定:
+        herdr pane list | python3 -c "import sys,json; [print(p['workspace_id']) for p in json.load(sys.stdin)['result']['panes'] if p.get('agent_status')=='working']"
+      そのworkspaceのimplementerに送信:
+        herdr pane run <impl-pane-id> "最終PRを作成。base:main head:<傘ブランチ>。pr-review-loop起動。reviewerは<同workspaceのreviewer>。mainマージは人間手動。計画書 <計画書の絶対パス> 参照。"
+      CronDelete でこのcronを停止
+      PushNotification でユーザーに「全工程完了。mainへのPR作成済み。手動マージしてください」と通知
+
+   ## 注意
+   - 実装AIが working なら何もせず次のcron
+   - APPROVED なしのPRはマージしない
+   - PRがない/実装中なら待機
+   - 検証失敗時は計画書を更新せずユーザーに通知
+   - mainへのマージは絶対にしない
+   - implementerへのプロンプトは短く（計画書パスとセクション名だけ）
+   ```
+
+4. **ユーザーに報告**
+   - 最初の孫の spawn 完了を報告
+   - cron ジョブID を表示
+   - 「以降は10分おきに自動進行。mainマージ直前で停止して通知します」と伝える
+
+**補足**:
+- このモードは計画書が完成した後の「実装フェーズ」全体を自動化するもの
+- 計画書の作成・レビューは人間が行う前提
+- 予期せぬエラー（lint/test失敗など）はユーザーに通知して停止
+- cron ジョブはセッション限り（7日で自動期限切れ）
 
 ## 4. 状態機械
 
@@ -205,6 +351,38 @@ Herdr があると自動化度が上がるが、必須ではない。
 ```bash
 test "${HERDR_ENV:-}" = 1
 ```
+
+### ワークスペース階層（最重要）
+
+```
+傘ブランチのワークスペース（司令官が常駐）
+  ├─ commander ← 司令官自身
+  ├─ implementer ← /finalize で使う
+  └─ reviewer ← /finalize で使う
+
+孫ワークスペース（ocw -H で孫ごとに作成される別workspace）
+  ├─ w2G: 孫0のworkspace
+  ├─ w2H: 孫1のworkspace
+  └─ w2J: 孫2のworkspace
+```
+
+- **司令官は常に傘ブランチのworkspaceにいる。** 孫workspaceではない。
+- **`/spawn`**: `ocw -H` が孫workspaceを**新規作成**し、そこのimplementerに実装させる
+- **`/check`**: 孫workspaceのimplementerを監視
+- **`/finalize`**: **司令官自身のworkspace**のimplementer/reviewerで実行。孫workspaceは使わない
+
+### 自分のworkspaceの見つけ方
+
+```bash
+herdr pane list | python3 -c "
+import sys, json
+for p in json.load(sys.stdin)['result']['panes']:
+    if p.get('agent_status') == 'working':
+        print(p['workspace_id'])
+"
+```
+
+司令官は常に1つだけ `working` なpane。そのworkspace_idが司令官のworkspace。
 
 ### `ocw -H` が作るもの
 
