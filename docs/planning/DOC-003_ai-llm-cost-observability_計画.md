@@ -964,7 +964,28 @@ instrumentationが実際のPR1本を通しても
 - `/autopilot` の cron プロンプトはこのリポジトリでは**そのままでは動かない**（第17章 R9 参照）。
   使う場合は先に修正すること
 
-### 孫マージ後の必須手順（デプロイの貼り直し）
+### 孫マージ後の必須手順その1（master の取り込み）
+
+**次の孫を spawn する前に、傘ブランチを `master` の最新へ rebase する。**
+
+```bash
+cd /home/manemone/projects/dotfiles/llm-cost-observability
+git fetch origin
+git rev-list --count HEAD..origin/master   # 0 なら何もしなくてよい
+git rebase origin/master
+git push --force-with-lease origin ai/llm-cost-observability
+```
+
+- **孫のPRが開いている間は絶対に実行しない。** 孫ブランチは傘のある時点のコミットを基点にしており、
+  rebase でその基点が消えると、走っているレビューの差分が壊れる。
+  **必ず「孫のマージ完了後・次の孫の spawn 前」に行う**
+- `--force-with-lease` を使う（`--force` は使わない）。なお `claude/settings.json` の
+  `permissions.ask` に force push が入っているため、実行時に人間の承認が必要になる
+- rebase 後は**孫を spawn する前に** `bin/tests/lint.sh` と
+  `python3 -m unittest discover -s bin/tests` を再実行し、取り込んだ変更で壊れていないか確認する
+- 競合したら自力で解決せず、内容を人間に報告してから進める
+
+### 孫マージ後の必須手順その2（デプロイの貼り直し）
 
 **孫PRをマージし lint/test 検証を通したら、必ず傘ブランチのworktreeから再デプロイする。**
 
