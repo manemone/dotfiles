@@ -703,7 +703,7 @@ Anthropic本家の `claude` で、Sonnet + auto permission mode で起動する�
 
 ```bash
 OCW_IMPLEMENTER_COMMAND='claude --model sonnet --permission-mode auto' \
-OCW_REVIEWER_COMMAND='claude --model opus --effort high' \
+OCW_REVIEWER_COMMAND='claude --model opus --effort high --permission-mode auto' \
   ocw -H <孫ブランチのslug> ai/llm-cost-observability
 ```
 
@@ -874,6 +874,8 @@ OCW_REVIEWER_COMMAND='claude --model opus --effort high' \
 | R6 | statusLine コマンドは描画のたびに実行される（高頻度） | I/O負荷・ログ肥大 | `snapshot-quota` は最短サンプリング間隔（既定60秒）を state ファイルで自制。超高速パス（前回から60秒未満なら即return） |
 | R7 | 観測イベント追加により `pr-review-loop` の手順が長くなり、LLMが手順を取りこぼす | レビュー品質低下（最も避けたい） | 追加は各Phase冒頭/末尾の**1行コマンド**のみ。規約テキスト・判定基準・禁止事項は一切変更しない。孫2のレビューではこの点を最重点で確認する |
 | R8 | 実測した7月の DeepSeek 実効単価と価格表の整合 | 費用推定の絶対値がずれる | 全期間transcriptからの推定 $46.8 と7月請求 $58.80 は同オーダーで矛盾しない。孫3で月境界を揃えて再突合し、乖離が2倍を超えるなら価格表の前提を疑う |
+| R10 | 孫worktreeから `deploy.sh` が実行されると `~/bin/*` と `~/.claude/*` の symlink が孫worktreeを指し、孫の片付け（`ocw rm`）で一斉にリンク切れする | `ocw` / `claude-ds` / `ocw-meter` / `pr-review-loop`・`umbrella-orchestrator` スキル / `CLAUDE.md` が全滅する。**孫1の片付け時に実際に発生した** | ①`shared/helpers.sh` に linked worktree 警告ガードを追加済み（警告のみ、失敗にはしない）②**孫マージ後に必ず傘worktreeから再デプロイする**手順を第12章に明記 ③傘→master マージ後は `master` から `./deploy-all.sh` |
+| R11 | `switchModelsOnFlag: true` により `claude --model <x>` での起動が `~/.claude/settings.json` の `model` を書き換え、後続ペインが引き継ぐ | implementer を Sonnet で起動した直後の reviewer が Sonnet になる。**孫1〜孫3のレビューで実際に発生した可能性が高い** | 3ペインすべてでモデルを明示起動する（第12章）。spawn 後に `model` が `opus` に戻っていることを確認する |
 | R9 | `umbrella-orchestrator` の `/autopilot` cron プロンプトがこのリポジトリで動かない | 使うと毎サイクル検証失敗で停止する | cron手順6が `bundle exec rubocop && bundle exec rspec && bin/doc-id verify` を決め打ちしているが、本リポジトリにGemfile・rspec・`bin/doc-id` は存在しない。手順9の `base:main` も本リポジトリでは `master`。手順5は `gh pr merge` を無条件実行する。使う場合は**検証コマンドを孫1で導入する `bin/tests/lint.sh` + `python3 -m unittest discover -s bin/tests` に、baseを `master` に差し替える**こと |
 | Q1 | reasoning（thinking）トークンの課金上の扱い | 費用推定の精度 | U5（孫0 P2）。判明するまで `reasoning_tokens: null` |
 | Q2 | Agent SDK credit と interactive quota の関係 | 将来Cの評価に影響 | 本傘では `claude -p` を使わないため未解決のままで問題ない。**混同しないことだけをschemaで担保**（`entrypoint` を記録） |
@@ -920,6 +922,42 @@ instrumentationが実際のPR1本を通しても
   diffが1行も無いことを `git diff` で機械的に検証し、その結果をPRコメントに残してからマージする
 - `/autopilot` の cron プロンプトはこのリポジトリでは**そのままでは動かない**（第17章 R9 参照）。
   使う場合は先に修正すること
+
+### 孫マージ後の必須手順（デプロイの貼り直し）
+
+**孫PRをマージし lint/test 検証を通したら、必ず傘ブランチのworktreeから再デプロイする。**
+
+```bash
+cd /home/manemone/projects/dotfiles/llm-cost-observability
+./bin/deploy.sh
+./claude/deploy.sh
+```
+
+理由（第17章 R10。**実際に事故が起きた**）:
+
+- 孫の implementer / reviewer は `bin/deploy.sh` や `claude/deploy.sh` の動作確認を
+  **孫worktree内から**行う。これは正当な検証行為である
+- その瞬間 `~/bin/*` と `~/.claude/*` の symlink は**孫worktreeを指す**
+- 孫マージ後に `ocw rm` で孫worktreeを片付けると、**symlinkが一斉にリンク切れになる**
+- 実際に孫1の片付け時、`ocw` / `claude-ds` / `ocw-meter` と
+  **`pr-review-loop` / `umbrella-orchestrator` スキル、`CLAUDE.md` が全滅した**
+
+再デプロイ後は次を必ず確認する:
+
+```bash
+# 1. リンク切れがゼロであること
+find ~ ~/.config ~/.claude ~/.claude/skills ~/bin -maxdepth 1 -type l ! -exec test -e {} \; -print
+
+# 2. Herdr の hooks が生きていること（claude/deploy.sh は settings.json を再生成する）
+python3 -c "import json;print('hooks:', bool(json.load(open('$HOME/.claude/settings.json')).get('hooks')))"
+
+# 3. モデル設定が opus に戻っていること（switchModelsOnFlag の副作用対策）
+python3 -c "import json;print('model:', json.load(open('$HOME/.claude/settings.json'))['model'])"
+```
+
+**傘ブランチ自体を master へマージして片付けるときは、`master` のworktreeから
+`./deploy-all.sh` を実行し直すこと。** 忘れると同じ事故が起きる
+（`shared/helpers.sh` のガードが警告を出すが、警告であって強制ではない）。
 
 ---
 
