@@ -57,6 +57,14 @@ subcommands:
     fail-open like event/bind-pr — a silently-broken ingest would make
     every downstream cost number meaningless).
 
+    --since is a READ-ONLY filter: a run using it does NOT advance the
+    persisted cursor, so nothing filtered out this way is ever lost —
+    a later run without --since re-reads and captures it. Cost is
+    priced by each message's OWN timestamp, not the date `ingest`
+    happens to run on. run_id is resolved by reading
+    <worktree's git-dir>/ocw-run-id directly (the same file bin/ocw
+    itself writes/reads), not by matching stored run.start events.
+
   validate
     Re-reads stored events. Quarantines (removes) lines that are
     corrupt — malformed JSON or a broken core envelope. Lines with a
@@ -449,8 +457,8 @@ def git_head_sha():
     return _git(["rev-parse", "HEAD"])
 
 
-def git_repo_slug():
-    url = _git(["remote", "get-url", "origin"])
+def git_repo_slug(cwd=None):
+    url = _git(["remote", "get-url", "origin"], cwd=cwd)
     if not url:
         return None
     m = re.search(r"[:/]([^/:]+)/([^/]+?)(?:\.git)?$", url)
@@ -1231,15 +1239,40 @@ def iter_stored_events(paths):
             yield obj, raw_line, ("; ".join(errors) if errors else None)
 
 
+INGEST_QUARANTINE_FILENAME = "ingest-transcript.jsonl"
+
+
 def count_quarantine_lines(paths):
+    """Counts quarantined EVENTS this meter itself wrote (`validate`'s
+    quarantine — corrupt/malformed `usage.message` etc. lines). PR #27
+    review round 1 finding 10: this used to glob every *.jsonl under
+    quarantine/, which also swept up ingest's own
+    `ingest-transcript.jsonl` (malformed SOURCE transcript lines) into
+    the same number — two categorically different things (our own
+    output being corrupt vs. someone else's input being corrupt) that
+    `report`'s single "quarantined: N lines" reads as one. See
+    `count_ingest_transcript_quarantine_lines` for the other half."""
     total = 0
     for target in sorted(paths.quarantine_dir.glob("*.jsonl")):
+        if target.name == INGEST_QUARANTINE_FILENAME:
+            continue
         try:
             with open(target, encoding="utf-8") as fh:
                 total += sum(1 for line in fh if line.strip())
         except OSError:
             continue
     return total
+
+
+def count_ingest_transcript_quarantine_lines(paths):
+    target = paths.quarantine_dir / INGEST_QUARANTINE_FILENAME
+    if not target.exists():
+        return 0
+    try:
+        with open(target, encoding="utf-8") as fh:
+            return sum(1 for line in fh if line.strip())
+    except OSError:
+        return 0
 
 
 def count_meter_errors(paths):
@@ -1305,6 +1338,22 @@ def _report_reconcile(paths, month, provider_totals, as_json):
             "cost_basis": sorted(bucket["cost_basis_seen"]) or None,
         }
 
+    # PR #27 review round 1 finding 5: a model with a --provider-total
+    # but ZERO transcript messages (the exact "0% covered" case plan
+    # §5.10 / ADR-001 §2.2 documents for deepseek-v4-flash) was silently
+    # absent from the whole report instead of showing as its own
+    # coverage_ratio: 0.0 row — the one case this --reconcile flag most
+    # needs to surface was the one case it couldn't.
+    for model, provider_total in provider_totals.items():
+        if model not in models_out:
+            models_out[model] = {
+                "messages": 0, "input_tokens": 0, "cache_read_input_tokens": 0,
+                "cache_creation_input_tokens": 0, "output_tokens": 0,
+                "transcript_total_tokens": 0, "provider_total_tokens": provider_total,
+                "coverage_ratio": 0.0 if provider_total else None,
+                "cost_estimate_usd": None, "cost_basis": None,
+            }
+
     summary = {
         "month": month,
         "cost_basis": "estimated — not an invoice",
@@ -1312,7 +1361,10 @@ def _report_reconcile(paths, month, provider_totals, as_json):
             "deepseek-v4-flash はtranscriptに一切記録されない（実測カバー率0%、計画書5.10）。"
             "deepseek-v4-pro のtranscriptカバー率は実測で約89%（ADR-001 §2.2）。"
             "coverage_ratio は --provider-total を渡したmodelにのみ算出される。claude-* は "
-            "定額契約のため cost_estimate_usd は常にnull（cost_basis: subscription）"
+            "定額契約のため cost_estimate_usd は常にnull（cost_basis: subscription）。"
+            "月の区切りはUTC固定。provider管理画面の集計タイムゾーン（例: DeepSeek管理画面は"
+            "北京時間 UTC+8）と異なる場合、月初・月末で最大±8時間分のずれが突合結果に生じうる"
+            "（計画書17章 R8）"
         ),
         "models": models_out,
     }
@@ -1399,6 +1451,17 @@ def cmd_report(args):
     if reconcile:
         if month is None:
             month = datetime.now(timezone.utc).strftime("%Y-%m")
+        elif not re.match(r"^\d{4}-\d{2}$", month):
+            # PR #27 review round 1 finding 6a: `_report_reconcile` used
+            # to filter with `ts.startswith(month)`, so a malformed value
+            # like "2026" silently aggregated the WHOLE year under a
+            # report that displays it as if it were one month, and
+            # "07-2026" silently matched zero events. `report` is the
+            # fail-loud half of this CLI (plan §10.1) — a garbage filter
+            # producing a garbage-but-plausible-looking number is exactly
+            # the failure mode that policy exists to prevent.
+            print(f"error: --month must be YYYY-MM, got: {month!r}", file=sys.stderr)
+            return 1
         return _report_reconcile(paths, month, provider_totals, as_json)
 
     valid_events, malformed = [], 0
@@ -1432,6 +1495,7 @@ def cmd_report(args):
 
     total = len(filtered)
     quarantined = count_quarantine_lines(paths)
+    transcript_quarantined = count_ingest_transcript_quarantine_lines(paths)
     meter_errors = count_meter_errors(paths)
 
     usage_events = [e for e in filtered if e.get("event_type") == "usage.message"]
@@ -1468,6 +1532,7 @@ def cmd_report(args):
         "completeness": completeness_counts,
         "malformed_unvalidated_lines": malformed,
         "quarantined_lines": quarantined,
+        "transcript_lines_quarantined": transcript_quarantined,
         "meter_error_diagnostics": meter_errors,
         "coverage": coverage,
         "price_table": price_table_summary,
@@ -1494,7 +1559,8 @@ def cmd_report(args):
             f"partial {pct(completeness_counts['partial']):.1f}% / "
             f"unknown {pct(completeness_counts['unknown']):.1f}%"
         )
-        print(f"quarantined:   {quarantined} lines")
+        print(f"quarantined:   {quarantined} lines (events this meter wrote)")
+        print(f"transcript lines quarantined (ingest source data): {transcript_quarantined} lines")
         print(f"meter.error diagnostics (state/meter-errors.jsonl): {meter_errors} lines")
         print(f"malformed (not yet quarantined; run 'ocw-meter validate'): {malformed} lines")
         print(f"coverage:      {summary['coverage']}")
@@ -1661,6 +1727,43 @@ def save_ingest_cursor(paths, cursor):
         raise
 
 
+def load_session_pr_links(paths):
+    """PR #27 review round 1 finding 2: `pr_link_map` was previously
+    built fresh from only THIS run's newly-read transcript lines, so a
+    session's `pr-link` line — read once, on whichever ingest run
+    happens to see it first — was forgotten on every subsequent
+    incremental run (the cursor has already moved past it), silently
+    dropping PR attribution for that session's later messages forever.
+    Persisting session_id -> pr_info here, alongside the cursor, fixes
+    that: once seen, a session's PR binding is never lost. Not gated by
+    --since like the cursor is (see save_ingest_cursor's caller) — a
+    pr-link discovery isn't the kind of "did we lose data" hazard the
+    --since/cursor interaction is; recording it is always safe."""
+    path = paths.state_dir / "session-pr-links.json"
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def save_session_pr_links(paths, mapping):
+    path = paths.state_dir / "session-pr-links.json"
+    ensure_dir(paths.state_dir, 0o700)
+    tmp_fd, tmp_path = tempfile.mkstemp(dir=str(paths.state_dir), prefix=".tmp-", suffix=".json")
+    try:
+        with os.fdopen(tmp_fd, "w", encoding="utf-8") as fh:
+            json.dump(mapping, fh, ensure_ascii=False, sort_keys=True)
+        os.chmod(tmp_path, 0o600)
+        os.replace(tmp_path, path)
+    except Exception:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp_path)
+        raise
+
+
 def read_new_lines(file_path, prev_entry):
     """Incrementally reads the bytes appended to `file_path` since
     `prev_entry` (plan §1: "(ファイルパス, inode, size, mtime, offset)
@@ -1709,7 +1812,7 @@ def quarantine_ingest_line(paths, source_file, reason, byte_length):
     requires that `message.content` never appears in anything this tool
     persists — so only a byte length and reason are kept, not the line
     itself."""
-    qpath = paths.quarantine_dir / "ingest-transcript.jsonl"
+    qpath = paths.quarantine_dir / INGEST_QUARANTINE_FILENAME
     ensure_dir(qpath.parent, 0o700)
     record_ = {
         "quarantined_at": iso_utc(datetime.now(timezone.utc)),
@@ -1843,15 +1946,13 @@ def resolve_herdr_role_map():
 
 # ── run_id / PR attribution from this meter's own local event store ────
 
-def load_local_run_and_pr_index(paths):
-    """Single pass over every stored event, building the two lookup
-    tables `ingest` needs for plan §7.4's attribution priority:
-    run.start/run.end pairs keyed by run_id (for run_id resolution by
-    worktree + time range) and pr.bind entries keyed by run_id (for PR
-    attribution once a run_id is known). Tolerates malformed lines by
+def load_local_pr_binds(paths):
+    """Single pass over every stored event, building the pr.bind lookup
+    table `ingest` needs for plan §7.4's attribution priority (PR
+    resolution once a run_id is known). Tolerates malformed lines by
     skipping them — this is advisory context-building, not `validate`,
     so a corrupt line here just means less context, not an error."""
-    starts, ends, binds = {}, {}, {}
+    binds = {}
     for target in sorted(paths.events_dir.glob("*.jsonl")):
         try:
             text = target.read_text(encoding="utf-8", errors="replace")
@@ -1864,41 +1965,68 @@ def load_local_run_and_pr_index(paths):
                 obj = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            event_type = obj.get("event_type")
-            run_id = obj.get("run_id")
-            if not run_id:
+            if obj.get("event_type") != "pr.bind":
                 continue
-            if event_type == "run.start":
-                worktree = obj.get("worktree")
-                ts = parse_ts(obj.get("ts"))
-                if worktree and ts is not None:
-                    starts[run_id] = (worktree, ts)
-            elif event_type == "run.end":
-                ts = parse_ts(obj.get("ts"))
-                if ts is not None:
-                    ends[run_id] = ts
-            elif event_type == "pr.bind":
-                pr_number = obj.get("pr_number")
-                if isinstance(pr_number, int):
-                    binds[run_id] = {"pr_number": pr_number, "pr_url": obj.get("pr_url")}
-    runs = [
-        {"run_id": run_id, "worktree": worktree, "start_ts": start_ts, "end_ts": ends.get(run_id)}
-        for run_id, (worktree, start_ts) in starts.items()
-    ]
-    return runs, binds
+            run_id = obj.get("run_id")
+            pr_number = obj.get("pr_number")
+            if run_id and isinstance(pr_number, int):
+                binds[run_id] = {"pr_number": pr_number, "pr_url": obj.get("pr_url")}
+    return binds
 
 
-def resolve_run_id(runs, worktree, at_ts):
-    if worktree is None or at_ts is None:
+def resolve_run_id_via_ocw_run_id_file(cwd, cache):
+    """Resolves run_id by reading `<worktree's git-dir>/ocw-run-id`
+    directly from the transcript message's OWN `cwd` — mirroring
+    exactly what `bin/ocw` itself does: it writes the run_id there right
+    after `git worktree add` (`worktree_git_dir="$(git -C "$worktree_dir"
+    rev-parse --absolute-git-dir)"`, then `printf ... >"${worktree_git_dir}/
+    ocw-run-id"`) and reads it back the same way in `ocw rm`.
+
+    PR #27 review round 1 finding 3: matching against locally stored
+    `run.start` events by (worktree, time range) does NOT work, because
+    `bin/ocw` never passes `--worktree` to `ocw-meter event run.start` —
+    it defaults to `git_worktree_root()` at the point `ocw` itself was
+    invoked, i.e. the ORIGIN worktree, not the newly created one that
+    transcript messages' `cwd` actually points at. That mismatch caused
+    both false negatives (real work always resolving to null) and false
+    positives (misattributing implementer/reviewer messages to whatever
+    run happened to be starting in the origin worktree at that moment).
+    Reading the git-dir file is authoritative for the EXACT worktree a
+    message came from and requires no cross-referencing at all.
+
+    Returns None once the worktree has been removed (git prunes its
+    metadata dir, including this file, on `ocw rm`/`git worktree
+    remove`) — that is correct, not a bug (plan §7.4: 不明なら null。
+    推測しない), not every historical message can still be traced back."""
+    if cwd is None:
         return None
-    candidates = [
-        r for r in runs
-        if r["worktree"] == worktree and r["start_ts"] <= at_ts and (r["end_ts"] is None or at_ts <= r["end_ts"])
-    ]
-    if not candidates:
+    if cwd in cache:
+        return cache[cwd]
+    run_id = None
+    git_dir = _git(["rev-parse", "--absolute-git-dir"], cwd=cwd)
+    if git_dir:
+        try:
+            run_id = (pathlib.Path(git_dir) / "ocw-run-id").read_text(encoding="utf-8").strip() or None
+        except OSError:
+            run_id = None
+    cache[cwd] = run_id
+    return run_id
+
+
+def repo_slug_for_cwd(cwd, cache):
+    """`repo` (plan §8.1: `owner/name`) resolved from the transcript
+    message's own `cwd`, cached per distinct cwd for the whole `ingest`
+    run — PR #27 review round 1 finding 9: this field was hardcoded to
+    null, making per-repository cost breakdowns impossible even though
+    `ocw`/`claude-ds` are routinely used across multiple repos on one
+    machine. `cwd` is already in the plan §1 field whitelist (it's read
+    for `worktree` too), so resolving `repo` from it costs one `git`
+    call per distinct worktree directory, not per message."""
+    if cwd is None:
         return None
-    candidates.sort(key=lambda r: r["start_ts"], reverse=True)
-    return candidates[0]["run_id"]
+    if cwd not in cache:
+        cache[cwd] = git_repo_slug(cwd=cwd)
+    return cache[cwd]
 
 
 def gh_pr_for_branch(branch):
@@ -1934,7 +2062,7 @@ def gh_pr_for_branch(branch):
 
 # ── assembling usage.message events ─────────────────────────────────────
 
-def build_usage_event(candidate, price_tables, at_date_str, role_map, runs, binds, pr_link_map, gh_cache):
+def build_usage_event(candidate, price_tables, today_str, role_map, binds, pr_link_map, gh_cache, run_id_cache, repo_cache):
     usage = candidate["usage"] or {}
     input_tokens = usage.get("input_tokens")
     cache_read = usage.get("cache_read_input_tokens")
@@ -1943,7 +2071,16 @@ def build_usage_event(candidate, price_tables, at_date_str, role_map, runs, bind
 
     model = normalize_model_name(candidate["model"])
     provider = infer_provider(model)
-    price_table = select_price_table(price_tables, at_date_str)
+    ts_dt = parse_ts(candidate["timestamp"])
+    # PR #27 review round 1 finding 4 (plan §17 R5): the price table must
+    # be chosen by the MESSAGE's own date, not the date `ingest` happens
+    # to run on — otherwise a price table added later (e.g. once peak/
+    # off-peak pricing starts) gets applied retroactively to messages
+    # that predate its effective_date the very first time they're ever
+    # ingested (this is NOT the "recalculate stored events" case plan
+    # §5.5 forbids; it's picking the WRONG table on first write).
+    price_date_str = ts_dt.strftime("%Y-%m-%d") if ts_dt is not None else today_str
+    price_table = select_price_table(price_tables, price_date_str)
     cost_estimate, price_version, price_effective, cost_basis = compute_cost(
         model,
         {
@@ -1959,8 +2096,7 @@ def build_usage_event(candidate, price_tables, at_date_str, role_map, runs, bind
     role_info = role_map.get(session_id) if session_id else None
 
     worktree = candidate["cwd"]
-    ts_dt = parse_ts(candidate["timestamp"])
-    run_id = resolve_run_id(runs, worktree, ts_dt)
+    run_id = resolve_run_id_via_ocw_run_id_file(worktree, run_id_cache)
 
     pr_info = binds.get(run_id) if run_id else None
     if pr_info is None:
@@ -1999,7 +2135,7 @@ def build_usage_event(candidate, price_tables, at_date_str, role_map, runs, bind
         "parser_version": INGEST_PARSER_VERSION,
         "completeness": completeness,
         "run_id": run_id,
-        "repo": None,
+        "repo": repo_slug_for_cwd(worktree, repo_cache),
         "worktree": worktree,
         "branch": candidate["git_branch"],
         "head_sha": None,
@@ -2065,6 +2201,7 @@ def bulk_write_events(paths, events):
                     seen = {line.rstrip("\n") for line in fh if line.strip()}
 
             existing_lines = []
+            trailing_newline = True
             if events_file.exists():
                 text = events_file.read_text(encoding="utf-8")
                 if text:
@@ -2108,7 +2245,32 @@ def bulk_write_events(paths, events):
                     file_changed = True
 
             if file_changed:
-                content = "\n".join(existing_lines) + ("\n" if existing_lines else "")
+                # PR #27 review round 1 finding 7: this used to append a
+                # trailing "\n" unconditionally, which silently "healed"
+                # a crash-truncated final line (round-3 review on
+                # `_replace_line_by_idempotency_key` explicitly commits
+                # to NOT doing that — `validate_file`'s only signal for
+                # "process crashed mid-write" (T05) is a missing trailing
+                # newline on the file's last line).
+                #
+                # A pure replacement touches no new content, so it must
+                # preserve the file's original terminal state exactly,
+                # same as `_replace_line_by_idempotency_key`. Appending
+                # brand-new lines is different: if the old tail was
+                # untermined, gluing new JSON directly onto it byte-for-
+                # byte (no separator) would corrupt BOTH the old garbage
+                # AND the new, otherwise-valid event — so a terminator is
+                # unavoidably inserted there. That means the "possible
+                # crash" classification for the OLD line is lost the
+                # moment anything is appended after it (it's no longer
+                # the file's last line) — an inherent tradeoff, not
+                # silent: recorded as a meter.error diagnostic below.
+                appended_new_lines = bool(new_seen_keys)
+                if appended_new_lines and not trailing_newline:
+                    with contextlib.suppress(Exception):
+                        emit_meter_error(str(paths.root), "ingest_appended_after_truncated_day_file", None)
+                newline_at_end = True if appended_new_lines else trailing_newline
+                content = "\n".join(existing_lines) + ("\n" if (existing_lines and newline_at_end) else "")
                 ensure_dir(paths.events_dir, 0o700)
                 tmp_fd, tmp_path = tempfile.mkstemp(dir=str(paths.events_dir), prefix=".tmp-", suffix=".jsonl")
                 try:
@@ -2166,7 +2328,10 @@ def cmd_ingest(args):
     new_cursor_files = dict(cursor_files)
 
     candidates = {}
-    pr_link_map = {}
+    # Starts from what earlier runs have already discovered (see
+    # load_session_pr_links) instead of empty — PR #27 review round 1
+    # finding 2.
+    pr_link_map = load_session_pr_links(paths)
     quarantined_count = 0
     files_scanned = 0
     files_with_new_data = 0
@@ -2227,25 +2392,40 @@ def cmd_ingest(args):
         }
 
     role_map = resolve_herdr_role_map()
-    runs, binds = load_local_run_and_pr_index(paths)
+    binds = load_local_pr_binds(paths)
     price_tables = load_price_tables(price_table_dir())
     today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    gh_cache = {}
+    gh_cache, run_id_cache, repo_cache = {}, {}, {}
 
     events = [
-        build_usage_event(candidate, price_tables, today_str, role_map, runs, binds, pr_link_map, gh_cache)
+        build_usage_event(candidate, price_tables, today_str, role_map, binds, pr_link_map, gh_cache, run_id_cache, repo_cache)
         for candidate in candidates.values()
     ]
 
     write_counts = bulk_write_events(paths, events) if events else {"written": 0, "replaced": 0}
 
-    # Cursor is only persisted AFTER the write succeeds: if this process
-    # is interrupted between reading and writing, the next run re-reads
-    # the same bytes from the same starting offset. That's safe (not
-    # wasted) because message.id-keyed writes are idempotent either way
-    # — this is what makes `ingest` produce identical results no matter
-    # how many times, or where, it is interrupted and re-run.
-    save_ingest_cursor(paths, {"files": new_cursor_files})
+    # pr-link discoveries are always persisted (see load_session_pr_links)
+    # — unlike the cursor below, this is never gated on --since, since
+    # forgetting a discovered PR binding is never desirable.
+    save_session_pr_links(paths, pr_link_map)
+
+    # Cursor is persisted AFTER the write succeeds: if this process is
+    # interrupted between reading and writing, the next run re-reads the
+    # same bytes from the same starting offset. That's safe (not wasted)
+    # because message.id-keyed writes are idempotent either way — this
+    # is what makes `ingest` produce identical results no matter how
+    # many times, or where, it is interrupted and re-run.
+    #
+    # EXCEPT when --since was used: PR #27 review round 1 finding 1 — a
+    # naive advance here would permanently mark the filtered-out (older
+    # than --since) bytes as "already read", so a LATER unrestricted
+    # `ingest` run would never see them again (the offset already moved
+    # past them). Treating a --since run as read-only with respect to
+    # the persisted cursor means it never loses data: the next run
+    # (restricted or not) simply re-reads the same unconsumed range from
+    # wherever the last UNRESTRICTED run left off.
+    if since_dt is None:
+        save_ingest_cursor(paths, {"files": new_cursor_files})
 
     print(f"transcript files scanned:            {files_scanned}")
     print(f"transcript files with new data:      {files_with_new_data}")
@@ -2253,6 +2433,8 @@ def cmd_ingest(args):
     print(f"usage.message written (new):         {write_counts['written']}")
     print(f"usage.message replaced (re-run/dup):  {write_counts['replaced']}")
     print(f"transcript lines quarantined:         {quarantined_count}")
+    if since_dt is not None:
+        print("note: --since was set; the incremental cursor was NOT advanced (read-only for this run)")
     return 0
 
 

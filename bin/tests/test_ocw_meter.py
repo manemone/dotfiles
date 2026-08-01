@@ -142,6 +142,37 @@ def write_transcript(projects_dir, slug, session_id, line_dicts):
     return path
 
 
+def make_ocw_style_worktree(tmp_root, run_id):
+    """Creates a throwaway git repo + linked worktree and writes
+    `run_id` to `<worktree's git-dir>/ocw-run-id`, mirroring bin/ocw's
+    OWN persistence exactly (`git -C "$worktree_dir" rev-parse
+    --absolute-git-dir` then `printf '%s\\n' "$run_id" >"$git_dir/
+    ocw-run-id"` — see bin/ocw around the `generate_run_id` call site).
+    Returns the worktree's absolute path, for use as an assistant
+    line's `cwd`."""
+    counter = getattr(make_ocw_style_worktree, "_counter", 0) + 1
+    make_ocw_style_worktree._counter = counter
+    repo_dir = pathlib.Path(tmp_root) / f"ocw-repo-{counter}"
+    worktree_dir = pathlib.Path(tmp_root) / f"ocw-worktree-{counter}"
+    repo_dir.mkdir()
+    subprocess.run(["git", "init", "-q", str(repo_dir)], check=True)
+    subprocess.run(["git", "-C", str(repo_dir), "config", "user.email", "test@example.com"], check=True)
+    subprocess.run(["git", "-C", str(repo_dir), "config", "user.name", "test"], check=True)
+    (repo_dir / "README.md").write_text("x", encoding="utf-8")
+    subprocess.run(["git", "-C", str(repo_dir), "add", "."], check=True)
+    subprocess.run(["git", "-C", str(repo_dir), "commit", "-q", "-m", "init"], check=True)
+    subprocess.run(
+        ["git", "-C", str(repo_dir), "worktree", "add", "-q", "-b", f"feature-{counter}", str(worktree_dir)],
+        check=True,
+    )
+    git_dir = subprocess.run(
+        ["git", "-C", str(worktree_dir), "rev-parse", "--absolute-git-dir"],
+        capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    (pathlib.Path(git_dir) / "ocw-run-id").write_text(run_id + "\n", encoding="utf-8")
+    return worktree_dir
+
+
 def run_ingest(home, projects_dir, args=None, price_dir=None, extra_env=None, timeout=60):
     env = {
         "OCW_METER_CLAUDE_PROJECTS_DIR": str(projects_dir),
@@ -1352,31 +1383,321 @@ class IngestTests(OcwMeterTestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertNotIn("gh should not have been called", result.stderr)
 
-    def test_ingest_run_id_resolved_from_local_run_start_event(self):
-        worktree = "/fixture/worktree"
-        run_meter(
-            # run.start must predate the transcript message's timestamp
-            # (2026-07-15T10:30) for the time-range match in
-            # `resolve_run_id` to find it — a real `ocw` invocation
-            # always records run.start before any work happens.
-            ["event", "run.start", "--idempotency-key", "run1-start", "--run-id", "run1",
-             "--ts", "2026-07-15T09:00:00.000Z",
-             "--worktree", worktree, "--base-ref", "origin/main", "--command", "claude"],
-            self.home,
-        )
+    def test_ingest_run_id_resolved_via_ocw_run_id_file(self):
+        # PR #27 review round 1 finding 3: matching a locally stored
+        # run.start event by (worktree, time range) does NOT work in
+        # real usage, because bin/ocw never passes --worktree to
+        # `ocw-meter event run.start` (it defaults to the ORIGIN
+        # worktree ocw was invoked FROM, not the newly created one the
+        # transcript's own `cwd` points at). The fix reads
+        # <worktree's git-dir>/ocw-run-id directly — exactly what
+        # bin/ocw itself writes right after `git worktree add` and reads
+        # back in `ocw rm`. This test reproduces that real mechanism
+        # with an actual git worktree instead of a fake --worktree value.
+        worktree_dir = make_ocw_style_worktree(self.tmpdir.name, run_id="run-abc123")
         write_transcript(self.projects_dir, "proj", "sess-run", [
-            assistant_line("sess-run", "m1", cwd=worktree, timestamp="2026-07-15T10:30:00.000Z"),
+            assistant_line("sess-run", "m1", cwd=str(worktree_dir)),
         ])
         result = run_ingest(self.home, self.projects_dir)
         self.assertEqual(result.returncode, 0, result.stderr)
         usage_event = next(e for e in read_events(self.home) if e["event_type"] == "usage.message")
-        self.assertEqual(usage_event["run_id"], "run1")
+        self.assertEqual(usage_event["run_id"], "run-abc123")
+
+    def test_ingest_run_id_is_null_when_ocw_run_id_file_absent(self):
+        # No ocw-run-id file was ever written for this cwd (e.g. a
+        # session outside any `ocw` worktree, or one whose worktree was
+        # since removed — git prunes the file along with its metadata
+        # dir). Must be null, not guessed.
+        write_transcript(self.projects_dir, "proj", "sess-norun", [
+            assistant_line("sess-norun", "m1", cwd="/nonexistent/not-a-worktree"),
+        ])
+        result = run_ingest(self.home, self.projects_dir)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIsNone(read_events(self.home)[0]["run_id"])
+
+    def test_ingest_pr_number_resolved_via_run_id_bind_using_ocw_run_id_file(self):
+        # End-to-end: pr.bind's run_id must line up with what the fixed
+        # run_id resolution (finding 3) actually produces, since PR
+        # attribution priority ① depends on it (plan §7.4).
+        worktree_dir = make_ocw_style_worktree(self.tmpdir.name, run_id="run-xyz789")
+        run_meter(
+            ["event", "pr.bind", "--idempotency-key", "bind1", "--run-id", "run-xyz789",
+             "--pr-number", "99", "--pr-url", "https://github.com/manemone/dotfiles/pull/99"],
+            self.home,
+        )
+        write_transcript(self.projects_dir, "proj", "sess-run-pr", [
+            assistant_line("sess-run-pr", "m1", cwd=str(worktree_dir)),
+        ])
+        result = run_ingest(self.home, self.projects_dir)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        event = read_events(self.home)[0]
+        self.assertEqual(event["run_id"], "run-xyz789")
+        self.assertEqual(event["pr_number"], 99)
+
+    def test_ingest_repo_resolved_from_cwd_git_remote(self):
+        # PR #27 review round 1 finding 9: `repo` was hardcoded null.
+        worktree_dir = pathlib.Path(self.tmpdir.name) / "repo-with-remote"
+        subprocess.run(["git", "init", "-q", str(worktree_dir)], check=True)
+        subprocess.run(
+            ["git", "-C", str(worktree_dir), "remote", "add", "origin", "https://github.com/manemone/dotfiles.git"],
+            check=True,
+        )
+        write_transcript(self.projects_dir, "proj", "sess-repo", [
+            assistant_line("sess-repo", "m1", cwd=str(worktree_dir)),
+        ])
+        result = run_ingest(self.home, self.projects_dir)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(read_events(self.home)[0]["repo"], "manemone/dotfiles")
 
     def test_ingest_refuses_to_operate_inside_a_git_worktree(self):
         write_transcript(self.projects_dir, "proj", "sess-refuse", [assistant_line("sess-refuse", "m1")])
         result = run_ingest(REPO_ROOT / "tmp-test-ocw-meter-ingest-worktree-guard", self.projects_dir)
         self.assertNotEqual(result.returncode, 0)
         self.assertFalse((REPO_ROOT / "tmp-test-ocw-meter-ingest-worktree-guard").exists())
+
+    def test_ingest_normalizes_context_window_suffix_in_model_name(self):
+        write_transcript(self.projects_dir, "proj", "sess-1m", [
+            assistant_line("sess-1m", "m1", model="deepseek-v4-pro[1m]",
+                            input_tokens=1000, cache_read_input_tokens=2000, output_tokens=300),
+        ])
+        result = run_ingest(self.home, self.projects_dir)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        event = read_events(self.home)[0]
+        self.assertEqual(event["model"], "deepseek-v4-pro")
+        # The [1m] suffix must not have blocked the price lookup either.
+        self.assertIsNotNone(event["cost_estimate_usd"])
+        self.assertEqual(event["price_table_version"], "deepseek-2026-08-01")
+
+    def test_ingest_picks_price_table_by_message_timestamp_not_run_date(self):
+        # PR #27 review round 1 finding 4 (plan §17 R5): a price table
+        # added AFTER a message's own date must not retroactively apply
+        # to that message the first time it's ingested.
+        price_dir = pathlib.Path(self.tmpdir.name) / "prices-dated"
+        price_dir.mkdir()
+        (price_dir / "deepseek-2026-07-01.json").write_text(json.dumps({
+            "price_table_version": "deepseek-2026-07-01", "effective_date": "2026-07-01",
+            "models": {"deepseek-v4-pro": {"cache_hit_in": 0.003625, "cache_miss_in": 0.435, "out": 0.87}},
+        }), encoding="utf-8")
+        (price_dir / "deepseek-2026-07-20.json").write_text(json.dumps({
+            "price_table_version": "deepseek-2026-07-20", "effective_date": "2026-07-20",
+            "models": {"deepseek-v4-pro": {"cache_hit_in": 999, "cache_miss_in": 999, "out": 999}},
+        }), encoding="utf-8")
+        write_transcript(self.projects_dir, "proj", "sess-dated", [
+            # Message is from BEFORE the 07-20 table's effective_date —
+            # the 07-01 table must be applied, not 07-20's.
+            assistant_line("sess-dated", "m1", timestamp="2026-07-15T10:00:00.000Z",
+                            input_tokens=1000, cache_read_input_tokens=2000, output_tokens=300),
+        ])
+        result = run_ingest(self.home, self.projects_dir, price_dir=price_dir)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        event = read_events(self.home)[0]
+        self.assertEqual(event["price_table_version"], "deepseek-2026-07-01")
+        self.assertLess(event["cost_estimate_usd"], 1.0)  # sanity: not the 999/1M-priced table
+
+    def test_ingest_since_does_not_permanently_lose_older_messages(self):
+        # PR #27 review round 1 finding 1: a --since run must not
+        # advance the persisted cursor, or the filtered-out range
+        # becomes permanently unreachable even by a later run with no
+        # --since at all.
+        write_transcript(self.projects_dir, "proj", "sess-since", [
+            assistant_line("sess-since", "old", timestamp="2026-06-01T00:00:00.000Z"),
+            assistant_line("sess-since", "new", timestamp="2026-07-15T00:00:00.000Z"),
+        ])
+        r1 = run_ingest(self.home, self.projects_dir, args=["--since", "2026-07-01T00:00:00Z"])
+        self.assertEqual(r1.returncode, 0, r1.stderr)
+        self.assertEqual({e["message_id"] for e in read_events(self.home)}, {"new"})
+
+        r2 = run_ingest(self.home, self.projects_dir)  # no --since this time
+        self.assertEqual(r2.returncode, 0, r2.stderr)
+        self.assertEqual({e["message_id"] for e in read_events(self.home)}, {"old", "new"})
+
+    def test_ingest_pr_link_survives_across_incremental_runs(self):
+        # PR #27 review round 1 finding 2: a session's `pr-link` must
+        # still apply to messages ingested in a LATER run, even though
+        # the cursor has already moved past the pr-link line itself.
+        session_id = "sess-prlink-incremental"
+        path = write_transcript(self.projects_dir, "proj", session_id, [
+            assistant_line(session_id, "m1"),
+            {"type": "pr-link", "sessionId": session_id, "prNumber": 7,
+             "prUrl": "https://github.com/manemone/dotfiles/pull/7",
+             "prRepository": "manemone/dotfiles", "timestamp": "2026-07-15T10:01:00.000Z"},
+        ])
+        r1 = run_ingest(self.home, self.projects_dir)
+        self.assertEqual(r1.returncode, 0, r1.stderr)
+
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(assistant_line(session_id, "m2", timestamp="2026-07-15T11:00:00.000Z"), ensure_ascii=False) + "\n")
+        r2 = run_ingest(self.home, self.projects_dir)
+        self.assertEqual(r2.returncode, 0, r2.stderr)
+
+        m2_event = next(e for e in read_events(self.home) if e["message_id"] == "m2")
+        self.assertEqual(m2_event["pr_number"], 7)
+
+    def test_ingest_appending_after_truncated_day_file_preserves_new_data_and_records_diagnostic(self):
+        # PR #27 review round 1 finding 7. A pure REPLACE (no new keys)
+        # must preserve the file's original trailing-newline state
+        # exactly; this covers the harder case, appending brand new
+        # events after an already-truncated tail, which must not corrupt
+        # either the old or the new data and must leave a visible trace
+        # instead of silently "healing" the crash marker.
+        write_transcript(self.projects_dir, "proj", "sess-trunc", [
+            assistant_line("sess-trunc", "m1", timestamp="2026-07-15T10:00:00.000Z"),
+        ])
+        r1 = run_ingest(self.home, self.projects_dir)
+        self.assertEqual(r1.returncode, 0, r1.stderr)
+        events_file = self.home / "events" / "2026-07-15.jsonl"
+        # Truncate the stored file mid-write, simulating a crash.
+        original = events_file.read_text(encoding="utf-8")
+        events_file.write_text(original.rstrip("\n")[:-5], encoding="utf-8")
+
+        write_transcript(self.projects_dir, "proj", "sess-trunc", [
+            assistant_line("sess-trunc", "m1", timestamp="2026-07-15T10:00:00.000Z"),
+            assistant_line("sess-trunc", "m2", timestamp="2026-07-15T12:00:00.000Z"),
+        ])
+        r2 = run_ingest(self.home, self.projects_dir)
+        self.assertEqual(r2.returncode, 0, r2.stderr)
+
+        # The new event (m2) must be intact, valid JSON — not merged
+        # into the truncated garbage.
+        validate_result = run_meter(["validate"], self.home)
+        self.assertEqual(validate_result.returncode, 0)
+        m2_events = [e for e in read_events(self.home) if e.get("message_id") == "m2"]
+        self.assertEqual(len(m2_events), 1)
+
+        # The tradeoff (old truncated line can no longer be classified
+        # as "possible crash" once something follows it) is recorded,
+        # not silent.
+        meter_errors = read_meter_errors(self.home)
+        self.assertTrue(any(e.get("stage") == "ingest_appended_after_truncated_day_file" for e in meter_errors))
+
+    def test_ingest_pure_replace_preserves_original_trailing_newline_state(self):
+        # The other half of finding 7: re-ingesting the SAME message
+        # (no new keys, just a replace) on a day file that already lacks
+        # a trailing newline must not add one.
+        write_transcript(self.projects_dir, "proj", "sess-trunc2", [
+            assistant_line("sess-trunc2", "dup1", output_tokens=1, timestamp="2026-07-16T10:00:00.000Z"),
+        ])
+        r1 = run_ingest(self.home, self.projects_dir)
+        self.assertEqual(r1.returncode, 0, r1.stderr)
+        events_file = self.home / "events" / "2026-07-16.jsonl"
+        self.assertTrue(events_file.read_text(encoding="utf-8").endswith("\n"))
+        # Strip the trailing newline to simulate an already-truncated
+        # file whose last (and only) line is otherwise valid JSON.
+        text = events_file.read_text(encoding="utf-8")
+        events_file.write_text(text.rstrip("\n"), encoding="utf-8")
+
+        # Force a re-ingest of the exact same message.id by resetting
+        # the transcript cursor's offset (simulating file rotation).
+        cursor_path = self.home / "state" / "ingest-cursor.json"
+        cursor = json.loads(cursor_path.read_text(encoding="utf-8"))
+        for entry in cursor["files"].values():
+            entry["offset"] = 0
+            entry["inode"] = -1  # force the rotation/reread path
+        cursor_path.write_text(json.dumps(cursor), encoding="utf-8")
+
+        r2 = run_ingest(self.home, self.projects_dir)
+        self.assertEqual(r2.returncode, 0, r2.stderr)
+        self.assertFalse(events_file.read_text(encoding="utf-8").endswith("\n"))
+
+
+class ReportReconcileTests(OcwMeterTestCase):
+    def setUp(self):
+        super().setUp()
+        self.projects_dir = pathlib.Path(self.tmpdir.name) / "claude-projects"
+        self.projects_dir.mkdir(parents=True, exist_ok=True)
+
+    def _seed_deepseek_message(self, message_id="m1", timestamp="2026-07-15T10:00:00.000Z", **kwargs):
+        write_transcript(self.projects_dir, "proj", f"sess-{message_id}", [
+            assistant_line(f"sess-{message_id}", message_id, timestamp=timestamp, **kwargs),
+        ])
+        result = run_ingest(self.home, self.projects_dir)
+        assert result.returncode == 0, result.stderr
+
+    def test_reconcile_reports_tokens_cost_and_known_gaps(self):
+        self._seed_deepseek_message(input_tokens=1000, cache_read_input_tokens=2000,
+                                     cache_creation_input_tokens=0, output_tokens=300)
+        result = run_meter(["report", "--reconcile", "--month", "2026-07", "--json"], self.home,
+                            extra_env={"OCW_METER_CLAUDE_PROJECTS_DIR": str(self.projects_dir), "OCW_METER_INGEST_USE_GH": "0"})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        data = json.loads(result.stdout)
+        self.assertEqual(data["cost_basis"], "estimated — not an invoice")
+        self.assertIn("known_gaps", data)
+        self.assertIn("deepseek-v4-flash", data["known_gaps"])
+        model = data["models"]["deepseek-v4-pro"]
+        self.assertEqual(model["input_tokens"], 1000)
+        self.assertEqual(model["cache_read_input_tokens"], 2000)
+        self.assertEqual(model["output_tokens"], 300)
+        self.assertIsNotNone(model["cost_estimate_usd"])
+        self.assertIsNone(model["provider_total_tokens"])
+        self.assertIsNone(model["coverage_ratio"])
+
+    def test_reconcile_provider_total_computes_coverage_ratio(self):
+        self._seed_deepseek_message(input_tokens=1000, cache_read_input_tokens=9000, output_tokens=0)
+        result = run_meter(
+            ["report", "--reconcile", "--month", "2026-07", "--provider-total", "deepseek-v4-pro=20000", "--json"],
+            self.home,
+            extra_env={"OCW_METER_CLAUDE_PROJECTS_DIR": str(self.projects_dir), "OCW_METER_INGEST_USE_GH": "0"},
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        model = json.loads(result.stdout)["models"]["deepseek-v4-pro"]
+        self.assertEqual(model["provider_total_tokens"], 20000)
+        self.assertAlmostEqual(model["coverage_ratio"], 10000 / 20000)
+
+    def test_reconcile_provider_total_for_model_absent_from_transcript_still_shown(self):
+        # PR #27 review round 1 finding 5: this is the exact "0%
+        # coverage" case (plan §5.10 / ADR-001 §2.2, deepseek-v4-flash)
+        # the whole flag exists to surface — it must not be the one case
+        # that silently disappears from the report.
+        self._seed_deepseek_message()  # only deepseek-v4-pro exists in transcript
+        result = run_meter(
+            ["report", "--reconcile", "--month", "2026-07",
+             "--provider-total", "deepseek-v4-flash=107000000", "--json"],
+            self.home,
+            extra_env={"OCW_METER_CLAUDE_PROJECTS_DIR": str(self.projects_dir), "OCW_METER_INGEST_USE_GH": "0"},
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        models = json.loads(result.stdout)["models"]
+        self.assertIn("deepseek-v4-flash", models)
+        flash = models["deepseek-v4-flash"]
+        self.assertEqual(flash["messages"], 0)
+        self.assertEqual(flash["transcript_total_tokens"], 0)
+        self.assertEqual(flash["provider_total_tokens"], 107000000)
+        self.assertEqual(flash["coverage_ratio"], 0.0)
+        self.assertIsNone(flash["cost_estimate_usd"])
+
+    def test_reconcile_rejects_malformed_month(self):
+        # PR #27 review round 1 finding 6a: report is the fail-loud half
+        # of this CLI (plan §10.1) — a garbage --month must not silently
+        # aggregate a whole year or silently match nothing.
+        for bad_month in ("2026", "07-2026", "2026-13x", "not-a-month"):
+            result = run_meter(["report", "--reconcile", "--month", bad_month], self.home)
+            self.assertNotEqual(result.returncode, 0, f"--month {bad_month!r} should have been rejected")
+
+    def test_reconcile_known_gaps_mentions_utc_month_boundary_caveat(self):
+        # PR #27 review round 1 finding 6b (plan §17 R8): month
+        # boundaries are UTC-fixed; the report must say so rather than
+        # implying exact alignment with a provider's own (e.g. Beijing
+        # time) monthly billing boundary.
+        result = run_meter(["report", "--reconcile", "--month", "2026-07", "--json"], self.home)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("UTC", json.loads(result.stdout)["known_gaps"])
+
+    def test_report_quarantine_counts_are_separated_from_ingest_transcript_quarantine(self):
+        # PR #27 review round 1 finding 10.
+        session_dir = self.projects_dir / "proj"
+        session_dir.mkdir(parents=True)
+        (session_dir / "sess-bad.jsonl").write_text(
+            json.dumps(assistant_line("sess-bad", "m1"), ensure_ascii=False) + "\n"
+            + "{not valid json\n",
+            encoding="utf-8",
+        )
+        result = run_ingest(self.home, self.projects_dir)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        report = run_meter(["report", "--json"], self.home)
+        self.assertEqual(report.returncode, 0, report.stderr)
+        data = json.loads(report.stdout)
+        self.assertEqual(data["transcript_lines_quarantined"], 1)
+        self.assertEqual(data["quarantined_lines"], 0)
 
 
 if __name__ == "__main__":

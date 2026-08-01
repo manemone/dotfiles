@@ -181,10 +181,20 @@ ocw-meter report --reconcile [--month <YYYY-MM>] [--provider-total <model>=<toke
 - 費用推定は `bin/prices/*.json` から。**Anthropicモデル（`claude-*`）は定額契約のため
   `cost_estimate_usd: null` / `cost_basis: "subscription"`**（API単価には換算しない）。
   価格表に無いモデルは `cost_estimate_usd: null` / `completeness: "unknown"`
-- role/PR/run_idの帰属は Herdr (`herdr pane list`) とこのmeter自身のローカルイベント
-  （`run.start`/`run.end`/`pr.bind`）・transcriptの `pr-link` 行から解決する。どれも失敗したら
+- role の帰属は Herdr (`herdr pane list`) から解決する。`run_id` はメッセージ自身の `cwd`（=
+  worktree）にある `<git-dir>/ocw-run-id` を直接読んで解決する（`bin/ocw` が `git worktree add` 直後に
+  書き込み、`ocw rm` が読み戻すのと同じファイル・同じ仕組み）。PR番号は ①その`run_id`に対する
+  `pr.bind`（`state/session-pr-links.json` とは別に、このmeter自身のイベントストアから解決）
+  ②`state/session-pr-links.json` に永続化されたtranscriptの `pr-link` 行（増分実行をまたいでも保持される）
+  ③`gh pr list --head` フォールバック、の順。どれも失敗したら
   `role: "unknown"` / `pr_number: null` / `run_id: null`。**推測で埋めない**
-- 過去に書き込んだイベントの `cost_estimate_usd` は、価格表を追加・更新しても**再計算されない**
+- `--since <ts>` を渡した実行は**増分カーソルを進めない**（読み取り専用）。`--since` でスキップした
+  期間を後から `--since` 無しで実行すれば取り込まれる — カーソルが先に進んで永久に欠落することはない
+- メッセージの費用は**そのメッセージ自身のtimestampの日付**に対応する価格表で計算する（`ingest`を
+  実行した日ではない）。過去に書き込んだイベントの `cost_estimate_usd` は、価格表を追加・更新しても
+  **再計算されない**
+- `report --reconcile` の月境界は**UTC固定**。DeepSeek管理画面（北京時間 UTC+8想定）等、provider側の
+  集計タイムゾーンと異なる場合、月初・月末で最大±8時間分のずれが突合結果に生じうる（計画書17章 R8）
 
 **保存先と環境変数:**
 
@@ -199,7 +209,13 @@ ocw-meter report --reconcile [--month <YYYY-MM>] [--provider-total <model>=<toke
 保存レイアウト: `events/YYYY-MM-DD.jsonl`（基本はappend-only, mode 600。**例外**: 同一`idempotency_key`を再送すると
 後勝ち(last-write-wins)でその日のファイル内の該当行をmkstemp+os.replaceで原子的に置き換える）/
 `state/seen-keys/YYYY-MM.txt`（`idempotency_key`による重複排除）/
-`quarantine/YYYY-MM-DD.jsonl`（schema不正・破損行の隔離先）/ `state/meter-errors.jsonl`（`meter.error`自己診断専用。
+`quarantine/YYYY-MM-DD.jsonl`（`validate`が隔離した破損イベントの隔離先）/
+`quarantine/ingest-transcript.jsonl`（`ingest`が隔離した破損transcript元行の隔離先。前者とは別カウントで
+`report`に出る。生コンテンツは保存しない）/
+`state/ingest-cursor.json`（`ingest`の増分読み取りカーソル）/
+`state/session-pr-links.json`（`ingest`がtranscriptの`pr-link`行から学習したsession→PRの対応。
+増分実行をまたいで保持される）/
+`state/meter-errors.jsonl`（`meter.error`自己診断専用。
 `events/`とは別ファイルにすることで、後勝ちdedupによるイベントファイル書き換えと競合せずlock無しで追記できる）。
 ディレクトリは mode 700。`ocw-meter report` はこのファイルの件数も表示する。
 
