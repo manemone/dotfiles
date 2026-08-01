@@ -32,11 +32,17 @@ done < <(
 echo "== embedded python3 heredoc in bin/ocw-meter =="
 meter_script="$repo_root/bin/ocw-meter"
 if [ -f "$meter_script" ]; then
-  # "${TMPDIR:-/tmp}/name-XXXXXX.py" rather than `mktemp -t name-XXXXXX.py`:
-  # BSD mktemp (macOS) treats the whole `-t` argument as a literal prefix,
-  # not a template, so the ".py" suffix would be silently dropped there.
-  tmp_py="$(mktemp "${TMPDIR:-/tmp}/ocw-meter-heredoc-XXXXXX.py")"
-  trap 'rm -f "$tmp_py"' EXIT
+  # A template ending in a suffix after the X's (e.g. "...-XXXXXX.py") is
+  # a GNU coreutils extension (see GNU mktemp(1): "This option [--suffix]
+  # is implied if TEMPLATE does not end in X"). BSD/macOS mktemp has no
+  # such extension — the template is passed straight to mkstemp(3), which
+  # requires it to *end* in the X's. Under `set -euo pipefail`, mktemp
+  # failing there would fail this whole script, not just misname a file.
+  # A directory whose template ends in X, with the suffix added to a
+  # filename inside it, works identically on GNU and BSD.
+  tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/ocw-meter-heredoc-XXXXXX")"
+  trap 'rm -rf "$tmp_dir"' EXIT
+  tmp_py="$tmp_dir/heredoc.py"
   awk "/<<'PY'/{flag=1; next} /^PY\$/{flag=0} flag" "$meter_script" > "$tmp_py"
   if [ -s "$tmp_py" ]; then
     echo "  py_compile (extracted heredoc)"
