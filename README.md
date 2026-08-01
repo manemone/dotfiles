@@ -76,13 +76,17 @@ Options can be combined:
 ├── .mise.toml                 # Runtime versions (python, node, ruby, rust, neovim, ripgrep, fd, lazygit)
 ├── .gitignore                 # Git ignore rules
 ├── LICENSE                    # MIT License
-├── docs/                      # Planning documents
-│   └── planning/
+├── docs/                      # Documentation (see docs/README.md for the full index)
+│   ├── README.md              # Index: quick-nav + full DOC-ID list. Only file allowed directly under docs/
+│   ├── adr/                   # Accepted architecture decision records
+│   ├── planning/               # Umbrella-branch plans and roadmaps (historical once merged)
+│   └── reference/              # Operational references kept current (schemas, runbooks)
 ├── shared/
 │   └── helpers.sh             # Shared shell functions (logging, symlinks, platform detection)
 ├── bin/
 │   ├── ocw                    # Git worktree manager with Herdr integration
 │   ├── claude-ds              # Claude Code via DeepSeek API wrapper
+│   ├── ocw-meter               # LLM cost / Claude quota observability (read-only, fail-open)
 │   ├── deploy.sh              # bin deployment script
 │   └── README.md
 ├── claude/
@@ -160,8 +164,9 @@ See each tool's deploy script for the full list of files it creates.
 
 See each tool's README for detailed configuration and troubleshooting:
 
-- [bin/README.md](bin/README.md) — CLI tools (ocw worktree manager, claude-ds DeepSeek wrapper)
+- [bin/README.md](bin/README.md) — CLI tools (ocw worktree manager, claude-ds DeepSeek wrapper, ocw-meter observability)
 - [claude/README.md](claude/README.md) — Claude Code config, skills, machine-specific customization
 - [zsh/README.md](zsh/README.md) — shell setup, plugin management, aliases, version managers
 - [nvim/README.md](nvim/README.md) — editor setup, LSP servers, keybindings, plugins
 - [tmux/README.md](tmux/README.md) — multiplexer setup, Vim-style keybindings, clipboard
+- [docs/README.md](docs/README.md) — documentation index (ADRs, umbrella-branch plans, operational references)

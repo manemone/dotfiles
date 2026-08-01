@@ -23,6 +23,11 @@ usage:
   ocw-meter snapshot-quota
   ocw-meter validate [--file <path>]
   ocw-meter report [--pr <n>] [--json]
+  ocw-meter report --phase [--pr <n>] [--json]
+  ocw-meter report --model [--pr <n>] [--json]
+  ocw-meter report --role [--pr <n>] [--json]
+  ocw-meter report --window [--pr <n>] [--json]
+  ocw-meter report --month [YYYY-MM] [--json]
   ocw-meter report --reconcile [--month <YYYY-MM>] [--provider-total <model>=<tokens> ...] [--json]
   ocw-meter help
 
@@ -77,7 +82,27 @@ subcommands:
   report
     Prints an event-count / completeness / coverage summary, including
     total estimated cost and which price_table_version(s)/cost_basis
-    were applied once usage.message events exist.
+    were applied once usage.message events exist. With `--pr <n>`, also
+    prints review-round/human-intervention/final-result/cash-cost
+    detail for that one PR and its same-5-hour-window-completion
+    verdict (孫5).
+
+  report --phase / --model / --role / --window
+    Grouped breakdowns (孫5), each combinable with `--pr <n>` to scope
+    to one PR: `--phase` (token/cost/duration per pr-review-loop phase,
+    best-effort time-correlated with usage.message — see
+    docs/reference/DOC-005_...), `--model` (token/cost per
+    provider+model), `--role` (event count + token/cost per
+    commander/implementer/reviewer/unknown), `--window` (quota.sample
+    grouped by 5-hour window_id, with directly-linked and time-overlap-
+    inferred PRs kept in separate fields).
+
+  report --month [YYYY-MM]
+    Cash cost (metered API) / capacity cost (Claude subscription quota)
+    / process efficiency for one UTC month (default: current month),
+    always in separate top-level keys — never summed (孫5, plan §16).
+    Cannot be combined with --phase/--model/--role/--window. NOT the
+    same as `report --reconcile --month ...` below.
 
   report --reconcile
     Prints model別 transcript token totals (miss/hit/creation/output)
@@ -1412,6 +1437,476 @@ def count_meter_errors(paths):
         return 0
 
 
+def normalize_month_arg(month):
+    """Shared by `report --reconcile` and `report --month` (孫5 §1): if
+    `month` is None, defaults to the current UTC month. Otherwise
+    validates YYYY-MM with a real month (01-12) — plan §10.1 requires
+    `report` to fail loud rather than silently aggregating a garbage
+    filter's zero (or, worse, a whole year's worth of) matches under a
+    label that looks like one specific month. Returns (month, error);
+    exactly one is None."""
+    if month is None:
+        return datetime.now(timezone.utc).strftime("%Y-%m"), None
+    if not re.match(r"^\d{4}-(0[1-9]|1[0-2])$", month):
+        return None, f"error: --month must be YYYY-MM with a valid month (01-12), got: {month!r}"
+    return month, None
+
+
+def usage_cost_footer(usage_events):
+    """The cost/coverage/price_table portion of the required per-plan-
+    §10.4 footer, shared by every `report` view (孫5 §1: "coverage 併記が
+    全出力経路で漏れていないか" is the reviewer's top concern for this
+    phase — factored into one function specifically so no new view can
+    forget a piece of it)."""
+    cost_sum, has_cost = 0.0, False
+    price_versions, cost_bases = set(), set()
+    for e in usage_events:
+        cost = e.get("cost_estimate_usd")
+        if isinstance(cost, (int, float)):
+            cost_sum += cost
+            has_cost = True
+        if e.get("price_table_version"):
+            price_versions.add(e["price_table_version"])
+        if e.get("cost_basis"):
+            cost_bases.add(e["cost_basis"])
+    if usage_events:
+        coverage = (
+            f"{len(usage_events)} usage.message event(s); run "
+            "'ocw-meter report --reconcile' for model別 coverage against provider totals"
+        )
+        price_table_summary = ", ".join(sorted(price_versions)) if price_versions else "(none applied)"
+        cost_basis_summary = ", ".join(sorted(cost_bases)) if cost_bases else "(none)"
+        cost_estimate_summary = f"${cost_sum:.2f} (estimated — not an invoice)" if has_cost else "null"
+    else:
+        coverage = "no usage.message events yet — run 'ocw-meter ingest'"
+        price_table_summary = "not applicable (no cost data ingested yet)"
+        cost_basis_summary = "not applicable (no cost data ingested yet)"
+        cost_estimate_summary = "null"
+    return {
+        "coverage": coverage,
+        "price_table": price_table_summary,
+        "cost_basis": cost_basis_summary,
+        "cost_estimate_usd": cost_estimate_summary,
+    }
+
+
+def completeness_footer(paths, scoped_events, malformed):
+    """The completeness/quarantine portion of the plan §10.4 footer —
+    see `usage_cost_footer` above for why this is factored out."""
+    completeness_counts = {"complete": 0, "partial": 0, "unknown": 0}
+    for e in scoped_events:
+        c = e.get("completeness")
+        completeness_counts[c if c in completeness_counts else "unknown"] += 1
+    return {
+        "completeness": completeness_counts,
+        "quarantined_lines": count_quarantine_lines(paths),
+        "transcript_lines_quarantined": count_ingest_transcript_quarantine_lines(paths),
+        "meter_error_diagnostics": count_meter_errors(paths),
+        "malformed_unvalidated_lines": malformed,
+    }
+
+
+def print_footer_text(footer_completeness, footer_cost, total):
+    def pct(n):
+        return (100.0 * n / total) if total else 0.0
+
+    cc = footer_completeness["completeness"]
+    print(
+        "completeness: "
+        f"complete {pct(cc['complete']):.1f}% / "
+        f"partial {pct(cc['partial']):.1f}% / "
+        f"unknown {pct(cc['unknown']):.1f}%"
+    )
+    print(f"quarantined:   {footer_completeness['quarantined_lines']} lines (events this meter wrote)")
+    print(f"transcript lines quarantined (ingest source data): {footer_completeness['transcript_lines_quarantined']} lines")
+    print(f"meter.error diagnostics (state/meter-errors.jsonl): {footer_completeness['meter_error_diagnostics']} lines")
+    print(f"malformed (not yet quarantined; run 'ocw-meter validate'): {footer_completeness['malformed_unvalidated_lines']} lines")
+    print(f"coverage:      {footer_cost['coverage']}")
+    print(f"price_table:   {footer_cost['price_table']}")
+    print(f"cost_basis:    {footer_cost['cost_basis']}")
+    print(f"cost_estimate: {footer_cost['cost_estimate_usd']}")
+
+
+def events_for_pr(valid_events, pr_number):
+    """PR帰属ロジック（plan §7.4）: an event belongs to `pr_number` if it
+    says so directly, OR its run_id was bound to that PR number via a
+    `pr.bind` event. Shared by cmd_report's default --pr view and the
+    new --phase/--model/--role/--window/--month(process efficiency)
+    views (孫5) so every view resolves "this PR's events" identically."""
+    bound_run_ids = {
+        e.get("run_id")
+        for e in valid_events
+        if e.get("event_type") == "pr.bind" and e.get("pr_number") == pr_number and e.get("run_id")
+    }
+    return [
+        e for e in valid_events
+        if e.get("pr_number") == pr_number or e.get("run_id") in bound_run_ids
+    ]
+
+
+def pr_review_summary(pr_events):
+    """孫5 §1 --pr: review round list / human intervention count / final
+    result / cash+capacity cost split for one PR's own (already
+    resolved via `events_for_pr`) event set. Reads ONLY the events
+    already attributed to this PR — no additional time-range guessing
+    beyond what plan §7.4's PR-attribution priority already resolved."""
+    review_rounds = []
+    for e in pr_events:
+        if e.get("event_type") == "review.round":
+            review_rounds.append({
+                "round": e.get("round"),
+                "verdict": e.get("verdict"),
+                "findings_count": e.get("findings_count"),
+                "reviewed_head_sha": e.get("reviewed_head_sha"),
+            })
+    review_rounds.sort(key=lambda r: (r["round"] is None, r["round"]))
+
+    human_events = [e for e in pr_events if e.get("event_type") == "human.intervention"]
+    human_reasons = [e.get("reason") for e in human_events if e.get("reason")]
+
+    done_ends = sorted(
+        (e for e in pr_events if e.get("event_type") == "phase.end" and e.get("phase") == "done"),
+        key=lambda e: e.get("ts") or "",
+    )
+    final_result = done_ends[-1].get("outcome") if done_ends else None
+
+    timestamps = [ts for ts in (parse_ts(e.get("ts")) for e in pr_events) if ts is not None]
+    duration_seconds = (max(timestamps) - min(timestamps)).total_seconds() if timestamps else None
+
+    cash_cost, has_cash_cost = 0.0, False
+    capacity_message_count = 0
+    for e in pr_events:
+        if e.get("event_type") != "usage.message":
+            continue
+        if e.get("cost_basis") == "subscription":
+            capacity_message_count += 1
+            continue
+        cost = e.get("cost_estimate_usd")
+        if isinstance(cost, (int, float)):
+            cash_cost += cost
+            has_cash_cost = True
+
+    return {
+        "duration_seconds": duration_seconds,
+        "review_rounds": review_rounds,
+        "review_round_count": len(review_rounds),
+        "human_intervention_count": len(human_events),
+        "human_intervention_reasons": human_reasons,
+        "final_result": final_result or "unknown",
+        "cash_cost_usd": cash_cost if has_cash_cost else None,
+        "capacity_message_count": capacity_message_count,
+    }
+
+
+def default_token_bucket():
+    return {
+        "messages": 0, "input_tokens": 0, "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0, "output_tokens": 0,
+        "cost_estimate_usd": 0.0, "has_cost": False,
+    }
+
+
+def accumulate_token_bucket(bucket, e):
+    bucket["messages"] += 1
+    for field in ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens", "output_tokens"):
+        v = e.get(field)
+        if isinstance(v, (int, float)):
+            bucket[field] += v
+    cost = e.get("cost_estimate_usd")
+    if isinstance(cost, (int, float)):
+        bucket["cost_estimate_usd"] += cost
+        bucket["has_cost"] = True
+
+
+def finalize_token_bucket(bucket):
+    out = dict(bucket)
+    out["cost_estimate_usd"] = bucket["cost_estimate_usd"] if bucket["has_cost"] else None
+    del out["has_cost"]
+    return out
+
+
+def report_by_model(usage_events):
+    """孫5 §1 --model: token/cost totals grouped by (provider, model),
+    scoped to whatever `filtered` the caller already resolved (the
+    whole store, or one --pr's events)."""
+    buckets = {}
+    for e in usage_events:
+        key = (e.get("provider") or "(unknown)", e.get("model") or "(unknown)")
+        accumulate_token_bucket(buckets.setdefault(key, default_token_bucket()), e)
+    out = {}
+    for (provider, model), bucket in buckets.items():
+        row = finalize_token_bucket(bucket)
+        row["provider"] = provider
+        row["model"] = model
+        out[f"{provider}/{model}"] = row
+    return out
+
+
+def report_by_role(scoped_events):
+    """孫5 §1 --role: usage.message token/cost totals AND total event
+    count, grouped by envelope `role` (commander/implementer/reviewer/
+    unknown — plan §7.4 priority 1: `OCW_ROLE`, falling back to Herdr
+    pane-label resolution at ingest time)."""
+    roles = {}
+    for e in scoped_events:
+        role = e.get("role") or "unknown"
+        row = roles.setdefault(role, {"total_events": 0, **default_token_bucket()})
+        row["total_events"] += 1
+        if e.get("event_type") == "usage.message":
+            accumulate_token_bucket(row, e)
+    out = {}
+    for role, row in roles.items():
+        total_events = row.pop("total_events")
+        finalized = finalize_token_bucket(row)
+        finalized["total_events"] = total_events
+        out[role] = finalized
+    return out
+
+
+def build_phase_windows(scoped_events):
+    """Pairs `phase.start`/`phase.end` events by (run_id, phase, round)
+    into time windows (孫5 §1 --phase). Plan §8.3's phase enum also
+    lists `implement` and `verdict`, but as of 孫2's actual pr-review-
+    loop embedding neither ever gets a phase.start/phase.end pair
+    anywhere in this repo — `implement` happens before pr-review-loop
+    is invoked at all, and `verdict` is only ever captured as a
+    `review.round` event, not a phase boundary (see
+    docs/reference/DOC-005_...). Those two names simply never appear
+    in the returned windows; that is expected, not a bug here. A
+    `phase.end` with no matching `phase.start` (or vice versa, at the
+    end of the scanned range) is dropped rather than guessed at."""
+    starts = {}
+    windows = []
+    ordered = sorted(
+        (e for e in scoped_events if e.get("event_type") in ("phase.start", "phase.end")),
+        key=lambda e: e.get("ts") or "",
+    )
+    for e in ordered:
+        key = (e.get("run_id"), e.get("phase"), e.get("round"))
+        if e.get("event_type") == "phase.start":
+            starts[key] = e
+            continue
+        start_e = starts.pop(key, None)
+        if start_e is None:
+            continue
+        start_ts, end_ts = parse_ts(start_e.get("ts")), parse_ts(e.get("ts"))
+        if start_ts is None or end_ts is None:
+            continue
+        windows.append({
+            "run_id": e.get("run_id"), "phase": e.get("phase"), "round": e.get("round"),
+            "start_ts": start_ts, "end_ts": end_ts, "outcome": e.get("outcome"),
+        })
+    return windows
+
+
+def assign_usage_to_phase_windows(usage_events, windows):
+    """Best-effort time-range correlation, NOT a stored field:
+    `usage.message` events (from transcript ingest, plan §8.4) never
+    carry `phase` — ingest has no way to know which pr-review-loop
+    phase a given transcript line belongs to, since the two are
+    independent data sources with no shared key. A usage.message is
+    attributed to the one phase window sharing its `run_id` whose
+    [start_ts, end_ts] contains its own timestamp; on overlap, the
+    first match found wins. Messages matching no window (null run_id,
+    a run predating any phase instrumentation, `implement` work done
+    before pr-review-loop starts, etc.) are bucketed under
+    `(unassigned)` rather than guessed into the nearest phase."""
+    by_run = {}
+    for w in windows:
+        by_run.setdefault(w["run_id"], []).append(w)
+
+    buckets = {}
+    for e in usage_events:
+        run_id = e.get("run_id")
+        ts = parse_ts(e.get("ts"))
+        phase = None
+        if run_id is not None and ts is not None:
+            for w in by_run.get(run_id, ()):
+                if w["start_ts"] <= ts <= w["end_ts"]:
+                    phase = w["phase"]
+                    break
+        key = phase or "(unassigned)"
+        accumulate_token_bucket(buckets.setdefault(key, default_token_bucket()), e)
+    return buckets
+
+
+def report_by_phase(scoped_events, usage_events):
+    windows = build_phase_windows(scoped_events)
+    durations = {}
+    for w in windows:
+        d = durations.setdefault(w["phase"], {"window_count": 0, "total_duration_seconds": 0.0})
+        d["window_count"] += 1
+        d["total_duration_seconds"] += (w["end_ts"] - w["start_ts"]).total_seconds()
+    tokens = assign_usage_to_phase_windows(usage_events, windows)
+
+    out = {}
+    for phase in set(durations) | set(tokens):
+        key = phase or "(unassigned)"
+        row = finalize_token_bucket(tokens.get(phase, default_token_bucket()))
+        row["window_count"] = durations.get(phase, {}).get("window_count", 0)
+        row["total_duration_seconds"] = durations.get(phase, {}).get("total_duration_seconds")
+        out[key] = row
+    return out
+
+
+def report_by_window(valid_events):
+    """孫5 §1 --window: `quota.sample` events grouped by `window_id`
+    (plan §8.5 — the 5-hour reset boundary's identifier). `pr_number`
+    on a quota.sample comes straight from the caller-supplied field
+    when present, but ADR-001 §2.1 observed statusLine's own `pr` key
+    populated in 0/66 real samples — so `prs_overlapping` ALSO includes
+    PRs found via the same best-effort time-range overlap
+    `pr_five_hour_window_completion` uses, kept in a separate key so a
+    reader can tell direct linkage from inferred overlap apart."""
+    windows = {}
+    for e in valid_events:
+        if e.get("event_type") != "quota.sample":
+            continue
+        wid = e.get("window_id")
+        if wid is None:
+            continue
+        w = windows.setdefault(wid, {
+            "samples": 0, "five_hour_used_pct_max": None, "seven_day_used_pct_max": None,
+            "first_ts": None, "last_ts": None, "prs_direct": set(),
+        })
+        w["samples"] += 1
+        for pct_field, out_field in (("five_hour_used_pct", "five_hour_used_pct_max"), ("seven_day_used_pct", "seven_day_used_pct_max")):
+            pct = e.get(pct_field)
+            if isinstance(pct, (int, float)):
+                w[out_field] = pct if w[out_field] is None else max(w[out_field], pct)
+        ts = e.get("ts")
+        if isinstance(ts, str):
+            if w["first_ts"] is None or ts < w["first_ts"]:
+                w["first_ts"] = ts
+            if w["last_ts"] is None or ts > w["last_ts"]:
+                w["last_ts"] = ts
+        if e.get("pr_number") is not None:
+            w["prs_direct"].add(e["pr_number"])
+
+    pr_ranges = {}
+    for e in valid_events:
+        pr = e.get("pr_number")
+        ts = parse_ts(e.get("ts"))
+        if pr is None or ts is None:
+            continue
+        lo, hi = pr_ranges.get(pr, (ts, ts))
+        pr_ranges[pr] = (min(lo, ts), max(hi, ts))
+
+    out = {}
+    for wid, w in windows.items():
+        window_start, window_end = parse_ts(w["first_ts"]), parse_ts(w["last_ts"])
+        prs_overlap = sorted(
+            pr for pr, (lo, hi) in pr_ranges.items()
+            if window_start is not None and window_end is not None and lo <= window_end and hi >= window_start
+        )
+        out[wid] = {
+            "window_id": wid,
+            "samples": w["samples"],
+            "five_hour_used_pct_max": w["five_hour_used_pct_max"],
+            "seven_day_used_pct_max": w["seven_day_used_pct_max"],
+            "first_sample_ts": w["first_ts"],
+            "last_sample_ts": w["last_ts"],
+            "prs_direct_link": sorted(w["prs_direct"]),
+            "prs_time_overlap": prs_overlap,
+            "blocked_seconds": None,
+            "blocked_note": "block.start/block.end are schema-defined but not emitted by any caller yet (計画書16章) — always null here",
+        }
+    return out
+
+
+def find_approved_pr_numbers_in_month(valid_events, month):
+    run_to_pr = {
+        e.get("run_id"): e.get("pr_number")
+        for e in valid_events
+        if e.get("event_type") == "pr.bind" and e.get("run_id") and e.get("pr_number") is not None
+    }
+    approved = set()
+    for e in valid_events:
+        if e.get("event_type") != "review.round" or e.get("verdict") != "approved":
+            continue
+        ts = e.get("ts")
+        if not isinstance(ts, str) or not ts.startswith(month):
+            continue
+        pr = e.get("pr_number") or run_to_pr.get(e.get("run_id"))
+        if pr is not None:
+            approved.add(pr)
+    return approved
+
+
+def report_month_process_efficiency(valid_events, month):
+    """孫5 §1 --month: process efficiency for PRs *approved* within this
+    UTC month (identified by a `review.round` with verdict "approved"
+    whose own timestamp falls in the month) — a PR's full event set
+    (which may itself span a month boundary) is used for its own
+    per-PR numbers, matching how `report --pr` already resolves one
+    PR's events."""
+    per_pr = []
+    for pr in sorted(find_approved_pr_numbers_in_month(valid_events, month)):
+        pr_events = events_for_pr(valid_events, pr)
+        detail = pr_review_summary(pr_events)
+        completion, _ = pr_five_hour_window_completion(pr_events, valid_events)
+        per_pr.append({"pr_number": pr, "five_hour_window_completion": completion, **detail})
+
+    def avg(key):
+        vals = [p[key] for p in per_pr if isinstance(p.get(key), (int, float))]
+        return (sum(vals) / len(vals)) if vals else None
+
+    return {
+        "approved_pr_count": len(per_pr),
+        "avg_cash_cost_usd": avg("cash_cost_usd"),
+        "avg_review_round_count": avg("review_round_count"),
+        "avg_human_intervention_count": avg("human_intervention_count"),
+        "avg_duration_seconds": avg("duration_seconds"),
+        "five_hour_window_completion_breakdown": {
+            v: sum(1 for p in per_pr if p["five_hour_window_completion"] == v)
+            for v in ("yes", "no", "unknown")
+        },
+        "per_pr": per_pr,
+    }
+
+
+def report_month_cash_and_capacity(valid_events, month):
+    """孫5 §1 --month: cash cost (metered API — currently only DeepSeek,
+    `cost_basis: "estimated"`) and capacity (Claude subscription quota
+    consumption) are reported as SEPARATE sections, never summed —
+    plan §16 / 孫5プロンプト §1 "Cash cost と Capacity cost を混ぜない"
+    is a hard requirement, not a style preference: a flat-rate
+    subscription has no per-message dollar figure to add to the
+    metered total."""
+    usage_month = [
+        e for e in valid_events
+        if e.get("event_type") == "usage.message" and isinstance(e.get("ts"), str) and e["ts"].startswith(month)
+    ]
+    cash_cost, has_cash = 0.0, False
+    capacity_message_count = 0
+    for e in usage_month:
+        if e.get("cost_basis") == "subscription":
+            capacity_message_count += 1
+            continue
+        cost = e.get("cost_estimate_usd")
+        if isinstance(cost, (int, float)):
+            cash_cost += cost
+            has_cash = True
+
+    quota_month = [
+        e for e in valid_events
+        if e.get("event_type") == "quota.sample" and isinstance(e.get("ts"), str) and e["ts"].startswith(month)
+    ]
+    five_hour_vals = [e["five_hour_used_pct"] for e in quota_month if isinstance(e.get("five_hour_used_pct"), (int, float))]
+    seven_day_vals = [e["seven_day_used_pct"] for e in quota_month if isinstance(e.get("seven_day_used_pct"), (int, float))]
+    distinct_windows = {e["window_id"] for e in quota_month if e.get("window_id")}
+
+    return {
+        "usage_message_count": len(usage_month),
+        "cash_cost_usd": cash_cost if has_cash else None,
+        "capacity_message_count": capacity_message_count,
+        "quota_sample_count": len(quota_month),
+        "five_hour_used_pct_max": max(five_hour_vals) if five_hour_vals else None,
+        "seven_day_used_pct_max": max(seven_day_vals) if seven_day_vals else None,
+        "distinct_five_hour_windows": len(distinct_windows),
+    }
+
+
 def _report_reconcile(paths, month, provider_totals, as_json):
     """`ocw-meter report --reconcile` (孫3 §3): model別のtranscript由来
     トークン合計・推定費用を出し、`--provider-total model=tokens` で
@@ -1419,17 +1914,25 @@ def _report_reconcile(paths, month, provider_totals, as_json):
     ADR-001 §2.2 の既知ギャップを毎回 `known_gaps` として併記する
     （「全部取れている」と読める出力を出さない）。"""
     totals_by_model = {}
+    malformed = 0
+    month_completeness = {"complete": 0, "partial": 0, "unknown": 0}
     for obj, _raw, error in iter_stored_events(paths):
-        if error or obj.get("event_type") != "usage.message":
+        if error:
+            malformed += 1
+            continue
+        if obj.get("event_type") != "usage.message":
             continue
         ts = obj.get("ts")
         if not isinstance(ts, str) or not ts.startswith(month):
             continue
+        c = obj.get("completeness")
+        month_completeness[c if c in month_completeness else "unknown"] += 1
         model = obj.get("model") or "(unknown)"
         bucket = totals_by_model.setdefault(model, {
             "messages": 0, "input_tokens": 0, "cache_read_input_tokens": 0,
             "cache_creation_input_tokens": 0, "output_tokens": 0,
             "cost_estimate_usd": 0.0, "has_cost": False, "cost_basis_seen": set(),
+            "price_versions_seen": set(),
         })
         bucket["messages"] += 1
         for field in ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens", "output_tokens"):
@@ -1443,6 +1946,9 @@ def _report_reconcile(paths, month, provider_totals, as_json):
         basis = obj.get("cost_basis")
         if basis:
             bucket["cost_basis_seen"].add(basis)
+        price_version = obj.get("price_table_version")
+        if price_version:
+            bucket["price_versions_seen"].add(price_version)
 
     models_out = {}
     for model, bucket in totals_by_model.items():
@@ -1481,9 +1987,26 @@ def _report_reconcile(paths, month, provider_totals, as_json):
                 "cost_estimate_usd": None, "cost_basis": None,
             }
 
+    total_messages = sum(m["messages"] for m in models_out.values())
+    price_versions_all = set()
+    for bucket in totals_by_model.values():
+        price_versions_all |= bucket["price_versions_seen"]
+    coverage_text = (
+        f"{total_messages} usage.message event(s) for {month}; per-model coverage_ratio requires "
+        "--provider-total <model>=<tokens>"
+        if total_messages else f"no usage.message events for {month} — run 'ocw-meter ingest' first"
+    )
+
     summary = {
         "month": month,
         "cost_basis": "estimated — not an invoice",
+        "coverage": coverage_text,
+        "price_table": ", ".join(sorted(price_versions_all)) if price_versions_all else "(none applied)",
+        "completeness": month_completeness,
+        "quarantined_lines": count_quarantine_lines(paths),
+        "transcript_lines_quarantined": count_ingest_transcript_quarantine_lines(paths),
+        "meter_error_diagnostics": count_meter_errors(paths),
+        "malformed_unvalidated_lines": malformed,
         "known_gaps": (
             "deepseek-v4-flash はtranscriptに一切記録されない（実測カバー率0%、計画書5.10）。"
             "deepseek-v4-pro のtranscriptカバー率は実測で約89%（ADR-001 §2.2）。"
@@ -1519,6 +2042,25 @@ def _report_reconcile(paths, month, provider_totals, as_json):
         else:
             print("    provider_total:       (not supplied — pass --provider-total <model>=<tokens>)")
             print("    coverage:             unknown")
+    print_footer_text(
+        {
+            "completeness": month_completeness,
+            "quarantined_lines": summary["quarantined_lines"],
+            "transcript_lines_quarantined": summary["transcript_lines_quarantined"],
+            "meter_error_diagnostics": summary["meter_error_diagnostics"],
+            "malformed_unvalidated_lines": malformed,
+        },
+        {
+            "coverage": coverage_text,
+            "price_table": summary["price_table"],
+            "cost_basis": summary["cost_basis"],
+            "cost_estimate_usd": (
+                f"${sum(m['cost_estimate_usd'] or 0 for m in models_out.values()):.2f} (estimated — not an invoice)"
+                if any(m["cost_estimate_usd"] is not None for m in models_out.values()) else "null"
+            ),
+        },
+        total_messages,
+    )
     print(f"known_gaps:    {summary['known_gaps']}")
     return 0
 
@@ -1567,11 +2109,40 @@ def pr_five_hour_window_completion(pr_events, all_events):
     return ("yes" if len(distinct) == 1 else "no"), distinct
 
 
+def _print_grouped_report(title, group_label, groups, as_json, storage_root_str, footer_completeness, footer_cost, total, extra_top=None):
+    """Shared text/JSON printer for the --model/--role/--phase/--window
+    grouped views (孫5 §1): each is "a dict of rows keyed by group name"
+    plus the mandatory plan §10.4 footer, so one function renders all of
+    them instead of four near-identical print blocks."""
+    summary = {"storage_root": storage_root_str, group_label: groups, **(extra_top or {}), **footer_completeness, **footer_cost}
+    if as_json:
+        print(json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True))
+        return 0
+    print(f"storage root:  {storage_root_str}")
+    for key, value in (extra_top or {}).items():
+        print(f"filter:        {key}={value}")
+    print(f"{title}:")
+    if not groups:
+        print("  (no data)")
+    for key, row in sorted(groups.items(), key=lambda kv: str(kv[0])):
+        print(f"  {key}:")
+        for field, value in row.items():
+            if field in ("provider", "model"):
+                continue
+            if field == "cost_estimate_usd":
+                value = f"${value:.4f}" if isinstance(value, (int, float)) else "null"
+            print(f"    {field}: {value}")
+    print_footer_text(footer_completeness, footer_cost, total)
+    return 0
+
+
 def cmd_report(args):
     filter_pr = None
     as_json = False
     reconcile = False
     month = None
+    month_flag_present = False
+    view = None
     provider_totals = {}
     i = 0
     while i < len(args):
@@ -1588,12 +2159,16 @@ def cmd_report(args):
         elif token == "--reconcile":
             reconcile = True
             i += 1
+        elif token in ("--phase", "--model", "--role", "--window"):
+            view = token[2:]
+            i += 1
         elif token == "--month":
-            if i + 1 >= len(args):
-                print("error: --month requires a value (YYYY-MM)", file=sys.stderr)
-                return 1
-            month = args[i + 1]
-            i += 2
+            month_flag_present = True
+            if i + 1 < len(args) and re.match(r"^\d{4}-\d{2}$", args[i + 1]):
+                month = args[i + 1]
+                i += 2
+            else:
+                i += 1
         elif token == "--provider-total":
             if i + 1 >= len(args):
                 print("error: --provider-total requires a value (<model>=<tokens>)", file=sys.stderr)
@@ -1613,6 +2188,13 @@ def cmd_report(args):
             print(f"error: unknown report flag: {token}", file=sys.stderr)
             return 1
 
+    if reconcile and view is not None:
+        print(f"error: --reconcile cannot be combined with --{view}", file=sys.stderr)
+        return 1
+    if month_flag_present and not reconcile and view is not None:
+        print(f"error: --month cannot be combined with --{view} (it can be combined with --reconcile, or used standalone)", file=sys.stderr)
+        return 1
+
     root = storage_root()
     if in_git_worktree(root):
         print(f"error: OCW_METER_HOME ({root}) resolves inside a Git worktree; refusing to operate", file=sys.stderr)
@@ -1620,24 +2202,9 @@ def cmd_report(args):
     paths = ensure_storage(root)
 
     if reconcile:
-        if month is None:
-            month = datetime.now(timezone.utc).strftime("%Y-%m")
-        elif not re.match(r"^\d{4}-(0[1-9]|1[0-2])$", month):
-            # PR #27 review round 1 finding 6a: `_report_reconcile` used
-            # to filter with `ts.startswith(month)`, so a malformed value
-            # like "2026" silently aggregated the WHOLE year under a
-            # report that displays it as if it were one month, and
-            # "07-2026" silently matched zero events. `report` is the
-            # fail-loud half of this CLI (plan §10.1) — a garbage filter
-            # producing a garbage-but-plausible-looking number is exactly
-            # the failure mode that policy exists to prevent.
-            #
-            # Round 2 finding "持ち越し6a": the first fix only checked
-            # digit-count shape (`\d{4}-\d{2}`), so "2026-13"/"2026-00"
-            # still passed through and silently matched zero events —
-            # the exact same failure mode, just moved to the month
-            # digits. The month component is now restricted to 01-12.
-            print(f"error: --month must be YYYY-MM with a valid month (01-12), got: {month!r}", file=sys.stderr)
+        month, err = normalize_month_arg(month)
+        if err:
+            print(err, file=sys.stderr)
             return 1
         return _report_reconcile(paths, month, provider_totals, as_json)
 
@@ -1648,18 +2215,38 @@ def cmd_report(args):
         else:
             valid_events.append(obj)
 
+    if month_flag_present and view is None:
+        # 孫5 §1 --month (standalone, i.e. NOT --reconcile): cash cost /
+        # capacity cost / process efficiency, kept separate (plan §16).
+        month, err = normalize_month_arg(month)
+        if err:
+            print(err, file=sys.stderr)
+            return 1
+        return _report_month_standalone(paths, valid_events, malformed, month, as_json)
+
     if filter_pr is not None:
-        bound_run_ids = {
-            e.get("run_id")
-            for e in valid_events
-            if e.get("event_type") == "pr.bind" and e.get("pr_number") == filter_pr and e.get("run_id")
-        }
-        filtered = [
-            e for e in valid_events
-            if e.get("pr_number") == filter_pr or e.get("run_id") in bound_run_ids
-        ]
+        filtered = events_for_pr(valid_events, filter_pr)
     else:
         filtered = valid_events
+
+    usage_events = [e for e in filtered if e.get("event_type") == "usage.message"]
+
+    if view is not None:
+        footer_completeness = completeness_footer(paths, filtered, malformed)
+        footer_cost = usage_cost_footer(usage_events)
+        extra_top = {"filter_pr": filter_pr} if filter_pr is not None else {}
+        if view == "model":
+            groups = report_by_model(usage_events)
+        elif view == "role":
+            groups = report_by_role(filtered)
+        elif view == "phase":
+            groups = report_by_phase(filtered, usage_events)
+        elif view == "window":
+            groups = report_by_window(valid_events if filter_pr is None else filtered)
+        return _print_grouped_report(
+            f"by {view}", f"by_{view}", groups, as_json, str(paths.root),
+            footer_completeness, footer_cost, len(filtered), extra_top,
+        )
 
     five_hour_window_completion, five_hour_window_ids_seen = (
         pr_five_hour_window_completion(filtered, valid_events) if filter_pr is not None else (None, [])
@@ -1669,62 +2256,26 @@ def cmd_report(args):
     for e in filtered:
         by_type[e.get("event_type")] = by_type.get(e.get("event_type"), 0) + 1
 
-    completeness_counts = {"complete": 0, "partial": 0, "unknown": 0}
-    for e in filtered:
-        c = e.get("completeness")
-        completeness_counts[c if c in completeness_counts else "unknown"] += 1
-
     total = len(filtered)
-    quarantined = count_quarantine_lines(paths)
-    transcript_quarantined = count_ingest_transcript_quarantine_lines(paths)
-    meter_errors = count_meter_errors(paths)
-
-    usage_events = [e for e in filtered if e.get("event_type") == "usage.message"]
-    if usage_events:
-        cost_sum, has_cost = 0.0, False
-        price_versions, cost_bases = set(), set()
-        for e in usage_events:
-            cost = e.get("cost_estimate_usd")
-            if isinstance(cost, (int, float)):
-                cost_sum += cost
-                has_cost = True
-            if e.get("price_table_version"):
-                price_versions.add(e["price_table_version"])
-            if e.get("cost_basis"):
-                cost_bases.add(e["cost_basis"])
-        coverage = (
-            f"{len(usage_events)} usage.message event(s); run "
-            "'ocw-meter report --reconcile' for model別 coverage against provider totals"
-        )
-        price_table_summary = ", ".join(sorted(price_versions)) if price_versions else "(none applied)"
-        cost_basis_summary = ", ".join(sorted(cost_bases)) if cost_bases else "(none)"
-        cost_estimate_summary = f"${cost_sum:.2f} (estimated — not an invoice)" if has_cost else "null"
-    else:
-        coverage = "no usage.message events yet — run 'ocw-meter ingest'"
-        price_table_summary = "not applicable (no cost data ingested yet)"
-        cost_basis_summary = "not applicable (no cost data ingested yet)"
-        cost_estimate_summary = "null"
+    footer_completeness = completeness_footer(paths, filtered, malformed)
+    footer_cost = usage_cost_footer(usage_events)
 
     summary = {
         "storage_root": str(paths.root),
         "filter_pr": filter_pr,
         "total_events": total,
         "by_event_type": by_type,
-        "completeness": completeness_counts,
-        "malformed_unvalidated_lines": malformed,
-        "quarantined_lines": quarantined,
-        "transcript_lines_quarantined": transcript_quarantined,
-        "meter_error_diagnostics": meter_errors,
-        "coverage": coverage,
-        "price_table": price_table_summary,
-        "cost_basis": cost_basis_summary,
-        "cost_estimate_usd": cost_estimate_summary,
+        **footer_completeness,
+        **footer_cost,
     }
     if filter_pr is not None:
         # plan §8.5 / 孫4プロンプト §2: same-5-hour-window completion.
         # Only meaningful with a PR filter — it's a per-PR judgment.
         summary["five_hour_window_completion"] = five_hour_window_completion
         summary["five_hour_window_ids_seen"] = five_hour_window_ids_seen
+        # 孫5 §1: round/human-intervention/final-result/cash+capacity
+        # cost detail for this one PR.
+        summary["pr_detail"] = pr_review_summary(filtered)
 
     if as_json:
         print(json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True))
@@ -1736,27 +2287,84 @@ def cmd_report(args):
         for event_type, count in sorted(by_type.items(), key=lambda kv: (kv[0] or "")):
             print(f"  {event_type or '(none)'}: {count}")
 
-        def pct(n):
-            return (100.0 * n / total) if total else 0.0
-
-        print(
-            "completeness: "
-            f"complete {pct(completeness_counts['complete']):.1f}% / "
-            f"partial {pct(completeness_counts['partial']):.1f}% / "
-            f"unknown {pct(completeness_counts['unknown']):.1f}%"
-        )
-        print(f"quarantined:   {quarantined} lines (events this meter wrote)")
-        print(f"transcript lines quarantined (ingest source data): {transcript_quarantined} lines")
-        print(f"meter.error diagnostics (state/meter-errors.jsonl): {meter_errors} lines")
-        print(f"malformed (not yet quarantined; run 'ocw-meter validate'): {malformed} lines")
-        print(f"coverage:      {summary['coverage']}")
-        print(f"price_table:   {summary['price_table']}")
-        print(f"cost_basis:    {summary['cost_basis']}")
-        print(f"cost_estimate: {summary['cost_estimate_usd']}")
+        print_footer_text(footer_completeness, footer_cost, total)
         if filter_pr is not None:
             ids_str = ", ".join(five_hour_window_ids_seen) if five_hour_window_ids_seen else "(none)"
             print(f"five_hour_window_completion: {five_hour_window_completion} (window_ids seen: {ids_str})")
+            detail = summary["pr_detail"]
+            print(f"duration_seconds: {detail['duration_seconds']}")
+            print(f"review_round_count: {detail['review_round_count']}")
+            for r in detail["review_rounds"]:
+                print(f"  round {r['round']}: verdict={r['verdict']} findings={r['findings_count']}")
+            print(f"human_intervention_count: {detail['human_intervention_count']}")
+            print(f"final_result: {detail['final_result']}")
+            cash_str = f"${detail['cash_cost_usd']:.4f}" if isinstance(detail["cash_cost_usd"], (int, float)) else "null"
+            print(f"cash_cost_usd: {cash_str}")
+            print(f"capacity_message_count (claude subscription, no dollar figure): {detail['capacity_message_count']}")
 
+    return 0
+
+
+def _report_month_standalone(paths, valid_events, malformed, month, as_json):
+    """`ocw-meter report --month [YYYY-MM]` (孫5 §1, NOT --reconcile):
+    cash cost / capacity cost / process efficiency for one UTC month,
+    always kept in separate top-level keys — see
+    `report_month_cash_and_capacity`'s docstring for why they are never
+    summed. Quality guardrail has no collected data in this phase (plan
+    §16), so that key is always the literal string below, never
+    fabricated from something else."""
+    month_events = [e for e in valid_events if isinstance(e.get("ts"), str) and e["ts"].startswith(month)]
+    footer_completeness = completeness_footer(paths, month_events, malformed)
+    usage_month = [e for e in month_events if e.get("event_type") == "usage.message"]
+    footer_cost = usage_cost_footer(usage_month)
+
+    summary = {
+        "month": month,
+        "cash_cost": report_month_cash_and_capacity(valid_events, month),
+        "process_efficiency": report_month_process_efficiency(valid_events, month),
+        "quality_guardrail": "未計測 — 第一段階では収集項目が無い（計画書16章）。defect.escaped 等のevent_typeを将来追加可能",
+        **footer_completeness,
+        **footer_cost,
+    }
+    # cash_cost/capacity are both inside report_month_cash_and_capacity's
+    # dict already; split them into their own top-level keys so a reader
+    # (and this report's own --json consumer) never has to guess which
+    # sub-fields are "cash" vs "capacity".
+    cash_and_capacity = summary.pop("cash_cost")
+    summary["cash_cost"] = {
+        "usage_message_count": cash_and_capacity["usage_message_count"],
+        "cash_cost_usd": cash_and_capacity["cash_cost_usd"],
+    }
+    summary["capacity"] = {
+        "capacity_message_count": cash_and_capacity["capacity_message_count"],
+        "quota_sample_count": cash_and_capacity["quota_sample_count"],
+        "five_hour_used_pct_max": cash_and_capacity["five_hour_used_pct_max"],
+        "seven_day_used_pct_max": cash_and_capacity["seven_day_used_pct_max"],
+        "distinct_five_hour_windows": cash_and_capacity["distinct_five_hour_windows"],
+    }
+
+    if as_json:
+        print(json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True))
+        return 0
+
+    print(f"month:         {summary['month']}")
+    print("cash cost (metered API — currently DeepSeek only):")
+    cash_str = f"${summary['cash_cost']['cash_cost_usd']:.2f}" if isinstance(summary["cash_cost"]["cash_cost_usd"], (int, float)) else "null"
+    print(f"  usage.message count: {summary['cash_cost']['usage_message_count']}")
+    print(f"  cash_cost_usd:       {cash_str} (estimated — not an invoice)")
+    print("capacity cost (Claude subscription quota — never summed with cash cost):")
+    for field, value in summary["capacity"].items():
+        print(f"  {field}: {value}")
+    pe = summary["process_efficiency"]
+    print(f"process efficiency (approved PRs in {month}):")
+    print(f"  approved_pr_count: {pe['approved_pr_count']}")
+    print(f"  avg_cash_cost_usd: {pe['avg_cash_cost_usd']}")
+    print(f"  avg_review_round_count: {pe['avg_review_round_count']}")
+    print(f"  avg_human_intervention_count: {pe['avg_human_intervention_count']}")
+    print(f"  avg_duration_seconds: {pe['avg_duration_seconds']}")
+    print(f"  five_hour_window_completion_breakdown: {pe['five_hour_window_completion_breakdown']}")
+    print(f"quality_guardrail: {summary['quality_guardrail']}")
+    print_footer_text(footer_completeness, footer_cost, len(month_events))
     return 0
 
 
