@@ -133,10 +133,12 @@ assistant行 98,230行 → distinct message.id 39,888（**59.4%が重複**）。
 
 **7月請求 $58.80 との比較**:
 - transcript推定: $46.78
-- ギャップ: $12.02（21%不足）の内訳（推定）:
-  - v4-pro未カバー分（11%）: 約 $5.8 (= $46.78 × 11/89)
-  - v4-flash分（0%カバー）: 約 $6.2（= $12.02 − $5.8）。計画書 §5.10 の「107M tokens ≒ 最大 $15、大半がhitなら $1未満」の中間値と整合
-  - 残差（streaming中断等）: 上記でほぼ閉じるが、正確な内訳は管理画面との突合が必要
+- ギャップ: $12.02（21%不足）。以下の既知要因で説明可能だが、正確な内訳は管理画面との突合が必要:
+  - v4-pro未カバー分（transcriptに現れない約11%）: 仮にproportionalとすると約 $5.8 (= $46.78 × 11/89)
+  - v4-flash分（transcriptカバー率0%）: 計画書 §5.10 の「107M tokens」から試算すると、hit率次第で $1未満〜最大$15
+  - streaming中断・retry課金分: 定量不可
+  - 複数マシン・複数プロジェクトの集約誤差: 定量不可
+  - **結論**: ギャップの大部分は v4-pro未カバー + v4-flash で説明可能だが、突合による検証なしに「閉じている」とは言えない。孫3で改めて突合する
 
 ### 2.3 P2: DeepSeek 生リクエストprobe（スクリプト作成済み・人間実行待ち）
 
@@ -170,16 +172,16 @@ probe期間中（2026-08-01）に5時間枠への到達は発生しなかった�
 以下は本方式では**現時点で取得できない、または未確認**の項目である。曖昧にせず明示する。
 「原理的に取得不可」と「未確認（P2/P4/P5待ち）」を区別して記載する。
 
-| 項目 | 理由 |
-|---|---|
-| `deepseek-v4-flash` の全usage | Claude Code の背景ユーティリティ呼び出し（タイトル生成・要約等）とサブエージェントは transcript に**一切記録されない**（計画書5.10） |
-| streaming中断・retryで課金されたリクエスト | transcript には「usage付きの完成メッセージ」としてしか現れない（計画書5.4） |
-| APIキー・認証ヘッダの値 | transcript に記録されない。meter も一切触れない |
-| プロンプト全文・モデル応答全文 | transcript の `message.content` は意図的に読まない |
-| `context_window.used_percentage` の実値 | 取得可能な場合が多い（59/66非null）が、nullのケースもある（7/66）。null-safeな処理が必要 |
-| 5時間枠到達による待機時間 | **P5未観測**。原理的には `agent_status: "blocked"` と statusLine の組み合わせで検出可能だが、実データ未収集のため第一段階では best-effort |
-| DeepSeek管理画面のリアルタイム値 | APIが存在しない（月次請求のみ） |
-| reasoning（thinking）トークン | **P2未了のため未確認**。transcriptの `usage` に `reasoning_tokens` フィールドが存在するかはP2後に判明。現時点では `reasoning_tokens: null` |
+| 項目 | 区分 | 理由 |
+|---|---|---|---|
+| `deepseek-v4-flash` の全usage | **原理的不可** | Claude Code の背景ユーティリティ呼び出し（タイトル生成・要約等）とサブエージェントは transcript に**一切記録されない**（計画書5.10） |
+| streaming中断・retryで課金されたリクエスト | **原理的不可** | transcript には「usage付きの完成メッセージ」としてしか現れない（計画書5.4） |
+| APIキー・認証ヘッダの値 | **原理的不可**（意図的） | transcript に記録されない。meter も一切触れない |
+| プロンプト全文・モデル応答全文 | **原理的不可**（意図的） | transcript の `message.content` は意図的に読まない |
+| DeepSeek管理画面のリアルタイム値 | **原理的不可** | APIが存在しない（月次請求のみ） |
+| `context_window.used_percentage` の実値 | **条件付き可** | 取得可能な場合が多い（59/66非null）が、nullのケースもある（7/66）。null-safeな処理が必要 |
+| 5時間枠到達による待機時間 | **未確認**（P5待ち） | 原理的には `agent_status: "blocked"` と statusLine の組み合わせで検出可能だが、実データ未収集のため第一段階では best-effort |
+| reasoning（thinking）トークン | **未確認**（P2待ち） | transcriptの `usage` に `reasoning_tokens` フィールドが存在するかはP2後に判明。現時点では `reasoning_tokens: null` |
 
 ---
 
