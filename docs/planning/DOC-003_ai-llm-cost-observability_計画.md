@@ -689,6 +689,23 @@ cost_basis: estimated — not an invoice
 - **`/autopilot` は使わない。** `/spawn <N>` → 人間がPRを確認 → マージ → `/check` の逐次進行とする
   （依頼書591行「後続PRを最初から固定しすぎない」に準拠）
 
+### spawn時のペイン構成（孫1以降・必須）
+
+孫0は implementer が `claude-ds`（DeepSeek）で実行された。**孫1以降は implementer を
+Anthropic本家の `claude` で、Sonnet + auto permission mode で起動する。**
+
+```bash
+OCW_IMPLEMENTER_COMMAND='claude --model sonnet --permission-mode auto' \
+  ocw -H <孫ブランチのslug> ai/llm-cost-observability
+```
+
+- commander / reviewer は現行のまま（reviewerは `claude` = 既定モデル Opus）
+- 環境に `OCW_IMPLEMENTER_COMMAND=claude-ds` が export されているため、
+  **上記のように毎回明示的に上書きしないと DeepSeek に戻る**
+- 注意: 孫0と孫1以降で implementer のモデル構成が異なる。
+  これは基盤構築フェーズの話であり、**第15章のベースライン計測（実PR 5〜10本）の期間中は
+  構成を固定すること**。計測開始時点の構成をベースラインレポートに記録する
+
 ---
 
 ## 13. Test strategy
