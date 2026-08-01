@@ -149,24 +149,52 @@ ocw-meter event <event_type> [--key value ...]
 # PRの後付けbind（run_id → PR番号）
 ocw-meter bind-pr --run <run_id> --pr <n> [--url <url>]
 
+# ~/.claude/projects/*/*.jsonl を走査し usage.message イベントを生成（冪等・増分）
+ocw-meter ingest [--since <rfc3339-ts>]
+
 # 保存済みイベントのschema検証。壊れた行はquarantineへ隔離
 ocw-meter validate [--file <path>]
 
-# イベント件数・completeness・coverageの要約（骨格。費用集計は後続フェーズ）
+# イベント件数・completeness・coverage・推定費用の要約
 ocw-meter report [--pr <n>] [--json]
+
+# model別トークン集計・推定費用・provider管理画面との突合（coverage比率）
+ocw-meter report --reconcile [--month <YYYY-MM>] [--provider-total <model>=<tokens> ...] [--json]
 ```
 
 | サブコマンド | 失敗時の挙動 |
 |---|---|
 | `event` / `bind-pr` | **常に exit 0**。stderrに1行warnのみ。本番フローを止めない |
-| `validate` / `report` | 失敗したら非ゼロで落ちる（壊れたデータを黙って集計しない） |
+| `validate` / `report` / `ingest` | 失敗したら非ゼロで落ちる（壊れたデータを黙って集計しない） |
+
+**`ingest` の要点（`docs/planning/DOC-003_..._計画.md` 孫3プロンプト / ADR-001 §8 準拠）:**
+
+- **`message.id` で重複排除する。** 1レスポンスがcontent blockごとに複数行へ分割追記されるため
+  （実測: assistant行の59.4%がmessage.id重複、ADR-001 §2.2）、素朴に合計すると2倍以上の過大計上になる。
+  同一message.idの行が複数あれば**ドキュメント順で最後の行**（usage/stop_reasonが最も完全）を採用する
+- **冪等**。`state/ingest-cursor.json` に transcriptファイルごとの (inode, size, mtime, offset) を保持し、
+  差分だけ読む。カーソルは書き込み成功後にのみ保存されるため、途中で中断しても再実行で結果が変わらない。
+  inode変化・サイズ縮小（ローテート/切り詰め）を検出したら該当ファイルを頭から読み直す
+  （重複は message.id キーで自然に吸収される）
+- **`message.content` には一切触れない。** 抽出するのは `id`/`model`/`usage`/`stop_reason`/`timestamp`/
+  `sessionId`/`gitBranch`/`cwd`/`isSidechain`/`effort` のみ
+- 費用推定は `bin/prices/*.json` から。**Anthropicモデル（`claude-*`）は定額契約のため
+  `cost_estimate_usd: null` / `cost_basis: "subscription"`**（API単価には換算しない）。
+  価格表に無いモデルは `cost_estimate_usd: null` / `completeness: "unknown"`
+- role/PR/run_idの帰属は Herdr (`herdr pane list`) とこのmeter自身のローカルイベント
+  （`run.start`/`run.end`/`pr.bind`）・transcriptの `pr-link` 行から解決する。どれも失敗したら
+  `role: "unknown"` / `pr_number: null` / `run_id: null`。**推測で埋めない**
+- 過去に書き込んだイベントの `cost_estimate_usd` は、価格表を追加・更新しても**再計算されない**
 
 **保存先と環境変数:**
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `OCW_METER_HOME` | `~/.local/state/ocw-meter` | 保存先ルート。**git worktree内を指すと拒否される**（誤commit防止）。`event`/`bind-pr`は書き込みをスキップして exit 0（設定ミスが誰にも気づかれないままにならないよう、既定の保存先へ `meter.error` を1件/日で記録し、fallbackした旨をstderrに警告する）、`validate`/`report`は非ゼロで停止する |
+| `OCW_METER_HOME` | `~/.local/state/ocw-meter` | 保存先ルート。**git worktree内を指すと拒否される**（誤commit防止）。`event`/`bind-pr`は書き込みをスキップして exit 0（設定ミスが誰にも気づかれないままにならないよう、既定の保存先へ `meter.error` を1件/日で記録し、fallbackした旨をstderrに警告する）、`validate`/`report`/`ingest`は非ゼロで停止する |
 | `OCW_METER_RAW` | `0` | 予約済み（将来フェーズのopt-in raw保存用）。現時点のサブコマンドでは未使用 |
+| `OCW_METER_CLAUDE_PROJECTS_DIR` | `~/.claude/projects` | `ingest` がtranscriptを探すディレクトリ |
+| `OCW_METER_PRICE_DIR` | `<このファイルのあるディレクトリ>/prices` | `ingest` が価格表(`*.json`)を探すディレクトリ |
+| `OCW_METER_INGEST_USE_GH` | `0` | `1` にすると、PR番号未解決時に `gh pr list --head <branch>` へフォールバックする（既定オフ = ネットワークを一切叩かない） |
 
 保存レイアウト: `events/YYYY-MM-DD.jsonl`（基本はappend-only, mode 600。**例外**: 同一`idempotency_key`を再送すると
 後勝ち(last-write-wins)でその日のファイル内の該当行をmkstemp+os.replaceで原子的に置き換える）/
@@ -181,13 +209,22 @@ GitHub token形式（`ghp_...` 等 / `github_pat_...`）に一致する値、キ
 `api_key` / `token` / `secret` / `password` / `authorization` に一致するものは保存前に `[REDACTED]` へ置換される。
 この置換は保存物だけでなく、meterが出す例外・警告メッセージにも適用される。
 
-**このフェーズでの既知の限界**:
-- `ingest`（DeepSeek transcript取り込み）と `snapshot-quota`（Claude利用枠取得）はまだ実装されていない。
-  `report` の費用・coverage列はプレースホルダで、実データは後続フェーズで入る
+**既知の限界（カバレッジは「全部取れている」ものではない — 計画書5.10 / ADR-001 §2.2 実測）**:
+- **`deepseek-v4-flash` はtranscriptに一切記録されない（実測カバー率 0%）。** タイトル生成・要約等の
+  背景ユーティリティ呼び出しやサブエージェント（`CLAUDE_CODE_SUBAGENT_MODEL=deepseek-v4-flash`）分は
+  `~/.claude/projects/*.jsonl` に現れないため、`ingest` では原理的に取得できない
+- **`deepseek-v4-pro` のtranscriptカバー率は実測で約89%。** 残り約11%は他マシン・別期間・
+  streaming中断/retryで課金されたが記録されない分などが要因（正確な内訳は provider管理画面との
+  突合が必要 — `ocw-meter report --reconcile --provider-total <model>=<tokens>` を使うこと）
+- `snapshot-quota`（Claude利用枠取得）はまだ実装されていない（孫4スコープ）
+- PR紐付け（`pr-link`）は`ingest`実行時点で読めた範囲の情報に基づく。transcriptへの`pr-link`追記が
+  後から起きても、既に書き込み済みの`usage.message`イベントは遡って更新されない
+  （`cost_estimate_usd`と同じ「過去は再計算しない」方針）
 - `event`/`bind-pr` は1呼び出しごとに git メタ情報の解決（subprocess呼び出し数回）と
   月次seen-keysファイルの全読み込みを行う（実測 約75ms/回）。`ocw`/`pr-review-loop` の工程境界イベント
-  （1runあたり数十件）には十分だが、**大量イベントをループでこのCLI経由で書き込む用途（将来のbulk ingest等）には
-  向かない**。そのような用途は同一プロセス内でgitメタとseen-key集合を1度だけ解決するバッチ経路を別途持つこと
+  （1runあたり数十件）には十分だが、**大量イベントをループでこのCLI経由で書き込む用途には向かない**。
+  `ingest` はこの制約を踏まえ、Herdr/run/pr情報を1回だけ解決し、seen-key集合と書き込みロックを
+  バッチ全体で保持する専用パス（`bulk_write_events`）を持つ
 
 ## 4. Customization
 

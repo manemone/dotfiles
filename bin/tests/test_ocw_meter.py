@@ -9,22 +9,31 @@ touches real state or the repo itself.
 No network access. No secrets. See docs/planning/DOC-003_..._計画.md §13
 for the numbered test-case list (T01, T02, ...) this file implements.
 
-Coverage of §13.2 in THIS phase (孫1 scope only):
+Coverage of §13.2 across 孫1 + 孫3 (this file):
 
-  implemented: T01 T02 T03 T04 T05 T06 T07
+  implemented: T01 T02 T03 T04 T05 T06 T07 T08
                T11 (forward-compat half: unknown fields survive)
+               T12 T13 T14 T16
                T17 T18 (regression guard) T19 T20 T21 T22
   deferred, not implementable until a later phase exists to test:
-    T08 - Herdr pane_id/session_id continuity is `ingest`'s role
-          resolution logic (plan §7.4 item 2); nothing to exercise
-          until `ingest` exists (孫3).
     T09 - 5h window reset/staleness is quota.sample-specific (孫4).
-    T10 - the rate_limits/usage-absence half is quota/usage-specific
-          (孫3/孫4); the generic "missing required field ->
-          quarantined" half is covered by EventSchemaValidationTests.
+    T10 - the rate_limits half is quota-specific (孫4); the
+          usage-absence half IS covered here
+          (IngestTests.test_ingest_missing_usage_field_is_completeness_unknown)
+          and the generic "missing required field -> quarantined" half
+          is covered by EventSchemaValidationTests.
     T11 - the "known key disappears" half is statusLine-parser-
           specific (孫4).
-    T16 - price-table versioning: no pricing exists yet (孫3).
+    T15 - API error -> block.*/error_category is pr-review-loop
+          instrumentation (孫2's scope, already covered there), not
+          something `ingest` (a read-only transcript scanner) produces.
+
+IngestTests below drives the real `ocw-meter ingest` subprocess against
+synthetic transcript fixtures under a tempdir (OCW_METER_CLAUDE_PROJECTS_DIR),
+not the developer's real ~/.claude/projects — nothing here reads real
+transcripts. See docs/planning/DOC-003_..._計画.md's 孫3プロンプト for the
+completion criteria this maps to (idempotency, message.id dedup,
+message.content non-exposure, cost formula, price-table versioning).
 """
 
 import concurrent.futures
@@ -89,6 +98,59 @@ def read_meter_errors(home):
     if not path.exists():
         return []
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+
+# ── ingest test helpers (孫3) ────────────────────────────────────────────
+
+REPO_PRICE_DIR = REPO_ROOT / "bin" / "prices"
+
+
+def assistant_line(session_id, message_id, *, model="deepseek-v4-pro", input_tokens=100,
+                    cache_read_input_tokens=200, cache_creation_input_tokens=0, output_tokens=50,
+                    stop_reason="end_turn", timestamp="2026-07-15T10:00:00.000Z",
+                    git_branch="ai/test", cwd="/fixture/worktree", is_sidechain=False, effort="high",
+                    usage=None):
+    if usage is None:
+        usage = {
+            "input_tokens": input_tokens,
+            "cache_read_input_tokens": cache_read_input_tokens,
+            "cache_creation_input_tokens": cache_creation_input_tokens,
+            "output_tokens": output_tokens,
+            "service_tier": "standard",
+        }
+    return {
+        "type": "assistant",
+        "timestamp": timestamp,
+        "sessionId": session_id,
+        "version": "2.1.220",
+        "gitBranch": git_branch,
+        "cwd": cwd,
+        "effort": effort,
+        "isSidechain": is_sidechain,
+        "message": {"id": message_id, "model": model, "stop_reason": stop_reason, "usage": usage},
+    }
+
+
+def write_transcript(projects_dir, slug, session_id, line_dicts):
+    session_dir = pathlib.Path(projects_dir) / slug
+    session_dir.mkdir(parents=True, exist_ok=True)
+    path = session_dir / f"{session_id}.jsonl"
+    path.write_text(
+        "".join(json.dumps(d, ensure_ascii=False) + "\n" for d in line_dicts),
+        encoding="utf-8",
+    )
+    return path
+
+
+def run_ingest(home, projects_dir, args=None, price_dir=None, extra_env=None, timeout=60):
+    env = {
+        "OCW_METER_CLAUDE_PROJECTS_DIR": str(projects_dir),
+        "OCW_METER_PRICE_DIR": str(price_dir if price_dir is not None else REPO_PRICE_DIR),
+        "OCW_METER_INGEST_USE_GH": "0",
+    }
+    if extra_env:
+        env.update(extra_env)
+    return run_meter(["ingest", *(args or [])], home, extra_env=env, timeout=timeout)
 
 
 class OcwMeterTestCase(unittest.TestCase):
@@ -954,6 +1016,367 @@ class TranscriptFixtureDedupTests(OcwMeterTestCase):
         events = read_events(self.home)
         self.assertEqual(len(events), 1)
         self.assertEqual(events[0]["note"], "second")
+
+
+class IngestTests(OcwMeterTestCase):
+    def setUp(self):
+        super().setUp()
+        self.projects_dir = pathlib.Path(self.tmpdir.name) / "claude-projects"
+        self.projects_dir.mkdir(parents=True, exist_ok=True)
+
+    def test_ingest_dedupes_content_block_split_lines_via_real_fixture(self):
+        # T04/T12, driven through the actual `ingest` scan path (not the
+        # `event` primitive directly, unlike TranscriptFixtureDedupTests
+        # above) — this is the fixture ADR-001 §2.2's 59.4%-duplicate
+        # measurement is based on, reused as-is per the 孫3 prompt's "実
+        # transcript由来の縮小fixture" test requirement.
+        fixture = REPO_ROOT / "bin" / "tests" / "fixtures" / "transcript_duplicate_message_id.jsonl"
+        session_dir = self.projects_dir / "fixture-project"
+        session_dir.mkdir(parents=True)
+        (session_dir / "00b2ac54-fixture.jsonl").write_text(fixture.read_text(encoding="utf-8"), encoding="utf-8")
+
+        result = run_ingest(self.home, self.projects_dir)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+        events = [e for e in read_events(self.home) if e["event_type"] == "usage.message"]
+        self.assertEqual(len(events), 2)  # 4 raw assistant lines -> 2 distinct message_id
+        by_id = {e["message_id"]: e for e in events}
+        # The LAST occurrence of msg_fixture_dup_001 has output_tokens
+        # 329 and a real stop_reason (the fixture's first two rows have
+        # output_tokens 0/150 and stop_reason null — an in-progress
+        # stream). Keeping an earlier row would silently under-count.
+        self.assertEqual(by_id["msg_fixture_dup_001"]["output_tokens"], 329)
+        self.assertEqual(by_id["msg_fixture_dup_001"]["stop_reason"], "end_turn")
+        self.assertEqual(by_id["msg_fixture_dup_001"]["completeness"], "complete")
+        self.assertEqual(by_id["msg_fixture_dup_002"]["output_tokens"], 77)
+
+    def test_ingest_is_idempotent_across_repeated_runs(self):
+        write_transcript(self.projects_dir, "proj", "sess-idem", [
+            assistant_line("sess-idem", "m1"),
+            assistant_line("sess-idem", "m2", timestamp="2026-07-15T10:05:00.000Z"),
+        ])
+        r1 = run_ingest(self.home, self.projects_dir)
+        self.assertEqual(r1.returncode, 0, r1.stderr)
+        self.assertIn("usage.message written (new):         2", r1.stdout)
+        first_events = read_events(self.home)
+
+        r2 = run_ingest(self.home, self.projects_dir)
+        self.assertEqual(r2.returncode, 0, r2.stderr)
+        self.assertIn("usage.message written (new):         0", r2.stdout)
+        second_events = read_events(self.home)
+
+        key = lambda e: e["message_id"]
+        self.assertEqual(sorted(first_events, key=key), sorted(second_events, key=key))
+
+    def test_ingest_incremental_only_processes_newly_appended_lines(self):
+        path = write_transcript(self.projects_dir, "proj", "sess-inc", [assistant_line("sess-inc", "m1")])
+        r1 = run_ingest(self.home, self.projects_dir)
+        self.assertEqual(r1.returncode, 0, r1.stderr)
+        self.assertEqual(len(read_events(self.home)), 1)
+
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(assistant_line("sess-inc", "m2", timestamp="2026-07-15T11:00:00.000Z"), ensure_ascii=False) + "\n")
+
+        r2 = run_ingest(self.home, self.projects_dir)
+        self.assertEqual(r2.returncode, 0, r2.stderr)
+        self.assertIn("usage.message written (new):         1", r2.stdout)
+        events = read_events(self.home)
+        self.assertEqual({e["message_id"] for e in events}, {"m1", "m2"})
+
+    def test_ingest_rereads_from_scratch_on_file_rotation(self):
+        path = write_transcript(self.projects_dir, "proj", "sess-rot", [assistant_line("sess-rot", "m1")])
+        r1 = run_ingest(self.home, self.projects_dir)
+        self.assertEqual(r1.returncode, 0, r1.stderr)
+        self.assertEqual(len(read_events(self.home)), 1)
+
+        # Simulate rotation: a brand-new file (new inode) replaces the
+        # old one at the same path, containing the same message plus a
+        # new one — this is what plan §1's "inode変化...を検出したら...
+        # 頭から読み直す" guards against. os.replace onto an existing
+        # path changes the inode even though the path string is the same.
+        tmp_path = path.with_suffix(".jsonl.new")
+        tmp_path.write_text(
+            "".join(
+                json.dumps(line, ensure_ascii=False) + "\n"
+                for line in [assistant_line("sess-rot", "m1"), assistant_line("sess-rot", "m2", timestamp="2026-07-15T12:00:00.000Z")]
+            ),
+            encoding="utf-8",
+        )
+        os.replace(tmp_path, path)
+
+        result = run_ingest(self.home, self.projects_dir)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        events = read_events(self.home)
+        # m1 is absorbed by message_id dedup even though its bytes were
+        # re-read from offset 0 — must not appear as a duplicate event.
+        self.assertEqual({e["message_id"] for e in events}, {"m1", "m2"})
+        self.assertEqual(len(events), 2)
+
+    def test_ingest_leaves_an_unterminated_final_line_for_the_next_run(self):
+        path = write_transcript(self.projects_dir, "proj", "sess-partial", [assistant_line("sess-partial", "m1")])
+        with open(path, "a", encoding="utf-8") as fh:
+            # No trailing newline: the writer may still be mid-write.
+            fh.write(json.dumps(assistant_line("sess-partial", "m2", timestamp="2026-07-15T13:00:00.000Z"), ensure_ascii=False))
+
+        result = run_ingest(self.home, self.projects_dir)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual({e["message_id"] for e in read_events(self.home)}, {"m1"})
+        self.assertEqual(read_quarantine(self.home), [])
+
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write("\n")
+        result2 = run_ingest(self.home, self.projects_dir)
+        self.assertEqual(result2.returncode, 0, result2.stderr)
+        self.assertEqual({e["message_id"] for e in read_events(self.home)}, {"m1", "m2"})
+
+    def test_ingest_quarantines_malformed_line_without_storing_its_bytes(self):
+        session_dir = self.projects_dir / "proj"
+        session_dir.mkdir(parents=True)
+        path = session_dir / "sess-bad.jsonl"
+        path.write_text(
+            json.dumps(assistant_line("sess-bad", "m1"), ensure_ascii=False) + "\n"
+            + '{"type":"assistant","message":{"id":"broken", THIS-IS-NOT-VALID-JSON\n',
+            encoding="utf-8",
+        )
+        result = run_ingest(self.home, self.projects_dir)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual({e["message_id"] for e in read_events(self.home)}, {"m1"})
+
+        quarantined = read_quarantine(self.home)
+        self.assertEqual(len(quarantined), 1)
+        self.assertEqual(quarantined[0]["reason"], "malformed JSON")
+        # No raw_line field at all — a broken line might contain a
+        # garbled fragment of prompt/response content from a partial
+        # write, so ingest's own quarantine (unlike validate's) never
+        # stores the source bytes (plan §1: message.content不可触).
+        self.assertNotIn("raw_line", quarantined[0])
+        self.assertNotIn("THIS-IS-NOT-VALID-JSON", json.dumps(quarantined[0]))
+
+    def test_ingest_never_persists_message_content_anywhere(self):
+        line = assistant_line("sess-content", "m1")
+        line["message"]["content"] = [{"type": "text", "text": "THIS-IS-SECRET-PROMPT-CONTENT"}]
+        write_transcript(self.projects_dir, "proj", "sess-content", [line])
+
+        result = run_ingest(self.home, self.projects_dir)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+        for path in pathlib.Path(self.home).rglob("*"):
+            if path.is_file():
+                self.assertNotIn("THIS-IS-SECRET-PROMPT-CONTENT", path.read_text(encoding="utf-8", errors="replace"))
+
+    def test_ingest_missing_usage_field_is_completeness_unknown(self):
+        # T13 (transcript-observable half of "stream interrupted"): a
+        # `usage`-less assistant line is treated the same way as data
+        # this meter genuinely cannot see — null fields, not a guess.
+        line = assistant_line("sess-nousage", "m1")
+        del line["message"]["usage"]
+        write_transcript(self.projects_dir, "proj", "sess-nousage", [line])
+
+        result = run_ingest(self.home, self.projects_dir)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        event = read_events(self.home)[0]
+        self.assertEqual(event["completeness"], "unknown")
+        self.assertIsNone(event["input_tokens"])
+        self.assertIsNone(event["output_tokens"])
+        self.assertIsNone(event["cost_estimate_usd"])
+
+    def test_ingest_distinct_message_ids_both_kept_not_merged(self):
+        # T14 (retry): a retry gets a NEW message.id from the provider —
+        # it is a second, separately-billable event, not merged into the
+        # first (only a REPEATED message.id gets deduped).
+        write_transcript(self.projects_dir, "proj", "sess-retry", [
+            assistant_line("sess-retry", "m1", output_tokens=10),
+            assistant_line("sess-retry", "m2", output_tokens=20, timestamp="2026-07-15T14:00:00.000Z"),
+        ])
+        result = run_ingest(self.home, self.projects_dir)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(len(read_events(self.home)), 2)
+
+    def test_ingest_anthropic_model_is_subscription_not_estimated(self):
+        write_transcript(self.projects_dir, "proj", "sess-anthropic", [
+            assistant_line("sess-anthropic", "m1", model="claude-opus-5"),
+        ])
+        result = run_ingest(self.home, self.projects_dir)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        event = read_events(self.home)[0]
+        self.assertEqual(event["provider"], "anthropic")
+        self.assertEqual(event["cost_basis"], "subscription")
+        self.assertIsNone(event["cost_estimate_usd"])
+        self.assertEqual(event["completeness"], "complete")
+
+    def test_ingest_deepseek_cost_matches_plan_formula(self):
+        # Uses the real bin/prices/deepseek-2026-08-01.json and the exact
+        # July totals from plan §1 / ADR-001 §2.2 — this is the $46.78
+        # figure the 孫3 prompt's completion criteria checks against.
+        write_transcript(self.projects_dir, "proj", "sess-cost", [
+            assistant_line(
+                "sess-cost", "m1", model="deepseek-v4-pro",
+                input_tokens=38336862, cache_read_input_tokens=5428087040,
+                cache_creation_input_tokens=0, output_tokens=11983028,
+            ),
+        ])
+        result = run_ingest(self.home, self.projects_dir)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        event = read_events(self.home)[0]
+        self.assertEqual(event["cost_basis"], "estimated")
+        self.assertAlmostEqual(event["cost_estimate_usd"], 46.7785848500, places=4)
+        self.assertEqual(event["price_table_version"], "deepseek-2026-08-01")
+        self.assertEqual(event["price_effective_date"], "2026-08-01")
+
+    def test_ingest_unpriced_model_is_completeness_unknown(self):
+        # A DeepSeek-shaped model name absent from bin/prices/*.json
+        # (both real price entries, deepseek-v4-pro/-flash, are present
+        # in the repo's committed price table — this exercises the
+        # "genuinely unpriced" branch with a name that will never match).
+        write_transcript(self.projects_dir, "proj", "sess-unpriced", [
+            assistant_line("sess-unpriced", "m1", model="deepseek-v4-nonexistent"),
+        ])
+        result = run_ingest(self.home, self.projects_dir)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        event = read_events(self.home)[0]
+        self.assertIsNone(event["cost_estimate_usd"])
+        self.assertEqual(event["cost_basis"], "estimated")
+        self.assertEqual(event["completeness"], "unknown")
+
+    def test_ingest_new_price_table_does_not_touch_already_ingested_events(self):
+        # T16: adding a newer price_table_version must not retroactively
+        # change cost_estimate_usd on events already written.
+        price_dir = pathlib.Path(self.tmpdir.name) / "prices-v1"
+        price_dir.mkdir()
+        (price_dir / "deepseek-2026-08-01.json").write_text(json.dumps({
+            "price_table_version": "deepseek-2026-08-01", "effective_date": "2026-08-01",
+            "models": {"deepseek-v4-pro": {"cache_hit_in": 0.003625, "cache_miss_in": 0.435, "out": 0.87}},
+        }), encoding="utf-8")
+        write_transcript(self.projects_dir, "proj", "sess-pricever", [
+            assistant_line("sess-pricever", "m1", model="deepseek-v4-pro",
+                            input_tokens=1000, cache_read_input_tokens=2000, output_tokens=300),
+        ])
+        r1 = run_ingest(self.home, self.projects_dir, price_dir=price_dir)
+        self.assertEqual(r1.returncode, 0, r1.stderr)
+        before = read_events(self.home)[0]
+
+        # A new, deliberately much more expensive price table shows up.
+        (price_dir / "deepseek-2099-01-01.json").write_text(json.dumps({
+            "price_table_version": "deepseek-2099-01-01", "effective_date": "2099-01-01",
+            "models": {"deepseek-v4-pro": {"cache_hit_in": 99, "cache_miss_in": 99, "out": 99}},
+        }), encoding="utf-8")
+
+        result = run_ingest(self.home, self.projects_dir, price_dir=price_dir)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("usage.message written (new):         0", result.stdout)
+        self.assertIn("usage.message replaced (re-run/dup):  0", result.stdout)
+        after = read_events(self.home)[0]
+
+        self.assertEqual(before["cost_estimate_usd"], after["cost_estimate_usd"])
+        self.assertEqual(before["price_table_version"], after["price_table_version"])
+
+    def test_ingest_role_resolved_via_herdr_pane_list(self):
+        # T08: role/pane/workspace attribution via a mocked Herdr CLI —
+        # not implementable before `ingest` existed (孫1's docstring
+        # deferred it here explicitly).
+        session_id = "sess-herdr"
+        write_transcript(self.projects_dir, "proj", session_id, [assistant_line(session_id, "m1")])
+
+        pane_json = json.dumps({"panes": [{
+            "pane_id": "w1:p2", "label": "implementer", "workspace_id": "w1",
+            "agent_session": {"agent": "claude", "kind": "id", "value": session_id},
+            "cwd": "/whatever",
+        }]})
+        fake_bin = pathlib.Path(self.tmpdir.name) / "fake-bin"
+        fake_bin.mkdir()
+        herdr_script = fake_bin / "herdr"
+        herdr_script.write_text(
+            "#!/usr/bin/env bash\n"
+            'if [ "$1" = "status" ] && [ "$2" = "server" ]; then exit 0; fi\n'
+            'if [ "$1" = "workspace" ] && [ "$2" = "list" ]; then echo \'{"workspaces":[{"workspace_id":"w1"}]}\'; exit 0; fi\n'
+            f"if [ \"$1\" = \"pane\" ] && [ \"$2\" = \"list\" ]; then echo '{pane_json}'; exit 0; fi\n"
+            "exit 1\n",
+            encoding="utf-8",
+        )
+        herdr_script.chmod(0o755)
+
+        path_with_fake_herdr_first = f"{fake_bin}:{os.environ.get('PATH', '')}"
+        result = run_ingest(self.home, self.projects_dir, extra_env={"PATH": path_with_fake_herdr_first})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        event = read_events(self.home)[0]
+        self.assertEqual(event["role"], "implementer")
+        self.assertEqual(event["workspace_id"], "w1")
+        self.assertEqual(event["pane_id"], "w1:p2")
+
+    def test_ingest_role_stays_unknown_when_herdr_unavailable(self):
+        write_transcript(self.projects_dir, "proj", "sess-noherdr", [assistant_line("sess-noherdr", "m1")])
+        # A PATH with no `herdr` on it at all (and no dev-machine Herdr
+        # server to accidentally talk to) — role resolution must fail
+        # closed to "unknown", never guess (plan §7.4: 推測で埋めない).
+        result = run_ingest(self.home, self.projects_dir, extra_env={"PATH": "/usr/bin:/bin"})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        event = read_events(self.home)[0]
+        self.assertEqual(event["role"], "unknown")
+        self.assertIsNone(event["workspace_id"])
+        self.assertIsNone(event["pane_id"])
+
+    def test_ingest_pr_number_resolved_from_pr_link_transcript_line(self):
+        session_id = "sess-prlink"
+        write_transcript(self.projects_dir, "proj", session_id, [
+            assistant_line(session_id, "m1"),
+            {"type": "pr-link", "sessionId": session_id, "prNumber": 42,
+             "prUrl": "https://github.com/manemone/dotfiles/pull/42",
+             "prRepository": "manemone/dotfiles", "timestamp": "2026-07-15T10:01:00.000Z"},
+        ])
+        result = run_ingest(self.home, self.projects_dir)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        event = read_events(self.home)[0]
+        self.assertEqual(event["pr_number"], 42)
+        self.assertEqual(event["pr_url"], "https://github.com/manemone/dotfiles/pull/42")
+
+    def test_ingest_pr_number_null_when_unresolvable_and_gh_disabled(self):
+        write_transcript(self.projects_dir, "proj", "sess-nopr", [assistant_line("sess-nopr", "m1")])
+        result = run_ingest(self.home, self.projects_dir)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIsNone(read_events(self.home)[0]["pr_number"])
+
+    def test_ingest_no_external_network_calls_by_default(self):
+        # `gh` must never be invoked unless OCW_METER_INGEST_USE_GH=1 —
+        # a fake `gh` that would fail loudly if actually called proves
+        # ingest never shells out to it under default settings.
+        write_transcript(self.projects_dir, "proj", "sess-nogh", [assistant_line("sess-nogh", "m1")])
+        fake_bin = pathlib.Path(self.tmpdir.name) / "no-gh-bin"
+        fake_bin.mkdir()
+        poison_gh = fake_bin / "gh"
+        poison_gh.write_text("#!/usr/bin/env bash\necho 'gh should not have been called' >&2\nexit 7\n", encoding="utf-8")
+        poison_gh.chmod(0o755)
+        result = run_ingest(
+            self.home, self.projects_dir,
+            extra_env={"PATH": f"{fake_bin}:{os.environ.get('PATH', '')}", "OCW_METER_INGEST_USE_GH": "0"},
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("gh should not have been called", result.stderr)
+
+    def test_ingest_run_id_resolved_from_local_run_start_event(self):
+        worktree = "/fixture/worktree"
+        run_meter(
+            # run.start must predate the transcript message's timestamp
+            # (2026-07-15T10:30) for the time-range match in
+            # `resolve_run_id` to find it — a real `ocw` invocation
+            # always records run.start before any work happens.
+            ["event", "run.start", "--idempotency-key", "run1-start", "--run-id", "run1",
+             "--ts", "2026-07-15T09:00:00.000Z",
+             "--worktree", worktree, "--base-ref", "origin/main", "--command", "claude"],
+            self.home,
+        )
+        write_transcript(self.projects_dir, "proj", "sess-run", [
+            assistant_line("sess-run", "m1", cwd=worktree, timestamp="2026-07-15T10:30:00.000Z"),
+        ])
+        result = run_ingest(self.home, self.projects_dir)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        usage_event = next(e for e in read_events(self.home) if e["event_type"] == "usage.message")
+        self.assertEqual(usage_event["run_id"], "run1")
+
+    def test_ingest_refuses_to_operate_inside_a_git_worktree(self):
+        write_transcript(self.projects_dir, "proj", "sess-refuse", [assistant_line("sess-refuse", "m1")])
+        result = run_ingest(REPO_ROOT / "tmp-test-ocw-meter-ingest-worktree-guard", self.projects_dir)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse((REPO_ROOT / "tmp-test-ocw-meter-ingest-worktree-guard").exists())
 
 
 if __name__ == "__main__":
