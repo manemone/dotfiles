@@ -654,7 +654,7 @@ cost_basis: estimated — not an invoice
 
 | 孫 | ブランチ | 内容 | 状況 |
 |---|---|---|---|
-| 0 | `ai/ph-00-feasibility-probes` | feasibility probe実施 + ADR作成（本番コードなし・docsのみ） | 🔄 実装中 |
+| 0 | `ai/ph-00-feasibility-probes` | feasibility probe実施 + ADR作成（本番コードなし・docsのみ） | ✅ PR #24 マージ済 |
 | 1 | `ai/ph-01-meter-core` | `bin/ocw-meter` コア（schema / storage / event / bind-pr / validate / report骨格）+ テスト基盤 | ⬜ 待機中 |
 | 2 | `ai/ph-02-instrumentation` | `ocw` と `pr-review-loop` への工程イベント埋め込み（挙動不変・fail-open） | ⬜ 待機中 |
 | 3 | `ai/ph-03-deepseek-usage` | transcript ingest + 価格表 + 費用推定 + 突合レポート | ⬜ 待機中 |
@@ -860,6 +860,7 @@ OCW_IMPLEMENTER_COMMAND='claude --model sonnet --permission-mode auto' \
 | R6 | statusLine コマンドは描画のたびに実行される（高頻度） | I/O負荷・ログ肥大 | `snapshot-quota` は最短サンプリング間隔（既定60秒）を state ファイルで自制。超高速パス（前回から60秒未満なら即return） |
 | R7 | 観測イベント追加により `pr-review-loop` の手順が長くなり、LLMが手順を取りこぼす | レビュー品質低下（最も避けたい） | 追加は各Phase冒頭/末尾の**1行コマンド**のみ。規約テキスト・判定基準・禁止事項は一切変更しない。孫2のレビューではこの点を最重点で確認する |
 | R8 | 実測した7月の DeepSeek 実効単価と価格表の整合 | 費用推定の絶対値がずれる | 全期間transcriptからの推定 $46.8 と7月請求 $58.80 は同オーダーで矛盾しない。孫3で月境界を揃えて再突合し、乖離が2倍を超えるなら価格表の前提を疑う |
+| R9 | `umbrella-orchestrator` の `/autopilot` cron プロンプトがこのリポジトリで動かない | 使うと毎サイクル検証失敗で停止する | cron手順6が `bundle exec rubocop && bundle exec rspec && bin/doc-id verify` を決め打ちしているが、本リポジトリにGemfile・rspec・`bin/doc-id` は存在しない。手順9の `base:main` も本リポジトリでは `master`。手順5は `gh pr merge` を無条件実行する。使う場合は**検証コマンドを孫1で導入する `bin/tests/lint.sh` + `python3 -m unittest discover -s bin/tests` に、baseを `master` に差し替える**こと |
 | Q1 | reasoning（thinking）トークンの課金上の扱い | 費用推定の精度 | U5（孫0 P2）。判明するまで `reasoning_tokens: null` |
 | Q2 | Agent SDK credit と interactive quota の関係 | 将来Cの評価に影響 | 本傘では `claude -p` を使わないため未解決のままで問題ない。**混同しないことだけをschemaで担保**（`entrypoint` を記録） |
 | Q3 | 固定費（Pro $20等）のPR配賦方法 | レポート解釈 | 第一段階では配賦しない。`cost_basis: subscription` で分離表示のみ |
@@ -895,10 +896,16 @@ OCW_IMPLEMENTER_COMMAND='claude --model sonnet --permission-mode auto' \
 instrumentationが実際のPR1本を通しても
 「レビュー品質・ラウンド数・承認判定が変わっていない」ことを人間が確認してから孫3以降へ進む。
 
-### 進行方法
+### 進行方法とマージ権限（2026-08-01 更新）
 
-`/umbrella-orchestrator /spawn 0` → 人間がPR確認 → マージ → `/check` → ゲート確認 → `/spawn 1` → …
-**`/autopilot` は使用しない。**
+- **孫PR（孫N → 傘ブランチ）のマージは commander が行う。** レビューで承認されたら commander が
+  `gh pr merge --squash` し、`/check` で検証・計画書更新まで進める
+- **傘ブランチ → `master` のマージだけは人間が行う。** ここが唯一の人間ゲート
+- ただし **孫2 だけは例外**: `pr-review-loop/SKILL.md` のレビュー規約に触るため、
+  commander はマージ前に「譲れないレビュー基準8項目 / Phase 4判定 / 安全制約 / 停止してユーザーに報告する条件」に
+  diffが1行も無いことを `git diff` で機械的に検証し、その結果をPRコメントに残してからマージする
+- `/autopilot` の cron プロンプトはこのリポジトリでは**そのままでは動かない**（第17章 R9 参照）。
+  使う場合は先に修正すること
 
 ---
 
@@ -1314,9 +1321,23 @@ command -v ocw-meter >/dev/null && ocw-meter event phase.start --phase self_revi
 
 計画書 `docs/planning/DOC-003_ai-llm-cost-observability_計画.md` の
 第5.2〜5.5章、第5.10章、第8.4章、第17章 R1/R2/R5/R8 を熟読すること。
-**孫0のADRに設計変更の指示があれば、そちらを優先する。**
+**さらに `docs/adr/ADR-001_llm-cost-observability-collection-method.md` の §2.2（P3突合結果）と
+§8「孫3への設計指示」を必ず読み、計画書と食い違う場合はADRを優先すること。**
 
 孫1（`bin/ocw-meter`）がマージ済みであること。
+
+**孫0 P3 で実測済みの基準値（実装の検算に使うこと）:**
+
+- `message.id` による重複排除で **59.4% が重複**と判明。重複排除を外すと数字が2倍以上狂う
+- 全期間の推定費用 **$46.78**。実装した `report` がこの値と大きくずれたら計算式を疑う
+- v4-pro のカバレッジ **約89%**、**v4-flash は transcript に1件も記録されない**
+
+**P2（DeepSeek生リクエストprobe）は人間実行待ちで未完了である。** 以下は現時点で確定していない:
+`deepseek-v4-pro[1m]` 指定時の実課金モデル名 / レスポンスヘッダのキー名 /
+streaming `message_delta` の usage 構造 / reasoningトークンの扱い / 中断時の課金有無。
+
+→ **これらに依存する項目は `null` + `completeness: "unknown"` で実装し、P2の結果が出たら別PRで反映する。
+P2の結果を待って実装を止めないこと。また、推測で埋めないこと。**
 
 ### やること
 
@@ -1476,9 +1497,24 @@ statusLine コマンドから呼ばれ、stdin の JSON を読んで `quota.samp
 - 未知のキーが増えても落ちない。既知キーが消えても落ちない（`parser_version` を付けて partial 記録）
 - **生JSONは既定で保存しない。** `OCW_METER_RAW=1` のときのみ `raw/` へ redaction 済みで保存
 
+**⚠️ 孫0 P1 の実測に基づく追加要件（ADR-001 §8「孫4への設計指示」。ここは必ず実装すること）**
+
+- **`context_used_pct` は null-safe に扱う。** P1実測で 59/66 は非nullだが 7/66 が null。
+  null のときは `context_window.total_input_tokens / context_window.context_window_size` で
+  フォールバック計算し、それも不能なら `null` のまま記録する
+- **`cost.total_cost_usd` を quota サンプルに含める。** P1実測で **66/66サンプルすべてで取得可能**。
+  Claude本家・DeepSeek両セッションで出現する。`report` から参照できるようにする
+  （ただしこれはClaude Code側の自己申告値であり、`ocw-meter` の推定費用とは**別カラム**で扱う）
+- **サンプリング頻度の実測値**: P1で1セッションあたり最大 **54サンプル/1時間**。
+  想定より高頻度なので、60秒の自制は必須（無いとログが肥大する）
+
 #### 2. 5時間窓の扱い（計画書8.5）
 
 - 消費量の算出は **同一 `window_id` 内のサンプル同士でのみ差分を取る**
+- **⚠️ `resets_at` の鮮度判定が必須（ADR-001 §8-4）。** P1実測で **8サンプル中3件が stale値**
+  （既に過ぎた過去窓の `resets_at`）を返していた。`window_id` として採用する前に現在時刻と比較し、
+  `resets_at <= now` なら **stale として扱い、その `window_id` で新しい窓を開始しない**
+  （`completeness: "partial"` を立てて記録する）
 - `window_id` が変わったら新しい窓の開始として扱い、**跨いだ減算はしない**
 - 同一 `window_id` 内で `used_percentage` が減少したら異常として `completeness: "partial"` を立て、警告する
 - `report` 側に「PRが同一5時間窓で完走できたか」を判定するロジックを入れる
@@ -1492,11 +1528,15 @@ statusLine コマンドから呼ばれ、stdin の JSON を読んで `quota.samp
 "statusLine": { "type": "command", "command": "ocw-meter snapshot-quota" }
 ```
 
-**重大な注意（計画書 R3）:**
+**重大な注意（計画書 R3）— 孫0 P1 で実際に事故が起きた箇所:**
 
 - `~/.claude/settings.json` は **Herdr も書き込み**（`hooks.SessionStart`）、
   **`claude/deploy.sh` も生成し直す** 競合地帯である
-- `hooks` には一切触らないこと
+- **孫0 P1 の probe 中に Herdr の `hooks.SessionStart` が実際に消失した。** 原因は
+  `claude/deploy.sh` が `settings.machine.json` を使ってマージする際、
+  `settings.machine.json` に `hooks` が無いと Herdr が後から書いた `hooks` ごと上書きしてしまうこと
+- 対策: **`claude/settings.machine.json` に `hooks` を明記する**手順を README に記載すること
+- `hooks` には一切触らないこと（消さない・書き換えない）
 - **PR説明文に、デプロイ前後で `~/.claude/settings.json` の `hooks` が健在であることを
   実際に確認した結果を貼ること**
 - `ocw-meter` が PATH に無い環境では statusLine が失敗する。表示が壊れないよう
