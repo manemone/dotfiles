@@ -365,6 +365,43 @@ class SecretRedactionTests(OcwMeterTestCase):
         raw = json.dumps(read_events(self.home)[-1])
         self.assertNotIn("ghp_AbCdEf1234567890abcdef", raw)
 
+    def test_token_count_fields_are_not_redacted(self):
+        # Round-2 review, most severe finding: SECRET_KEY_RE's old
+        # substring match on "token" caught input_tokens/output_tokens/
+        # cache_*_tokens/reasoning_tokens — exactly the numbers this
+        # whole project exists to measure.
+        result = run_meter(
+            [
+                "event", "usage.message", "--idempotency-key", "u1", "--message-id", "msg_x",
+                "--input-tokens", "4617", "--output-tokens", "329",
+                "--cache-read-input-tokens", "27264", "--cache-creation-input-tokens", "0",
+                "--reasoning-tokens", "12", "--cost-basis", "estimated",
+            ],
+            self.home,
+        )
+        self.assertEqual(result.returncode, 0)
+        event = read_events(self.home)[-1]
+        self.assertEqual(event["input_tokens"], "4617")
+        self.assertEqual(event["output_tokens"], "329")
+        self.assertEqual(event["cache_read_input_tokens"], "27264")
+        self.assertEqual(event["cache_creation_input_tokens"], "0")
+        self.assertEqual(event["reasoning_tokens"], "12")
+
+    def test_sk_pattern_does_not_match_mid_word(self):
+        # Round-2 review: the un-anchored "sk-" pattern matched inside
+        # ordinary words like "task-force" / "risk-assessment", and
+        # `branch` is captured automatically from `git` — `ocw` names
+        # branches `ai/<slug>` (plan §3.1), so `ocw task-foo` is a
+        # realistic branch name this must not corrupt.
+        result = run_meter(
+            ["event", "run.start", "--idempotency-key", "u2", "--base-ref", "ai/task-force", "--command", "npm run task-build"],
+            self.home,
+        )
+        self.assertEqual(result.returncode, 0)
+        event = read_events(self.home)[-1]
+        self.assertEqual(event["base_ref"], "ai/task-force")
+        self.assertEqual(event["command"], "npm run task-build")
+
 
 class ReadOnlyStorageTests(OcwMeterTestCase):
     def test_event_exits_zero_when_storage_cannot_be_created(self):
@@ -384,17 +421,33 @@ class GitWorktreeGuardTests(unittest.TestCase):
         # T22 (fail-open side): the safety property is "never write into
         # the repo", not "return non-zero" — event's contract is always
         # exit 0, so the guard must manifest as a silent no-write here.
+        #
+        # Round-2 review: this test must also override HOME to a
+        # throwaway tempdir. The refusal's meter.error self-diagnostic
+        # falls back to $HOME/.local/state/ocw-meter (see
+        # MeterErrorSelfDiagnosticTests) — without overriding HOME here,
+        # every run of this test suite was writing a real event into the
+        # developer's actual, non-test ocw-meter storage.
         home = REPO_ROOT / "tmp-test-ocw-meter-worktree-guard"
+        fake_home = tempfile.mkdtemp()
         self.assertFalse(home.exists())
         try:
-            result = run_meter(["event", "run.start", "--idempotency-key", "k1"], home)
+            result = run_meter(["event", "run.start", "--idempotency-key", "k1"], home, extra_env={"HOME": fake_home})
             self.assertEqual(result.returncode, 0)
             self.assertFalse(home.exists())
+            # And it actually did land somewhere traceable (not just "no
+            # real storage touched, no diagnostic either").
+            fallback_events = read_events(pathlib.Path(fake_home) / ".local" / "state" / "ocw-meter")
+            self.assertEqual(len(fallback_events), 1)
+            self.assertEqual(fallback_events[0]["event_type"], "meter.error")
         finally:
             if home.exists():
                 import shutil
 
                 shutil.rmtree(home)
+            import shutil as _shutil
+
+            _shutil.rmtree(fake_home, ignore_errors=True)
 
     def test_validate_and_report_fail_loud_inside_repo(self):
         # T22 (fail-loud side): validate/report must not silently pretend
@@ -558,20 +611,46 @@ class EventSchemaValidationTests(OcwMeterTestCase):
         run_meter(["validate"], self.home)
         return read_events(self.home), read_quarantine(self.home)
 
-    def test_known_type_missing_required_payload_field_is_quarantined(self):
+    def test_known_type_missing_required_payload_field_is_downgraded_not_deleted(self):
+        # Round-2 review: a payload shape issue is advisory, not
+        # corruption (plan §10.2 says to keep a best-effort record, not
+        # discard it) — it downgrades completeness in place and is
+        # NEVER quarantined/removed.
         events, quarantined = self._write_and_validate("run.start", ["--base-ref", "origin/main"])  # missing --command
-        self.assertEqual(events, [])
-        self.assertEqual(len(quarantined), 1)
-        self.assertIn("command", quarantined[0]["reason"])
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["completeness"], "partial")
+        self.assertEqual(quarantined, [])
 
-    def test_known_type_enum_violation_is_quarantined(self):
+    def test_known_type_enum_violation_is_downgraded_not_deleted(self):
         events, quarantined = self._write_and_validate(
             "phase.end",
-            ["--phase", "implement", "--outcome", "not-a-real-outcome", "--duration-ms", "10"],
+            ["--phase", "implement", "--outcome", "not-a-real-outcome"],
         )
-        self.assertEqual(events, [])
-        self.assertEqual(len(quarantined), 1)
-        self.assertIn("outcome", quarantined[0]["reason"])
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["completeness"], "partial")
+        self.assertEqual(quarantined, [])
+
+    def test_explicit_null_payload_field_is_not_treated_as_missing(self):
+        # Round-2 review: an explicitly-recorded empty/null value (the
+        # caller tried and confirmed the field is unavailable, e.g. a
+        # DeepSeek session with no rate_limits — ADR-001 §2.1) must NOT
+        # be treated the same as the field never appearing at all.
+        events, quarantined = self._write_and_validate(
+            "quota.sample",
+            ["--source", "statusline", "--plan-source", "statusline", "--five-hour-used-pct", ""],
+        )
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["completeness"], "complete")
+        self.assertEqual(quarantined, [])
+
+    def test_best_effort_event_missing_advisory_field_stays_complete(self):
+        # block.end's wait_ms and phase.end's outcome/duration_ms are
+        # advisory (plan §8.2 "best-effort"), not required — omitting
+        # them entirely must not downgrade completeness either.
+        events, quarantined = self._write_and_validate("block.end", ["--cause", "rate_limit"])
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["completeness"], "complete")
+        self.assertEqual(quarantined, [])
 
     def test_unknown_event_type_is_forward_compatible_not_quarantined(self):
         # A future event_type this binary has never heard of must not be
@@ -619,6 +698,10 @@ class MeterErrorSelfDiagnosticTests(unittest.TestCase):
             )
             self.assertEqual(result.returncode, 0)
             self.assertFalse(bad_target.exists())
+            # Round-2 review: the user must be told their configured
+            # OCW_METER_HOME is being ignored, not just have data quietly
+            # reappear somewhere else.
+            self.assertIn("misconfigured", result.stderr)
 
             default_root = pathlib.Path(fake_home) / ".local" / "state" / "ocw-meter"
             default_events = read_events(default_root)
@@ -626,6 +709,15 @@ class MeterErrorSelfDiagnosticTests(unittest.TestCase):
             self.assertEqual(default_events[0]["event_type"], "meter.error")
             self.assertEqual(default_events[0]["completeness"], "unknown")
             self.assertEqual(default_events[0]["stage"], "storage_home_inside_git_worktree")
+
+            # Round-2 review: a persistent misconfiguration must not grow
+            # this file without bound — a second failure on the same day
+            # must not add a second line.
+            subprocess.run(
+                [str(OCW_METER), "event", "run.start", "--idempotency-key", "k2"],
+                cwd=str(REPO_ROOT), env=env, capture_output=True, text=True, timeout=10,
+            )
+            self.assertEqual(len(read_events(default_root)), 1)
         finally:
             import shutil
 
@@ -679,6 +771,26 @@ class TranscriptFixtureDedupTests(OcwMeterTestCase):
         self.assertEqual(len(events), len(distinct_ids))
         recorded_ids = {e["message_id"] for e in events}
         self.assertEqual(recorded_ids, distinct_ids)
+
+        # Round-2 review: counting events and message_ids isn't enough —
+        # the fixture's duplicate rows are output_tokens: 0 -> 150 -> 329
+        # (a streaming response's progressively-complete usage). The
+        # kept line must be the LAST one (last-write-wins), not the
+        # first (which would silently under-count output tokens by
+        # exactly the amount plan §8.4's cost formula multiplies).
+        kept = next(e for e in events if e["message_id"] == "msg_fixture_dup_001")
+        self.assertEqual(kept["output_tokens"], "329")
+        # And the token-count fields themselves must be the real numbers,
+        # not "[REDACTED]" (round-2 review, most severe finding).
+        self.assertEqual(kept["input_tokens"], "4617")
+        self.assertEqual(kept["cache_read_input_tokens"], "27264")
+
+    def test_last_write_wins_generically_for_any_duplicate_key(self):
+        run_meter(["event", "phase.start", "--idempotency-key", "lw1", "--phase", "implement", "--note", "first"], self.home)
+        run_meter(["event", "phase.start", "--idempotency-key", "lw1", "--phase", "implement", "--note", "second"], self.home)
+        events = read_events(self.home)
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["note"], "second")
 
 
 if __name__ == "__main__":

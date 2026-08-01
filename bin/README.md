@@ -130,7 +130,7 @@ ocw-meter report [--pr <n>] [--json]
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `OCW_METER_HOME` | `~/.local/state/ocw-meter` | 保存先ルート。**git worktree内を指すと拒否される**（誤commit防止）。`event`/`bind-pr`は書き込みをスキップして exit 0（設定ミスが誰にも気づかれないままにならないよう、既定の保存先へ `meter.error` を1件残す）、`validate`/`report`は非ゼロで停止する |
+| `OCW_METER_HOME` | `~/.local/state/ocw-meter` | 保存先ルート。**git worktree内を指すと拒否される**（誤commit防止）。`event`/`bind-pr`は書き込みをスキップして exit 0（設定ミスが誰にも気づかれないままにならないよう、既定の保存先へ `meter.error` を1件/日で記録し、fallbackした旨をstderrに警告する）、`validate`/`report`は非ゼロで停止する |
 | `OCW_METER_RAW` | `0` | 予約済み（将来フェーズのopt-in raw保存用）。現時点のサブコマンドでは未使用 |
 
 保存レイアウト: `events/YYYY-MM-DD.jsonl`（append-only, mode 600）/ `state/seen-keys/YYYY-MM.txt`（`idempotency_key`による重複排除）/

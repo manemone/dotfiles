@@ -122,7 +122,8 @@ fi
 python3 - "$cmd" "$@" <<'PY'
 # PERFORMANCE NOTE for whoever builds the DeepSeek transcript `ingest`
 # subcommand (a later phase): this CLI resolves git metadata (repo slug,
-# worktree root, branch, HEAD SHA — 4 `git` subprocess calls) and reloads
+# worktree root, branch, HEAD SHA, plus the worktree-safety check itself
+# — 5 `git` subprocess calls per `event` invocation) and reloads
 # the *entire* monthly seen-keys file on every single invocation. Measured
 # at ~75ms/event in this repo. That is fine for the phase-boundary event
 # volumes `ocw` / `pr-review-loop` produce (tens of events per run), but a
@@ -173,25 +174,33 @@ SOURCE_ENUM = ("ocw", "pr-review-loop", "transcript", "statusline", "unknown")
 # usage.message / quota.sample get their schema defined here per the
 # 孫1 prompt §2 even though nothing in this phase produces them yet
 # (that's 孫3/孫4) — see plan §8.4/§8.5.
+# Required sets are deliberately conservative (round-2 review): a field
+# only belongs here if the plan's own 孫2/孫3/孫4 embedding examples show
+# it being set on *every* occurrence of that event type. `phase.end`'s
+# `outcome`/`duration_ms` and `block.end`'s `wait_ms` were removed —
+# 孫2's actual embedding only sets `outcome` on the final `done`
+# phase.end, and block.* is explicitly "best-effort" (plan §8.2).
+# `quota.sample` keeps only `plan_source`: everything else about a
+# quota sample is legitimately absent (DeepSeek sessions have no
+# rate_limits at all — ADR-001 §2.1 — and even Anthropic sessions saw
+# `context_used_pct` null in 7/66 samples) and T10 requires recording
+# that absence as null, not treating it as corruption.
 EVENT_PAYLOAD_REQUIRED = {
     "run.start": ("base_ref", "command"),
     "run.end": ("outcome",),
     "phase.start": ("phase",),
-    "phase.end": ("phase", "outcome", "duration_ms"),
+    "phase.end": ("phase",),
     "pr.bind": ("pr_number",),
     "review.round": ("round", "verdict", "findings_count"),
     "human.intervention": ("reason",),
     "block.start": ("cause",),
-    "block.end": ("cause", "wait_ms"),
+    "block.end": ("cause",),
     "meter.error": ("stage",),
     "usage.message": (
         "message_id", "input_tokens", "cache_read_input_tokens",
         "cache_creation_input_tokens", "output_tokens", "cost_basis",
     ),
-    "quota.sample": (
-        "five_hour_used_pct", "five_hour_resets_at", "seven_day_used_pct",
-        "seven_day_resets_at", "window_id", "context_used_pct", "plan_source",
-    ),
+    "quota.sample": ("plan_source",),
 }
 
 EVENT_ENUM_FIELDS = {
@@ -205,13 +214,35 @@ EVENT_ENUM_FIELDS = {
 # T17). `redact_value` covers structured field values keyed by name;
 # `redact_text` covers free-form text (exception messages) where there is
 # no field name to key off, so only the pattern-based half applies there.
-SECRET_KEY_RE = re.compile(r"(api[-_]?key|token|secret|password|authorization)", re.IGNORECASE)
+#
+# SECRET_KEY_RE requires "token"/"secret"/etc. to be a whole underscore-
+# delimited segment of the field name, not merely a substring — a naive
+# substring match redacts `input_tokens` / `output_tokens` /
+# `cache_read_input_tokens` / `cache_creation_input_tokens` /
+# `reasoning_tokens` (round-2 review, most severe finding: this project
+# exists to measure exactly those numbers). TOKEN_COUNT_FIELD_NAMES is a
+# belt-and-suspenders explicit allow-list on top of that, since relying
+# solely on "tokens" (plural) not matching a boundary-anchored "token"
+# pattern is a coincidence worth not depending on alone.
+TOKEN_COUNT_FIELD_NAMES = frozenset({
+    "input_tokens", "output_tokens", "cache_read_input_tokens",
+    "cache_creation_input_tokens", "reasoning_tokens",
+})
+SECRET_KEY_RE = re.compile(
+    r"(?:^|[-_])(api[-_]?key|token|secret|password|authorization)(?:$|[-_])",
+    re.IGNORECASE,
+)
+# Each secret-shaped pattern requires a non-alphanumeric boundary before
+# it (negative lookbehind) — without this, `sk-` matches mid-word inside
+# ordinary strings like "task-force" or "risk-assessment" (round-2
+# review), which is a real hazard since `worktree`/`branch` are captured
+# automatically from `git` and `ocw` names branches `ai/<slug>`.
 SECRET_VALUE_RE = re.compile(
     r"Authorization:\s*.*"
     r"|Bearer\s+\S+"
-    r"|sk-[A-Za-z0-9_-]+"
-    r"|gh[pousr]_[A-Za-z0-9]+"
-    r"|github_pat_[A-Za-z0-9_]+",
+    r"|(?<![A-Za-z0-9])sk-[A-Za-z0-9_-]+"
+    r"|(?<![A-Za-z0-9])gh[pousr]_[A-Za-z0-9]+"
+    r"|(?<![A-Za-z0-9])github_pat_[A-Za-z0-9_]+",
     re.IGNORECASE,
 )
 
@@ -248,7 +279,7 @@ def local_offset_str():
 def redact_value(key, value):
     if not isinstance(value, str):
         return value
-    if key and SECRET_KEY_RE.search(key):
+    if key and key not in TOKEN_COUNT_FIELD_NAMES and SECRET_KEY_RE.search(key):
         return "[REDACTED]"
     if SECRET_VALUE_RE.search(value):
         return SECRET_VALUE_RE.sub("[REDACTED]", value)
@@ -388,9 +419,55 @@ def append_line(path, line, mode=0o600):
         os.close(fd)
 
 
+def _replace_line_by_idempotency_key(events_file, key, new_line):
+    """Atomically replace the first stored line whose idempotency_key
+    matches `key`. Returns False (no-op) if no such line is found in
+    THIS file — same-key resends land in the same day's file in the
+    overwhelming common case, so this deliberately does not search
+    across files."""
+    if not events_file.exists():
+        return False
+    lines = events_file.read_text(encoding="utf-8").splitlines()
+    replaced = False
+    out = []
+    for line in lines:
+        if not replaced:
+            try:
+                obj = json.loads(line)
+            except json.JSONDecodeError:
+                obj = None
+            if isinstance(obj, dict) and obj.get("idempotency_key") == key:
+                out.append(new_line)
+                replaced = True
+                continue
+        out.append(line)
+    if not replaced:
+        return False
+
+    tmp_fd, tmp_path = tempfile.mkstemp(dir=str(events_file.parent), prefix=".tmp-", suffix=".jsonl")
+    try:
+        with os.fdopen(tmp_fd, "w", encoding="utf-8") as fh:
+            for line in out:
+                fh.write(line + "\n")
+        os.chmod(tmp_path, 0o600)
+        os.replace(tmp_path, events_file)
+    except Exception:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp_path)
+        raise
+    return True
+
+
 def write_event(paths, event):
     """Single flock-guarded check-then-append: dedup via idempotency_key,
-    one write() per file (plan §10.3 concurrent-writer requirement)."""
+    one write() per file (plan §10.3 concurrent-writer requirement).
+
+    Last-write-wins on a duplicate idempotency_key (round-2 review): a
+    resend under the same key is either a corrected resubmission (a
+    quarantined event freed its key — see cmd_validate) or, for an event
+    like `usage.message`, a later content-block line carrying more
+    complete data than an earlier one for the same `message.id` (plan
+    §5.3) — either way the newer payload is the one worth keeping."""
     dt = parse_ts(event["ts"]) or datetime.now(timezone.utc)
     events_file = paths.events_dir / f"{dt.strftime('%Y-%m-%d')}.jsonl"
     seen_file = paths.seen_keys_dir / f"{dt.strftime('%Y-%m')}.txt"
@@ -405,12 +482,16 @@ def write_event(paths, event):
                 seen = {line.rstrip("\n") for line in fh if line.strip()}
 
         key = event["idempotency_key"]
+        new_line = json.dumps(event, ensure_ascii=False, sort_keys=True)
+
         if key in seen:
-            return "duplicate"
+            if _replace_line_by_idempotency_key(events_file, key, new_line):
+                return "replaced"
+            return "duplicate"  # original line lives in a different day's file
 
         ensure_dir(paths.events_dir, 0o700)
         ensure_dir(paths.seen_keys_dir, 0o700)
-        append_line(events_file, json.dumps(event, ensure_ascii=False, sort_keys=True))
+        append_line(events_file, new_line)
         append_line(seen_file, key)
         return "written"
 
@@ -529,23 +610,57 @@ def emit_meter_error(root, stage, exc):
     If `root` itself is the problem (points inside a Git worktree), fall
     back to the default storage root instead of writing into the very
     path being refused — otherwise a misconfigured OCW_METER_HOME would
-    leave literally no trace anywhere that anything was ever wrong."""
+    leave literally no trace anywhere that anything was ever wrong. When
+    that happens, this prints a one-line stderr warning naming the
+    fallback location, since a user who explicitly set OCW_METER_HOME
+    would otherwise have no way to know their diagnostics are landing
+    somewhere else entirely (round-2 review).
+
+    idempotency_key is stable per (stage, day), not `auto:<uuid4>`: this
+    bypasses the normal write_event()/seen-keys path (no lock), so a
+    persistent misconfiguration caps out at one line per stage per day
+    instead of growing without bound (round-2 review — this was
+    previously unbounded and, worse, was landing in the *real* $HOME of
+    anyone running this test suite without HOME also pointed at a
+    tempdir). The substring check below is a best-effort, non-atomic
+    dedup; it is not race-proof against concurrent writers, which is an
+    acceptable trade-off for a diagnostic record."""
     try:
         target_root = root
+        fell_back = False
         if in_git_worktree(target_root):
             target_root = default_storage_root()
             if target_root is None or in_git_worktree(target_root):
                 return
+            fell_back = True
+
         paths = Paths(target_root)
         ensure_dir(paths.events_dir, 0o700)
+        now = datetime.now(timezone.utc)
+        idempotency_key = f"meter-error:{stage}:{now.strftime('%Y-%m-%d')}"
+        events_file = paths.events_dir / f"{now.strftime('%Y-%m-%d')}.jsonl"
+
+        if events_file.exists():
+            try:
+                if idempotency_key in events_file.read_text(encoding="utf-8"):
+                    return
+            except OSError:
+                pass
+
         event = build_envelope("meter.error", {
             "completeness": "unknown",
+            "idempotency_key": idempotency_key,
             "stage": stage,
             "error_type": type(exc).__name__ if exc is not None else None,
         })
-        now = parse_ts(event["ts"]) or datetime.now(timezone.utc)
-        events_file = paths.events_dir / f"{now.strftime('%Y-%m-%d')}.jsonl"
         append_line(events_file, json.dumps(event, ensure_ascii=False, sort_keys=True))
+
+        if fell_back:
+            print(
+                f"warning: OCW_METER_HOME is misconfigured; recorded a meter.error "
+                f"diagnostic at the default storage root instead ({paths.root})",
+                file=sys.stderr,
+            )
     except Exception:
         pass
 
@@ -607,7 +722,13 @@ def cmd_bind_pr(args):
 
 # ── validate / report (fail-loud) ───────────────────────────────────────
 
-def line_errors(obj):
+def hard_line_errors(obj):
+    """Errors that mean the line is corrupt or unusable — these are what
+    `validate` quarantines (removes from the events file). Deliberately
+    does NOT include per-event-type payload shape (see
+    `payload_shape_issues`): a semantically-incomplete-but-well-formed
+    event is not corruption, and quarantining it would delete a record
+    that plan §10.2 explicitly says to keep (as `completeness: partial`)."""
     if not isinstance(obj, dict):
         return ["not a JSON object"]
     errors = []
@@ -635,16 +756,33 @@ def line_errors(obj):
     # notes it may grow ("将来 controller 等を追加可"), so a strict
     # allow-list here would just make future roles look like corruption.
 
+    return errors
+
+
+def payload_shape_issues(obj):
+    """Advisory-only, per-event-type payload checks (plan §8.2/§8.3).
+    Only evaluated when the writer itself claimed `completeness ==
+    "complete"` — an event already marked partial/unknown has already
+    told us it's incomplete, so there's nothing more to flag (round-2
+    review: applying this to best-effort/partial events just quarantined
+    data plan §10.2 says to keep).
+
+    Round-2 review: a required field being explicitly present with a
+    null/empty value (the caller tried and confirmed it's unavailable)
+    is NOT the same as the field never appearing at all (the caller
+    never even attempted it) — only the latter counts as "missing"."""
+    if obj.get("completeness") != "complete":
+        return []
+    issues = []
     event_type = obj.get("event_type")
     for field in EVENT_PAYLOAD_REQUIRED.get(event_type, ()):
-        if obj.get(field) in (None, ""):
-            errors.append(f"missing required payload field for {event_type}: {field}")
+        if field not in obj:
+            issues.append(f"missing required payload field for {event_type}: {field}")
     for field, allowed in EVENT_ENUM_FIELDS.get(event_type, {}).items():
         value = obj.get(field)
         if value is not None and value not in allowed:
-            errors.append(f"{field} must be one of {allowed} for {event_type}, got: {value!r}")
-
-    return errors
+            issues.append(f"{field} must be one of {allowed} for {event_type}, got: {value!r}")
+    return issues
 
 
 def validate_file(path, quarantine_dir):
@@ -652,10 +790,15 @@ def validate_file(path, quarantine_dir):
     the parsed object (when JSON parsing succeeded) alongside the raw
     line and reason, so the caller can also free up any idempotency_key
     that would otherwise block a corrected resend forever (see the
-    seen-keys cleanup in cmd_validate)."""
+    seen-keys cleanup in cmd_validate).
+
+    counts adds "downgraded": events kept in place but rewritten with
+    completeness downgraded to "partial" because they had a payload
+    shape issue (missing/invalid per-event-type field) that is advisory,
+    not corruption — see `payload_shape_issues`."""
     path = pathlib.Path(path)
     if not path.exists():
-        return {"total": 0, "valid": 0, "quarantined": 0}, []
+        return {"total": 0, "valid": 0, "quarantined": 0, "downgraded": 0}, []
 
     raw = path.read_bytes()
     raw_lines = raw.split(b"\n")
@@ -663,7 +806,8 @@ def validate_file(path, quarantine_dir):
     if raw_lines and raw_lines[-1] == b"":
         raw_lines = raw_lines[:-1]
 
-    good, bad = [], []  # bad: dict(raw_line, reason, obj)
+    good, bad = [], []  # good: raw line text to keep; bad: dict(raw_line, reason, obj)
+    downgraded = 0
     for idx, raw_bytes in enumerate(raw_lines):
         if not raw_bytes.strip():
             continue
@@ -682,9 +826,18 @@ def validate_file(path, quarantine_dir):
             reason = "truncated/malformed JSON (possible process crash)" if is_last else "malformed JSON"
             bad.append({"raw_line": raw_line, "reason": reason, "obj": None})
             continue
-        errors = line_errors(obj)
+
+        errors = hard_line_errors(obj)
         if errors:
             bad.append({"raw_line": raw_line, "reason": "; ".join(errors), "obj": obj})
+            continue
+
+        issues = payload_shape_issues(obj)
+        if issues:
+            obj = dict(obj)
+            obj["completeness"] = "partial"
+            good.append(json.dumps(obj, ensure_ascii=False, sort_keys=True))
+            downgraded += 1
         else:
             good.append(raw_line)
 
@@ -704,6 +857,7 @@ def validate_file(path, quarantine_dir):
         with contextlib.suppress(OSError):
             os.chmod(qpath, 0o600)
 
+    if bad or downgraded:
         tmp_fd, tmp_path = tempfile.mkstemp(dir=str(path.parent), prefix=".tmp-", suffix=".jsonl")
         try:
             with os.fdopen(tmp_fd, "w", encoding="utf-8") as fh:
@@ -716,7 +870,7 @@ def validate_file(path, quarantine_dir):
                 os.unlink(tmp_path)
             raise
 
-    return {"total": len(good) + len(bad), "valid": len(good), "quarantined": len(bad)}, bad
+    return {"total": len(good) + len(bad), "valid": len(good), "quarantined": len(bad), "downgraded": downgraded}, bad
 
 
 def month_of(obj, fallback_date_str):
@@ -771,7 +925,7 @@ def cmd_validate(args):
         if not acquired:
             print("error: could not acquire storage lock within 2s", file=sys.stderr)
             return 1
-        totals = {"total": 0, "valid": 0, "quarantined": 0}
+        totals = {"total": 0, "valid": 0, "quarantined": 0, "downgraded": 0}
         keys_to_remove_by_month = {}
         for target in targets:
             result, quarantined_entries = validate_file(target, paths.quarantine_dir)
@@ -790,13 +944,20 @@ def cmd_validate(args):
     print(f"lines total:       {totals['total']}")
     print(f"lines valid:       {totals['valid']}")
     print(f"lines quarantined: {totals['quarantined']}")
+    print(f"lines downgraded to partial (payload shape only, kept): {totals['downgraded']}")
     return 0
 
 
 def iter_stored_events(paths):
     """Yield (event_or_None, raw_line, error_or_None) for every stored
     line. Malformed lines are reported here, not moved — moving them is
-    `validate`'s job, so `report` stays read-only."""
+    `validate`'s job, so `report` stays read-only.
+
+    Uses `hard_line_errors` only, not `payload_shape_issues`: a payload
+    shape issue is advisory (see `payload_shape_issues`'s docstring), so
+    an event with one is still a valid, countable event here — its
+    `completeness` field (as currently stored) is what tells the truth,
+    not exclusion from this report entirely."""
     for target in sorted(paths.events_dir.glob("*.jsonl")):
         try:
             text = target.read_text(encoding="utf-8", errors="replace")
@@ -810,7 +971,7 @@ def iter_stored_events(paths):
             except json.JSONDecodeError:
                 yield None, raw_line, "malformed JSON"
                 continue
-            errors = line_errors(obj)
+            errors = hard_line_errors(obj)
             yield obj, raw_line, ("; ".join(errors) if errors else None)
 
 
