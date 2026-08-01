@@ -133,7 +133,9 @@ ocw-meter report [--pr <n>] [--json]
 | `OCW_METER_HOME` | `~/.local/state/ocw-meter` | 保存先ルート。**git worktree内を指すと拒否される**（誤commit防止）。`event`/`bind-pr`は書き込みをスキップして exit 0（設定ミスが誰にも気づかれないままにならないよう、既定の保存先へ `meter.error` を1件/日で記録し、fallbackした旨をstderrに警告する）、`validate`/`report`は非ゼロで停止する |
 | `OCW_METER_RAW` | `0` | 予約済み（将来フェーズのopt-in raw保存用）。現時点のサブコマンドでは未使用 |
 
-保存レイアウト: `events/YYYY-MM-DD.jsonl`（append-only, mode 600）/ `state/seen-keys/YYYY-MM.txt`（`idempotency_key`による重複排除）/
+保存レイアウト: `events/YYYY-MM-DD.jsonl`（基本はappend-only, mode 600。**例外**: 同一`idempotency_key`を再送すると
+後勝ち(last-write-wins)でその日のファイル内の該当行をmkstemp+os.replaceで原子的に置き換える）/
+`state/seen-keys/YYYY-MM.txt`（`idempotency_key`による重複排除）/
 `quarantine/YYYY-MM-DD.jsonl`（schema不正・破損行の隔離先）。ディレクトリは mode 700。
 
 **プライバシー方針**: プロンプト全文・モデル応答全文・ソースコード本文・APIキー・認証ヘッダ・トークン類は

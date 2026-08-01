@@ -380,12 +380,14 @@ class SecretRedactionTests(OcwMeterTestCase):
             self.home,
         )
         self.assertEqual(result.returncode, 0)
+        # Round-3 review: these must be real numbers (plan §8.4's cost
+        # formula does arithmetic on them), not strings.
         event = read_events(self.home)[-1]
-        self.assertEqual(event["input_tokens"], "4617")
-        self.assertEqual(event["output_tokens"], "329")
-        self.assertEqual(event["cache_read_input_tokens"], "27264")
-        self.assertEqual(event["cache_creation_input_tokens"], "0")
-        self.assertEqual(event["reasoning_tokens"], "12")
+        self.assertEqual(event["input_tokens"], 4617)
+        self.assertEqual(event["output_tokens"], 329)
+        self.assertEqual(event["cache_read_input_tokens"], 27264)
+        self.assertEqual(event["cache_creation_input_tokens"], 0)
+        self.assertEqual(event["reasoning_tokens"], 12)
 
     def test_sk_pattern_does_not_match_mid_word(self):
         # Round-2 review: the un-anchored "sk-" pattern matched inside
@@ -592,6 +594,49 @@ class QuarantineSeenKeysCleanupTests(OcwMeterTestCase):
         events = read_events(self.home)
         self.assertEqual(events[0]["completeness"], "partial")
 
+    def test_non_numeric_payload_field_is_quarantined_like_round_or_pr_number(self):
+        # Round-3 review: a *present* value of the wrong type in a known
+        # numeric payload field (findings_count here) is corruption, not
+        # absence — same hard/quarantine treatment as round/pr_number,
+        # not the soft downgrade payload_shape_issues gives to missing
+        # fields.
+        run_meter(
+            ["event", "review.round", "--idempotency-key", "rk3", "--round", "1", "--verdict", "approved", "--findings-count", "not-a-number"],
+            self.home,
+        )
+        run_meter(["validate"], self.home)
+        self.assertEqual(read_events(self.home), [])
+        quarantined = read_quarantine(self.home)
+        self.assertEqual(len(quarantined), 1)
+        self.assertIn("findings_count", quarantined[0]["reason"])
+
+
+class ReplaceTrailingNewlineTests(OcwMeterTestCase):
+    def test_replace_preserves_a_crash_truncated_final_line(self):
+        # Round-3 review: last-write-wins rewrites the day's file via
+        # `_replace_line_by_idempotency_key`. If that rewrite always
+        # terminates every line with "\n", it silently "heals" a
+        # crash-truncated final line (the only signal `validate_file`
+        # has for T05) the next time ANY OTHER key in the same file
+        # happens to get replaced.
+        run_meter(["event", "phase.start", "--idempotency-key", "k1", "--phase", "implement"], self.home)
+
+        events_dir = self.home / "events"
+        today = sorted(events_dir.glob("*.jsonl"))[0]
+        with open(today, "a", encoding="utf-8") as fh:
+            fh.write('{"schema_version": 1, "event_id": "crashed", "idempotency_key": "crashed-key"')  # no closing brace, no newline
+
+        # Trigger a replace on the *other* (complete) key, not the
+        # crashed one.
+        result = run_meter(["event", "phase.start", "--idempotency-key", "k1", "--phase", "implement", "--note", "resend"], self.home)
+        self.assertEqual(result.returncode, 0)
+
+        result = run_meter(["validate"], self.home)
+        self.assertEqual(result.returncode, 0)
+        quarantined = read_quarantine(self.home)
+        self.assertEqual(len(quarantined), 1)
+        self.assertIn("crash", quarantined[0]["reason"])
+
 
 class ExceptionMessageRedactionTests(OcwMeterTestCase):
     def test_event_error_message_does_not_leak_secret_shaped_positional_arg(self):
@@ -641,6 +686,10 @@ class EventSchemaValidationTests(OcwMeterTestCase):
         )
         self.assertEqual(len(events), 1)
         self.assertEqual(events[0]["completeness"], "complete")
+        # Round-3 review: "" must become a real JSON null, not survive as
+        # an empty string — a CLI flag can't carry `null` directly, so ""
+        # is how a caller spells it, but the *stored* value must be null.
+        self.assertIsNone(events[0]["five_hour_used_pct"])
         self.assertEqual(quarantined, [])
 
     def test_best_effort_event_missing_advisory_field_stays_complete(self):
@@ -779,11 +828,11 @@ class TranscriptFixtureDedupTests(OcwMeterTestCase):
         # first (which would silently under-count output tokens by
         # exactly the amount plan §8.4's cost formula multiplies).
         kept = next(e for e in events if e["message_id"] == "msg_fixture_dup_001")
-        self.assertEqual(kept["output_tokens"], "329")
-        # And the token-count fields themselves must be the real numbers,
-        # not "[REDACTED]" (round-2 review, most severe finding).
-        self.assertEqual(kept["input_tokens"], "4617")
-        self.assertEqual(kept["cache_read_input_tokens"], "27264")
+        self.assertEqual(kept["output_tokens"], 329)
+        # And the token-count fields themselves must be real numbers, not
+        # "[REDACTED]" (round-2) and not strings (round-3).
+        self.assertEqual(kept["input_tokens"], 4617)
+        self.assertEqual(kept["cache_read_input_tokens"], 27264)
 
     def test_last_write_wins_generically_for_any_duplicate_key(self):
         run_meter(["event", "phase.start", "--idempotency-key", "lw1", "--phase", "implement", "--note", "first"], self.home)

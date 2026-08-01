@@ -134,6 +134,16 @@ python3 - "$cmd" "$@" <<'PY'
 # `ingest` must NOT shell out to `ocw-meter event` per message; it needs
 # its own bulk-write path that resolves git metadata once and keeps the
 # seen-key set (and the storage lock) for the whole batch.
+#
+# On top of that: a duplicate idempotency_key now triggers last-write-
+# wins (round-2), which rewrites the *entire* day's events file via
+# `_replace_line_by_idempotency_key`. ADR-001 §2.2 measured 59.4% of
+# real assistant lines as message.id duplicates — meaning a naive
+# per-message ingest loop would trigger this full-file rewrite for the
+# majority of its calls, each one O(file size). This is the single
+# biggest reason `ingest` needs its own batch path: resolve all
+# duplicates for one message.id in memory before doing a single write,
+# rather than writing-then-rewriting through this CLI's primitives.
 import contextlib
 import errno
 import fcntl
@@ -159,6 +169,21 @@ ENVELOPE_FIELDS = (
 )
 INT_FIELDS = ("schema_version", "round", "pr_number")
 REQUIRED_FIELDS = ("event_id", "event_type", "idempotency_key", "schema_version", "ts")
+
+# Payload fields (not part of the fixed envelope) that plan §8.4/§8.5
+# define as numbers. Without coercing these, every one of them would be
+# stored as a string forever — harmless to look at, but plan §8.4's cost
+# formula does arithmetic on them and would TypeError the moment
+# anything actually reads these fields (round-3 review). `used_pct`
+# fields may legitimately be non-integer percentages, so these try int
+# first, then float — see `to_number`.
+NUMERIC_PAYLOAD_FIELDS = frozenset({
+    "findings_count", "duration_ms", "wait_ms",
+    "input_tokens", "output_tokens", "cache_read_input_tokens",
+    "cache_creation_input_tokens", "reasoning_tokens",
+    "five_hour_used_pct", "seven_day_used_pct", "context_used_pct",
+    "five_hour_resets_at", "seven_day_resets_at",
+})
 
 COMPLETENESS_ENUM = ("complete", "partial", "unknown")
 SOURCE_ENUM = ("ocw", "pr-review-loop", "transcript", "statusline", "unknown")
@@ -424,10 +449,25 @@ def _replace_line_by_idempotency_key(events_file, key, new_line):
     matches `key`. Returns False (no-op) if no such line is found in
     THIS file — same-key resends land in the same day's file in the
     overwhelming common case, so this deliberately does not search
-    across files."""
+    across files.
+
+    Preserves whether the file ended with a trailing newline. A file
+    lacking one has a truncated final line — the only signal
+    `validate_file` has for "process crashed mid-write" (T05). Naively
+    rejoining lines with "\\n" after every line, including the last,
+    would silently "heal" that truncation the next time any *other*
+    key happens to get replaced, destroying the crash evidence
+    (round-3 review)."""
     if not events_file.exists():
         return False
-    lines = events_file.read_text(encoding="utf-8").splitlines()
+    text = events_file.read_text(encoding="utf-8")
+    if not text:
+        return False
+    trailing_newline = text.endswith("\n")
+    lines = text.split("\n")
+    if trailing_newline:
+        lines = lines[:-1]
+
     replaced = False
     out = []
     for line in lines:
@@ -444,11 +484,12 @@ def _replace_line_by_idempotency_key(events_file, key, new_line):
     if not replaced:
         return False
 
+    content = "\n".join(out) + ("\n" if trailing_newline else "")
+
     tmp_fd, tmp_path = tempfile.mkstemp(dir=str(events_file.parent), prefix=".tmp-", suffix=".jsonl")
     try:
         with os.fdopen(tmp_fd, "w", encoding="utf-8") as fh:
-            for line in out:
-                fh.write(line + "\n")
+            fh.write(content)
         os.chmod(tmp_path, 0o600)
         os.replace(tmp_path, events_file)
     except Exception:
@@ -467,7 +508,15 @@ def write_event(paths, event):
     quarantined event freed its key — see cmd_validate) or, for an event
     like `usage.message`, a later content-block line carrying more
     complete data than an earlier one for the same `message.id` (plan
-    §5.3) — either way the newer payload is the one worth keeping."""
+    §5.3) — either way the newer payload is the one worth keeping.
+
+    NOTE: this is the one exception to "events/*.jsonl is append-only"
+    (plan §9.1/§10.3). A duplicate key triggers a full read + atomic
+    rewrite of that day's file (see `_replace_line_by_idempotency_key`)
+    instead of a plain append. This is still crash-safe (mkstemp +
+    os.replace), but it is not append-only, and `emit_meter_error`
+    shares this function's lock specifically so it never appends to a
+    file mid-rewrite (round-3 review)."""
     dt = parse_ts(event["ts"]) or datetime.now(timezone.utc)
     events_file = paths.events_dir / f"{dt.strftime('%Y-%m-%d')}.jsonl"
     seen_file = paths.seen_keys_dir / f"{dt.strftime('%Y-%m')}.txt"
@@ -498,18 +547,49 @@ def write_event(paths, event):
 
 # ── envelope construction ──────────────────────────────────────────────
 
-def coerce(key, value, failures):
-    if value is None or key not in INT_FIELDS:
-        return value
+def to_number(value):
+    """Best-effort int-then-float coercion. Returns (converted, True) on
+    success or (original_value, False) on failure."""
     try:
-        return int(value)
+        return int(value), True
     except (TypeError, ValueError):
-        # Left as the original (wrong-typed) value; the caller downgrades
-        # completeness to "partial" for this (see build_envelope) so the
-        # mistake is visible immediately, not just whenever someone next
-        # happens to run `validate`.
-        failures.append(key)
-        return value
+        pass
+    try:
+        return float(value), True
+    except (TypeError, ValueError):
+        return value, False
+
+
+def normalize_value(key, value, failures):
+    """Applied to every caller-supplied override, both fixed envelope
+    fields and extra/payload fields alike (round-3 review — the extras
+    loop previously bypassed coercion entirely, so payload numbers like
+    input_tokens/findings_count stayed strings forever).
+
+    An empty string becomes JSON null: this is how a caller (a future
+    `ingest`/`snapshot-quota`) records "I checked and this is genuinely
+    unavailable" (plan §8.5 / ADR-001 §2.1), as distinct from never
+    mentioning the field at all — CLI flags can't carry a real `null`,
+    so "" is the closest a string-only interface gets."""
+    if value == "":
+        return None
+    if key in INT_FIELDS:
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            # Left as the original (wrong-typed) value; the caller
+            # downgrades completeness to "partial" for this (see
+            # build_envelope) so the mistake is visible immediately, not
+            # just whenever someone next happens to run `validate`.
+            failures.append(key)
+            return value
+    if key in NUMERIC_PAYLOAD_FIELDS:
+        converted, ok = to_number(value)
+        if not ok:
+            failures.append(key)
+            return value
+        return converted
+    return value
 
 
 def parse_flags(args, mapping=None):
@@ -576,13 +656,16 @@ def build_envelope(event_type, overrides):
     coercion_failures = []
     event = {}
     for field in ENVELOPE_FIELDS:
-        event[field] = coerce(field, overrides[field], coercion_failures) if field in overrides else defaults[field]
+        event[field] = normalize_value(field, overrides[field], coercion_failures) if field in overrides else defaults[field]
 
     # Unknown flags become extra top-level fields (e.g. run.start's
-    # base_ref) — forward compatible, never silently dropped.
+    # base_ref) — forward compatible, never silently dropped. Also
+    # normalized (empty string -> null, known numeric payload fields ->
+    # int/float) so `usage.message`/`quota.sample`/etc. store real
+    # numbers, not strings (round-3 review).
     for key, value in overrides.items():
         if key not in ENVELOPE_FIELDS:
-            event[key] = value
+            event[key] = normalize_value(key, value, coercion_failures)
 
     if coercion_failures and "completeness" not in overrides:
         # A caller passed a non-integer for round/pr_number/schema_version.
@@ -601,11 +684,17 @@ def build_envelope(event_type, overrides):
 
 def emit_meter_error(root, stage, exc):
     """Best-effort self-diagnostic (plan §8.2/§10.2 `meter.error`). Never
-    raises. Never takes the main storage lock: this is called from
-    exactly the failure paths where that lock is unavailable or the
-    surrounding write already failed, so re-using it here would either
-    deadlock or fail the same way instead of recording anything — a
-    single lock-free O_APPEND write is the whole point.
+    raises.
+
+    Takes the main storage lock with a short (20ms) timeout — short
+    enough that a genuinely contended/stuck lock just means this
+    diagnostic is skipped (acceptable: it's best-effort), but real
+    enough to matter: round-2 added `_replace_line_by_idempotency_key`,
+    which rewrites the day's events file via mkstemp+os.replace (a new
+    inode). A lock-free append here could `open()` the old inode right
+    before a replace swaps it in, and then write bytes into a file no
+    path points to anymore — silently lost. Sharing the lock removes
+    that race entirely (round-3 review).
 
     If `root` itself is the problem (points inside a Git worktree), fall
     back to the default storage root instead of writing into the very
@@ -616,15 +705,9 @@ def emit_meter_error(root, stage, exc):
     would otherwise have no way to know their diagnostics are landing
     somewhere else entirely (round-2 review).
 
-    idempotency_key is stable per (stage, day), not `auto:<uuid4>`: this
-    bypasses the normal write_event()/seen-keys path (no lock), so a
+    idempotency_key is stable per (stage, day), not `auto:<uuid4>`, so a
     persistent misconfiguration caps out at one line per stage per day
-    instead of growing without bound (round-2 review — this was
-    previously unbounded and, worse, was landing in the *real* $HOME of
-    anyone running this test suite without HOME also pointed at a
-    tempdir). The substring check below is a best-effort, non-atomic
-    dedup; it is not race-proof against concurrent writers, which is an
-    acceptable trade-off for a diagnostic record."""
+    instead of growing without bound (round-2 review)."""
     try:
         target_root = root
         fell_back = False
@@ -640,20 +723,24 @@ def emit_meter_error(root, stage, exc):
         idempotency_key = f"meter-error:{stage}:{now.strftime('%Y-%m-%d')}"
         events_file = paths.events_dir / f"{now.strftime('%Y-%m-%d')}.jsonl"
 
-        if events_file.exists():
-            try:
-                if idempotency_key in events_file.read_text(encoding="utf-8"):
-                    return
-            except OSError:
-                pass
+        with acquire_lock(paths.lock_file, timeout=0.02) as acquired:
+            if not acquired:
+                return
 
-        event = build_envelope("meter.error", {
-            "completeness": "unknown",
-            "idempotency_key": idempotency_key,
-            "stage": stage,
-            "error_type": type(exc).__name__ if exc is not None else None,
-        })
-        append_line(events_file, json.dumps(event, ensure_ascii=False, sort_keys=True))
+            if events_file.exists():
+                try:
+                    if idempotency_key in events_file.read_text(encoding="utf-8"):
+                        return
+                except OSError:
+                    pass
+
+            event = build_envelope("meter.error", {
+                "completeness": "unknown",
+                "idempotency_key": idempotency_key,
+                "stage": stage,
+                "error_type": type(exc).__name__ if exc is not None else None,
+            })
+            append_line(events_file, json.dumps(event, ensure_ascii=False, sort_keys=True))
 
         if fell_back:
             print(
@@ -743,6 +830,17 @@ def hard_line_errors(obj):
         value = obj.get(field)
         if value is not None and not isinstance(value, int):
             errors.append(f"{field} must be an int or null")
+
+    # Same treatment as round/pr_number, not payload_shape_issues: a
+    # *present* value of the wrong type is a corruption signal (data
+    # written by something that didn't go through this CLI's coercion),
+    # not an absence — so it's hard/quarantine-worthy regardless of
+    # completeness, matching the existing round/pr_number precedent
+    # (round-3 review).
+    for field in NUMERIC_PAYLOAD_FIELDS:
+        value = obj.get(field)
+        if value is not None and not isinstance(value, (int, float)):
+            errors.append(f"{field} must be a number or null, got: {value!r}")
 
     completeness = obj.get("completeness")
     if completeness is not None and completeness not in COMPLETENESS_ENUM:
