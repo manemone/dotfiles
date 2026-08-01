@@ -1,0 +1,1341 @@
+#!/usr/bin/env bash
+set -uo pipefail
+
+# NOTE on exit-code policy (docs/planning/DOC-003_..._計画.md §10.1):
+#   `event` / `bind-pr` must ALWAYS exit 0 (fail-open: observation must
+#   never break the production flow that calls it).
+#   `validate` / `report` must fail loud (non-zero) on unexpected errors,
+#   since silently trusting corrupted data would make every downstream
+#   number meaningless.
+# This file intentionally does NOT `set -e` — exit codes are managed by
+# hand so the fail-open guarantee holds even if python3 itself is
+# missing or the embedded script crashes outright.
+
+warn() { echo "warning: $*" >&2; }
+die() { echo "error: $*" >&2; exit 1; }
+
+usage() {
+  cat <<'USAGE'
+usage:
+  ocw-meter event <event_type> [--key value ...]
+  ocw-meter bind-pr --run <run_id> --pr <n> [--url <url>]
+  ocw-meter validate [--file <path>]
+  ocw-meter report [--pr <n>] [--json]
+  ocw-meter help
+
+subcommands:
+  event
+    Append one event line to the event log, append-only (a resend under
+    the same idempotency_key replaces the stored line instead —
+    last-write-wins). Common envelope fields (run_id, role, phase,
+    round, pr_number, source, ...) can be overridden with "--field
+    value" flags; unrecognized flags are stored as extra top-level
+    fields (forward compatible). Always exits 0.
+
+  bind-pr
+    Convenience wrapper around `event pr.bind`. Always exits 0.
+
+  validate
+    Re-reads stored events. Quarantines (removes) lines that are
+    corrupt — malformed JSON or a broken core envelope. Lines with a
+    per-event-type payload shape issue (missing/invalid field) are kept
+    but rewritten with completeness downgraded to "partial", not
+    quarantined. `--file` must be inside the events directory. Exits
+    non-zero on unexpected failure.
+
+  report
+    Prints an event-count / completeness / coverage summary. Skeleton
+    only in this phase — cost figures arrive with the DeepSeek ingest
+    and Claude quota phases. Exits non-zero on unexpected failure.
+
+environment:
+  OCW_METER_HOME
+    default: $HOME/.local/state/ocw-meter
+    Storage root. Refused if it resolves inside a Git worktree:
+    event/bind-pr print a stderr warning and skip the write (never
+    silent), and also record a meter.error diagnostic under the
+    *default* storage root's state/meter-errors.jsonl, since the
+    configured one is exactly the path being refused. validate/report
+    error out instead.
+
+  OCW_METER_RAW
+    default: 0
+    Reserved for a later phase (opt-in raw snapshot storage). Unused
+    by this subcommand set.
+
+notes:
+  - `ingest` and `snapshot-quota` are not implemented in this phase.
+  - Nothing here talks to the network or reads prompt/response content.
+  - Callers should guard every invocation with:
+      command -v ocw-meter >/dev/null && ocw-meter event ... || true
+    ocw-meter being entirely absent from PATH is a supported, normal
+    state — every other tool in this repo must keep working without it.
+  - state/meter-errors.jsonl holds ocw-meter's own best-effort
+    self-diagnostics (lock timeouts, the worktree refusal above,
+    unexpected exceptions) — `report` shows its line count alongside
+    quarantined lines.
+USAGE
+}
+
+# NOTE: do not write "${OCW_METER_HOME:-$HOME/...}" directly — under
+# `set -u`, if OCW_METER_HOME is unset AND HOME is unset, expanding $HOME
+# inside the default kills the whole script with a non-zero exit before
+# python is ever reached, which would break the fail-open guarantee for
+# `event`/`bind-pr` no matter what safety nets exist below. Resolve HOME
+# with its own safe default first.
+if [ -z "${OCW_METER_HOME:-}" ] && [ -n "${HOME:-}" ]; then
+  OCW_METER_HOME="$HOME/.local/state/ocw-meter"
+fi
+export OCW_METER_HOME="${OCW_METER_HOME:-}"
+export OCW_METER_RAW="${OCW_METER_RAW:-0}"
+
+cmd="${1:-}"
+if [ -z "$cmd" ]; then
+  usage
+  exit 1
+fi
+shift || true
+
+case "$cmd" in
+  help | -h | --help)
+    usage
+    exit 0
+    ;;
+  event | bind-pr | validate | report)
+    ;;
+  *)
+    usage >&2
+    die "unknown subcommand: $cmd"
+    ;;
+esac
+
+if [ -z "$OCW_METER_HOME" ]; then
+  case "$cmd" in
+    event | bind-pr)
+      warn "OCW_METER_HOME is not set and HOME is not set; skipping '$cmd' (fail-open, no event recorded)"
+      exit 0
+      ;;
+    *)
+      die "OCW_METER_HOME is not set and HOME is not set; cannot determine a storage root"
+      ;;
+  esac
+fi
+
+if ! command -v python3 >/dev/null 2>&1; then
+  case "$cmd" in
+    event | bind-pr)
+      warn "python3 not found; skipping '$cmd' (fail-open, no event recorded)"
+      exit 0
+      ;;
+    *)
+      die "required command not found: python3"
+      ;;
+  esac
+fi
+
+python3 - "$cmd" "$@" <<'PY'
+# PERFORMANCE NOTE for whoever builds the DeepSeek transcript `ingest`
+# subcommand (a later phase): this CLI resolves git metadata (repo slug,
+# worktree root, branch, HEAD SHA, plus the worktree-safety check itself
+# — 5 `git` subprocess calls per `event` invocation) and reloads
+# the *entire* monthly seen-keys file on every single invocation. Measured
+# at ~75ms/event in this repo. That is fine for the phase-boundary event
+# volumes `ocw` / `pr-review-loop` produce (tens of events per run), but a
+# real transcript has tens of thousands of messages (ADR-001 §2.2 measured
+# 39,888 distinct `message.id`s in one month) — looping this CLI once per
+# message would take on the order of an hour and re-read an
+# ever-growing seen-keys file on every iteration (effectively O(n^2)).
+# `ingest` must NOT shell out to `ocw-meter event` per message; it needs
+# its own bulk-write path that resolves git metadata once and keeps the
+# seen-key set (and the storage lock) for the whole batch.
+#
+# On top of that: a duplicate idempotency_key now triggers last-write-
+# wins (round-2), which rewrites the *entire* day's events file via
+# `_replace_line_by_idempotency_key`. ADR-001 §2.2 measured 59.4% of
+# real assistant lines as message.id duplicates — meaning a naive
+# per-message ingest loop would trigger this full-file rewrite for the
+# majority of its calls, each one O(file size). This is the single
+# biggest reason `ingest` needs its own batch path: resolve all
+# duplicates for one message.id in memory before doing a single write,
+# rather than writing-then-rewriting through this CLI's primitives.
+import contextlib
+import errno
+import fcntl
+import json
+import math
+import os
+import pathlib
+import re
+import subprocess
+import sys
+import tempfile
+import time
+import uuid
+from datetime import datetime, timezone
+
+SCHEMA_VERSION = 1
+
+ENVELOPE_FIELDS = (
+    "schema_version", "event_id", "idempotency_key", "event_type", "ts",
+    "ts_local_offset", "source", "parser_version", "completeness", "run_id",
+    "repo", "worktree", "branch", "head_sha", "workspace_id", "pane_id",
+    "role", "session_id", "provider", "model", "phase", "round",
+    "pr_number", "pr_url",
+)
+INT_FIELDS = ("schema_version", "round", "pr_number")
+REQUIRED_FIELDS = ("event_id", "event_type", "idempotency_key", "schema_version", "ts")
+
+# Payload fields (not part of the fixed envelope) that plan §8.4/§8.5
+# define as numbers. Without coercing these, every one of them would be
+# stored as a string forever — harmless to look at, but plan §8.4's cost
+# formula does arithmetic on them and would TypeError the moment
+# anything actually reads these fields (round-3 review). `used_pct`
+# fields may legitimately be non-integer percentages, so these try int
+# first, then float — see `to_number`.
+#
+# Kept in sync with plan §8.4 (usage.message) and §8.5 (quota.sample) by
+# going through each table top-to-bottom (round-4 review, after
+# `cost_estimate_usd` and `is_sidechain` were missed the first pass):
+#   §8.4 numeric: input_tokens, cache_creation_input_tokens,
+#     cache_read_input_tokens, output_tokens, reasoning_tokens,
+#     cost_estimate_usd
+#   §8.4 boolean: is_sidechain -> BOOL_PAYLOAD_FIELDS below
+#   §8.4 string/no-coercion: message_id, effort, stop_reason,
+#     price_table_version, price_effective_date, cost_basis, currency
+#   §8.5 numeric: five_hour_used_pct, five_hour_resets_at,
+#     seven_day_used_pct, seven_day_resets_at, context_used_pct
+#   §8.5 string/no-coercion: window_id, plan_source, raw_ref
+#   other numeric payload fields (review.round/phase.end/block.end):
+#     findings_count, duration_ms, wait_ms
+NUMERIC_PAYLOAD_FIELDS = frozenset({
+    "findings_count", "duration_ms", "wait_ms",
+    "input_tokens", "output_tokens", "cache_read_input_tokens",
+    "cache_creation_input_tokens", "reasoning_tokens", "cost_estimate_usd",
+    "five_hour_used_pct", "seven_day_used_pct", "context_used_pct",
+    "five_hour_resets_at", "seven_day_resets_at",
+})
+BOOL_PAYLOAD_FIELDS = frozenset({"is_sidechain"})
+_TRUE_STRINGS = frozenset({"true", "1", "yes"})
+_FALSE_STRINGS = frozenset({"false", "0", "no"})
+
+COMPLETENESS_ENUM = ("complete", "partial", "unknown")
+SOURCE_ENUM = ("ocw", "pr-review-loop", "transcript", "statusline", "unknown")
+
+# Per-event-type required payload fields, plan §8.2/§8.3. Only the event
+# types this phase's prompt lists as in-scope get enforced; an
+# `event_type` NOT in this table is treated as forward-compatible (no
+# payload check) rather than rejected outright — new event types must be
+# addable without every historical `ocw-meter` binary starting to
+# quarantine them (plan §9.1 "未知フィールドは保持する" extended to
+# unknown *types*, not just unknown fields).
+#
+# usage.message / quota.sample get their schema defined here per the
+# 孫1 prompt §2 even though nothing in this phase produces them yet
+# (that's 孫3/孫4) — see plan §8.4/§8.5.
+# Required sets are deliberately conservative (round-2 review): a field
+# only belongs here if the plan's own 孫2/孫3/孫4 embedding examples show
+# it being set on *every* occurrence of that event type. `phase.end`'s
+# `outcome`/`duration_ms` and `block.end`'s `wait_ms` were removed —
+# 孫2's actual embedding only sets `outcome` on the final `done`
+# phase.end, and block.* is explicitly "best-effort" (plan §8.2).
+# `quota.sample` keeps only `plan_source`: everything else about a
+# quota sample is legitimately absent (DeepSeek sessions have no
+# rate_limits at all — ADR-001 §2.1 — and even Anthropic sessions saw
+# `context_used_pct` null in 7/66 samples) and T10 requires recording
+# that absence as null, not treating it as corruption.
+EVENT_PAYLOAD_REQUIRED = {
+    "run.start": ("base_ref", "command"),
+    "run.end": ("outcome",),
+    "phase.start": ("phase",),
+    "phase.end": ("phase",),
+    "pr.bind": ("pr_number",),
+    "review.round": ("round", "verdict", "findings_count"),
+    "human.intervention": ("reason",),
+    "block.start": ("cause",),
+    "block.end": ("cause",),
+    "meter.error": ("stage",),
+    "usage.message": (
+        "message_id", "input_tokens", "cache_read_input_tokens",
+        "cache_creation_input_tokens", "output_tokens", "cost_basis",
+    ),
+    "quota.sample": ("plan_source",),
+}
+
+EVENT_ENUM_FIELDS = {
+    "phase.end": {"outcome": ("success", "failure", "blocked")},
+    "review.round": {"verdict": ("approved", "changes_requested", "ambiguous")},
+    "block.start": {"cause": ("rate_limit", "api_error", "unknown")},
+    "block.end": {"cause": ("rate_limit", "api_error", "unknown")},
+}
+
+# Secret-shaped values must never survive into stored events (plan §9.2 /
+# T17). `redact_value` covers structured field values keyed by name;
+# `redact_text` covers free-form text (exception messages) where there is
+# no field name to key off, so only the pattern-based half applies there.
+#
+# SECRET_KEY_RE requires "token"/"secret"/etc. to be a whole underscore-
+# delimited segment of the field name, not merely a substring — a naive
+# substring match redacts `input_tokens` / `output_tokens` /
+# `cache_read_input_tokens` / `cache_creation_input_tokens` /
+# `reasoning_tokens` (round-2 review, most severe finding: this project
+# exists to measure exactly those numbers). TOKEN_COUNT_FIELD_NAMES is a
+# belt-and-suspenders explicit allow-list on top of that, since relying
+# solely on "tokens" (plural) not matching a boundary-anchored "token"
+# pattern is a coincidence worth not depending on alone.
+TOKEN_COUNT_FIELD_NAMES = frozenset({
+    "input_tokens", "output_tokens", "cache_read_input_tokens",
+    "cache_creation_input_tokens", "reasoning_tokens",
+})
+SECRET_KEY_RE = re.compile(
+    r"(?:^|[-_])(api[-_]?key|token|secret|password|authorization)(?:$|[-_])",
+    re.IGNORECASE,
+)
+# Each secret-shaped pattern requires a non-alphanumeric boundary before
+# it (negative lookbehind) — without this, `sk-` matches mid-word inside
+# ordinary strings like "task-force" or "risk-assessment" (round-2
+# review), which is a real hazard since `worktree`/`branch` are captured
+# automatically from `git` and `ocw` names branches `ai/<slug>`.
+SECRET_VALUE_RE = re.compile(
+    r"Authorization:\s*.*"
+    r"|Bearer\s+\S+"
+    r"|(?<![A-Za-z0-9])sk-[A-Za-z0-9_-]+"
+    r"|(?<![A-Za-z0-9])gh[pousr]_[A-Za-z0-9]+"
+    r"|(?<![A-Za-z0-9])github_pat_[A-Za-z0-9_]+",
+    re.IGNORECASE,
+)
+
+
+class MeterTimeout(Exception):
+    pass
+
+
+# ── small helpers ──────────────────────────────────────────────────────
+
+def iso_utc(dt):
+    return dt.strftime("%Y-%m-%dT%H:%M:%S.") + f"{dt.microsecond // 1000:03d}Z"
+
+
+def parse_ts(value):
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def local_offset_str():
+    offset = datetime.now().astimezone().utcoffset()
+    if offset is None:
+        return "+00:00"
+    total_minutes = int(offset.total_seconds() // 60)
+    sign = "+" if total_minutes >= 0 else "-"
+    total_minutes = abs(total_minutes)
+    return f"{sign}{total_minutes // 60:02d}:{total_minutes % 60:02d}"
+
+
+def redact_value(key, value):
+    if not isinstance(value, str):
+        return value
+    if key and key not in TOKEN_COUNT_FIELD_NAMES and SECRET_KEY_RE.search(key):
+        return "[REDACTED]"
+    if SECRET_VALUE_RE.search(value):
+        return SECRET_VALUE_RE.sub("[REDACTED]", value)
+    return value
+
+
+def redact_text(text):
+    """Pattern-only redaction for free-form strings (error/warning
+    messages) that may echo caller-supplied CLI values but have no field
+    name to key `redact_value`'s key-name check off of (plan §10.1: never
+    log the content of input data, not even in the meter's own errors)."""
+    if not isinstance(text, str):
+        return text
+    return SECRET_VALUE_RE.sub("[REDACTED]", text)
+
+
+def _git(args, cwd=None):
+    try:
+        result = subprocess.run(
+            ["git", *args],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+    except Exception:
+        return None
+    if result.returncode != 0:
+        return None
+    value = result.stdout.strip()
+    return value or None
+
+
+def git_worktree_root():
+    return _git(["rev-parse", "--show-toplevel"])
+
+
+def git_branch():
+    branch = _git(["rev-parse", "--abbrev-ref", "HEAD"])
+    return None if branch == "HEAD" else branch
+
+
+def git_head_sha():
+    return _git(["rev-parse", "HEAD"])
+
+
+def git_repo_slug():
+    url = _git(["remote", "get-url", "origin"])
+    if not url:
+        return None
+    m = re.search(r"[:/]([^/:]+)/([^/]+?)(?:\.git)?$", url)
+    return f"{m.group(1)}/{m.group(2)}" if m else None
+
+
+def in_git_worktree(path):
+    p = pathlib.Path(path)
+    try:
+        p = p.resolve()
+    except OSError:
+        pass
+    check_dir = p
+    while not check_dir.exists():
+        parent = check_dir.parent
+        if parent == check_dir:
+            return False
+        check_dir = parent
+    return _git(["rev-parse", "--is-inside-work-tree"], cwd=str(check_dir)) == "true"
+
+
+# ── storage layout ─────────────────────────────────────────────────────
+
+class Paths:
+    def __init__(self, root):
+        self.root = pathlib.Path(root)
+        self.events_dir = self.root / "events"
+        self.state_dir = self.root / "state"
+        self.seen_keys_dir = self.state_dir / "seen-keys"
+        self.quarantine_dir = self.root / "quarantine"
+        self.lock_file = self.state_dir / ".lock"
+        # Deliberately NOT under events_dir: `_replace_line_by_
+        # idempotency_key` only ever rewrites files under events_dir, so
+        # keeping meter.error's diagnostics in a separate file lets
+        # `emit_meter_error` append lock-free with zero risk of losing
+        # data to that rewrite's inode swap (round-4 review — sharing
+        # the main lock made the write_event_lock_timeout diagnostic
+        # self-defeating: it would need the very lock it's reporting as
+        # unavailable).
+        self.meter_errors_file = self.state_dir / "meter-errors.jsonl"
+
+
+def storage_root():
+    return os.environ.get("OCW_METER_HOME") or str(pathlib.Path.home() / ".local" / "state" / "ocw-meter")
+
+
+def default_storage_root():
+    home = os.environ.get("HOME")
+    return str(pathlib.Path(home) / ".local" / "state" / "ocw-meter") if home else None
+
+
+def ensure_dir(path, mode=0o700):
+    path.mkdir(parents=True, exist_ok=True)
+    try:
+        os.chmod(path, mode)
+    except OSError:
+        pass
+
+
+def ensure_storage(root):
+    paths = Paths(root)
+    for d in (paths.root, paths.events_dir, paths.state_dir, paths.seen_keys_dir, paths.quarantine_dir):
+        ensure_dir(d, 0o700)
+    return paths
+
+
+@contextlib.contextmanager
+def acquire_lock(lock_path, timeout=0.1, poll=0.005):
+    ensure_dir(lock_path.parent, 0o700)
+    fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o600)
+    start = time.monotonic()
+    acquired = False
+    try:
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                acquired = True
+                break
+            except OSError as exc:
+                if exc.errno not in (errno.EAGAIN, errno.EACCES):
+                    raise
+                if time.monotonic() - start >= timeout:
+                    break
+                time.sleep(poll)
+        yield acquired
+    finally:
+        if acquired:
+            with contextlib.suppress(OSError):
+                fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
+
+
+def append_line(path, line, mode=0o600):
+    fd = os.open(str(path), os.O_CREAT | os.O_WRONLY | os.O_APPEND, mode)
+    try:
+        os.write(fd, (line + "\n").encode("utf-8"))
+    finally:
+        os.close(fd)
+
+
+def _replace_line_by_idempotency_key(events_file, key, new_line):
+    """Atomically replace the first stored line whose idempotency_key
+    matches `key`. Returns False (no-op) if no such line is found in
+    THIS file — same-key resends land in the same day's file in the
+    overwhelming common case, so this deliberately does not search
+    across files.
+
+    Preserves whether the file ended with a trailing newline. A file
+    lacking one has a truncated final line — the only signal
+    `validate_file` has for "process crashed mid-write" (T05). Naively
+    rejoining lines with "\\n" after every line, including the last,
+    would silently "heal" that truncation the next time any *other*
+    key happens to get replaced, destroying the crash evidence
+    (round-3 review)."""
+    if not events_file.exists():
+        return False
+    text = events_file.read_text(encoding="utf-8")
+    if not text:
+        return False
+    trailing_newline = text.endswith("\n")
+    lines = text.split("\n")
+    if trailing_newline:
+        lines = lines[:-1]
+
+    replaced = False
+    out = []
+    for line in lines:
+        if not replaced:
+            try:
+                obj = json.loads(line)
+            except json.JSONDecodeError:
+                obj = None
+            if isinstance(obj, dict) and obj.get("idempotency_key") == key:
+                out.append(new_line)
+                replaced = True
+                continue
+        out.append(line)
+    if not replaced:
+        return False
+
+    content = "\n".join(out) + ("\n" if trailing_newline else "")
+
+    tmp_fd, tmp_path = tempfile.mkstemp(dir=str(events_file.parent), prefix=".tmp-", suffix=".jsonl")
+    try:
+        with os.fdopen(tmp_fd, "w", encoding="utf-8") as fh:
+            fh.write(content)
+        os.chmod(tmp_path, 0o600)
+        os.replace(tmp_path, events_file)
+    except Exception:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp_path)
+        raise
+    return True
+
+
+def write_event(paths, event):
+    """Single flock-guarded check-then-append: dedup via idempotency_key,
+    one write() per file (plan §10.3 concurrent-writer requirement).
+
+    Last-write-wins on a duplicate idempotency_key (round-2 review): a
+    resend under the same key is either a corrected resubmission (a
+    quarantined event freed its key — see cmd_validate) or, for an event
+    like `usage.message`, a later content-block line carrying more
+    complete data than an earlier one for the same `message.id` (plan
+    §5.3) — either way the newer payload is the one worth keeping.
+
+    NOTE: this is the one exception to "events/*.jsonl is append-only"
+    (plan §9.1/§10.3). A duplicate key triggers a full read + atomic
+    rewrite of that day's file (see `_replace_line_by_idempotency_key`)
+    instead of a plain append. This is still crash-safe (mkstemp +
+    os.replace). `emit_meter_error` never touches events/*.jsonl at all
+    (it has its own `state/meter-errors.jsonl` — round-4 review), so
+    there is no longer a lock-free-append-vs-rewrite race to worry
+    about here."""
+    dt = parse_ts(event["ts"]) or datetime.now(timezone.utc)
+    events_file = paths.events_dir / f"{dt.strftime('%Y-%m-%d')}.jsonl"
+    seen_file = paths.seen_keys_dir / f"{dt.strftime('%Y-%m')}.txt"
+
+    with acquire_lock(paths.lock_file, timeout=0.1) as acquired:
+        if not acquired:
+            raise MeterTimeout("could not acquire storage lock within 100ms")
+
+        seen = set()
+        if seen_file.exists():
+            with open(seen_file, "r", encoding="utf-8") as fh:
+                seen = {line.rstrip("\n") for line in fh if line.strip()}
+
+        key = event["idempotency_key"]
+        new_line = json.dumps(event, ensure_ascii=False, sort_keys=True, allow_nan=False)
+
+        if key in seen:
+            if _replace_line_by_idempotency_key(events_file, key, new_line):
+                return "replaced"
+            return "duplicate"  # original line lives in a different day's file
+
+        ensure_dir(paths.events_dir, 0o700)
+        ensure_dir(paths.seen_keys_dir, 0o700)
+        append_line(events_file, new_line)
+        append_line(seen_file, key)
+        return "written"
+
+
+# ── envelope construction ──────────────────────────────────────────────
+
+def to_number(value):
+    """Best-effort int-then-float coercion. Returns (converted, True) on
+    success or (original_value, False) on failure.
+
+    Rejects non-finite floats (nan/inf): those aren't valid JSON literals
+    (Python's `json` module accepts them as a non-standard extension,
+    but `jq` and most other languages' parsers do not — round-4 review),
+    so a non-finite result is treated the same as any other coercion
+    failure: left as-is and flagged, which downgrades completeness to
+    "partial" rather than silently writing JSON nothing else can read."""
+    try:
+        return int(value), True
+    except (TypeError, ValueError):
+        pass
+    try:
+        converted = float(value)
+    except (TypeError, ValueError):
+        return value, False
+    if not math.isfinite(converted):
+        return value, False
+    return converted, True
+
+
+def to_bool(value):
+    """Best-effort bool coercion for CLI string values. Returns
+    (converted, True) on success or (original_value, False) on failure."""
+    if isinstance(value, str) and value.strip().lower() in _TRUE_STRINGS:
+        return True, True
+    if isinstance(value, str) and value.strip().lower() in _FALSE_STRINGS:
+        return False, True
+    return value, False
+
+
+def normalize_value(key, value, failures):
+    """Applied to every caller-supplied override, both fixed envelope
+    fields and extra/payload fields alike (round-3 review — the extras
+    loop previously bypassed coercion entirely, so payload numbers like
+    input_tokens/findings_count stayed strings forever).
+
+    An empty string becomes JSON null: this is how a caller (a future
+    `ingest`/`snapshot-quota`) records "I checked and this is genuinely
+    unavailable" (plan §8.5 / ADR-001 §2.1), as distinct from never
+    mentioning the field at all — CLI flags can't carry a real `null`,
+    so "" is the closest a string-only interface gets."""
+    if value == "":
+        return None
+    if key in INT_FIELDS:
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            # Left as the original (wrong-typed) value; the caller
+            # downgrades completeness to "partial" for this (see
+            # build_envelope) so the mistake is visible immediately, not
+            # just whenever someone next happens to run `validate`.
+            failures.append(key)
+            return value
+    if key in NUMERIC_PAYLOAD_FIELDS:
+        converted, ok = to_number(value)
+        if not ok:
+            failures.append(key)
+            return value
+        return converted
+    if key in BOOL_PAYLOAD_FIELDS:
+        converted, ok = to_bool(value)
+        if not ok:
+            failures.append(key)
+            return value
+        return converted
+    return value
+
+
+def parse_flags(args, mapping=None):
+    """Parse a flat "--flag value" arg list. With no mapping, the flag
+    name itself (dashes -> underscores) becomes the field name — this is
+    what makes `event <type> --any-field value` forward-extensible."""
+    result = {}
+    i = 0
+    while i < len(args):
+        token = args[i]
+        if not token.startswith("--"):
+            raise ValueError(f"expected a --flag, got: {token!r}")
+        if i + 1 >= len(args):
+            raise ValueError(f"flag {token} is missing a value")
+        value = args[i + 1]
+        if mapping is not None:
+            key = mapping.get(token)
+            if key is None:
+                raise ValueError(f"unknown flag: {token}")
+        else:
+            key = token[2:].replace("-", "_")
+        result[key] = value
+        i += 2
+    return result
+
+
+def build_envelope(event_type, overrides):
+    if not event_type or not isinstance(event_type, str):
+        raise ValueError("event_type must be a non-empty string")
+
+    now = datetime.now(timezone.utc)
+    event_id = overrides.get("event_id") or str(uuid.uuid4())
+
+    defaults = {
+        "schema_version": SCHEMA_VERSION,
+        "event_id": event_id,
+        "idempotency_key": f"auto:{event_id}",
+        "event_type": event_type,
+        "ts": iso_utc(now),
+        "ts_local_offset": local_offset_str(),
+        # plan §8.1: role/source are typed as plain `string`, not
+        # `string | null` — "unknown" is the documented sentinel for
+        # "could not be resolved", not the absence of the field.
+        "source": "unknown",
+        "parser_version": None,
+        "completeness": "complete",
+        "run_id": os.environ.get("OCW_RUN_ID"),
+        "repo": git_repo_slug(),
+        "worktree": git_worktree_root(),
+        "branch": git_branch(),
+        "head_sha": git_head_sha(),
+        "workspace_id": os.environ.get("HERDR_WORKSPACE_ID"),
+        "pane_id": os.environ.get("HERDR_PANE_ID"),
+        "role": os.environ.get("OCW_ROLE") or "unknown",
+        "session_id": None,
+        "provider": None,
+        "model": None,
+        "phase": None,
+        "round": None,
+        "pr_number": None,
+        "pr_url": None,
+    }
+
+    coercion_failures = []
+    event = {}
+    for field in ENVELOPE_FIELDS:
+        event[field] = normalize_value(field, overrides[field], coercion_failures) if field in overrides else defaults[field]
+
+    # Unknown flags become extra top-level fields (e.g. run.start's
+    # base_ref) — forward compatible, never silently dropped. Also
+    # normalized (empty string -> null, known numeric payload fields ->
+    # int/float) so `usage.message`/`quota.sample`/etc. store real
+    # numbers, not strings (round-3 review).
+    for key, value in overrides.items():
+        if key not in ENVELOPE_FIELDS:
+            event[key] = normalize_value(key, value, coercion_failures)
+
+    if coercion_failures and "completeness" not in overrides:
+        # A caller passed a non-integer for round/pr_number/schema_version.
+        # `validate` will still quarantine it, but don't wait for someone
+        # to run `validate` to find out — flag it the moment it happens.
+        event["completeness"] = "partial"
+
+    for key in list(event.keys()):
+        event[key] = redact_value(key, event[key])
+
+    if not event.get("idempotency_key"):
+        event["idempotency_key"] = f"auto:{event_id}"
+
+    return event
+
+
+def emit_meter_error(root, stage, exc):
+    """Best-effort self-diagnostic (plan §8.2/§10.2 `meter.error`). Never
+    raises. Never takes the main storage lock, and does NOT write into
+    events/*.jsonl — it appends to its own `state/meter-errors.jsonl`
+    instead (see `Paths.meter_errors_file`). Round-3 shared the main
+    lock to avoid a race with `_replace_line_by_idempotency_key`, but
+    that made the `write_event_lock_timeout` diagnostic self-defeating:
+    it needs the very lock it exists to report as unavailable, so it
+    would almost never actually record anything (round-4 review). A
+    dedicated file sidesteps the race a different way: nothing else
+    ever rewrites this file, so a lock-free O_APPEND write here is safe
+    regardless of what's happening to events/*.jsonl.
+
+    If `root` itself is the problem (points inside a Git worktree), fall
+    back to the default storage root instead of writing into the very
+    path being refused — otherwise a misconfigured OCW_METER_HOME would
+    leave literally no trace anywhere that anything was ever wrong. When
+    that happens, this prints a one-line stderr warning naming the
+    fallback location, since a user who explicitly set OCW_METER_HOME
+    would otherwise have no way to know their diagnostics are landing
+    somewhere else entirely (round-2 review).
+
+    idempotency_key is stable per (stage, day), not `auto:<uuid4>`, so a
+    persistent misconfiguration caps out at one line per stage per day
+    instead of growing without bound (round-2 review). The substring
+    check below is a best-effort, non-atomic dedup; it is not race-proof
+    against concurrent writers, which is an acceptable trade-off for a
+    diagnostic record."""
+    try:
+        target_root = root
+        fell_back = False
+        if in_git_worktree(target_root):
+            target_root = default_storage_root()
+            if target_root is None or in_git_worktree(target_root):
+                return
+            fell_back = True
+
+        paths = Paths(target_root)
+        # Round-5 review: `ensure_dir` only chmods the leaf directory it's
+        # given, so passing state_dir alone left the storage ROOT at
+        # umask-default 755 whenever this ran before `ensure_storage` had
+        # a chance to (e.g. this exact fallback path, or any failure
+        # this fires from on a brand-new root). Plan §9.1/§9.3 require
+        # 700 on every directory, root included.
+        ensure_dir(paths.root, 0o700)
+        ensure_dir(paths.state_dir, 0o700)
+        now = datetime.now(timezone.utc)
+        idempotency_key = f"meter-error:{stage}:{now.strftime('%Y-%m-%d')}"
+
+        if paths.meter_errors_file.exists():
+            try:
+                if idempotency_key in paths.meter_errors_file.read_text(encoding="utf-8"):
+                    return
+            except OSError:
+                pass
+
+        event = build_envelope("meter.error", {
+            "completeness": "unknown",
+            "idempotency_key": idempotency_key,
+            "stage": stage,
+            "error_type": type(exc).__name__ if exc is not None else None,
+        })
+        append_line(paths.meter_errors_file, json.dumps(event, ensure_ascii=False, sort_keys=True, allow_nan=False))
+
+        if fell_back:
+            print(
+                f"warning: OCW_METER_HOME is misconfigured; recorded a meter.error "
+                f"diagnostic at the default storage root instead ({paths.root})",
+                file=sys.stderr,
+            )
+    except Exception:
+        pass
+
+
+def record(event_type, overrides):
+    root = storage_root()
+    if in_git_worktree(root):
+        print(
+            f"warning: OCW_METER_HOME ({root}) resolves inside a Git worktree; "
+            "refusing to write there (no event recorded)",
+            file=sys.stderr,
+        )
+        emit_meter_error(root, "storage_home_inside_git_worktree", None)
+        return 0
+
+    paths = ensure_storage(root)
+    event = build_envelope(event_type, overrides)
+    try:
+        write_event(paths, event)
+    except MeterTimeout as exc:
+        print(f"warning: {exc}", file=sys.stderr)
+        emit_meter_error(root, "write_event_lock_timeout", exc)
+        return 0
+    return 0
+
+
+# ── subcommands: event / bind-pr (fail-open) ───────────────────────────
+
+def cmd_event(args):
+    if not args or args[0].startswith("--"):
+        print("error: event requires an <event_type> argument", file=sys.stderr)
+        return 0
+    event_type, rest = args[0], args[1:]
+    overrides = parse_flags(rest)
+    return record(event_type, overrides)
+
+
+def cmd_bind_pr(args):
+    parsed = parse_flags(args, {"--run": "run_id", "--pr": "pr_number", "--url": "pr_url"})
+    run_id = parsed.get("run_id")
+    pr_number_raw = parsed.get("pr_number")
+    if not run_id or pr_number_raw is None:
+        print("error: bind-pr requires --run <run_id> and --pr <n>", file=sys.stderr)
+        return 0
+    try:
+        pr_number = int(pr_number_raw)
+    except ValueError:
+        print(f"error: --pr must be an integer, got: {redact_text(repr(pr_number_raw))}", file=sys.stderr)
+        return 0
+
+    overrides = {
+        "run_id": run_id,
+        "pr_number": pr_number,
+        "pr_url": parsed.get("pr_url"),
+        "idempotency_key": f"bind:{run_id}:{pr_number}",
+    }
+    return record("pr.bind", overrides)
+
+
+# ── validate / report (fail-loud) ───────────────────────────────────────
+
+def hard_line_errors(obj):
+    """Errors that mean the line is corrupt or unusable — these are what
+    `validate` quarantines (removes from the events file). Deliberately
+    does NOT include per-event-type payload shape (see
+    `payload_shape_issues`): a semantically-incomplete-but-well-formed
+    event is not corruption, and quarantining it would delete a record
+    that plan §10.2 explicitly says to keep (as `completeness: partial`)."""
+    if not isinstance(obj, dict):
+        return ["not a JSON object"]
+    errors = []
+    for field in REQUIRED_FIELDS:
+        if obj.get(field) in (None, ""):
+            errors.append(f"missing required field: {field}")
+    if "schema_version" in obj and obj["schema_version"] is not None and not isinstance(obj["schema_version"], int):
+        errors.append("schema_version must be an int")
+    if obj.get("ts") and parse_ts(obj["ts"]) is None:
+        errors.append("ts is not a valid RFC3339 timestamp")
+    for field in ("round", "pr_number"):
+        value = obj.get(field)
+        if value is not None and not isinstance(value, int):
+            errors.append(f"{field} must be an int or null")
+
+    # Same treatment as round/pr_number, not payload_shape_issues: a
+    # *present* value of the wrong type is a corruption signal (data
+    # written by something that didn't go through this CLI's coercion),
+    # not an absence — so it's hard/quarantine-worthy regardless of
+    # completeness, matching the existing round/pr_number precedent
+    # (round-3 review).
+    for field in NUMERIC_PAYLOAD_FIELDS:
+        value = obj.get(field)
+        if value is not None and not isinstance(value, (int, float)):
+            errors.append(f"{field} must be a number or null, got: {value!r}")
+        elif isinstance(value, float) and not math.isfinite(value):
+            # Defense in depth: our own write path never produces these
+            # (`to_number` rejects non-finite results), but a foreign
+            # producer writing straight to the JSONL could still inject
+            # a `NaN`/`Infinity` literal that Python's `json.loads`
+            # happens to accept even though it isn't valid JSON.
+            errors.append(f"{field} must be a finite number, got: {value!r}")
+
+    for field in BOOL_PAYLOAD_FIELDS:
+        value = obj.get(field)
+        if value is not None and not isinstance(value, bool):
+            errors.append(f"{field} must be a bool or null, got: {value!r}")
+
+    completeness = obj.get("completeness")
+    if completeness is not None and completeness not in COMPLETENESS_ENUM:
+        errors.append(f"completeness must be one of {COMPLETENESS_ENUM}, got: {completeness!r}")
+
+    source = obj.get("source")
+    if source is not None and source not in SOURCE_ENUM:
+        errors.append(f"source must be one of {SOURCE_ENUM}, got: {source!r}")
+
+    # role is deliberately NOT checked against a closed enum: plan §8.1
+    # notes it may grow ("将来 controller 等を追加可"), so a strict
+    # allow-list here would just make future roles look like corruption.
+
+    return errors
+
+
+def payload_shape_issues(obj):
+    """Advisory-only, per-event-type payload checks (plan §8.2/§8.3).
+    Only evaluated when the writer itself claimed `completeness ==
+    "complete"` — an event already marked partial/unknown has already
+    told us it's incomplete, so there's nothing more to flag (round-2
+    review: applying this to best-effort/partial events just quarantined
+    data plan §10.2 says to keep).
+
+    Round-2 review: a required field being explicitly present with a
+    null/empty value (the caller tried and confirmed it's unavailable)
+    is NOT the same as the field never appearing at all (the caller
+    never even attempted it) — only the latter counts as "missing".
+
+    Round-4 review: that distinction is about MISSING vs ABSENT-BUT-
+    ACKNOWLEDGED, not about "null is fine." A *required* field that is
+    present-but-null (e.g. an unset shell variable passed through as
+    `--phase ""`) still isn't usable data — `completeness: "complete"`
+    would be a lie either way, so both cases downgrade to "partial"."""
+    if obj.get("completeness") != "complete":
+        return []
+    issues = []
+    event_type = obj.get("event_type")
+    for field in EVENT_PAYLOAD_REQUIRED.get(event_type, ()):
+        if field not in obj:
+            issues.append(f"missing required payload field for {event_type}: {field}")
+        elif obj[field] is None:
+            issues.append(f"required payload field for {event_type} is null: {field}")
+    for field, allowed in EVENT_ENUM_FIELDS.get(event_type, {}).items():
+        value = obj.get(field)
+        if value is not None and value not in allowed:
+            issues.append(f"{field} must be one of {allowed} for {event_type}, got: {value!r}")
+    return issues
+
+
+def validate_file(path, quarantine_dir):
+    """Returns (counts, quarantined_entries). quarantined_entries carries
+    the parsed object (when JSON parsing succeeded) alongside the raw
+    line and reason, so the caller can also free up any idempotency_key
+    that would otherwise block a corrected resend forever (see the
+    seen-keys cleanup in cmd_validate).
+
+    counts adds "downgraded": events kept in place but rewritten with
+    completeness downgraded to "partial" because they had a payload
+    shape issue (missing/invalid per-event-type field) that is advisory,
+    not corruption — see `payload_shape_issues`."""
+    path = pathlib.Path(path)
+    if not path.exists():
+        return {"total": 0, "valid": 0, "quarantined": 0, "downgraded": 0}, []
+
+    raw = path.read_bytes()
+    raw_lines = raw.split(b"\n")
+    trailing_incomplete = bool(raw_lines and raw_lines[-1] != b"")
+    if raw_lines and raw_lines[-1] == b"":
+        raw_lines = raw_lines[:-1]
+
+    good, bad = [], []  # good: raw line text to keep; bad: dict(raw_line, reason, obj)
+    downgraded = 0
+    for idx, raw_bytes in enumerate(raw_lines):
+        if not raw_bytes.strip():
+            continue
+        is_last = trailing_incomplete and idx == len(raw_lines) - 1
+        try:
+            raw_line = raw_bytes.decode("utf-8")
+        except UnicodeDecodeError:
+            # Strict decode, not errors="replace": silently substituting
+            # U+FFFD and writing that back would permanently corrupt an
+            # otherwise-good line the next time this runs.
+            bad.append({"raw_line": raw_bytes.decode("utf-8", errors="replace"), "reason": "invalid UTF-8 encoding", "obj": None})
+            continue
+        try:
+            obj = json.loads(raw_line)
+        except json.JSONDecodeError:
+            reason = "truncated/malformed JSON (possible process crash)" if is_last else "malformed JSON"
+            bad.append({"raw_line": raw_line, "reason": reason, "obj": None})
+            continue
+
+        errors = hard_line_errors(obj)
+        if errors:
+            bad.append({"raw_line": raw_line, "reason": "; ".join(errors), "obj": obj})
+            continue
+
+        issues = payload_shape_issues(obj)
+        if issues:
+            obj = dict(obj)
+            obj["completeness"] = "partial"
+            good.append(json.dumps(obj, ensure_ascii=False, sort_keys=True, allow_nan=False))
+            downgraded += 1
+        else:
+            good.append(raw_line)
+
+    if bad:
+        date_str = path.stem
+        qpath = pathlib.Path(quarantine_dir) / f"{date_str}.jsonl"
+        ensure_dir(qpath.parent, 0o700)
+        with open(qpath, "a", encoding="utf-8") as fh:
+            for entry in bad:
+                record_ = {
+                    "quarantined_at": iso_utc(datetime.now(timezone.utc)),
+                    "reason": entry["reason"],
+                    "source_file": path.name,
+                    "raw_line": entry["raw_line"],
+                }
+                fh.write(json.dumps(record_, ensure_ascii=False) + "\n")
+        with contextlib.suppress(OSError):
+            os.chmod(qpath, 0o600)
+
+    if bad or downgraded:
+        tmp_fd, tmp_path = tempfile.mkstemp(dir=str(path.parent), prefix=".tmp-", suffix=".jsonl")
+        try:
+            with os.fdopen(tmp_fd, "w", encoding="utf-8") as fh:
+                for raw_line in good:
+                    fh.write(raw_line + "\n")
+            os.chmod(tmp_path, 0o600)
+            os.replace(tmp_path, path)
+        except Exception:
+            with contextlib.suppress(OSError):
+                os.unlink(tmp_path)
+            raise
+
+    return {"total": len(good) + len(bad), "valid": len(good), "quarantined": len(bad), "downgraded": downgraded}, bad
+
+
+def month_of(obj, fallback_date_str):
+    ts = obj.get("ts") if obj else None
+    dt = parse_ts(ts) if ts else None
+    if dt is not None:
+        return dt.astimezone(timezone.utc).strftime("%Y-%m")
+    return fallback_date_str[:7]  # "YYYY-MM-DD"[:7] -> "YYYY-MM"
+
+
+def remove_keys_from_seen_file(path, keys_to_remove):
+    if not keys_to_remove or not path.exists():
+        return
+    remaining = [line for line in path.read_text(encoding="utf-8").splitlines() if line.strip() and line not in keys_to_remove]
+    tmp_fd, tmp_path = tempfile.mkstemp(dir=str(path.parent), prefix=".tmp-", suffix=".txt")
+    try:
+        with os.fdopen(tmp_fd, "w", encoding="utf-8") as fh:
+            for line in remaining:
+                fh.write(line + "\n")
+        os.chmod(tmp_path, 0o600)
+        os.replace(tmp_path, path)
+    except Exception:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp_path)
+        raise
+
+
+def cmd_validate(args):
+    parsed = parse_flags(args, {"--file": "file"}) if args else {}
+
+    root = storage_root()
+    if in_git_worktree(root):
+        print(f"error: OCW_METER_HOME ({root}) resolves inside a Git worktree; refusing to operate", file=sys.stderr)
+        return 1
+    paths = ensure_storage(root)
+
+    if parsed.get("file"):
+        candidate = pathlib.Path(parsed["file"]).resolve()
+        events_dir_resolved = paths.events_dir.resolve()
+        if candidate != events_dir_resolved and events_dir_resolved not in candidate.parents:
+            print(
+                f"error: --file must be inside the events directory ({paths.events_dir}); "
+                f"refusing to touch: {candidate}",
+                file=sys.stderr,
+            )
+            return 1
+        targets = [candidate]
+    else:
+        targets = sorted(paths.events_dir.glob("*.jsonl"))
+
+    with acquire_lock(paths.lock_file, timeout=2.0) as acquired:
+        if not acquired:
+            print("error: could not acquire storage lock within 2s", file=sys.stderr)
+            return 1
+        totals = {"total": 0, "valid": 0, "quarantined": 0, "downgraded": 0}
+        keys_to_remove_by_month = {}
+        for target in targets:
+            result, quarantined_entries = validate_file(target, paths.quarantine_dir)
+            for k in totals:
+                totals[k] += result[k]
+            for entry in quarantined_entries:
+                obj = entry["obj"]
+                key = obj.get("idempotency_key") if obj else None
+                if key:
+                    month = month_of(obj, target.stem)
+                    keys_to_remove_by_month.setdefault(month, set()).add(key)
+        for month, keys in keys_to_remove_by_month.items():
+            remove_keys_from_seen_file(paths.seen_keys_dir / f"{month}.txt", keys)
+
+    print(f"files checked:     {len(targets)}")
+    print(f"lines total:       {totals['total']}")
+    print(f"lines valid:       {totals['valid']}")
+    print(f"lines quarantined: {totals['quarantined']}")
+    print(f"lines downgraded to partial (payload shape only, kept): {totals['downgraded']}")
+    return 0
+
+
+def iter_stored_events(paths):
+    """Yield (event_or_None, raw_line, error_or_None) for every stored
+    line. Malformed lines are reported here, not moved — moving them is
+    `validate`'s job, so `report` stays read-only.
+
+    Uses `hard_line_errors` only, not `payload_shape_issues`: a payload
+    shape issue is advisory (see `payload_shape_issues`'s docstring), so
+    an event with one is still a valid, countable event here — its
+    `completeness` field (as currently stored) is what tells the truth,
+    not exclusion from this report entirely."""
+    for target in sorted(paths.events_dir.glob("*.jsonl")):
+        try:
+            text = target.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        for raw_line in text.split("\n"):
+            if not raw_line.strip():
+                continue
+            try:
+                obj = json.loads(raw_line)
+            except json.JSONDecodeError:
+                yield None, raw_line, "malformed JSON"
+                continue
+            errors = hard_line_errors(obj)
+            yield obj, raw_line, ("; ".join(errors) if errors else None)
+
+
+def count_quarantine_lines(paths):
+    total = 0
+    for target in sorted(paths.quarantine_dir.glob("*.jsonl")):
+        try:
+            with open(target, encoding="utf-8") as fh:
+                total += sum(1 for line in fh if line.strip())
+        except OSError:
+            continue
+    return total
+
+
+def count_meter_errors(paths):
+    if not paths.meter_errors_file.exists():
+        return 0
+    try:
+        with open(paths.meter_errors_file, encoding="utf-8") as fh:
+            return sum(1 for line in fh if line.strip())
+    except OSError:
+        return 0
+
+
+def cmd_report(args):
+    filter_pr = None
+    as_json = False
+    i = 0
+    while i < len(args):
+        token = args[i]
+        if token == "--pr":
+            if i + 1 >= len(args):
+                print("error: --pr requires a value", file=sys.stderr)
+                return 1
+            filter_pr = int(args[i + 1])
+            i += 2
+        elif token == "--json":
+            as_json = True
+            i += 1
+        else:
+            print(f"error: unknown report flag: {token}", file=sys.stderr)
+            return 1
+
+    root = storage_root()
+    if in_git_worktree(root):
+        print(f"error: OCW_METER_HOME ({root}) resolves inside a Git worktree; refusing to operate", file=sys.stderr)
+        return 1
+    paths = ensure_storage(root)
+
+    valid_events, malformed = [], 0
+    for obj, _raw, error in iter_stored_events(paths):
+        if error:
+            malformed += 1
+        else:
+            valid_events.append(obj)
+
+    if filter_pr is not None:
+        bound_run_ids = {
+            e.get("run_id")
+            for e in valid_events
+            if e.get("event_type") == "pr.bind" and e.get("pr_number") == filter_pr and e.get("run_id")
+        }
+        filtered = [
+            e for e in valid_events
+            if e.get("pr_number") == filter_pr or e.get("run_id") in bound_run_ids
+        ]
+    else:
+        filtered = valid_events
+
+    by_type = {}
+    for e in filtered:
+        by_type[e.get("event_type")] = by_type.get(e.get("event_type"), 0) + 1
+
+    completeness_counts = {"complete": 0, "partial": 0, "unknown": 0}
+    for e in filtered:
+        c = e.get("completeness")
+        completeness_counts[c if c in completeness_counts else "unknown"] += 1
+
+    total = len(filtered)
+    quarantined = count_quarantine_lines(paths)
+    meter_errors = count_meter_errors(paths)
+
+    summary = {
+        "storage_root": str(paths.root),
+        "filter_pr": filter_pr,
+        "total_events": total,
+        "by_event_type": by_type,
+        "completeness": completeness_counts,
+        "malformed_unvalidated_lines": malformed,
+        "quarantined_lines": quarantined,
+        "meter_error_diagnostics": meter_errors,
+        "coverage": "not available yet (usage.message events are produced by a later ingest phase)",
+        "price_table": "not applicable (no cost data ingested yet)",
+        "cost_basis": "not applicable (no cost data ingested yet)",
+    }
+
+    if as_json:
+        print(json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True))
+    else:
+        print(f"storage root:  {summary['storage_root']}")
+        if filter_pr is not None:
+            print(f"filter:        pr={filter_pr}")
+        print(f"total events:  {total}")
+        for event_type, count in sorted(by_type.items(), key=lambda kv: (kv[0] or "")):
+            print(f"  {event_type or '(none)'}: {count}")
+
+        def pct(n):
+            return (100.0 * n / total) if total else 0.0
+
+        print(
+            "completeness: "
+            f"complete {pct(completeness_counts['complete']):.1f}% / "
+            f"partial {pct(completeness_counts['partial']):.1f}% / "
+            f"unknown {pct(completeness_counts['unknown']):.1f}%"
+        )
+        print(f"quarantined:   {quarantined} lines")
+        print(f"meter.error diagnostics (state/meter-errors.jsonl): {meter_errors} lines")
+        print(f"malformed (not yet quarantined; run 'ocw-meter validate'): {malformed} lines")
+        print(f"coverage:      {summary['coverage']}")
+        print(f"price_table:   {summary['price_table']}")
+        print(f"cost_basis:    {summary['cost_basis']}")
+
+    return 0
+
+
+# ── entry point ──────────────────────────────────────────────────────
+
+def main():
+    argv = sys.argv[1:]
+    if not argv:
+        print("error: missing subcommand", file=sys.stderr)
+        return 1
+    cmd, rest = argv[0], argv[1:]
+
+    if cmd in ("event", "bind-pr"):
+        try:
+            return cmd_event(rest) if cmd == "event" else cmd_bind_pr(rest)
+        except Exception as exc:  # belt-and-suspenders: fail-open no matter what
+            # redact_text: `exc` may echo a caller-supplied CLI value
+            # (e.g. parse_flags's "expected a --flag, got: ...") that
+            # never made it through build_envelope's redaction.
+            print(
+                f"warning: ocw-meter {cmd} failed unexpectedly: "
+                f"{redact_text(f'{type(exc).__name__}: {exc}')}",
+                file=sys.stderr,
+            )
+            with contextlib.suppress(Exception):
+                emit_meter_error(storage_root(), f"cmd_{cmd.replace('-', '_')}_unexpected_exception", exc)
+            return 0
+
+    if cmd in ("validate", "report"):
+        try:
+            return cmd_validate(rest) if cmd == "validate" else cmd_report(rest)
+        except Exception as exc:
+            print(f"error: ocw-meter {cmd} failed: {redact_text(f'{type(exc).__name__}: {exc}')}", file=sys.stderr)
+            return 1
+
+    print(f"error: unknown subcommand: {cmd}", file=sys.stderr)
+    return 1
+
+
+sys.exit(main())
+PY
+py_status=$?
+
+case "$cmd" in
+  event | bind-pr)
+    if [ "$py_status" -ne 0 ]; then
+      warn "'$cmd' exited $py_status internally; fail-open, treating as success"
+    fi
+    exit 0
+    ;;
+  *)
+    exit "$py_status"
+    ;;
+esac

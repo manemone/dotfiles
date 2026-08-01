@@ -8,6 +8,7 @@
 |---|---|
 | `ocw` | Git worktree 作成・管理。Herdr 連携で commander/implementer/reviewer の三面体制を自動セットアップ |
 | `claude-ds` | Claude Code を DeepSeek API 経由で実行するラッパー |
+| `ocw-meter` | LLM費用・Claude利用枠の観測基盤。既存ログの事後読み取り専用。fail-open |
 
 ## 1. Requirements
 
@@ -39,7 +40,7 @@ which claude-ds
 
 The deploy script:
 - Creates `~/bin/` directory if missing
-- Symlinks `ocw` and `claude-ds` into `~/bin/`
+- Symlinks `ocw`, `claude-ds`, and `ocw-meter` into `~/bin/`
 
 ## 3. What's Included
 
@@ -93,6 +94,65 @@ claude-ds
 | Haiku / subagent | `deepseek-v4-flash` |
 
 API キーは `DEEPSEEK_API_KEY_FILE` 環境変数で指定可能（デフォルト: `~/.config/deepseek/api_key`）。
+
+### 3.3 ocw-meter — LLM費用・Claude利用枠の観測基盤
+
+`ocw` / `claude-ds` / `pr-review-loop` の**本番経路には一切割り込まない**、事後読み取り専用の観測ツール。
+詳細設計は `docs/planning/DOC-003_ai-llm-cost-observability_計画.md` を参照。
+
+**観測は fail-open。`ocw-meter` が無くても、PATH から消えても、書き込みに失敗しても、
+本スキル・`ocw` は完全に動作し続ける。** 呼び出し側は必ず次の形で呼ぶ:
+
+```bash
+command -v ocw-meter >/dev/null && ocw-meter event ... || true
+```
+
+```bash
+# 任意のイベントを1行append（--key value で任意フィールドを上書き・追加可能）
+ocw-meter event <event_type> [--key value ...]
+
+# PRの後付けbind（run_id → PR番号）
+ocw-meter bind-pr --run <run_id> --pr <n> [--url <url>]
+
+# 保存済みイベントのschema検証。壊れた行はquarantineへ隔離
+ocw-meter validate [--file <path>]
+
+# イベント件数・completeness・coverageの要約（骨格。費用集計は後続フェーズ）
+ocw-meter report [--pr <n>] [--json]
+```
+
+| サブコマンド | 失敗時の挙動 |
+|---|---|
+| `event` / `bind-pr` | **常に exit 0**。stderrに1行warnのみ。本番フローを止めない |
+| `validate` / `report` | 失敗したら非ゼロで落ちる（壊れたデータを黙って集計しない） |
+
+**保存先と環境変数:**
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `OCW_METER_HOME` | `~/.local/state/ocw-meter` | 保存先ルート。**git worktree内を指すと拒否される**（誤commit防止）。`event`/`bind-pr`は書き込みをスキップして exit 0（設定ミスが誰にも気づかれないままにならないよう、既定の保存先へ `meter.error` を1件/日で記録し、fallbackした旨をstderrに警告する）、`validate`/`report`は非ゼロで停止する |
+| `OCW_METER_RAW` | `0` | 予約済み（将来フェーズのopt-in raw保存用）。現時点のサブコマンドでは未使用 |
+
+保存レイアウト: `events/YYYY-MM-DD.jsonl`（基本はappend-only, mode 600。**例外**: 同一`idempotency_key`を再送すると
+後勝ち(last-write-wins)でその日のファイル内の該当行をmkstemp+os.replaceで原子的に置き換える）/
+`state/seen-keys/YYYY-MM.txt`（`idempotency_key`による重複排除）/
+`quarantine/YYYY-MM-DD.jsonl`（schema不正・破損行の隔離先）/ `state/meter-errors.jsonl`（`meter.error`自己診断専用。
+`events/`とは別ファイルにすることで、後勝ちdedupによるイベントファイル書き換えと競合せずlock無しで追記できる）。
+ディレクトリは mode 700。`ocw-meter report` はこのファイルの件数も表示する。
+
+**プライバシー方針**: プロンプト全文・モデル応答全文・ソースコード本文・APIキー・認証ヘッダ・トークン類は
+一切保存しない。`--key value` で渡された値のうち `sk-...`（任意長）/ `Bearer ...` / `Authorization: ...` /
+GitHub token形式（`ghp_...` 等 / `github_pat_...`）に一致する値、キー名が
+`api_key` / `token` / `secret` / `password` / `authorization` に一致するものは保存前に `[REDACTED]` へ置換される。
+この置換は保存物だけでなく、meterが出す例外・警告メッセージにも適用される。
+
+**このフェーズでの既知の限界**:
+- `ingest`（DeepSeek transcript取り込み）と `snapshot-quota`（Claude利用枠取得）はまだ実装されていない。
+  `report` の費用・coverage列はプレースホルダで、実データは後続フェーズで入る
+- `event`/`bind-pr` は1呼び出しごとに git メタ情報の解決（subprocess呼び出し数回）と
+  月次seen-keysファイルの全読み込みを行う（実測 約75ms/回）。`ocw`/`pr-review-loop` の工程境界イベント
+  （1runあたり数十件）には十分だが、**大量イベントをループでこのCLI経由で書き込む用途（将来のbulk ingest等）には
+  向かない**。そのような用途は同一プロセス内でgitメタとseen-key集合を1度だけ解決するバッチ経路を別途持つこと
 
 ## 4. Customization
 
