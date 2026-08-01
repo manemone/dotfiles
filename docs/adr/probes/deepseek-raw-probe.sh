@@ -19,7 +19,7 @@ if [ ! -f "$API_KEY_FILE" ]; then
   echo "Set DEEPSEEK_API_KEY_FILE or create ~/.config/deepseek/api_key"
   exit 1
 fi
-API_KEY=$(cat "$API_KEY_FILE")
+API_KEY=$(tr -d '\r\n' < "$API_KEY_FILE")
 
 BASE_URL="https://api.deepseek.com/anthropic/v1/messages"
 MODEL="deepseek-v4-pro[1m]"
@@ -30,7 +30,7 @@ BODY='{"model":"'"$MODEL"'","max_tokens":16,"messages":[{"role":"user","content"
 echo "=== DeepSeek Raw Request Probe ==="
 echo "Model: $MODEL"
 echo "Output files: /tmp/ds-probe-nonstreaming.txt, /tmp/ds-probe-streaming.txt"
-echo "Estimated cost: < $0.01"
+echo 'Estimated cost: < $0.01'
 echo ""
 
 # ── Non-streaming ──
