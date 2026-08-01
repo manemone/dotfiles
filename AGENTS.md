@@ -13,8 +13,11 @@
   すべての不可逆操作の前にこのルールを照合すること。
 - **deploy スクリプト（`deploy-all.sh` / `uninstall.sh` / `*/deploy.sh`）を実オペレーションで
   実行しない。** symlink 先はユーザーの実 `$HOME` であり、`~/.zshrc` `~/.tmux.conf`
-  `~/.claude/settings.json` `~/bin/*` を実際に置き換える。動作確認は `--dry-run`、または
-  `HOME` を一時ディレクトリに差し替えたサンドボックスで行うこと。
+  `~/.claude/settings.json` `~/bin/*` を実際に置き換える。動作確認は `deploy-all.sh --dry-run`、
+  または `HOME` を一時ディレクトリに差し替えたサンドボックスで行うこと。
+  **個別の `<tool>/deploy.sh` は `--dry-run` 引数を解釈しない**（環境変数 `DRY_RUN=1` のみ見る）。
+  `sh zsh/deploy.sh --dry-run` のように直接引数を渡しても無視され実際に書き換えが起きるため、
+  個別スクリプトを dry-run するときは `DRY_RUN=1 sh zsh/deploy.sh` のように環境変数で渡すこと。
 - 指示された範囲外の機能を先回りして実装しない。
 - **linter の抑制ディレクティブ（`# shellcheck disable=...` 等）や linter 設定の除外・閾値緩和を、
   AI の判断で追加しない。** 違反が設計上不合理だと判断した場合は、抑制せず違反内容・対象ファイル・
@@ -38,19 +41,24 @@
 
 | 対象 | 正体 | 誰が読むか |
 |---|---|---|
-| `claude/CLAUDE.md`, `claude/settings.json`, `claude/skills/` | **配布される成果物。** `claude/deploy.sh` がユーザーの `~/.claude/` へ symlink する | このリポジトリを使う人間のマシンの Claude Code |
+| `claude/CLAUDE.md`, `claude/settings.json`, `claude/skills/` | **配布される成果物。** `claude/deploy.sh` がユーザーの `~/.claude/` 配下へ配置する（`CLAUDE.md` と `skills/` は symlink、`settings.json` は生成。詳細は「デプロイの仕組み」参照） | このリポジトリを使う人間のマシンの Claude Code |
 | ルート `AGENTS.md` / `CLAUDE.md`（このファイル） | **このリポジトリを開発するためのルール** | このリポジトリで作業する AI |
 | `.claude/settings.json` | リポジトリで作業する AI 向けの permissions を置く場所 | このリポジトリで作業する Claude Code |
 
-`claude/CLAUDE.md`（配布物。個人の口調設定などが入っている）は編集対象が別物であることに注意する。
+**`claude/CLAUDE.md`（配布物。個人の口調設定などが入っている。ルート `CLAUDE.md` とは別物）は、
+指示が無い限り編集しない。**
 
 ## デプロイの仕組み
 
 - `deploy-all.sh` が `shared/helpers.sh` を source し、`AVAILABLE_TOOLS` を解決した上で
   各 `<tool>/deploy.sh` を呼び出す。
 - オプション: `--dry-run` / `--force` / `--only <tools>` / `--backup` / `--no-backup`。
-- symlink は `shared/helpers.sh` の `symlink_backup` 経由で張る。既存ファイルは `.backup` に
-  退避される。`symlink_restore` が uninstall 側の対応関数。
+- symlink は `shared/helpers.sh` の `symlink_backup` 経由で張る。既存ファイルは `.backup`
+  （既に存在する場合はタイムスタンプ+PID 付きの別名）に退避される。`symlink_restore` が
+  uninstall 側の対応関数。ただし退避の前提は次の2点で崩れる:
+  - `--no-backup`（`BACKUP=0`）指定時は退避されず `rm -f` される
+  - `claude/skills/` は `symlink_backup` を通らない。`claude/deploy.sh` がスキルごとに
+    個別に symlink を張り、退避先も `~/.claude/skills-backup/<名前>.<日時>.<PID>` になる
 - `claude/settings.json` だけは symlink ではなく、ベース設定と `settings.machine.json`
   （マシン固有・非追跡）をマージした**実ファイル**として生成される。マシンごとの上書き設定を
   git 管理下に置かずに反映するため。
@@ -69,17 +77,24 @@
 現時点では以下でよい:
 
 - 変更したシェルスクリプトが `sh -n` / `bash -n` で構文エラーにならないこと
-- `--dry-run` で意図した動作になることを確認すること
+- `deploy-all.sh --dry-run`（個別スクリプトは `DRY_RUN=1 sh <tool>/deploy.sh`）で
+  意図した動作になることを確認すること
 
 ※ 孫4 で pre-commit が導入された時点でこの節は実際のコマンドに更新される。
 
 ## PR 作成時の注意
 
-PR を作る前に `docs/design/` の「プルリクエストの作法」を読むこと
-（孫2 で作成される予定の文書。作成前はこの節の原則に従う）。
+PR を作る前に `docs/design/` の「プルリクエストの作法」を読むこと（孫2 で作成される予定の文書）。
+その文書が無い間は、最低限以下に従う:
+
+- 説明文は「背景・目的・実装内容・レビューで見てほしいところ・テスト結果・今後の予定」の構成で書く
+- ですます調・平易な言葉で書き、セッション内の固有名詞や個人的な文脈を入れない
 
 ## 実装時の注意
 
-- 新しいツールディレクトリを足すときは `shared/helpers.sh` の `AVAILABLE_TOOLS` にも追加する。
+- 新しいツールディレクトリを足すときは `shared/helpers.sh` の `AVAILABLE_TOOLS` に加えて、
+  `uninstall.sh` の `KNOWN_LINKS_<tool>`（生成ファイルがあれば `KNOWN_GENERATED_<tool>` も）にも
+  追加する。これを忘れると `uninstall.sh` は該当ツールを静かにスキップし、張った symlink が
+  ユーザーの `$HOME` に残り続ける。
 - README は「ルート `README.md`（全体）」と「各ツールの `README.md`（詳細）」の二層構造。
   片方だけ更新しない。
