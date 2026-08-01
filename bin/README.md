@@ -130,19 +130,25 @@ ocw-meter report [--pr <n>] [--json]
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `OCW_METER_HOME` | `~/.local/state/ocw-meter` | 保存先ルート。**git worktree内を指すと拒否される**（誤commit防止）。`event`/`bind-pr`は書き込みをスキップして exit 0、`validate`/`report`は非ゼロで停止する |
+| `OCW_METER_HOME` | `~/.local/state/ocw-meter` | 保存先ルート。**git worktree内を指すと拒否される**（誤commit防止）。`event`/`bind-pr`は書き込みをスキップして exit 0（設定ミスが誰にも気づかれないままにならないよう、既定の保存先へ `meter.error` を1件残す）、`validate`/`report`は非ゼロで停止する |
 | `OCW_METER_RAW` | `0` | 予約済み（将来フェーズのopt-in raw保存用）。現時点のサブコマンドでは未使用 |
 
 保存レイアウト: `events/YYYY-MM-DD.jsonl`（append-only, mode 600）/ `state/seen-keys/YYYY-MM.txt`（`idempotency_key`による重複排除）/
 `quarantine/YYYY-MM-DD.jsonl`（schema不正・破損行の隔離先）。ディレクトリは mode 700。
 
 **プライバシー方針**: プロンプト全文・モデル応答全文・ソースコード本文・APIキー・認証ヘッダ・トークン類は
-一切保存しない。`--key value` で渡された値のうち `sk-...` 形式の文字列や `Authorization:` を含む値、
-キー名が `api_key` / `token` / `secret` / `password` / `authorization` に一致するものは
-保存前に `[REDACTED]` へ置換される。
+一切保存しない。`--key value` で渡された値のうち `sk-...`（任意長）/ `Bearer ...` / `Authorization: ...` /
+GitHub token形式（`ghp_...` 等 / `github_pat_...`）に一致する値、キー名が
+`api_key` / `token` / `secret` / `password` / `authorization` に一致するものは保存前に `[REDACTED]` へ置換される。
+この置換は保存物だけでなく、meterが出す例外・警告メッセージにも適用される。
 
-**このフェーズでの既知の限界**: `ingest`（DeepSeek transcript取り込み）と `snapshot-quota`（Claude利用枠取得）は
-まだ実装されていない。`report` の費用・coverage列はプレースホルダで、実データは後続フェーズで入る。
+**このフェーズでの既知の限界**:
+- `ingest`（DeepSeek transcript取り込み）と `snapshot-quota`（Claude利用枠取得）はまだ実装されていない。
+  `report` の費用・coverage列はプレースホルダで、実データは後続フェーズで入る
+- `event`/`bind-pr` は1呼び出しごとに git メタ情報の解決（subprocess呼び出し数回）と
+  月次seen-keysファイルの全読み込みを行う（実測 約75ms/回）。`ocw`/`pr-review-loop` の工程境界イベント
+  （1runあたり数十件）には十分だが、**大量イベントをループでこのCLI経由で書き込む用途（将来のbulk ingest等）には
+  向かない**。そのような用途は同一プロセス内でgitメタとseen-key集合を1度だけ解決するバッチ経路を別途持つこと
 
 ## 4. Customization
 
