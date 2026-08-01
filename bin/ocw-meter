@@ -25,17 +25,23 @@ usage:
 
 subcommands:
   event
-    Append one event line to the append-only event log. Common envelope
-    fields (run_id, role, phase, round, pr_number, source, ...) can be
-    overridden with "--field value" flags; unrecognized flags are stored
-    as extra top-level fields (forward compatible). Always exits 0.
+    Append one event line to the event log, append-only (a resend under
+    the same idempotency_key replaces the stored line instead —
+    last-write-wins). Common envelope fields (run_id, role, phase,
+    round, pr_number, source, ...) can be overridden with "--field
+    value" flags; unrecognized flags are stored as extra top-level
+    fields (forward compatible). Always exits 0.
 
   bind-pr
     Convenience wrapper around `event pr.bind`. Always exits 0.
 
   validate
-    Re-reads stored events, quarantines malformed/incomplete lines, and
-    prints a summary. Exits non-zero on unexpected failure.
+    Re-reads stored events. Quarantines (removes) lines that are
+    corrupt — malformed JSON or a broken core envelope. Lines with a
+    per-event-type payload shape issue (missing/invalid field) are kept
+    but rewritten with completeness downgraded to "partial", not
+    quarantined. `--file` must be inside the events directory. Exits
+    non-zero on unexpected failure.
 
   report
     Prints an event-count / completeness / coverage summary. Skeleton
@@ -45,8 +51,12 @@ subcommands:
 environment:
   OCW_METER_HOME
     default: $HOME/.local/state/ocw-meter
-    Storage root. Refused if it resolves inside a Git worktree (event/
-    bind-pr silently skip the write; validate/report error out).
+    Storage root. Refused if it resolves inside a Git worktree:
+    event/bind-pr print a stderr warning and skip the write (never
+    silent), and also record a meter.error diagnostic under the
+    *default* storage root's state/meter-errors.jsonl, since the
+    configured one is exactly the path being refused. validate/report
+    error out instead.
 
   OCW_METER_RAW
     default: 0
@@ -60,6 +70,10 @@ notes:
       command -v ocw-meter >/dev/null && ocw-meter event ... || true
     ocw-meter being entirely absent from PATH is a supported, normal
     state — every other tool in this repo must keep working without it.
+  - state/meter-errors.jsonl holds ocw-meter's own best-effort
+    self-diagnostics (lock timeouts, the worktree refusal above,
+    unexpected exceptions) — `report` shows its line count alongside
+    quarantined lines.
 USAGE
 }
 
