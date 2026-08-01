@@ -1696,7 +1696,7 @@ cost_basis:   estimated — not an invoice
 
 #### 2. ベースライン計測手順書
 
-`docs/design/DOC-004_LLM費用観測ベースライン計測手順.md` を作成する。
+`docs/reference/DOC-004_LLM費用観測ベースライン計測手順.md` を作成する。
 
 **配置の注意（着手前に必ず読むこと）**
 
@@ -1706,13 +1706,21 @@ cost_basis:   estimated — not an invoice
 | 場所 | 役割 |
 |---|---|
 | `docs/` 直下 | **索引 `README.md` のみ。他の文書を直下に置かない**（明文化された規約） |
-| `docs/design/` | **設計書・仕様・規約** — 実装の指針となる現役文書 |
+| `docs/design/` | **設計書・仕様・規約** — 実装の指針となる現役文書（本リポジトリでは未使用） |
 | `docs/planning/` | 計画・ロードマップ |
 | `docs/archive/` | 過去の経緯。現在の判断には使わない |
 
 本リポジトリの `docs/` は現在 `adr/` と `planning/` のみで、直下は0ファイル。
-**`design/` を新設し、手順書とスキーマ仕様はそこに置く**（`reference/` のような
-lora-dataset-forge に無い語彙を新しく作らないこと）。
+**`reference/` を新設し、手順書とスキーマ仕様はそこに置く。**
+
+`design/` ではなく `reference/` を使う理由（lora-dataset-forge に無い語彙だが意図的に足す）:
+
+- `design/` は**作るとき**に読む文書（設計判断とその根拠）
+- `reference/` は**運用中に繰り返し引く**文書（man page 的なもの）
+
+イベントスキーマは「`completeness: partial` とは何か」をデータを読むたびに引く文書であり、
+実装完了後も参照され続ける。ベースライン計測手順も運用時に開く。どちらも後者にあたる。
+`docs/README.md` にこの区別を明記すること。
 
 **DOC-ID の採番**: lora-dataset-forge は `DOC-YYMMDDHHMM_タイトル.md`（タイムスタンプ）だが、
 本リポジトリは既に `DOC-001` / `DOC-002` / `DOC-003` の連番で3件確立している。
@@ -1733,8 +1741,7 @@ lora-dataset-forge に無い語彙を新しく作らないこと）。
 
 #### 3. イベントスキーマの恒久リファレンス（新規・重要）
 
-`docs/design/DOC-005_ocw-meterイベントスキーマ.md` を作成する（配置の注意は上の #2 と同じ）。
-これは**仕様**であり、lora-dataset-forge の分類では `design/`（設計書・仕様・規約）に当たる。
+`docs/reference/DOC-005_ocw-meterイベントスキーマ.md` を作成する（配置の注意は上の #2 と同じ）。
 
 **なぜ必要か**: 現在スキーマの定義は計画書 `DOC-003` 第8章にしか存在しない。
 計画書は傘の完了と同時に歴史的記録（`DOC-001` / `DOC-002` と同列）になる。
@@ -1767,7 +1774,7 @@ lora-dataset-forge に無い語彙を新しく作らないこと）。
 `~/projects/lora-dataset-forge/main/docs/README.md` を**実物として読み、同じ体裁で**作成する:
 
 - **目的別クイックナビ**（「〜したいときはまずこれを読む」の表）
-- **フォルダ構成の表**（`adr/` / `design/` / `planning/` の役割）
+- **フォルダ構成の表**（`adr/` / `reference/` / `planning/` の役割と使い分けの基準）
 - **全DOC-ID索引**（DOC-ID / ファイルへのリンク / 概要 の表。ADR-001 も含める）
 - 「`docs/` 直下には索引ファイルのみを置く」という規約の明記
 
@@ -1795,7 +1802,7 @@ lora-dataset-forge に無い語彙を新しく作らないこと）。
 ### 変更してよいファイル
 
 `bin/ocw-meter`, `bin/tests/**`, `bin/README.md`,
-`docs/design/**`（新規ディレクトリ。DOC-004 手順書 / DOC-005 スキーマ仕様）,
+`docs/reference/**`（新規ディレクトリ。DOC-004 手順書 / DOC-005 スキーマ仕様）,
 `docs/README.md`（新規。文書索引）,
 `README.md`（Directory Structure の `docs/` の説明を実態に合わせる）,
 `docs/planning/DOC-003_*.md`（進捗テーブルの更新のみ）
@@ -1815,7 +1822,7 @@ lora-dataset-forge に無い語彙を新しく作らないこと）。
 - スキーマ文書に**全 `event_type` が載っており、未実装の型は「未実装」と明記されている**
 - スキーマ文書のフィールド表が、**実際に保存されているイベントと突き合わせて検証済み**
   （`~/.local/state/ocw-meter/events/*.jsonl` の実データでフィールド名の過不足を確認する）
-- 新規文書が `docs/design/` に置かれ、**`docs/` 直下は索引 `README.md` のみ**になっている
+- 新規文書が `docs/reference/` に置かれ、**`docs/` 直下は索引 `README.md` のみ**になっている
 - `docs/README.md` に既存文書（DOC-001/002/003 / ADR-001）を含む全DOC-ID索引がある
 - `bin/README.md` からスキーマ文書へのリンクがあり、スキーマの情報源が計画書ではなくなっている
 - 保持期間（`prune`）について実装／非実装のどちらかに決着し、判断理由がPR説明文にある
