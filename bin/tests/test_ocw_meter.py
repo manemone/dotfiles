@@ -83,6 +83,13 @@ def read_quarantine(home):
     return lines
 
 
+def read_meter_errors(home):
+    path = pathlib.Path(home) / "state" / "meter-errors.jsonl"
+    if not path.exists():
+        return []
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+
 class OcwMeterTestCase(unittest.TestCase):
     def setUp(self):
         self.tmpdir = tempfile.TemporaryDirectory()
@@ -439,9 +446,9 @@ class GitWorktreeGuardTests(unittest.TestCase):
             self.assertFalse(home.exists())
             # And it actually did land somewhere traceable (not just "no
             # real storage touched, no diagnostic either").
-            fallback_events = read_events(pathlib.Path(fake_home) / ".local" / "state" / "ocw-meter")
-            self.assertEqual(len(fallback_events), 1)
-            self.assertEqual(fallback_events[0]["event_type"], "meter.error")
+            fallback_diagnostics = read_meter_errors(pathlib.Path(fake_home) / ".local" / "state" / "ocw-meter")
+            self.assertEqual(len(fallback_diagnostics), 1)
+            self.assertEqual(fallback_diagnostics[0]["event_type"], "meter.error")
         finally:
             if home.exists():
                 import shutil
@@ -701,6 +708,19 @@ class EventSchemaValidationTests(OcwMeterTestCase):
         self.assertEqual(events[0]["completeness"], "complete")
         self.assertEqual(quarantined, [])
 
+    def test_required_payload_field_present_but_null_is_also_downgraded(self):
+        # Round-4 review: an unset shell variable passed through as
+        # `--phase ""` (e.g. `ocw-meter event phase.start --phase
+        # "$PHASE"` with $PHASE empty) makes the *required* `phase` key
+        # present-but-null. That must downgrade completeness exactly
+        # like the field being absent entirely — "complete" would be a
+        # lie either way (plan §10.4).
+        events, quarantined = self._write_and_validate("phase.start", ["--phase", ""])
+        self.assertEqual(len(events), 1)
+        self.assertIsNone(events[0]["phase"])
+        self.assertEqual(events[0]["completeness"], "partial")
+        self.assertEqual(quarantined, [])
+
     def test_unknown_event_type_is_forward_compatible_not_quarantined(self):
         # A future event_type this binary has never heard of must not be
         # treated as invalid — only *known* types get payload checks.
@@ -752,12 +772,17 @@ class MeterErrorSelfDiagnosticTests(unittest.TestCase):
             # reappear somewhere else.
             self.assertIn("misconfigured", result.stderr)
 
+            # Round-4 review: meter.error diagnostics live in their own
+            # state/meter-errors.jsonl, not events/*.jsonl (that file is
+            # reserved for observation events; keeping diagnostics out of
+            # it is what lets emit_meter_error stay lock-free).
             default_root = pathlib.Path(fake_home) / ".local" / "state" / "ocw-meter"
-            default_events = read_events(default_root)
-            self.assertEqual(len(default_events), 1)
-            self.assertEqual(default_events[0]["event_type"], "meter.error")
-            self.assertEqual(default_events[0]["completeness"], "unknown")
-            self.assertEqual(default_events[0]["stage"], "storage_home_inside_git_worktree")
+            self.assertEqual(read_events(default_root), [])
+            diagnostics = read_meter_errors(default_root)
+            self.assertEqual(len(diagnostics), 1)
+            self.assertEqual(diagnostics[0]["event_type"], "meter.error")
+            self.assertEqual(diagnostics[0]["completeness"], "unknown")
+            self.assertEqual(diagnostics[0]["stage"], "storage_home_inside_git_worktree")
 
             # Round-2 review: a persistent misconfiguration must not grow
             # this file without bound — a second failure on the same day
@@ -766,13 +791,91 @@ class MeterErrorSelfDiagnosticTests(unittest.TestCase):
                 [str(OCW_METER), "event", "run.start", "--idempotency-key", "k2"],
                 cwd=str(REPO_ROOT), env=env, capture_output=True, text=True, timeout=10,
             )
-            self.assertEqual(len(read_events(default_root)), 1)
+            self.assertEqual(len(read_meter_errors(default_root)), 1)
         finally:
             import shutil
 
             shutil.rmtree(fake_home, ignore_errors=True)
             if bad_target.exists():
                 shutil.rmtree(bad_target)
+
+    def test_lock_contention_still_records_a_diagnostic(self):
+        # Round-4 review: this is exactly the scenario round-3's fix
+        # broke — write_event's own lock-timeout path calling
+        # emit_meter_error, which used to need the *same* lock and would
+        # therefore almost never actually record anything while the lock
+        # was genuinely contended. A dedicated, lock-free diagnostic file
+        # fixes that; verify it by holding the lock with `flock` while a
+        # separate `event` call times out acquiring it.
+        home = pathlib.Path(tempfile.mkdtemp()) / "ocw-meter-home"
+        lock_file = home / "state" / ".lock"
+        lock_file.parent.mkdir(parents=True, exist_ok=True)
+        lock_file.touch()
+        holder = subprocess.Popen(["flock", str(lock_file), "-c", "sleep 2"])
+        try:
+            import time as _time
+
+            _time.sleep(0.2)  # let the holder actually acquire the lock
+            result = run_meter(["event", "phase.start", "--idempotency-key", "locked1", "--phase", "implement"], home, timeout=10)
+            self.assertEqual(result.returncode, 0)
+            diagnostics = read_meter_errors(home)
+            self.assertEqual(len(diagnostics), 1)
+            self.assertEqual(diagnostics[0]["stage"], "write_event_lock_timeout")
+        finally:
+            holder.wait(timeout=10)
+            import shutil
+
+            shutil.rmtree(home.parent, ignore_errors=True)
+
+
+class PayloadTypeCoercionTests(OcwMeterTestCase):
+    def test_cost_estimate_and_is_sidechain_are_coerced(self):
+        # Round-4 review: these two were missed in the round-3 pass —
+        # cost_estimate_usd is the actual cost figure plan §8.4's
+        # formula produces, and is_sidechain as the string "false" is
+        # truthy in Python, so `if event["is_sidechain"]` would treat
+        # every message as a subagent message.
+        result = run_meter(
+            [
+                "event", "usage.message", "--idempotency-key", "b1", "--message-id", "m",
+                "--input-tokens", "4617", "--output-tokens", "329",
+                "--cache-read-input-tokens", "27264", "--cache-creation-input-tokens", "0",
+                "--cost-basis", "estimated", "--cost-estimate-usd", "0.0123", "--is-sidechain", "false",
+            ],
+            self.home,
+        )
+        self.assertEqual(result.returncode, 0)
+        event = read_events(self.home)[-1]
+        self.assertEqual(event["cost_estimate_usd"], 0.0123)
+        self.assertIs(event["is_sidechain"], False)
+
+    def test_is_sidechain_true_is_coerced(self):
+        run_meter(
+            ["event", "usage.message", "--idempotency-key", "b2", "--message-id", "m2", "--is-sidechain", "true"],
+            self.home,
+        )
+        event = read_events(self.home)[-1]
+        self.assertIs(event["is_sidechain"], True)
+
+    def test_nan_and_infinity_are_rejected_not_written(self):
+        # Round-4 review: NaN/Infinity are not valid JSON literals — jq
+        # and most non-Python parsers reject them even though Python's
+        # `json` module accepts them by default. A caller passing one
+        # must not corrupt the events file with an unparseable line.
+        run_meter(
+            ["event", "quota.sample", "--idempotency-key", "c1", "--plan-source", "statusline", "--five-hour-used-pct", "nan"],
+            self.home,
+        )
+        raw = (self.home / "events").glob("*.jsonl")
+        text = next(raw).read_text(encoding="utf-8")
+        self.assertNotIn("NaN", text)
+        event = read_events(self.home)[-1]
+        # Left as the original string and flagged, same as any other
+        # coercion failure — not silently dropped, not written as NaN.
+        self.assertEqual(event["completeness"], "partial")
+
+        result = run_meter(["validate"], self.home)
+        self.assertEqual(result.returncode, 0)
 
 
 class TranscriptFixtureDedupTests(OcwMeterTestCase):

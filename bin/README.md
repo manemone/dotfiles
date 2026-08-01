@@ -136,7 +136,9 @@ ocw-meter report [--pr <n>] [--json]
 保存レイアウト: `events/YYYY-MM-DD.jsonl`（基本はappend-only, mode 600。**例外**: 同一`idempotency_key`を再送すると
 後勝ち(last-write-wins)でその日のファイル内の該当行をmkstemp+os.replaceで原子的に置き換える）/
 `state/seen-keys/YYYY-MM.txt`（`idempotency_key`による重複排除）/
-`quarantine/YYYY-MM-DD.jsonl`（schema不正・破損行の隔離先）。ディレクトリは mode 700。
+`quarantine/YYYY-MM-DD.jsonl`（schema不正・破損行の隔離先）/ `state/meter-errors.jsonl`（`meter.error`自己診断専用。
+`events/`とは別ファイルにすることで、後勝ちdedupによるイベントファイル書き換えと競合せずlock無しで追記できる）。
+ディレクトリは mode 700。`ocw-meter report` はこのファイルの件数も表示する。
 
 **プライバシー方針**: プロンプト全文・モデル応答全文・ソースコード本文・APIキー・認証ヘッダ・トークン類は
 一切保存しない。`--key value` で渡された値のうち `sk-...`（任意長）/ `Bearer ...` / `Authorization: ...` /
