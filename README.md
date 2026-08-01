@@ -78,8 +78,10 @@ Options can be combined:
 ├── .mise.toml                 # Runtime versions (python, node, ruby, rust, neovim, ripgrep, fd, lazygit)
 ├── .gitignore                 # Git ignore rules
 ├── LICENSE                    # MIT License
-├── docs/                      # Planning documents
-│   └── planning/
+├── docs/                      # Design docs, coding/PR conventions, umbrella-branch plans
+│   ├── README.md              # Index: quick nav, DOC-ID registry, folder rules
+│   ├── design/                # Active design docs (PR conventions, shell coding policy, test policy)
+│   └── planning/              # Umbrella-branch plans and roadmaps
 ├── shared/
 │   └── helpers.sh             # Shared shell functions (logging, symlinks, platform detection)
 ├── bin/
