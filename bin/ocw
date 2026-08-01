@@ -457,7 +457,12 @@ create_worktree() {
   # emitted just below still went out.
   worktree_git_dir="$(git -C "$worktree_dir" rev-parse --absolute-git-dir 2>/dev/null)" || worktree_git_dir=""
   if [ -n "$worktree_git_dir" ]; then
-    printf '%s\n' "$run_id" >"${worktree_git_dir}/ocw-run-id" 2>/dev/null || true
+    # Redirections apply left-to-right: `2>/dev/null` must come BEFORE the
+    # `>file` redirect, or a failure to open `>file` (permission denied,
+    # disk full) is reported by bash before stderr is silenced, leaking a
+    # raw bash error onto ocw's real stderr despite the trailing `|| true`
+    # protecting the exit code.
+    printf '%s\n' "$run_id" 2>/dev/null >"${worktree_git_dir}/ocw-run-id" || true
   fi
 
   echo "run:         ${run_id}"

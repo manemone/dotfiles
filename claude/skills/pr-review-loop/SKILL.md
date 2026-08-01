@@ -128,24 +128,28 @@ fi
 command -v ocw-meter >/dev/null && ocw-meter event phase.start --phase pr_create --source pr-review-loop --round "$ROUND" || true
 ```
 
-1. PR番号、タイトル、URL、base/head ref、stateを取得。取得した `url` を `$URL` として以降で参照する:
+1. PR番号、タイトル、URL、base/head ref、stateを取得:
 
 ```bash
 gh pr view $PR --json number,title,url,baseRefName,headRefName,state
 ```
 
-PR番号が確定したら、`run_id` を後付けbindする（`OCW_RUN_ID` が環境にあれば。`bind-pr` は `--source` を受け付けないため、同じ情報を汎用の `event pr.bind` で発行し `--source` を明示する）:
+取得した `url` は `$URL` として以降で参照する。
+
+PR番号が確定したら、`run_id` を後付けbindする（`OCW_RUN_ID` が環境にある場合のみ。無ければ発行しない。`bind-pr` は `--source` を受け付けないため、同じ情報を汎用の `event pr.bind` で発行し `--source` を明示する）:
 
 ```bash
-command -v ocw-meter >/dev/null && ocw-meter event pr.bind --run-id "$OCW_RUN_ID" --pr-number "$PR" --pr-url "$URL" --source pr-review-loop --idempotency-key "bind:$OCW_RUN_ID:$PR" || true
+[ -n "${OCW_RUN_ID:-}" ] && command -v ocw-meter >/dev/null && ocw-meter event pr.bind --run-id "$OCW_RUN_ID" --pr-number "$PR" --pr-url "$URL" --source pr-review-loop --idempotency-key "bind:$OCW_RUN_ID:$PR" || true
 command -v ocw-meter >/dev/null && ocw-meter event phase.end --phase pr_create --source pr-review-loop --round "$ROUND" || true
 ```
 
-2. 現在のHEAD SHAを取得。この値を `$HEAD_SHA` として、以降このサイクルでレビュー対象とするHEADの参照に使う:
+2. 現在のHEAD SHAを取得:
 
 ```bash
 git rev-parse HEAD
 ```
+
+この値は `$HEAD_SHA` として、以降このサイクルでレビュー対象とするHEADの参照に使う。
 
 3. 規約docを読む（`CONVENTION_DOCS` が設定されている場合のみ）:
 
@@ -479,12 +483,13 @@ command -v ocw-meter >/dev/null && ocw-meter event phase.end --phase review_coll
 承認 → Phase 7（報告）。
 変更要求 → Phase 5（修正）。
 
-工程計測（この判定の直後、Phase 5/6/7のいずれに進む場合も1回だけ実行する。`--verdict` には確定した判定を
-`approved` / `changes_requested` / `ambiguous` のいずれかでリテラルに入れる。`$FINDINGS_COUNT` はPhase 3bで
-保持した未解決指摘の件数（承認なら0）、`$HEAD_SHA` はレビュー対象のHEAD）:
+工程計測（この判定の直後、Phase 5/6/7のいずれに進む場合も1回だけ実行する。`$VERDICT` には確定した判定を
+`approved` / `changes_requested` / `ambiguous` のいずれかでリテラルに入れる（他の `$XXX` 表記と同じ記法。
+`<...>` のような山括弧はbashの入力リダイレクト/パイプとして解釈されるため使わないこと）。`$FINDINGS_COUNT` は
+Phase 3bで保持した未解決指摘の件数（承認なら0）、`$HEAD_SHA` はレビュー対象のHEAD）:
 
 ```bash
-command -v ocw-meter >/dev/null && ocw-meter event review.round --round "$ROUND" --verdict <approved|changes_requested|ambiguous> --findings-count "$FINDINGS_COUNT" --reviewed-head-sha "$HEAD_SHA" --source pr-review-loop || true
+command -v ocw-meter >/dev/null && ocw-meter event review.round --round "$ROUND" --verdict "$VERDICT" --findings-count "$FINDINGS_COUNT" --reviewed-head-sha "$HEAD_SHA" --source pr-review-loop || true
 ```
 
 ## Phase 5: 修正
@@ -592,7 +597,9 @@ herdr pane run "$REVIEWER_PANE" "PR #$PR 再レビュー依頼。全指摘に対
 command -v ocw-meter >/dev/null && ocw-meter event phase.end --phase rereview_request --source pr-review-loop --round "$ROUND" || true
 ```
 
-6. レビュワーの作業開始を待ち、Phase 3に戻る。次のサイクルに入るため、`$ROUND` が指すサイクル数を1つ進める（次にPhase 1.5以降で `--round` を発行するときは、この進めた後の値をリテラルに使う）。
+6. レビュワーの作業開始を待ち、Phase 3に戻る。
+
+次のサイクルに入るため、`$ROUND` が指すサイクル数を1つ進める（次にPhase 1.5以降で `--round` を発行するときは、この進めた後の値をリテラルに使う）。
 
 ### アンチパターン: 冗長な再レビュープロンプト
 

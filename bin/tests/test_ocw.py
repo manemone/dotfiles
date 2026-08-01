@@ -170,6 +170,35 @@ def write_git_shim_failing_absolute_git_dir(shim_dir, worktree_dir):
     shim.chmod(0o755)
 
 
+def write_git_shim_redirecting_absolute_git_dir(shim_dir, worktree_dir, redirect_to):
+    """A `git` wrapper that makes `-C <worktree_dir> rev-parse
+    --absolute-git-dir` *succeed*, but answer with `redirect_to` instead
+    of the real git dir — everything else delegates to real git. Used to
+    make bin/ocw's run-id `printf` target a caller-controlled (e.g.
+    read-only) directory without needing a real disk-full/RO-mount, which
+    isn't reproducible from a plain user-permission test.
+    """
+    real_git_path = next(
+        (p for p in ("/usr/bin/git", "/bin/git") if pathlib.Path(p).exists()),
+        shutil.which("git"),
+    )
+    assert real_git_path, "no real git found to delegate to"
+    target = shlex.quote(str(worktree_dir))
+    redirect = shlex.quote(str(redirect_to))
+    shim = pathlib.Path(shim_dir) / "git"
+    shim.write_text(
+        "#!/usr/bin/env bash\n"
+        f'if [ "$1" = "-C" ] && [ "$2" = {target} ] && '
+        '[ "$3" = "rev-parse" ] && [ "$4" = "--absolute-git-dir" ]; then\n'
+        f"  printf '%s\\n' {redirect}\n"
+        "  exit 0\n"
+        "fi\n"
+        f'exec "{real_git_path}" "$@"\n',
+        encoding="utf-8",
+    )
+    shim.chmod(0o755)
+
+
 class OcwTestCase(unittest.TestCase):
     def setUp(self):
         self.tmpdir = tempfile.TemporaryDirectory()
@@ -277,6 +306,46 @@ class RunIdPersistenceFailOpenTests(OcwTestCase):
         remove = run_ocw(["rm", "widget-maker"], self.repo_root, path_prepend=[str(shim_dir)])
         self.assertEqual(remove.returncode, 0, remove.stderr)
         self.assertFalse(worktree_dir.exists())
+
+    def test_create_succeeds_and_leaks_no_bash_error_when_run_id_write_fails(self):
+        # Distinct from the rev-parse-failure case above: here rev-parse
+        # *succeeds* (as it always does in real use — worktree add just
+        # created that git dir), but the actual `printf >file` write into
+        # it fails (permission denied). Left-to-right redirect ordering
+        # (`2>/dev/null` before `>file`) is what's under test here.
+        baseline = run_ocw(["baseline-widget"], self.repo_root)
+        self.assertEqual(baseline.returncode, 0, baseline.stderr)
+        baseline_run_id = extract_run_id(baseline.stdout)
+
+        worktree_dir = self.repo_root.parent / "widget-maker"
+        shim_dir = pathlib.Path(self.tmpdir.name) / "git-shim"
+        shim_dir.mkdir()
+        ro_dir = pathlib.Path(self.tmpdir.name) / "ro-git-dir"
+        ro_dir.mkdir()
+        os.chmod(ro_dir, 0o500)
+        try:
+            write_git_shim_redirecting_absolute_git_dir(shim_dir, worktree_dir, ro_dir)
+
+            create = run_ocw(["widget-maker"], self.repo_root, path_prepend=[str(shim_dir)])
+            self.assertEqual(create.returncode, 0, create.stderr)
+            create_run_id = extract_run_id(create.stdout)
+            self.assertFalse((ro_dir / "ocw-run-id").exists())
+
+            # stderr identical (modulo the differing worktree slug, which
+            # git's own "Preparing worktree" message echoes) to a fully-
+            # working run proves the write failure produced no raw bash
+            # diagnostic ("Permission denied" / its localized equivalent)
+            # on ocw's real stderr.
+            self.assertEqual(
+                baseline.stderr.replace("baseline-widget", "widget-maker"),
+                create.stderr,
+            )
+            self.assertEqual(
+                baseline.stdout.replace(baseline_run_id, "<RUN_ID>").replace("baseline-widget", "widget-maker"),
+                create.stdout.replace(create_run_id, "<RUN_ID>"),
+            )
+        finally:
+            os.chmod(ro_dir, 0o700)
 
 
 class MeterAbsentRegressionTests(OcwTestCase):
