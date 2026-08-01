@@ -2525,9 +2525,13 @@ def cmd_ingest(args):
         # actually happened: detected while reading, nothing persisted.
         print(f"transcript lines with parse errors (detected, NOT persisted — see note below): {quarantined_count}")
     if since_dt is not None:
+        # PR #27 review round 4 finding "新規1": this string is printed
+        # to the user's terminal — it must read on its own, not
+        # reference an internal PR review round number nobody running
+        # `ingest` has any context for.
         print(
             "note: --since was set; this run is read-only — the incremental cursor was NOT "
-            "advanced and no quarantine records were written (see round 2 finding \"新規2\")"
+            "advanced and no quarantine records were written"
         )
     return 0
 
