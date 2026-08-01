@@ -9,7 +9,7 @@ Easily deployable, cross-platform dotfiles managed with [mise](https://mise.jdx.
 | **Zsh** | Shell | [Antidote](https://github.com/mattmc3/antidote) |
 | **NeoVim** | Editor | [lazy.nvim](https://github.com/folke/lazy.nvim) |
 | **tmux** | Terminal multiplexer | — (built-in) |
-| **bin** | Custom CLI tools (ocw, claude-ds) | — (standalone scripts) |
+| **bin** | Custom CLI tools (ocw, claude-ds, ocw-meter) | — (standalone scripts) |
 | **claude** | Claude Code config & skills | — (built-in) |
 
 ## Supported Platforms
