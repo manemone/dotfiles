@@ -658,7 +658,7 @@ cost_basis: estimated — not an invoice
 | 1 | `ai/ph-01-meter-core` | `bin/ocw-meter` コア（schema / storage / event / bind-pr / validate / report骨格）+ テスト基盤 | ✅ PR #25 マージ済 |
 | 2 | `ai/ph-02-instrumentation` | `ocw` と `pr-review-loop` への工程イベント埋め込み（挙動不変・fail-open） | ✅ PR #26 マージ済 |
 | 3 | `ai/ph-03-deepseek-usage` | transcript ingest + 価格表 + 費用推定 + 突合レポート | ✅ PR #27 マージ済 |
-| 4 | `ai/ph-04-claude-quota` | statusLine 経由の quota スナップショット収集（孫0 P1 の実証範囲のみ） | ⬜ 待機中 |
+| 4 | `ai/ph-04-claude-quota` | statusLine 経由の quota スナップショット収集（孫0 P1 の実証範囲のみ） | 🔄 実装中 |
 | 5 | `ai/ph-05-reports-baseline` | 集計レポート（PR別/工程別/model別/5h窓別/月次）+ ベースライン計測手順 | ⬜ 待機中 |
 
 各孫の詳細（目的 / 変更対象 / 変更しない対象 / 依存 / 完了条件 / テスト / ロールバック / レビュー重点）は
