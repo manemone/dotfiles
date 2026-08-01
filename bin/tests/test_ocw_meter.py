@@ -2377,6 +2377,19 @@ class ReportGroupedViewsTests(OcwMeterTestCase):
         result = run_meter(["report", "--month", "2026-08", "--model"], self.home)
         self.assertNotEqual(result.returncode, 0)
 
+    def test_two_different_grouped_views_cannot_be_combined(self):
+        # Round-1 self-review finding: --phase --model used to silently
+        # take the LAST flag (view got overwritten) instead of erroring
+        # — exactly the "garbage-but-plausible-looking output" failure
+        # mode `report` (the fail-loud half of this CLI) exists to
+        # prevent for --month/--reconcile already.
+        result = run_meter(["report", "--phase", "--model"], self.home)
+        self.assertNotEqual(result.returncode, 0)
+
+    def test_repeating_the_same_grouped_view_flag_is_fine(self):
+        result = run_meter(["report", "--phase", "--phase"], self.home)
+        self.assertEqual(result.returncode, 0)
+
 
 class ReportMonthStandaloneTests(OcwMeterTestCase):
     """孫5プロンプト §1 --month (NOT --reconcile): cash cost / capacity

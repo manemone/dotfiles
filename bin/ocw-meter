@@ -2160,6 +2160,9 @@ def cmd_report(args):
             reconcile = True
             i += 1
         elif token in ("--phase", "--model", "--role", "--window"):
+            if view is not None and view != token[2:]:
+                print(f"error: --{view} cannot be combined with {token} (pick one grouped view)", file=sys.stderr)
+                return 1
             view = token[2:]
             i += 1
         elif token == "--month":
