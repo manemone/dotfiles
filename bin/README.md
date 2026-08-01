@@ -71,6 +71,22 @@ ocw ls
 - **implementer**: 実装担当（デフォルト: `claude`）
 - **reviewer**: レビュー担当（デフォルト: `claude`）
 
+**工程計測（`ocw-meter` 連携。fail-open）:**
+
+worktree作成のたびに `run_id` を採番し、標準出力に `run:` 行として表示する。
+`run_id` は worktree の git管理領域（`git -C <worktree> rev-parse --absolute-git-dir` が指す
+`.git/worktrees/<slug>/ocw-run-id`。git worktreeの削除時に自動で掃除される、リポジトリには一切入らない場所）
+に保存され、`ocw rm` 実行時にそこから読み戻されて `run.end` イベントの記録に使われる。
+
+Herdrモードでは、commander/implementer/reviewer の各ペイン起動時に環境変数
+`OCW_ROLE`（`commander`/`implementer`/`reviewer`）と `OCW_RUN_ID` が `herdr workspace create --env` /
+`herdr pane split --env` 経由で自動的に渡される。`ocw-meter event` はこれらの環境変数を
+自動的に読み取り役割・runを紐付けるため、呼び出し側で明示的に指定する必要はない。
+
+`ocw-meter` が PATH に無い場合、`run:` 行と `.git/worktrees/<slug>/ocw-run-id` の保存は変わらず行われる
+（純粋なgit/bashロジックのため）が、`ocw-meter event` 呼び出しは `command -v` ガードにより静かにスキップされ、
+`ocw` 自体の動作・終了コードには一切影響しない。
+
 ### 3.2 claude-ds — Claude Code via DeepSeek API
 
 Claude Code CLI を DeepSeek API に繋ぎ替えて実行する。`exec env` で以下の環境変数を**すべて上書き固定**する。`claude "$@"` で CLI 引数は素通しされるため `--model` 等のオプションは通常通り指定可能だが、デフォルトモデルは以下の値に固定される:

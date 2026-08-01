@@ -1,11 +1,27 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Full original invocation, captured before any arg-shifting below, for the
+# run.start `--command` payload (docs/planning/DOC-003_..._計画.md §8.4-adjacent
+# 孫2 prompt). Display-only string; never re-executed.
+ORIGINAL_INVOCATION="ocw $*"
+
 USE_HERDR=false
 
 COMMANDER_COMMAND="${OCW_COMMANDER_COMMAND:-claude}"
 IMPLEMENTER_COMMAND="${OCW_IMPLEMENTER_COMMAND:-claude}"
 REVIEWER_COMMAND="${OCW_REVIEWER_COMMAND:-claude}"
+
+# Observability (docs/planning/DOC-003_..._計画.md §7.4, 孫2 prompt). Always
+# fail-open: ocw-meter being entirely absent from PATH, or failing internally,
+# must never affect ocw's own exit code or output beyond the `run:` line.
+ocw_meter_event() {
+  command -v ocw-meter >/dev/null 2>&1 && ocw-meter event "$@" || true
+}
+
+generate_run_id() {
+  printf '%s-%x%x\n' "$(date +%s)" "$RANDOM" "$RANDOM"
+}
 
 HERDR_SETUP_WORKSPACE_ID=""
 HERDR_SETUP_COMMANDER_PANE_ID=""
@@ -177,6 +193,7 @@ open_vscode() {
 setup_herdr_workspace() {
   local worktree_dir="$1"
   local workspace_label="$2"
+  local run_id="$3"
 
   local open_json=""
   local split_json=""
@@ -191,6 +208,8 @@ setup_herdr_workspace() {
   herdr workspace create \
     --cwd "$worktree_dir" \
     --label "$workspace_label" \
+    --env "OCW_ROLE=commander" \
+    --env "OCW_RUN_ID=${run_id}" \
     --no-focus
   )" || return 1
 
@@ -242,6 +261,8 @@ setup_herdr_workspace() {
       "$HERDR_SETUP_COMMANDER_PANE_ID" \
       --direction right \
       --cwd "$worktree_dir" \
+      --env "OCW_ROLE=implementer" \
+      --env "OCW_RUN_ID=${run_id}" \
       --no-focus
   )" || return 1
 
@@ -268,6 +289,8 @@ setup_herdr_workspace() {
       "$HERDR_SETUP_IMPLEMENTER_PANE_ID" \
       --direction right \
       --cwd "$worktree_dir" \
+      --env "OCW_ROLE=reviewer" \
+      --env "OCW_RUN_ID=${run_id}" \
       --no-focus
   )" || return 1
 
@@ -315,8 +338,16 @@ setup_herdr_workspace() {
 rollback_created_worktree() {
   local worktree_dir="$1"
   local branch="$2"
+  local run_id="${3:-}"
 
   echo "error: Herdr setup failed; rolling back" >&2
+
+  if [ -n "$run_id" ]; then
+    ocw_meter_event run.end \
+      --run-id "$run_id" \
+      --source ocw \
+      --outcome failure
+  fi
 
   set +e
 
@@ -407,20 +438,42 @@ create_worktree() {
     "$worktree_dir" \
     "$base_ref"
 
+  local run_id=""
+  local worktree_git_dir=""
+
+  run_id="$(generate_run_id)"
+  # `.git` inside a linked worktree is a *file* pointing at the private
+  # metadata dir under the main repo's `.git/worktrees/<slug>/` — not a
+  # directory we can drop a file into directly. That metadata dir is the
+  # actual git-managed, never-committed, auto-pruned-on-removal location, so
+  # store the run-id file there instead of literally at "<worktree>/.git/".
+  worktree_git_dir="$(git -C "$worktree_dir" rev-parse --absolute-git-dir)"
+  printf '%s\n' "$run_id" >"${worktree_git_dir}/ocw-run-id"
+
+  echo "run:         ${run_id}"
+
+  ocw_meter_event run.start \
+    --run-id "$run_id" \
+    --source ocw \
+    --base-ref "$base_ref" \
+    --command "$ORIGINAL_INVOCATION"
+
   if [ "$USE_HERDR" = "true" ]; then
     local setup_status=0
 
     set +e
     setup_herdr_workspace \
       "$worktree_dir" \
-      "$workspace_label"
+      "$workspace_label" \
+      "$run_id"
     setup_status="$?"
     set -e
 
     if [ "$setup_status" -ne 0 ]; then
       rollback_created_worktree \
         "$worktree_dir" \
-        "$branch"
+        "$branch" \
+        "$run_id"
 
       exit "$setup_status"
     fi
@@ -619,6 +672,15 @@ remove_worktree() {
   [ -d "$worktree_dir" ] ||
     die "worktree dir does not exist: ${worktree_dir}"
 
+  local run_id=""
+  local worktree_git_dir=""
+
+  worktree_git_dir="$(git -C "$worktree_dir" rev-parse --absolute-git-dir 2>/dev/null)" || true
+
+  if [ -n "$worktree_git_dir" ] && [ -f "${worktree_git_dir}/ocw-run-id" ]; then
+    run_id="$(cat "${worktree_git_dir}/ocw-run-id")"
+  fi
+
   if [ "$force" = "false" ]; then
     if [ -n "$(git -C "$worktree_dir" status --porcelain)" ]; then
       die "worktree has uncommitted or untracked changes: ${worktree_dir}"
@@ -645,6 +707,13 @@ remove_worktree() {
 
     git -C "$repo_root" \
       branch -d "$branch"
+  fi
+
+  if [ -n "$run_id" ]; then
+    ocw_meter_event run.end \
+      --run-id "$run_id" \
+      --source ocw \
+      --outcome success
   fi
 }
 

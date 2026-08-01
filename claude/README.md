@@ -82,6 +82,10 @@ Claude Code のカスタムスキル。`claude/skills/` 配下の各スキルデ
 | `pr-review-loop` | PRレビューサイクルを自動化。Herdr の reviewer エージェントと連携し、レビュー→修正→再レビューを承認まで繰り返す |
 | `umbrella-orchestrator` | 傘ブランチの孫ライフサイクル管理。計画書の読み取り、孫ブランチの spawn、マージ検出と検証、計画書更新を自動化 |
 
+`pr-review-loop` は各Phaseの境界で `ocw-meter event`（工程計測。`docs/planning/DOC-003_ai-llm-cost-observability_計画.md` 参照）を呼び出す。
+すべて `command -v ocw-meter >/dev/null && ... || true` 形式の fail-open 呼び出しで、
+レビュー規約・判定基準・停止条件には一切変更が無く、`ocw-meter` が存在しない環境でもスキルは完全に動作する。
+
 **デプロイの仕組み:**
 
 - **ディレクトリ全体 symlink は禁止。** `~/.claude/skills` をまとめて symlink すると、Herdr 管理の `herdr` スキルやユーザー独自スキルが消えるため。

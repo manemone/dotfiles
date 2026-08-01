@@ -509,16 +509,6 @@ class ConcurrencyTests(OcwMeterTestCase):
         self.assertEqual(len(keys), n)
 
 
-class NoAccidentalCouplingTests(unittest.TestCase):
-    def test_ocw_does_not_reference_ocw_meter_yet(self):
-        # Regression guard for this PR's stated scope: instrumentation of
-        # `ocw` itself is a later phase. If this starts failing, it means
-        # someone wired ocw-meter into ocw here — that integration needs
-        # its own review focused on non-regression of ocw's behavior.
-        ocw_source = (REPO_ROOT / "bin" / "ocw").read_text(encoding="utf-8")
-        self.assertNotIn("ocw-meter", ocw_source)
-
-
 class HomeUnsetTests(unittest.TestCase):
     """`set -u` under bash means expanding an unset $HOME while computing
     the default OCW_METER_HOME kills the process before python is ever

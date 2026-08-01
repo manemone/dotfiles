@@ -7,6 +7,10 @@ description: "PRレビューサイクルを自動化。Herdrワークスペー�
 
 Herdrワークスペース内の `reviewer` Claude Codeペインと連携してPRレビューサイクルを自動化する。
 
+本スキルには工程計測用の `ocw-meter` 呼び出しが含まれる。すべて fail-open であり、
+`ocw-meter` が存在しない環境でも本スキルは完全に動作する。
+計測はレビュー判定に一切影響しない。
+
 ## 前提条件
 
 Herdr内で実行されていること。確認:
@@ -116,10 +120,27 @@ fi
 
 サイクル開始時に1回だけ実行:
 
+工程計測（サイクル全体で1回だけ。レビューラウンドは `$ROUND` に保持し、以降のPhaseで使う）:
+
+```bash
+ROUND=1
+command -v ocw-meter >/dev/null && ocw-meter event phase.start --phase pr_create || true
+```
+
 1. PR番号、タイトル、URL、base/head ref、stateを取得:
 
 ```bash
 gh pr view $PR --json number,title,url,baseRefName,headRefName,state
+```
+
+PR番号が確定したら、`run_id` を後付けbindする（`OCW_RUN_ID` が環境にあれば）:
+
+```bash
+command -v ocw-meter >/dev/null && ocw-meter bind-pr --run "$OCW_RUN_ID" --pr "$PR" --url "$URL" || true
+```
+
+```bash
+command -v ocw-meter >/dev/null && ocw-meter event phase.end --phase pr_create || true
 ```
 
 2. 現在のHEAD SHAを取得:
@@ -143,6 +164,12 @@ ls docs/ 2>/dev/null || echo "NO_DOCS_DIR"
 **実装が完了したら、レビュワーに依頼する前に、自分で自分をレビューする。**
 このステップをスキップしてレビュー依頼するな。
 
+工程計測:
+
+```bash
+command -v ocw-meter >/dev/null && ocw-meter event phase.start --phase self_review --round "$ROUND" || true
+```
+
 ### なぜ必要か
 
 レビュワーと同じ AI なのに、実装者が「作る脳」のままだとエッジケースに気づけない。
@@ -165,8 +192,10 @@ ls docs/ 2>/dev/null || echo "NO_DOCS_DIR"
 
 3. **コードを実行して確認する**（コマンドが設定されている場合のみ）:
    ```bash
+   command -v ocw-meter >/dev/null && ocw-meter event phase.start --phase lint_test --round "$ROUND" || true
    # LINT_CMD が設定されていれば実行
    # TEST_CMD が設定されていれば実行
+   command -v ocw-meter >/dev/null && ocw-meter event phase.end --phase lint_test --round "$ROUND" || true
    ```
 
 4. **自分で見つけた問題は、レビュー前に自分で直す。**
@@ -191,7 +220,19 @@ ls docs/ 2>/dev/null || echo "NO_DOCS_DIR"
 このフェーズを通過してから Phase 2 へ進む。**通過せずにレビュー依頼した場合、
 往復の全責任は実装者にある。**
 
+工程計測:
+
+```bash
+command -v ocw-meter >/dev/null && ocw-meter event phase.end --phase self_review --round "$ROUND" || true
+```
+
 ## Phase 2: レビュー依頼
+
+工程計測:
+
+```bash
+command -v ocw-meter >/dev/null && ocw-meter event phase.start --phase review_request --round "$ROUND" || true
+```
 
 レビュー指示をファイルに書き出し、短いコマンドでレビュワーに読ませる。**長文を pane run に詰め込むとペースト確認が入って2往復になるため絶対にやらない。**
 
@@ -336,7 +377,19 @@ herdr pane read "$REVIEWER_PANE" --source detection --lines 3
 
 依頼テキストが表示されていなければ、`herdr pane get "$REVIEWER_PANE"` で状態を確認。
 
+工程計測:
+
+```bash
+command -v ocw-meter >/dev/null && ocw-meter event phase.end --phase review_request --round "$ROUND" || true
+```
+
 ## Phase 3: レビュワーの完了を待つ
+
+工程計測:
+
+```bash
+command -v ocw-meter >/dev/null && ocw-meter event phase.start --phase review_wait --round "$ROUND" || true
+```
 
 ### 作業開始を待つ
 
@@ -373,7 +426,19 @@ STATUS=$(herdr pane get "$REVIEWER_PANE" | python3 -c "import json,sys; d=json.l
 - `working`（継続中）→ レビューに時間がかかっている。ペイン出力を読む。
 - それ以外 → Phase 3bへ。
 
+工程計測:
+
+```bash
+command -v ocw-meter >/dev/null && ocw-meter event phase.end --phase review_wait --round "$ROUND" || true
+```
+
 ### Phase 3b: 結果の収集
+
+工程計測:
+
+```bash
+command -v ocw-meter >/dev/null && ocw-meter event phase.start --phase review_collect --round "$ROUND" || true
+```
 
 エージェントがidleに達したらレビュー完了。全内容（レビュー本文＋インラインコメント）はGitHubに投稿済み。以下両方で確認:
 
@@ -392,6 +457,12 @@ herdr pane read "$REVIEWER_PANE" --source recent-unwrapped --lines 120
 
 画面上の出力だけをレビュー結果として扱うな。GitHub投稿だけが本物。
 
+工程計測:
+
+```bash
+command -v ocw-meter >/dev/null && ocw-meter event phase.end --phase review_collect --round "$ROUND" || true
+```
+
 ## Phase 4: レビュー状態の判定
 
 `CONVENTION_DOCS` が設定されていればその規約を、なければ以下のデフォルト判定基準を使う。
@@ -409,6 +480,13 @@ herdr pane read "$REVIEWER_PANE" --source recent-unwrapped --lines 120
 変更要求 → Phase 5（修正）。
 
 ## Phase 5: 修正
+
+工程計測（Phase 4の判定結果を記録。`$FINDINGS_COUNT` はPhase 3bで収集した未解決指摘の件数、`$HEAD_SHA` はレビュー対象のHEAD）:
+
+```bash
+command -v ocw-meter >/dev/null && ocw-meter event review.round --round "$ROUND" --verdict changes_requested --findings-count "$FINDINGS_COUNT" --reviewed-head-sha "$HEAD_SHA" || true
+command -v ocw-meter >/dev/null && ocw-meter event phase.start --phase fix --round "$ROUND" || true
+```
 
 ### Step 0: 修正前の必須チェック（毎ラウンド実行）
 
@@ -461,7 +539,19 @@ Co-Authored-By: Claude <noreply@anthropic.com>"
 git push origin HEAD
 ```
 
+工程計測:
+
+```bash
+command -v ocw-meter >/dev/null && ocw-meter event phase.end --phase fix --round "$ROUND" || true
+```
+
 ## Phase 6: 返信と再依頼
+
+工程計測:
+
+```bash
+command -v ocw-meter >/dev/null && ocw-meter event phase.start --phase reply --round "$ROUND" || true
+```
 
 1. 各指摘にGitHub上で `{{REPLY_MARKER}}` で返信。各返信にコミットSHAを含める。
    - **返信は十分な詳細さで書く。** どのファイルの何行目をどう修正したか、検証コマンドとその結果を記載する。
@@ -474,6 +564,13 @@ git push origin HEAD
 git rev-parse HEAD
 ```
 
+工程計測:
+
+```bash
+command -v ocw-meter >/dev/null && ocw-meter event phase.end --phase reply --round "$ROUND" || true
+command -v ocw-meter >/dev/null && ocw-meter event phase.start --phase rereview_request --round "$ROUND" || true
+```
+
 4. **最小限の**再レビュー依頼を送信。修正内容を列挙するな。レビュワーはGitHubのコメントを読む:
 
 ```bash
@@ -481,6 +578,14 @@ herdr pane run "$REVIEWER_PANE" "PR #$PR 再レビュー依頼。全指摘に対
 ```
 
 5. 配信確認（Phase 2 Step 3と同様）。
+
+工程計測（次のラウンドへ。Phase 3に戻る前に実行する）:
+
+```bash
+command -v ocw-meter >/dev/null && ocw-meter event phase.end --phase rereview_request --round "$ROUND" || true
+ROUND=$((ROUND + 1))
+```
+
 6. レビュワーの作業開始を待ち、Phase 3に戻る。
 
 ### アンチパターン: 冗長な再レビュープロンプト
@@ -488,6 +593,12 @@ herdr pane run "$REVIEWER_PANE" "PR #$PR 再レビュー依頼。全指摘に対
 修正内容とテスト結果を列挙した再レビュープロンプトを送るな。レビュワーはGitHubコメントを読む。長いプロンプトはトークンを浪費し本質を埋没させる。プロンプトは厳密に1行。
 
 ## Phase 7: 完了報告
+
+工程計測（Phase 4の判定結果を記録。承認は未解決指摘0件を意味する）:
+
+```bash
+command -v ocw-meter >/dev/null && ocw-meter event review.round --round "$ROUND" --verdict approved --findings-count 0 --reviewed-head-sha "$HEAD_SHA" || true
+```
 
 承認に達したら:
 
@@ -505,6 +616,12 @@ herdr pane run "$REVIEWER_PANE" "PR #$PR 再レビュー依頼。全指摘に対
 - 未解決の非ブロッキング項目
 - 承認条件をどう満たしたか
 - マージは実行していないこと
+
+工程計測:
+
+```bash
+command -v ocw-meter >/dev/null && ocw-meter event phase.end --phase done --outcome success --round "$ROUND" || true
+```
 
 ## 安全制約
 
@@ -537,3 +654,10 @@ herdr pane run "$REVIEWER_PANE" "PR #$PR 再レビュー依頼。全指摘に対
 - GitHubへの投稿・取得が不能
 - 6サイクルを超えても承認されない
 - HERDR_ENVが設定されていない
+
+上記いずれかに該当して停止する場合、ユーザーへの報告と合わせて以下を実行する
+（`--reason` には該当条件を表す短い識別子を入れる。理由の説明文そのものは記録しない）:
+
+```bash
+command -v ocw-meter >/dev/null && ocw-meter event human.intervention --reason "<該当条件の短い識別子>" || true
+```
