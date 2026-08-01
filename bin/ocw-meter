@@ -389,12 +389,26 @@ def iso_utc(dt):
 
 
 def parse_ts(value):
+    """Always returns a timezone-AWARE datetime (or None). `ts` is
+    normally always `Z`-suffixed (`iso_utc` never produces anything
+    else), but `event`'s `--ts` override lets a caller store an
+    offset-less value (plan §8.1 lists `ts` as a plain overridable
+    envelope field, and nothing in `hard_line_errors` rejects an
+    offset-less-but-otherwise-valid ISO 8601 string). PR #27 review
+    round 3 finding "新規1": comparing such a naive datetime against an
+    aware one (as `ingest`'s run_id staleness check — round 2 finding
+    "新規1" — does) raises TypeError and takes down the whole `ingest`
+    run with no recovery path (`validate` doesn't reject offset-less
+    `ts` either). A naive value is treated as UTC, matching every other
+    `ts` in this schema and `month_of`'s existing (and, before this fix,
+    silently wrong for naive input) `.astimezone(timezone.utc)` call."""
     if not isinstance(value, str) or not value:
         return None
     try:
-        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+        dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError:
         return None
+    return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt
 
 
 def local_offset_str():
@@ -2500,9 +2514,21 @@ def cmd_ingest(args):
     print(f"distinct message.id in this run:     {len(candidates)}")
     print(f"usage.message written (new):         {write_counts['written']}")
     print(f"usage.message replaced (re-run/dup):  {write_counts['replaced']}")
-    print(f"transcript lines quarantined:         {quarantined_count}")
+    if since_dt is None:
+        print(f"transcript lines quarantined:         {quarantined_count}")
+    else:
+        # PR #27 review round 3 finding "新規2": under --since,
+        # quarantine writes are skipped (round 2 finding "新規2"), so
+        # printing this under the same "quarantined:" label as a normal
+        # run — even with the cursor note appended separately — read as
+        # "this many were recorded" when zero were. Label matches what
+        # actually happened: detected while reading, nothing persisted.
+        print(f"transcript lines with parse errors (detected, NOT persisted — see note below): {quarantined_count}")
     if since_dt is not None:
-        print("note: --since was set; the incremental cursor was NOT advanced (read-only for this run)")
+        print(
+            "note: --since was set; this run is read-only — the incremental cursor was NOT "
+            "advanced and no quarantine records were written (see round 2 finding \"新規2\")"
+        )
     return 0
 
 

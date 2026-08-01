@@ -1210,6 +1210,26 @@ class IngestTests(OcwMeterTestCase):
         self.assertEqual(result2.returncode, 0, result2.stderr)
         self.assertEqual(len(read_quarantine(self.home)), 1)  # still just once
 
+    def test_ingest_since_output_does_not_claim_quarantine_when_none_was_persisted(self):
+        # PR #27 review round 3 finding "新規2": under --since, nothing
+        # is actually written to quarantine/ingest-transcript.jsonl (see
+        # the test above), but the old output label
+        # "transcript lines quarantined: N" implied it had been. This
+        # tool's own design principle (plan §10.4: 部分的な記録を完全と
+        # 誤認しない) applies to its OWN stdout, not just stored data.
+        session_dir = self.projects_dir / "proj"
+        session_dir.mkdir(parents=True)
+        (session_dir / "sess-bad-since2.jsonl").write_text(
+            json.dumps(assistant_line("sess-bad-since2", "m1", timestamp="2026-07-15T10:00:00.000Z"), ensure_ascii=False) + "\n"
+            + "{broken json\n",
+            encoding="utf-8",
+        )
+        result = run_ingest(self.home, self.projects_dir, args=["--since", "2026-01-01T00:00:00Z"])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("transcript lines quarantined:", result.stdout)
+        self.assertIn("NOT persisted", result.stdout)
+        self.assertEqual(len(read_quarantine(self.home)), 0)
+
     def test_ingest_tolerates_malformed_session_pr_links_state_file(self):
         # PR #27 review round 2 finding "新規3": a malformed entry in
         # state/session-pr-links.json (this meter's own state, but
@@ -1518,7 +1538,13 @@ class IngestTests(OcwMeterTestCase):
         ])
         result = run_ingest(self.home, self.projects_dir)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(read_events(self.home)[0]["run_id"], "run-normal")
+        # The run.start event (ts 2026-07-01) sorts into an earlier
+        # day-file than the usage.message (2026-07-15), so index [0]
+        # would trivially be the run.start event itself (whose own
+        # run_id field is "run-normal" regardless of what the message
+        # resolved to) — select the usage.message explicitly.
+        usage_event = next(e for e in read_events(self.home) if e["event_type"] == "usage.message")
+        self.assertEqual(usage_event["run_id"], "run-normal")
 
     def test_ingest_pr_number_resolved_via_run_id_bind_using_ocw_run_id_file(self):
         # End-to-end: pr.bind's run_id must line up with what the fixed
@@ -1535,9 +1561,31 @@ class IngestTests(OcwMeterTestCase):
         ])
         result = run_ingest(self.home, self.projects_dir)
         self.assertEqual(result.returncode, 0, result.stderr)
-        event = read_events(self.home)[0]
+        event = next(e for e in read_events(self.home) if e["event_type"] == "usage.message")
         self.assertEqual(event["run_id"], "run-xyz789")
         self.assertEqual(event["pr_number"], 99)
+
+    def test_ingest_survives_a_run_start_with_an_offset_less_timestamp(self):
+        # PR #27 review round 3 finding "新規1": `event --ts` accepts an
+        # offset-less (naive) ISO 8601 value — `hard_line_errors` doesn't
+        # reject it, so it can genuinely end up stored. Round 2's run_id
+        # staleness cross-check ("新規1" there) then compared it against
+        # a timezone-AWARE message timestamp, raising TypeError and
+        # taking down `ingest` entirely, with no recovery path (this
+        # naive `ts` isn't rejected by `validate` either).
+        worktree_dir = make_ocw_style_worktree(self.tmpdir.name, run_id="run-naive-ts")
+        run_meter(
+            ["event", "run.start", "--idempotency-key", "naive-run-start", "--run-id", "run-naive-ts",
+             "--ts", "2026-07-01T00:00:00", "--base-ref", "origin/main", "--command", "claude"],
+            self.home,
+        )
+        write_transcript(self.projects_dir, "proj", "sess-naive-ts", [
+            assistant_line("sess-naive-ts", "m1", cwd=str(worktree_dir), timestamp="2026-07-15T00:00:00.000Z"),
+        ])
+        result = run_ingest(self.home, self.projects_dir)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        event = next(e for e in read_events(self.home) if e["event_type"] == "usage.message")
+        self.assertEqual(event["run_id"], "run-naive-ts")
 
     def test_ingest_repo_resolved_from_cwd_git_remote(self):
         # PR #27 review round 1 finding 9: `repo` was hardcoded null.
