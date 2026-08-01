@@ -703,12 +703,26 @@ Anthropic本家の `claude` で、Sonnet + auto permission mode で起動する�
 
 ```bash
 OCW_IMPLEMENTER_COMMAND='claude --model sonnet --permission-mode auto' \
+OCW_REVIEWER_COMMAND='claude --model opus --effort high' \
   ocw -H <孫ブランチのslug> ai/llm-cost-observability
 ```
 
-- commander / reviewer は現行のまま（reviewerは `claude` = 既定モデル Opus）
+- **reviewer は必ず Opus + high effort を明示すること。** レビュー品質はこの傘の生命線であり、
+  Sonnet に落としてはいけない
 - 環境に `OCW_IMPLEMENTER_COMMAND=claude-ds` が export されているため、
   **上記のように毎回明示的に上書きしないと DeepSeek に戻る**
+
+> **⚠️ 実際に踏んだ罠（2026-08-02）**
+>
+> `claude/settings.json` の `switchModelsOnFlag: true` により、`claude --model sonnet` で
+> 起動すると **その選択が `~/.claude/settings.json` の `model` に永続化される**。
+> `ocw` は commander → implementer → reviewer の順にペインを起動するため、
+> implementer を Sonnet で起動した直後に立ち上がる reviewer（引数なしの `claude`）が
+> Sonnet を引き継いでしまった。孫1〜孫3のレビューはこの状態で行われた可能性が高い。
+>
+> 対策: **3ペインすべてでモデルを明示する**（既定値に依存しない）。
+> spawn 後に `python3 -c "import json;print(json.load(open('$HOME/.claude/settings.json'))['model'])"`
+> で `opus` に戻っていることを確認する。
 - 注意: 孫0と孫1以降で implementer のモデル構成が異なる。
   これは基盤構築フェーズの話であり、**第15章のベースライン計測（実PR 5〜10本）の期間中は
   構成を固定すること**。計測開始時点の構成をベースラインレポートに記録する
