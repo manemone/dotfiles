@@ -34,6 +34,8 @@ import json
 import os
 import pathlib
 import re
+import shlex
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -96,10 +98,12 @@ def make_repo(root):
     return main_dir
 
 
-def run_ocw(args, cwd, meter_on_path=False, meter_home=None, extra_env=None, timeout=30):
+def run_ocw(args, cwd, meter_on_path=False, meter_home=None, extra_env=None, path_prepend=None, timeout=30):
     path_dirs = list(BASE_PATH_DIRS)
     if meter_on_path:
         path_dirs.insert(0, str(REPO_ROOT / "bin"))
+    if path_prepend:
+        path_dirs = list(path_prepend) + path_dirs
     env = {
         "PATH": ":".join(path_dirs),
         "HOME": os.environ.get("HOME", "/root"),
@@ -134,6 +138,36 @@ def extract_run_id(stdout):
     match = RUN_LINE_RE.search(stdout)
     assert match, f"no 'run:' line found in stdout:\n{stdout}"
     return match.group(1)
+
+
+def write_git_shim_failing_absolute_git_dir(shim_dir, worktree_dir):
+    """A `git` wrapper that fails only `-C <worktree_dir> rev-parse
+    --absolute-git-dir` (exactly bin/ocw's run_id-persistence lookup for
+    that one worktree) and delegates everything else — including that
+    same rev-parse for any *other* path, and every other subcommand ocw
+    itself needs (worktree add/remove, show-ref, branch, symbolic-ref,
+    merge-base, status) — to the real system git. This exercises the
+    `|| worktree_git_dir=""` fail-open fallback in bin/ocw without a real
+    disk-full/read-only-mount setup, which isn't reproducible from a
+    plain user-permission test.
+    """
+    real_git_path = next(
+        (p for p in ("/usr/bin/git", "/bin/git") if pathlib.Path(p).exists()),
+        shutil.which("git"),
+    )
+    assert real_git_path, "no real git found to delegate to"
+    target = shlex.quote(str(worktree_dir))
+    shim = pathlib.Path(shim_dir) / "git"
+    shim.write_text(
+        "#!/usr/bin/env bash\n"
+        f'if [ "$1" = "-C" ] && [ "$2" = {target} ] && '
+        '[ "$3" = "rev-parse" ] && [ "$4" = "--absolute-git-dir" ]; then\n'
+        "  exit 1\n"
+        "fi\n"
+        f'exec "{real_git_path}" "$@"\n',
+        encoding="utf-8",
+    )
+    shim.chmod(0o755)
 
 
 class OcwTestCase(unittest.TestCase):
@@ -220,6 +254,29 @@ class RunIdAndMeterEventsTests(OcwTestCase):
         ends = [e for e in events if e["event_type"] == "run.end" and e["run_id"] == run_id]
         self.assertEqual(len(ends), 1, events)
         self.assertEqual(ends[0]["outcome"], "failure")
+
+
+class RunIdPersistenceFailOpenTests(OcwTestCase):
+    """The run_id persistence step itself (rev-parse + printf into the
+    worktree's private git dir) must be fail-open: a failure there is not
+    an ocw-meter failure (T18/T19 above), it's `bin/ocw`'s own git/bash
+    logic, and it ran into the exact `set -euo pipefail` trap ocw-meter's
+    own design notes warn about elsewhere in this codebase."""
+
+    def test_create_succeeds_when_git_rev_parse_absolute_git_dir_fails(self):
+        worktree_dir = self.repo_root.parent / "widget-maker"
+        shim_dir = pathlib.Path(self.tmpdir.name) / "git-shim"
+        shim_dir.mkdir()
+        write_git_shim_failing_absolute_git_dir(shim_dir, worktree_dir)
+
+        create = run_ocw(["widget-maker"], self.repo_root, path_prepend=[str(shim_dir)])
+        self.assertEqual(create.returncode, 0, create.stderr)
+        self.assertRegex(create.stdout, RUN_LINE_RE)
+        self.assertTrue(worktree_dir.is_dir())
+
+        remove = run_ocw(["rm", "widget-maker"], self.repo_root, path_prepend=[str(shim_dir)])
+        self.assertEqual(remove.returncode, 0, remove.stderr)
+        self.assertFalse(worktree_dir.exists())
 
 
 class MeterAbsentRegressionTests(OcwTestCase):
