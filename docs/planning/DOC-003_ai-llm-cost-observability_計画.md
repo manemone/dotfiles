@@ -659,7 +659,7 @@ cost_basis: estimated — not an invoice
 | 2 | `ai/ph-02-instrumentation` | `ocw` と `pr-review-loop` への工程イベント埋め込み（挙動不変・fail-open） | ✅ PR #26 マージ済 |
 | 3 | `ai/ph-03-deepseek-usage` | transcript ingest + 価格表 + 費用推定 + 突合レポート | ✅ PR #27 マージ済 |
 | 4 | `ai/ph-04-claude-quota` | statusLine 経由の quota スナップショット収集（孫0 P1 の実証範囲のみ） | ✅ PR #28 マージ済 |
-| 5 | `ai/ph-05-reports-baseline` | 集計レポート（PR別/工程別/model別/5h窓別/月次）+ ベースライン計測手順 + 文書索引・スキーマ仕様 | 🔄 実装中 |
+| 5 | `ai/ph-05-reports-baseline` | 集計レポート（PR別/工程別/model別/5h窓別/月次）+ ベースライン計測手順 + 文書索引・スキーマ仕様 | 🔄 PR #32 作成済み・レビュー待ち |
 
 各孫の詳細（目的 / 変更対象 / 変更しない対象 / 依存 / 完了条件 / テスト / ロールバック / レビュー重点）は
 後半の「孫N用プロンプト」に implementer 向けの形で完全記述する。ここでは要点のみ。

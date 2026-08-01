@@ -133,7 +133,12 @@ API キーは `DEEPSEEK_API_KEY_FILE` 環境変数で指定可能（デフォル
 ### 3.3 ocw-meter — LLM費用・Claude利用枠の観測基盤
 
 `ocw` / `claude-ds` / `pr-review-loop` の**本番経路には一切割り込まない**、事後読み取り専用の観測ツール。
-詳細設計は `docs/planning/DOC-003_ai-llm-cost-observability_計画.md` を参照。
+設計の経緯・意思決定の背景は `docs/planning/DOC-003_ai-llm-cost-observability_計画.md`（計画書。
+傘の完了とともに歴史的記録になる）を参照。**イベントスキーマ（全フィールド・全event_type・
+idempotency_keyの生成規則・費用計算式・schema_versionの変更ルール）の一次情報源は計画書ではなく
+[`docs/reference/DOC-005_ocw-meterイベントスキーマ.md`](../docs/reference/DOC-005_ocw-meterイベントスキーマ.md)。**
+運用手順（ベースライン計測）は
+[`docs/reference/DOC-004_LLM費用観測ベースライン計測手順.md`](../docs/reference/DOC-004_LLM費用観測ベースライン計測手順.md)を参照。
 
 **観測は fail-open。`ocw-meter` が無くても、PATH から消えても、書き込みに失敗しても、
 本スキル・`ocw` は完全に動作し続ける。** 呼び出し側は必ず次の形で呼ぶ:
@@ -156,7 +161,28 @@ ocw-meter ingest [--since <rfc3339-ts>]
 ocw-meter validate [--file <path>]
 
 # イベント件数・completeness・coverage・推定費用の要約
-ocw-meter report [--pr <n>] [--json]
+# --pr <n> を付けるとレビューラウンド一覧・人間介入回数・最終結果・
+# 同一5時間窓完走可否・そのPRのcash cost内訳も併せて出す
+ocw-meter report [--pr <n>] [--repo <owner>/<name>] [--json]
+
+# 工程別（phase.start/endの時間ペアとusage.messageの時刻範囲による
+# ベストエフォート対応）のトークン・費用・所要時間
+ocw-meter report --phase [--pr <n>] [--repo <owner>/<name>] [--json]
+
+# provider+model別のトークン・推定費用
+ocw-meter report --model [--pr <n>] [--repo <owner>/<name>] [--json]
+
+# role（commander/implementer/reviewer/unknown）別のイベント数・トークン・推定費用
+ocw-meter report --role [--pr <n>] [--repo <owner>/<name>] [--json]
+
+# 5時間窓（window_id）別のquota.sample集計。直接紐付き/時間範囲重複の
+# PRを別フィールドで提示
+ocw-meter report --window [--pr <n>] [--repo <owner>/<name>] [--json]
+
+# 月次: cash cost（従量API）/ capacity cost（Claudeサブスク枠）/
+# process efficiency（承認済みPRあたりの費用・ラウンド数等）を分離して表示
+# --reconcile とは別物（こちらは突合をしない）
+ocw-meter report --month [YYYY-MM] [--repo <owner>/<name>] [--json]
 
 # model別トークン集計・推定費用・provider管理画面との突合（coverage比率）
 ocw-meter report --reconcile [--month <YYYY-MM>] [--provider-total <model>=<tokens> ...] [--json]
@@ -170,6 +196,22 @@ ocw-meter snapshot-quota
 | `event` / `bind-pr` | **常に exit 0**。stderrに1行warnのみ。本番フローを止めない |
 | `snapshot-quota` | **常に exit 0 かつ必ずstdoutに表示文字列を出す**（statusLineが壊れて画面が崩れる事態を絶対に避ける。event/bind-pr以上に厳格なfail-open） |
 | `validate` / `report` / `ingest` | 失敗したら非ゼロで落ちる（壊れたデータを黙って集計しない） |
+
+**`--repo <owner>/<name>`（`--pr`・standalone `--month`専用。孫5後半で追加）**:
+
+`~/.local/state/ocw-meter`は本マシンの`ocw-meter`が向いた**全リポジトリで共有される1つのストア**だが、
+PR番号はリポジトリ**内**でしか一意でない。`--pr`とstandaloneの`--month`（`process_efficiency`集計）は
+どちらもこの「どのリポジトリのPR番号か」を解決する必要があり、通常はカレントディレクトリの
+`git remote get-url origin`から自動解決される。**git管理外のディレクトリから実行した場合や、
+`origin` remoteが無い場合は自動解決できず、`--pr`/standalone `--month`はfail-loudでエラーになる**
+（黙って別リポジトリの同番号PRにスコープする、または全イベントを取りこぼす、のどちらの誤動作も避けるため）。
+そのようなときは`--repo <owner>/<name>`で明示指定する（`<owner>/<name>`の形式、両側非空でなければ拒否される）。
+
+典型的にこれが必要になるのは、**PRのworktreeを`ocw rm`した後**（`docs/reference/DOC-004_...`§2.1の
+手順どおりworktree削除前にingestしていれば通常は発生しない）に、別の場所から`report --pr <N>`を
+取り直す場合。`--repo`は`--pr`または（`--reconcile`を伴わない）standaloneの`--month`と組み合わせない限り
+一切参照されないフィールドのため、それ以外の組み合わせ（`--repo`単体、`--model`と`--repo`のみ等）で
+渡すとエラーになる（値を受理して黙って無視する、という状態を避けるため）。
 
 **`ingest` の要点（`docs/planning/DOC-003_..._計画.md` 孫3プロンプト / ADR-001 §8 準拠）:**
 
@@ -263,6 +305,31 @@ ocw-meter snapshot-quota
 運用上は、`OCW_METER_QUOTA_INTERVAL`を既定の60秒より大きくする、または手動で古い
 `events/YYYY-MM-DD.jsonl`を別途アーカイブ・削除する、のいずれかを検討すること。
 
+**`prune`を実装しない決定について（孫5、計画書9.3の積み残し解消）**: 計画書9.3は
+「保存期間: 既定14日、`ocw-meter prune`で削除」と書いていたが、`prune`はどの孫の実装スコープにも
+入っておらず、計画時の書き漏れだった。孫5で以下の理由により**意図的に未実装のまま据え置く**と決定した:
+
+- `events/`（費用履歴そのもの）は数十MB/年〜数百MB/年規模（上記実測）であり、資産として残す価値が
+  ディスクコストを上回る。誤って自動削除する仕組みを持ち込むリスクの方が大きい
+- `raw/`（`OCW_METER_RAW=1`時のみ生成、既定オフ）は元々opt-inかつ再現性の低い生データであり、
+  肥大化した場合は`rm -rf ~/.local/state/ocw-meter/raw/`で無条件に安全に削除できる
+  （events/やstate/には一切影響しない、独立したディレクトリのため）
+- 自動削除ロジック（cron等）を追加すること自体が「観測は本番フローに一切割り込まない」という
+  本傘の設計方針（計画書§7.1）に新しい可動部を足すことになり、費用対効果に見合わない
+
+必要になった場合の手動削除パス（**いずれもocw-meterの動作を止めない**）:
+
+```bash
+# raw/ を丸ごと削除（既定では空。OCW_METER_RAW=1を使った場合のみ意味がある）
+rm -rf ~/.local/state/ocw-meter/raw/
+
+# 古いイベントファイルを個別に削除（費用履歴が失われる点に注意）
+rm ~/.local/state/ocw-meter/events/2026-01-*.jsonl
+```
+
+将来もし実際に運用上の困りごと（`report`/`validate`の実行時間が無視できなくなった等）が出た場合は、
+その時点で`ocw-meter prune`の実装を独立したPRとして起票すること（本PRのスコープには含めない）。
+
 保存レイアウト: `events/YYYY-MM-DD.jsonl`（基本はappend-only, mode 600。**例外**: 同一`idempotency_key`を再送すると
 後勝ち(last-write-wins)でその日のファイル内の該当行をmkstemp+os.replaceで原子的に置き換える）/
 `state/seen-keys/YYYY-MM.txt`（`idempotency_key`による重複排除）/
@@ -305,6 +372,17 @@ GitHub token形式（`ghp_...` 等 / `github_pat_...`）に一致する値、キ
   （1runあたり数十件）には十分だが、**大量イベントをループでこのCLI経由で書き込む用途には向かない**。
   `ingest` はこの制約を踏まえ、Herdr/run/pr情報を1回だけ解決し、seen-key集合と書き込みロックを
   バッチ全体で保持する専用パス（`bulk_write_events`）を持つ
+- **`usage.message`の`run_id`は、`ingest`をworktree削除（`ocw rm`）より後に実行すると解決できない
+  （孫5で実データ検証して判明。実測: このマシンの実ストア44,425件の`usage.message`のうち`run_id`が
+  設定されているものは0件）。** `run_id`解決（`resolve_run_id_via_ocw_run_id_file`）は、その
+  メッセージの`cwd`（worktreeパス）配下の`<git-dir>/ocw-run-id`ファイルを**ingest実行時点**で
+  読む方式であり、`ocw rm`はそのファイルをworktreeごと削除する。一度`run_id`無しで書き込まれた
+  `usage.message`は、後から同じtranscriptを再ingestしても直らない（他のフィールドと同じ
+  「過去は再計算しない」不変条件のため）。`ocw-meter report --phase`（工程別トークン内訳。
+  `run_id`でphase.start/endの時間窓と対応付ける — `docs/reference/DOC-005_...`§2.3参照）を
+  意味のある形で使うには、**PRの作業中〜マージ直後、worktreeを消す前に`ocw-meter ingest`を
+  実行する運用が必須**（`docs/reference/DOC-004_...`§2の計測手順に反映済み）。`--model`/`--role`/
+  `--pr`はこの制約の影響を受けない（`run_id`ではなく`model`/`role`/`pr_number`を直接見るため）
 
 ## 4. Customization
 

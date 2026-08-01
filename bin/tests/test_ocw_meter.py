@@ -55,7 +55,7 @@ REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
 OCW_METER = REPO_ROOT / "bin" / "ocw-meter"
 
 
-def run_meter(args, home, extra_env=None, timeout=30):
+def run_meter(args, home, extra_env=None, timeout=30, cwd=None):
     env = dict(os.environ)
     env["OCW_METER_HOME"] = str(home)
     # Isolate from whatever role/run/Herdr context this test happens to run
@@ -66,7 +66,7 @@ def run_meter(args, home, extra_env=None, timeout=30):
         env.update(extra_env)
     return subprocess.run(
         [str(OCW_METER), *args],
-        cwd=str(REPO_ROOT),
+        cwd=str(cwd) if cwd is not None else str(REPO_ROOT),
         env=env,
         capture_output=True,
         text=True,
@@ -2216,6 +2216,420 @@ class ReportFiveHourWindowCompletionTests(OcwMeterTestCase):
         data = json.loads(result.stdout)
         self.assertNotIn("five_hour_window_completion", data)
         self.assertNotIn("five_hour_window_ids_seen", data)
+
+
+# ── 孫5: grouped report views (--phase/--model/--role/--window/--month) ──
+
+class ReportGroupedViewsTests(OcwMeterTestCase):
+    """docs/planning/DOC-003_..._計画.md 孫5プロンプト §1."""
+
+    def _seed_full_pr(self, pr_number, run_id):
+        run_meter(["event", "run.start", "--idempotency-key", f"{run_id}-start",
+                   "--run-id", run_id, "--base-ref", "master", "--command", "claude",
+                   "--role", "implementer", "--ts", "2026-08-01T09:00:00.000Z"], self.home)
+        run_meter(["event", "phase.start", "--idempotency-key", f"{run_id}-p1s",
+                   "--run-id", run_id, "--phase", "pr_create", "--round", "1",
+                   "--role", "implementer", "--pr-number", str(pr_number),
+                   "--ts", "2026-08-01T09:05:00.000Z"], self.home)
+        run_meter(["event", "phase.end", "--idempotency-key", f"{run_id}-p1e",
+                   "--run-id", run_id, "--phase", "pr_create", "--round", "1",
+                   "--role", "implementer", "--pr-number", str(pr_number),
+                   "--ts", "2026-08-01T09:10:00.000Z"], self.home)
+        run_meter(["bind-pr", "--run", run_id, "--pr", str(pr_number)], self.home)
+        run_meter(["event", "review.round", "--idempotency-key", f"{run_id}-rv1",
+                   "--run-id", run_id, "--round", "1", "--verdict", "approved",
+                   "--findings-count", "0", "--role", "reviewer", "--pr-number", str(pr_number),
+                   "--ts", "2026-08-01T09:30:00.000Z"], self.home)
+        run_meter(["event", "phase.end", "--idempotency-key", f"{run_id}-done",
+                   "--run-id", run_id, "--phase", "done", "--outcome", "success", "--round", "1",
+                   "--role", "implementer", "--pr-number", str(pr_number),
+                   "--ts", "2026-08-01T09:35:00.000Z"], self.home)
+        run_meter(["event", "quota.sample", "--idempotency-key", f"{run_id}-q1",
+                   "--plan-source", "statusline", "--window-id", f"win-{run_id}",
+                   "--five-hour-used-pct", "20", "--pr-number", str(pr_number),
+                   "--ts", "2026-08-01T09:12:00.000Z"], self.home)
+        run_meter(["event", "usage.message", "--idempotency-key", f"{run_id}-u1",
+                   "--run-id", run_id, "--message-id", f"{run_id}-m1",
+                   "--model", "deepseek-v4-pro", "--provider", "deepseek",
+                   "--input-tokens", "1000", "--cache-read-input-tokens", "500",
+                   "--cache-creation-input-tokens", "0", "--output-tokens", "200",
+                   "--cost-basis", "estimated", "--cost-estimate-usd", "0.01",
+                   "--price-table-version", "deepseek-2026-08-01", "--role", "implementer",
+                   "--pr-number", str(pr_number), "--ts", "2026-08-01T09:06:00.000Z"], self.home)
+
+    # -- empty storage: every new view must not fail (T20) --
+
+    def test_phase_model_role_window_month_on_empty_storage_do_not_fail(self):
+        for view_args in (["--phase"], ["--model"], ["--role"], ["--window"], ["--month"]):
+            result = run_meter(["report", *view_args], self.home)
+            self.assertEqual(result.returncode, 0, f"{view_args} failed: {result.stderr}")
+            self.assertIn("coverage:", result.stdout)
+            self.assertIn("completeness:", result.stdout)
+            self.assertIn("quarantined:", result.stdout)
+
+            result_json = run_meter(["report", *view_args, "--json"], self.home)
+            self.assertEqual(result_json.returncode, 0)
+            data = json.loads(result_json.stdout)
+            for field in ("coverage", "completeness", "quarantined_lines", "price_table", "cost_basis"):
+                self.assertIn(field, data, f"{view_args} --json missing {field!r}")
+
+    # -- --model --
+
+    def test_model_view_groups_by_provider_and_model(self):
+        self._seed_full_pr(1, "run-model-1")
+        data = json.loads(run_meter(["report", "--model", "--json"], self.home).stdout)
+        row = data["by_model"]["deepseek/deepseek-v4-pro"]
+        self.assertEqual(row["messages"], 1)
+        self.assertEqual(row["input_tokens"], 1000)
+        self.assertEqual(row["cache_read_input_tokens"], 500)
+        self.assertAlmostEqual(row["cost_estimate_usd"], 0.01)
+
+    # -- --role --
+
+    def test_role_view_counts_total_events_and_usage_tokens(self):
+        self._seed_full_pr(2, "run-role-1")
+        data = json.loads(run_meter(["report", "--role", "--json"], self.home).stdout)
+        self.assertEqual(data["by_role"]["implementer"]["messages"], 1)
+        self.assertGreaterEqual(data["by_role"]["implementer"]["total_events"], 1)
+        self.assertEqual(data["by_role"]["reviewer"]["messages"], 0)
+        self.assertGreaterEqual(data["by_role"]["reviewer"]["total_events"], 1)
+
+    # -- --window --
+
+    def test_window_view_groups_quota_samples_and_links_pr_directly(self):
+        self._seed_full_pr(3, "run-window-1")
+        data = json.loads(run_meter(["report", "--window", "--json"], self.home).stdout)
+        row = data["by_window"]["win-run-window-1"]
+        self.assertEqual(row["samples"], 1)
+        self.assertEqual(row["five_hour_used_pct_max"], 20)
+        self.assertEqual(row["prs_direct_link"], [3])
+        self.assertIsNone(row["blocked_seconds"])
+
+    # -- --phase --
+
+    def test_phase_view_pairs_phase_start_end_and_attributes_tokens_by_time_range(self):
+        self._seed_full_pr(4, "run-phase-1")
+        data = json.loads(run_meter(["report", "--phase", "--json"], self.home).stdout)
+        pr_create = data["by_phase"]["pr_create"]
+        # usage.message at 09:06:00 falls inside pr_create's [09:05, 09:10)
+        # window (seeded above), so it must be attributed there, not to
+        # `(unassigned)` or to `review_request`/`done`.
+        self.assertEqual(pr_create["messages"], 1)
+        self.assertAlmostEqual(pr_create["total_duration_seconds"], 300.0)
+        self.assertEqual(pr_create["window_count"], 1)
+        # `done`'s phase.end in _seed_full_pr has no matching phase.start
+        # (pr-review-loop never emits one for `done` — see
+        # build_phase_windows' docstring), so it must not appear as a
+        # guessed/zero-duration window at all.
+        self.assertNotIn("done", data["by_phase"])
+
+    def test_phase_view_usage_with_unknown_run_id_is_unassigned_not_guessed(self):
+        # A usage.message with no run_id (e.g. ingest couldn't resolve
+        # one) must not be silently attributed to any phase window.
+        run_meter(["event", "phase.start", "--idempotency-key", "u-p-s", "--run-id", "run-orphan",
+                   "--phase", "fix", "--round", "1", "--ts", "2026-08-01T10:00:00.000Z"], self.home)
+        run_meter(["event", "phase.end", "--idempotency-key", "u-p-e", "--run-id", "run-orphan",
+                   "--phase", "fix", "--round", "1", "--ts", "2026-08-01T10:05:00.000Z"], self.home)
+        run_meter(["event", "usage.message", "--idempotency-key", "u-orphan", "--message-id", "m-orphan",
+                   "--model", "deepseek-v4-pro", "--cost-basis", "estimated",
+                   "--ts", "2026-08-01T10:02:00.000Z"], self.home)
+        data = json.loads(run_meter(["report", "--phase", "--json"], self.home).stdout)
+        self.assertEqual(data["by_phase"]["(unassigned)"]["messages"], 1)
+        self.assertEqual(data["by_phase"]["fix"]["messages"], 0)
+
+    # -- --pr combined with a grouped view scopes to that PR --
+
+    def test_model_view_combined_with_pr_filter_scopes_to_that_pr(self):
+        self._seed_full_pr(5, "run-scope-a")
+        self._seed_full_pr(6, "run-scope-b")
+        data = json.loads(run_meter(["report", "--model", "--pr", "5", "--json"], self.home).stdout)
+        self.assertEqual(data["filter_pr"], 5)
+        self.assertEqual(data["by_model"]["deepseek/deepseek-v4-pro"]["messages"], 1)
+
+    # -- cross-repo PR-number collision (round-1 review finding 1) --
+
+    def test_pr_filter_excludes_a_same_numbered_pr_in_a_different_repo(self):
+        # The store is shared across every repo ocw-meter is ever
+        # pointed at (plan §9.1). `pr_number` alone is only unique
+        # WITHIN a repo, so a same-numbered PR in a completely
+        # different repo must never leak into this repo's --pr report.
+        self._seed_full_pr(999, "run-thisrepo")
+        run_meter(["event", "usage.message", "--idempotency-key", "other-repo-u1",
+                   "--message-id", "other-repo-m1", "--repo", "someone/other-repo",
+                   "--model", "deepseek-v4-pro", "--cost-basis", "estimated",
+                   "--cost-estimate-usd", "999.0", "--pr-number", "999",
+                   "--input-tokens", "1", "--cache-read-input-tokens", "0",
+                   "--cache-creation-input-tokens", "0", "--output-tokens", "1",
+                   "--ts", "2026-08-01T09:07:00.000Z"], self.home)
+        data = json.loads(run_meter(["report", "--pr", "999", "--json"], self.home).stdout)
+        # Only the same-repo usage.message (cost 0.01, seeded by
+        # _seed_full_pr) counts; the other-repo $999.0 message must be
+        # excluded entirely.
+        self.assertAlmostEqual(data["pr_detail"]["cash_cost_usd"], 0.01)
+
+    def test_pr_filter_excludes_repo_null_events_from_direct_pr_number_match(self):
+        # An event with repo:null (e.g. `ingest` couldn't resolve a repo
+        # slug for that message's cwd — DOC-005 §2.4/§4's documented
+        # run_id-resolution gap has the same root cause) must not be
+        # guessed into belonging to the caller's own repo; that would
+        # silently reopen the exact cross-repo contamination class this
+        # fix closes. `--repo ""` is normalized to `null` (empty string
+        # -> null, same as every other envelope field).
+        run_meter(["event", "usage.message", "--idempotency-key", "norepo-u1",
+                   "--message-id", "norepo-m1", "--model", "deepseek-v4-pro",
+                   "--cost-basis", "estimated", "--cost-estimate-usd", "5.0",
+                   "--pr-number", "1000", "--repo", "",
+                   "--input-tokens", "1", "--cache-read-input-tokens", "0",
+                   "--cache-creation-input-tokens", "0", "--output-tokens", "1",
+                   "--ts", "2026-08-01T09:07:00.000Z"], self.home)
+        events = read_events(self.home)
+        self.assertIsNone(next(e for e in events if e["idempotency_key"] == "norepo-u1")["repo"])
+        data = json.loads(run_meter(["report", "--pr", "1000", "--json"], self.home).stdout)
+        self.assertIsNone(data["pr_detail"]["cash_cost_usd"])
+
+    # -- round-2 review finding 10: git_repo_slug() == None must fail loud, not flip scope --
+
+    def test_pr_filter_fails_loud_when_repo_cannot_be_resolved(self):
+        # A tempdir with no .git at all -> `git remote get-url origin`
+        # fails -> git_repo_slug() returns None. Previously this flipped
+        # `events_for_pr`'s repo scoping into matching ONLY repo:null
+        # events (the exact opposite of what round-1's fix intended),
+        # silently resurrecting cross-repo contamination with zero
+        # legitimate events surviving. `report` (the fail-loud half of
+        # this CLI) must refuse instead.
+        self._seed_full_pr(50, "run-norepo-check")
+        no_git_dir = pathlib.Path(self.tmpdir.name) / "not-a-git-repo"
+        no_git_dir.mkdir()
+        result = run_meter(["report", "--pr", "50"], self.home, cwd=no_git_dir)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("--repo", result.stderr)
+
+    def test_standalone_month_fails_loud_when_repo_cannot_be_resolved(self):
+        # report --month also calls events_for_pr (via
+        # report_month_process_efficiency) once per approved PR, so it
+        # needs the same guard.
+        no_git_dir = pathlib.Path(self.tmpdir.name) / "not-a-git-repo-month"
+        no_git_dir.mkdir()
+        result = run_meter(["report", "--month", "2026-08"], self.home, cwd=no_git_dir)
+        self.assertNotEqual(result.returncode, 0)
+
+    def test_pr_filter_explicit_repo_flag_works_outside_any_git_repo(self):
+        # The escape hatch: --repo <owner>/<name> lets `report --pr`
+        # run from anywhere, as long as the caller states which repo's
+        # PR numbering they mean.
+        self._seed_full_pr(51, "run-explicit-repo")
+        no_git_dir = pathlib.Path(self.tmpdir.name) / "not-a-git-repo-2"
+        no_git_dir.mkdir()
+        # _seed_full_pr's events were written from inside REPO_ROOT, so
+        # their `repo` field is REPO_ROOT's own git remote slug.
+        real_repo = json.loads(
+            run_meter(["report", "--pr", "51", "--json"], self.home).stdout
+        )["repo"]
+        result = run_meter(
+            ["report", "--pr", "51", "--repo", real_repo, "--json"], self.home, cwd=no_git_dir,
+        )
+        self.assertEqual(result.returncode, 0)
+        data = json.loads(result.stdout)
+        self.assertEqual(data["repo"], real_repo)
+        self.assertEqual(data["total_events"], 8)
+
+    # -- round-3 review finding 14: --repo validation + unused-flag guard --
+
+    def test_repo_flag_rejects_a_value_without_a_slash(self):
+        # A plausible typo (missing "owner/") must not silently match
+        # zero events with exit 0 — the same "garbage filter, plausible
+        # zero result" failure mode --month's 01-12 validation exists to
+        # prevent.
+        result = run_meter(["report", "--pr", "1", "--repo", "dotfiles"], self.home)
+        self.assertNotEqual(result.returncode, 0)
+
+    def test_repo_flag_rejects_empty_owner_or_name(self):
+        for bad in ("/dotfiles", "owner/", "owner/name/extra"):
+            result = run_meter(["report", "--pr", "1", "--repo", bad], self.home)
+            self.assertNotEqual(result.returncode, 0, f"--repo {bad!r} should have been rejected")
+
+    def test_repo_flag_without_pr_or_month_is_rejected(self):
+        # --repo only ever matters on paths that call events_for_pr
+        # (--pr, or standalone --month); anywhere else it would be
+        # silently accepted and ignored, same failure mode as --pr
+        # being silently ignored by --month/--reconcile (finding 2).
+        result = run_meter(["report", "--model", "--repo", "owner/bogus"], self.home)
+        self.assertNotEqual(result.returncode, 0)
+
+    def test_repo_flag_without_pr_or_month_is_rejected_even_for_bare_report(self):
+        result = run_meter(["report", "--repo", "owner/bogus"], self.home)
+        self.assertNotEqual(result.returncode, 0)
+
+    def test_repo_flag_is_accepted_with_standalone_month(self):
+        result = run_meter(["report", "--month", "2026-08", "--repo", "owner/name"], self.home)
+        self.assertEqual(result.returncode, 0)
+
+    # -- round-2 review finding 11: cross-repo review.round leaking into --month --
+
+    def test_month_process_efficiency_excludes_other_repo_approved_prs(self):
+        run_meter(["event", "review.round", "--idempotency-key", "other-repo-approval",
+                   "--repo", "someone/other-repo", "--pr-number", "777", "--round", "1",
+                   "--verdict", "approved", "--findings-count", "0",
+                   "--ts", "2026-08-05T09:00:00.000Z"], self.home)
+        data = json.loads(run_meter(["report", "--month", "2026-08", "--json"], self.home).stdout)
+        self.assertEqual(data["process_efficiency"]["approved_pr_count"], 0)
+        self.assertNotIn(777, [p["pr_number"] for p in data["process_efficiency"]["per_pr"]])
+
+    # -- --pr detail additions (round list / human intervention / final result / cash cost) --
+
+    def test_pr_detail_includes_rounds_final_result_and_cash_cost(self):
+        self._seed_full_pr(7, "run-detail-1")
+        data = json.loads(run_meter(["report", "--pr", "7", "--json"], self.home).stdout)
+        detail = data["pr_detail"]
+        self.assertEqual(detail["review_round_count"], 1)
+        self.assertEqual(detail["review_rounds"][0]["verdict"], "approved")
+        self.assertEqual(detail["final_result"], "success")
+        self.assertEqual(detail["human_intervention_count"], 0)
+        self.assertAlmostEqual(detail["cash_cost_usd"], 0.01)
+
+    def test_pr_detail_counts_human_intervention(self):
+        self._seed_full_pr(8, "run-detail-2")
+        run_meter(["event", "human.intervention", "--idempotency-key", "hi-1", "--run-id", "run-detail-2",
+                   "--reason", "review-blocked-condition", "--pr-number", "8",
+                   "--ts", "2026-08-01T09:20:00.000Z"], self.home)
+        data = json.loads(run_meter(["report", "--pr", "8", "--json"], self.home).stdout)
+        self.assertEqual(data["pr_detail"]["human_intervention_count"], 1)
+        self.assertEqual(data["pr_detail"]["human_intervention_reasons"], ["review-blocked-condition"])
+
+    # -- mutual exclusivity --
+
+    def test_reconcile_cannot_combine_with_grouped_view(self):
+        result = run_meter(["report", "--reconcile", "--phase"], self.home)
+        self.assertNotEqual(result.returncode, 0)
+
+    def test_standalone_month_cannot_combine_with_grouped_view(self):
+        result = run_meter(["report", "--month", "2026-08", "--model"], self.home)
+        self.assertNotEqual(result.returncode, 0)
+
+    def test_two_different_grouped_views_cannot_be_combined(self):
+        # Round-1 self-review finding: --phase --model used to silently
+        # take the LAST flag (view got overwritten) instead of erroring
+        # — exactly the "garbage-but-plausible-looking output" failure
+        # mode `report` (the fail-loud half of this CLI) exists to
+        # prevent for --month/--reconcile already.
+        result = run_meter(["report", "--phase", "--model"], self.home)
+        self.assertNotEqual(result.returncode, 0)
+
+    def test_repeating_the_same_grouped_view_flag_is_fine(self):
+        result = run_meter(["report", "--phase", "--phase"], self.home)
+        self.assertEqual(result.returncode, 0)
+
+    # -- round-1 review finding 2: --pr silently ignored by --month/--reconcile --
+
+    def test_pr_cannot_combine_with_standalone_month(self):
+        result = run_meter(["report", "--month", "2026-08", "--pr", "5"], self.home)
+        self.assertNotEqual(result.returncode, 0)
+
+    def test_pr_cannot_combine_with_reconcile(self):
+        result = run_meter(["report", "--reconcile", "--pr", "5"], self.home)
+        self.assertNotEqual(result.returncode, 0)
+
+    # -- round-1 review finding 3/4: duration_seconds semantics + 5h quota in --pr --
+
+    def test_pr_detail_duration_seconds_is_null_without_an_approval(self):
+        # A run with no review.round event at all (never reviewed yet).
+        run_meter(["event", "run.start", "--idempotency-key", "run-bare-start", "--run-id", "run-bare",
+                   "--ts", "2026-08-01T09:00:00.000Z"], self.home)
+        run_meter(["bind-pr", "--run", "run-bare", "--pr", "12"], self.home)
+        run_meter(["event", "usage.message", "--idempotency-key", "run-bare-u1", "--run-id", "run-bare",
+                   "--message-id", "run-bare-m1", "--model", "deepseek-v4-pro", "--cost-basis", "estimated",
+                   "--cost-estimate-usd", "0.02", "--pr-number", "12",
+                   "--input-tokens", "1", "--cache-read-input-tokens", "0",
+                   "--cache-creation-input-tokens", "0", "--output-tokens", "1",
+                   "--ts", "2026-08-01T09:05:00.000Z"], self.home)
+        data = json.loads(run_meter(["report", "--pr", "12", "--json"], self.home).stdout)
+        self.assertIsNone(data["pr_detail"]["duration_seconds"])
+        self.assertIsNotNone(data["pr_detail"]["total_span_seconds"])
+
+    def test_pr_detail_duration_seconds_measures_time_to_approval_not_full_span(self):
+        self._seed_full_pr(13, "run-approved-then-more")
+        # _seed_full_pr's approval round.round is at 09:30:00Z, but the
+        # PR's overall span extends to the usage.message at 09:06:00Z
+        # .. review.round at 09:30:00Z .. phase.end(done) at 09:35:00Z.
+        # Add an event AFTER the approval to prove duration_seconds
+        # does NOT grow with it (only total_span_seconds should).
+        run_meter(["event", "quota.sample", "--idempotency-key", "run-approved-then-more-late-q",
+                   "--run-id", "run-approved-then-more", "--plan-source", "statusline",
+                   "--pr-number", "13", "--ts", "2026-08-01T12:00:00.000Z"], self.home)
+        data = json.loads(run_meter(["report", "--pr", "13", "--json"], self.home).stdout)
+        detail = data["pr_detail"]
+        # approval at 09:30:00, earliest event (run.start) at 09:00:00 -> 1800s to approval.
+        self.assertAlmostEqual(detail["duration_seconds"], 1800.0)
+        # total span now reaches the 12:00:00 event -> much larger.
+        self.assertGreater(detail["total_span_seconds"], detail["duration_seconds"])
+
+    def test_pr_detail_includes_five_hour_quota_consumption(self):
+        self._seed_full_pr(14, "run-quota-detail")
+        data = json.loads(run_meter(["report", "--pr", "14", "--json"], self.home).stdout)
+        # _seed_full_pr's quota.sample has five_hour_used_pct=20.
+        self.assertEqual(data["pr_detail"]["five_hour_used_pct_max"], 20)
+
+
+class ReportMonthStandaloneTests(OcwMeterTestCase):
+    """孫5プロンプト §1 --month (NOT --reconcile): cash cost / capacity
+    cost / process efficiency."""
+
+    def test_cash_and_capacity_cost_are_kept_in_separate_keys(self):
+        run_meter(["event", "usage.message", "--idempotency-key", "u1", "--message-id", "m1",
+                   "--model", "deepseek-v4-pro", "--cost-basis", "estimated", "--cost-estimate-usd", "1.5",
+                   "--input-tokens", "10", "--cache-read-input-tokens", "0",
+                   "--cache-creation-input-tokens", "0", "--output-tokens", "5",
+                   "--ts", "2026-08-05T10:00:00.000Z"], self.home)
+        run_meter(["event", "usage.message", "--idempotency-key", "u2", "--message-id", "m2",
+                   "--model", "claude-opus-5", "--cost-basis", "subscription",
+                   "--input-tokens", "10", "--cache-read-input-tokens", "0",
+                   "--cache-creation-input-tokens", "0", "--output-tokens", "5",
+                   "--ts", "2026-08-05T10:05:00.000Z"], self.home)
+        data = json.loads(run_meter(["report", "--month", "2026-08", "--json"], self.home).stdout)
+        self.assertAlmostEqual(data["cash_cost"]["cash_cost_usd"], 1.5)
+        self.assertEqual(data["cash_cost"]["usage_message_count"], 2)
+        self.assertEqual(data["capacity"]["capacity_message_count"], 1)
+        self.assertNotIn("cash_cost_usd", data["capacity"])
+
+    def test_approved_pr_process_efficiency_is_scoped_to_the_month(self):
+        run_meter(["event", "run.start", "--idempotency-key", "r1", "--run-id", "run-m1",
+                   "--ts", "2026-08-05T09:00:00.000Z"], self.home)
+        run_meter(["bind-pr", "--run", "run-m1", "--pr", "99"], self.home)
+        run_meter(["event", "review.round", "--idempotency-key", "rv1", "--run-id", "run-m1",
+                   "--round", "1", "--verdict", "approved", "--findings-count", "0",
+                   "--ts", "2026-08-05T09:30:00.000Z"], self.home)
+        # A second PR approved in a DIFFERENT month must not be counted.
+        run_meter(["event", "run.start", "--idempotency-key", "r2", "--run-id", "run-m2",
+                   "--ts", "2026-07-05T09:00:00.000Z"], self.home)
+        run_meter(["bind-pr", "--run", "run-m2", "--pr", "100"], self.home)
+        run_meter(["event", "review.round", "--idempotency-key", "rv2", "--run-id", "run-m2",
+                   "--round", "1", "--verdict", "approved", "--findings-count", "0",
+                   "--ts", "2026-07-05T09:30:00.000Z"], self.home)
+
+        data = json.loads(run_meter(["report", "--month", "2026-08", "--json"], self.home).stdout)
+        self.assertEqual(data["process_efficiency"]["approved_pr_count"], 1)
+        self.assertEqual(data["process_efficiency"]["per_pr"][0]["pr_number"], 99)
+
+    def test_month_boundary_uses_utc_not_local_offset(self):
+        # T21: an event timestamped 23:30 UTC on 2026-07-31 must land in
+        # the 2026-07 month report, NOT 2026-08, even though a JST
+        # reader (+9h) would see it as the morning of 2026-08-01.
+        run_meter(["event", "usage.message", "--idempotency-key", "u1", "--message-id", "m1",
+                   "--model", "deepseek-v4-pro", "--cost-basis", "estimated", "--cost-estimate-usd", "2.0",
+                   "--ts", "2026-07-31T23:30:00.000Z"], self.home)
+        july = json.loads(run_meter(["report", "--month", "2026-07", "--json"], self.home).stdout)
+        august = json.loads(run_meter(["report", "--month", "2026-08", "--json"], self.home).stdout)
+        self.assertEqual(july["cash_cost"]["usage_message_count"], 1)
+        self.assertEqual(august["cash_cost"]["usage_message_count"], 0)
+
+    def test_month_defaults_to_current_utc_month_when_value_omitted(self):
+        result = run_meter(["report", "--month"], self.home)
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("month:", result.stdout)
+
+    def test_rejects_malformed_month(self):
+        result = run_meter(["report", "--month", "2026-13"], self.home)
+        self.assertNotEqual(result.returncode, 0)
 
 
 # ── Round 1 review regression tests ─────────────────────────────────────
