@@ -43,6 +43,7 @@ import concurrent.futures
 import json
 import os
 import pathlib
+import pty
 import stat
 import subprocess
 import sys
@@ -2346,39 +2347,150 @@ class SnapshotQuotaRoundOneReviewTests(OcwMeterTestCase):
         # it used to block sys.stdin.buffer.read() with NO time bound at
         # all — only a size bound. This must return within
         # STDIN_READ_TIMEOUT_SECONDS (2s), not hang indefinitely.
-        proc = subprocess.Popen(
-            [str(OCW_METER), "snapshot-quota"],
-            cwd=str(REPO_ROOT),
-            env={**os.environ, "OCW_METER_HOME": str(self.home)},
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-        )
-        start = time.monotonic()
+        #
+        # round-2 review finding 2: `Popen(stdin=subprocess.PIPE)` +
+        # `communicate()` with no `input=` closes the CHILD's stdin
+        # immediately (an instant EOF) — that version of this test
+        # passed identically against the pre-fix code too (review
+        # measured 0.06s on both), so it never actually exercised the
+        # hang this is meant to guard against. A real "caller keeps the
+        # pipe open" scenario needs a fd whose write end the PARENT
+        # keeps open for the whole check: os.pipe()'s read end goes to
+        # the child as stdin, and the write end is held here, unclosed,
+        # until after the process has already returned.
+        read_fd, write_fd = os.pipe()
+        proc = None
         try:
-            stdout, _stderr = proc.communicate(timeout=15)
+            proc = subprocess.Popen(
+                [str(OCW_METER), "snapshot-quota"],
+                cwd=str(REPO_ROOT),
+                env={**os.environ, "OCW_METER_HOME": str(self.home)},
+                stdin=read_fd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            os.close(read_fd)  # the child has its own copy (dup'd by Popen); this process doesn't need it
+            read_fd = None
+            start = time.monotonic()
+            try:
+                stdout, _stderr = proc.communicate(timeout=15)
+            finally:
+                if proc.poll() is None:
+                    proc.kill()
+            elapsed = time.monotonic() - start
         finally:
-            if proc.poll() is None:
-                proc.kill()
-        elapsed = time.monotonic() - start
+            if read_fd is not None:
+                os.close(read_fd)
+            os.close(write_fd)  # kept open (unclosed, unwritten-to) for the entire wait above
+
         self.assertEqual(proc.returncode, 0)
-        # Generous slack above the 2s internal timeout for CI/sandbox
-        # scheduling jitter — the old code would have blocked for the
-        # full 15s `communicate` timeout (or forever, without one).
-        self.assertLess(elapsed, 10)
+        # STDIN_READ_TIMEOUT_SECONDS is 2.0; review measured the fixed
+        # code at ~2.07s under this exact harness. 5s leaves slack for
+        # CI/sandbox jitter without hiding a regression the way the
+        # previous 10s threshold could (a timeout silently growing from
+        # 2s to 8s would still pass under 10s).
+        self.assertLess(elapsed, 5)
 
     def test_interactive_tty_like_stdin_returns_immediately(self):
-        # Finding 8 (isatty half): `sys.stdin.isatty()` short-circuits
-        # before ever calling select() — verified indirectly here by
-        # confirming empty (already-closed) stdin still returns fast and
-        # clean, matching the documented "no piped data" contract; a
-        # literal TTY is not spawnable inside this test harness.
-        start = time.monotonic()
-        result = run_snapshot_quota("", self.home)
-        elapsed = time.monotonic() - start
+        # Finding 8 (isatty half). round-2 review finding 2: the
+        # previous version of this test fed already-closed/empty stdin,
+        # which hits EOF at the select()/read() stage and never actually
+        # exercises the isatty() short-circuit branch at all — and its
+        # own comment's claim that "a literal TTY is not spawnable
+        # inside this test harness" was simply wrong (review's own repro
+        # used exactly this pty.openpty() approach). A real pty fd, not
+        # a pipe, is required to exercise isatty() == True.
+        master_fd, slave_fd = pty.openpty()
+        proc = None
+        try:
+            proc = subprocess.Popen(
+                [str(OCW_METER), "snapshot-quota"],
+                cwd=str(REPO_ROOT),
+                env={**os.environ, "OCW_METER_HOME": str(self.home)},
+                stdin=slave_fd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            os.close(slave_fd)
+            slave_fd = None
+            start = time.monotonic()
+            try:
+                stdout, _stderr = proc.communicate(timeout=15)
+            finally:
+                if proc.poll() is None:
+                    proc.kill()
+            elapsed = time.monotonic() - start
+        finally:
+            if slave_fd is not None:
+                os.close(slave_fd)
+            os.close(master_fd)
+
+        self.assertEqual(proc.returncode, 0)
+        # isatty() short-circuits before select() ever runs (review
+        # measured ~0.06s) — much tighter than the pipe-timeout case.
+        self.assertLess(elapsed, 2)
+
+
+class SnapshotQuotaRoundTwoReviewTests(OcwMeterTestCase):
+    def test_rate_limits_less_sample_does_not_erase_global_window_state(self):
+        # Round-2 review finding 1 (most severe): the global
+        # five_hour_window_id/five_hour_used_pct slot used to be
+        # overwritten unconditionally on every write, including by a
+        # sample that has NO window info of its own (any claude-ds/
+        # DeepSeek sample — ADR-001 §2.1's 58/58). One such sample
+        # landing between two Anthropic samples silently defeated plan
+        # §8.5's "同一window_id内でused_percentageが減少したら異常" check
+        # — and round-1's OWN per-session-throttle fix made this near-
+        # guaranteed in this repo's standard Herdr setup (an Anthropic
+        # pane + a claude-ds pane both sampling roughly every interval).
+        far_future = 99999999999
+        obj_a1 = {"session_id": "sess-A", "rate_limits": {"five_hour": {"used_percentage": 50, "resets_at": far_future}}}
+        obj_ds = {"session_id": "sess-ds", "model": {"id": "deepseek-v4-pro[1m]"}}  # no rate_limits at all
+        obj_a2 = {"session_id": "sess-A", "rate_limits": {"five_hour": {"used_percentage": 30, "resets_at": far_future}}}
+
+        run_snapshot_quota(json.dumps(obj_a1), self.home, extra_env={"OCW_METER_QUOTA_INTERVAL": "0"})
+        r_ds = run_snapshot_quota(json.dumps(obj_ds), self.home, extra_env={"OCW_METER_QUOTA_INTERVAL": "0"})
+        r_a2 = run_snapshot_quota(json.dumps(obj_a2), self.home, extra_env={"OCW_METER_QUOTA_INTERVAL": "0"})
+
+        self.assertNotIn("decreased within the same window_id", r_ds.stderr)
+        self.assertIn("decreased within the same window_id", r_a2.stderr)
+
+        events = read_events(self.home)
+        by_session_and_ts = sorted(events, key=lambda e: e["ts"])
+        self.assertEqual([e["session_id"] for e in by_session_and_ts], ["sess-A", "sess-ds", "sess-A"])
+        self.assertEqual(by_session_and_ts[1]["completeness"], "unknown")  # the rate_limits-less sample itself
+        self.assertEqual(by_session_and_ts[2]["completeness"], "partial")  # A's decrease must still be caught
+
+    def test_suppression_cache_does_not_write_inside_a_git_worktree_home(self):
+        # Round-2 review finding 3: `default_storage_root()` is a pure
+        # path-string builder — it never checks whether $HOME itself
+        # happens to sit inside a git worktree (a real shape for this
+        # very repo's own dotfiles use case). Writing the round-1
+        # suppression cache there unconditionally left an untracked
+        # quota-worktree-refusal.json inside a test repo. This must not
+        # happen — `emit_meter_error`'s own default-root fallback
+        # already re-checks the same way, and the suppression cache must
+        # match that precedent.
+        home_repo = pathlib.Path(self.tmpdir.name) / "home-is-a-git-repo"
+        subprocess.run(["git", "init", "-q", str(home_repo)], check=True)
+        other_repo = pathlib.Path(self.tmpdir.name) / "other-repo-for-bad-ocw-meter-home"
+        subprocess.run(["git", "init", "-q", str(other_repo)], check=True)
+        bad_ocw_meter_home = other_repo / "ocw-meter-home"
+
+        result = run_snapshot_quota(
+            json.dumps(CLAUDE_STATUSLINE_SAMPLE), bad_ocw_meter_home,
+            extra_env={"HOME": str(home_repo)},
+        )
         self.assertEqual(result.returncode, 0)
-        self.assertLess(elapsed, 5)
+        self.assertIn("resolves inside a Git worktree", result.stderr)
+
+        status = subprocess.run(
+            ["git", "-C", str(home_repo), "status", "--porcelain"],
+            capture_output=True, text=True, check=True,
+        )
+        self.assertEqual(status.stdout.strip(), "", "suppression cache must not write inside $HOME's own git worktree")
 
 
 if __name__ == "__main__":

@@ -3121,8 +3121,26 @@ def record_quota_sample(obj):
     # the same underlying reason), keyed by the configured (bad) root's
     # own path string so multiple distinct misconfigurations don't
     # clobber each other.
+    # round-2 review finding 3: `default_storage_root()` just builds a
+    # path string ("$HOME/.local/state/ocw-meter") — it does NOT check
+    # whether that path itself happens to sit inside a git worktree
+    # (e.g. $HOME pointed at a checkout, as this very repository's own
+    # dotfiles use case can produce). Writing the suppression cache
+    # there unconditionally would violate this file's own "never write
+    # under a git worktree" rule for exactly the state file that exists
+    # to STOP unwanted writes — confirmed: it left an untracked
+    # quota-worktree-refusal.json inside a test repo. `emit_meter_error`
+    # already re-checks its own default-root fallback the same way; this
+    # matches that precedent. If the default root itself is inside a
+    # worktree, there is nowhere left to cache the refusal — `root`
+    # simply gets re-checked every call in that (rare, doubly-
+    # misconfigured) case, same as before this suppression existed.
     default_root = default_storage_root()
-    refusal_paths = Paths(default_root) if (default_root and default_root != root) else None
+    refusal_paths = (
+        Paths(default_root)
+        if (default_root and default_root != root and not in_git_worktree(default_root))
+        else None
+    )
     if refusal_paths is not None:
         refusal_state = load_worktree_refusal_state(refusal_paths)
         last_refused_at = refusal_state.get(root)
@@ -3270,11 +3288,28 @@ def record_quota_sample(obj):
         # every session — see the session_key comment above). Pruned on
         # every write so a machine that has seen many distinct
         # session_ids over time doesn't grow this file without bound.
+        #
+        # round-2 review finding 1: a sample with NO window info of its
+        # own (this sample's `window_id` is None — either a rate_limits-
+        # less DeepSeek/claude-ds session, ADR-001 §2.1's 58/58, or a
+        # stale/out-of-range resets_at) must NOT blank out the global
+        # window state a PREVIOUS Anthropic sample left behind. It used
+        # to overwrite unconditionally, so a single claude-ds sample
+        # landing between two Anthropic samples silently defeated plan
+        # §8.5's "同一window_id内でused_percentageが減少したら異常" check
+        # — and per-session throttling (this same round-1 fix) made that
+        # interleaving near-guaranteed in this repo's own standard Herdr
+        # setup (an Anthropic pane + a claude-ds pane both sampling every
+        # ~60s). Only replace the global slot when THIS sample actually
+        # carries fresh window info; otherwise carry the previous value
+        # forward untouched.
+        new_global_window_id = window_id if window_id is not None else prev_state.get("five_hour_window_id")
+        new_global_used_pct = five_hour_used_pct if window_id is not None else prev_state.get("five_hour_used_pct")
         new_sessions = prune_stale_sessions(prev_sessions, now)
         new_sessions[session_key] = {"last_sample_ts": iso_utc(now)}
         save_quota_state(paths, {
-            "five_hour_window_id": window_id,
-            "five_hour_used_pct": five_hour_used_pct,
+            "five_hour_window_id": new_global_window_id,
+            "five_hour_used_pct": new_global_used_pct,
             "sessions": new_sessions,
         })
     except Exception:

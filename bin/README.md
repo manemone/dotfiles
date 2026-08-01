@@ -215,8 +215,10 @@ ocw-meter snapshot-quota
 - `rate_limits.five_hour.resets_at` が既に過去の時刻（stale値。ADR-001 §2.1で実測: 8サンプル中3件）の
   場合、`window_id`を`null`にして`completeness: "partial"`で記録する（stale値を新しい窓のIDとして
   採用しない）。同一`window_id`内で`used_percentage`が前回より減少した場合も`partial`にしstderrへ警告する
-- `context_window.used_percentage`が`null`の場合、`total_input_tokens / context_window_size`から
-  フォールバック計算する（ADR-001実測: 66サンプル中7件がnull）
+- `context_window.used_percentage`が`null`の場合、**記録するイベントの`context_used_pct`フィールドのみ**
+  `total_input_tokens / context_window_size`からフォールバック計算する（ADR-001実測: 66サンプル中7件がnull）。
+  **statusLineの表示文字列にはこのフォールバック値を使わない**（ADR-001 §8-7: 生の`used_percentage`が
+  `null`の場合、フォールバック計算できても`ctx`セグメント自体を表示しない）
 - statusLineの`cost.total_cost_usd`（Claude Code自己申告のセッション累積コスト）を`session_cost_usd`
   として記録する。`usage.message`の`cost_estimate_usd`（ocw-meter自身の推定値）とは**別カラム**であり、
   合算しない

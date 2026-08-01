@@ -143,6 +143,8 @@ Claude Code のステータスバーに 5時間枠 / 週間枠 / コンテキス
 
 取得できない項目は表示しない（例: `claude-ds`（DeepSeek）セッションでは `rate_limits` が
 一切来ないため `5h:`/`7d:` は出ず、`ctx:` のみになるか、コンテキスト情報も無ければ完全に空になる）。
+`ctx` は `context_window.used_percentage` が生の値として取得できているときのみ表示する
+（推定値からのフォールバック計算は記録用イベントにのみ使い、表示には使わない）。
 
 **事前準備（必須）**: `ocw-meter` が PATH に無い環境では statusLine コマンド自体が
 `command not found` になり、表示が壊れる。必ず先に `bin/deploy.sh` を実行して
