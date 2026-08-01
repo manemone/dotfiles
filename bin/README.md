@@ -163,26 +163,26 @@ ocw-meter validate [--file <path>]
 # イベント件数・completeness・coverage・推定費用の要約
 # --pr <n> を付けるとレビューラウンド一覧・人間介入回数・最終結果・
 # 同一5時間窓完走可否・そのPRのcash cost内訳も併せて出す
-ocw-meter report [--pr <n>] [--json]
+ocw-meter report [--pr <n>] [--repo <owner>/<name>] [--json]
 
 # 工程別（phase.start/endの時間ペアとusage.messageの時刻範囲による
 # ベストエフォート対応）のトークン・費用・所要時間
-ocw-meter report --phase [--pr <n>] [--json]
+ocw-meter report --phase [--pr <n>] [--repo <owner>/<name>] [--json]
 
 # provider+model別のトークン・推定費用
-ocw-meter report --model [--pr <n>] [--json]
+ocw-meter report --model [--pr <n>] [--repo <owner>/<name>] [--json]
 
 # role（commander/implementer/reviewer/unknown）別のイベント数・トークン・推定費用
-ocw-meter report --role [--pr <n>] [--json]
+ocw-meter report --role [--pr <n>] [--repo <owner>/<name>] [--json]
 
 # 5時間窓（window_id）別のquota.sample集計。直接紐付き/時間範囲重複の
 # PRを別フィールドで提示
-ocw-meter report --window [--pr <n>] [--json]
+ocw-meter report --window [--pr <n>] [--repo <owner>/<name>] [--json]
 
 # 月次: cash cost（従量API）/ capacity cost（Claudeサブスク枠）/
 # process efficiency（承認済みPRあたりの費用・ラウンド数等）を分離して表示
 # --reconcile とは別物（こちらは突合をしない）
-ocw-meter report --month [YYYY-MM] [--json]
+ocw-meter report --month [YYYY-MM] [--repo <owner>/<name>] [--json]
 
 # model別トークン集計・推定費用・provider管理画面との突合（coverage比率）
 ocw-meter report --reconcile [--month <YYYY-MM>] [--provider-total <model>=<tokens> ...] [--json]
@@ -196,6 +196,22 @@ ocw-meter snapshot-quota
 | `event` / `bind-pr` | **常に exit 0**。stderrに1行warnのみ。本番フローを止めない |
 | `snapshot-quota` | **常に exit 0 かつ必ずstdoutに表示文字列を出す**（statusLineが壊れて画面が崩れる事態を絶対に避ける。event/bind-pr以上に厳格なfail-open） |
 | `validate` / `report` / `ingest` | 失敗したら非ゼロで落ちる（壊れたデータを黙って集計しない） |
+
+**`--repo <owner>/<name>`（`--pr`・standalone `--month`専用。孫5後半で追加）**:
+
+`~/.local/state/ocw-meter`は本マシンの`ocw-meter`が向いた**全リポジトリで共有される1つのストア**だが、
+PR番号はリポジトリ**内**でしか一意でない。`--pr`とstandaloneの`--month`（`process_efficiency`集計）は
+どちらもこの「どのリポジトリのPR番号か」を解決する必要があり、通常はカレントディレクトリの
+`git remote get-url origin`から自動解決される。**git管理外のディレクトリから実行した場合や、
+`origin` remoteが無い場合は自動解決できず、`--pr`/standalone `--month`はfail-loudでエラーになる**
+（黙って別リポジトリの同番号PRにスコープする、または全イベントを取りこぼす、のどちらの誤動作も避けるため）。
+そのようなときは`--repo <owner>/<name>`で明示指定する（`<owner>/<name>`の形式、両側非空でなければ拒否される）。
+
+典型的にこれが必要になるのは、**PRのworktreeを`ocw rm`した後**（`docs/reference/DOC-004_...`§2.1の
+手順どおりworktree削除前にingestしていれば通常は発生しない）に、別の場所から`report --pr <N>`を
+取り直す場合。`--repo`は`--pr`または（`--reconcile`を伴わない）standaloneの`--month`と組み合わせない限り
+一切参照されないフィールドのため、それ以外の組み合わせ（`--repo`単体、`--model`と`--repo`のみ等）で
+渡すとエラーになる（値を受理して黙って無視する、という状態を避けるため）。
 
 **`ingest` の要点（`docs/planning/DOC-003_..._計画.md` 孫3プロンプト / ADR-001 §8 準拠）:**
 

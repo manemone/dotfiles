@@ -22,12 +22,12 @@ usage:
   ocw-meter ingest [--since <rfc3339-ts>]
   ocw-meter snapshot-quota
   ocw-meter validate [--file <path>]
-  ocw-meter report [--pr <n>] [--json]
-  ocw-meter report --phase [--pr <n>] [--json]
-  ocw-meter report --model [--pr <n>] [--json]
-  ocw-meter report --role [--pr <n>] [--json]
-  ocw-meter report --window [--pr <n>] [--json]
-  ocw-meter report --month [YYYY-MM] [--json]
+  ocw-meter report [--pr <n>] [--repo <owner>/<name>] [--json]
+  ocw-meter report --phase [--pr <n>] [--repo <owner>/<name>] [--json]
+  ocw-meter report --model [--pr <n>] [--repo <owner>/<name>] [--json]
+  ocw-meter report --role [--pr <n>] [--repo <owner>/<name>] [--json]
+  ocw-meter report --window [--pr <n>] [--repo <owner>/<name>] [--json]
+  ocw-meter report --month [YYYY-MM] [--repo <owner>/<name>] [--json]
   ocw-meter report --reconcile [--month <YYYY-MM>] [--provider-total <model>=<tokens> ...] [--json]
   ocw-meter help
 
@@ -103,6 +103,25 @@ subcommands:
     always in separate top-level keys — never summed (孫5, plan §16).
     Cannot be combined with --phase/--model/--role/--window. NOT the
     same as `report --reconcile --month ...` below.
+
+  report ... --repo <owner>/<name>
+    ~/.local/state/ocw-meter is ONE store shared across every repo this
+    machine's ocw-meter is ever pointed at, but a PR number is only
+    unique WITHIN a repo — --pr and standalone --month (both resolve
+    "this PR"/"this month's approved PRs" via events_for_pr) need to
+    know which repo they're scoping to, or a same-numbered PR in a
+    different repo could contaminate the result. Normally this is
+    resolved automatically from `git remote get-url origin` in the
+    current working directory. --repo overrides that (required when
+    running from outside any git repo, e.g. after the PR's worktree has
+    already been `ocw rm`'d — see docs/reference/DOC-004_...§2.1).
+    Must be exactly one `/` with non-empty owner and name on both
+    sides; a malformed value is rejected rather than silently matching
+    zero events. Passing --repo without --pr or standalone --month is
+    also rejected (it would have no effect — every other report path
+    doesn't call events_for_pr at all). If neither --repo is given NOR a
+    repo can be auto-resolved, --pr/standalone --month fail loud instead
+    of guessing.
 
   report --reconcile
     Prints model別 transcript token totals (miss/hit/creation/output)
@@ -2238,6 +2257,16 @@ def cmd_report(args):
                 print("error: --repo requires a value (<owner>/<name>)", file=sys.stderr)
                 return 1
             explicit_repo = args[i + 1]
+            # Round-3 review finding 14a: an unvalidated `--repo dotfiles`
+            # (missing the "owner/" part — a plausible typo) silently
+            # matched zero events and returned exit 0 — the exact
+            # "garbage filter, plausible-looking zero result" failure
+            # mode `normalize_month_arg`'s strict `01-12` check exists to
+            # prevent for `--month`. `owner/name`, both sides non-empty,
+            # no extra `/`.
+            if not re.match(r"^[^/\s]+/[^/\s]+$", explicit_repo):
+                print(f"error: --repo must be <owner>/<name>, got: {explicit_repo!r}", file=sys.stderr)
+                return 1
             i += 2
         elif token == "--json":
             as_json = True
@@ -2294,6 +2323,17 @@ def cmd_report(args):
     if filter_pr is not None and (reconcile or month_flag_present):
         flag = "--reconcile" if reconcile else "--month"
         print(f"error: --pr cannot be combined with {flag} (use 'report --pr <n>' for one PR's own numbers)", file=sys.stderr)
+        return 1
+    # Round-3 review finding 14b: `--repo` is only ever consulted on the
+    # two code paths that call `events_for_pr` (a `--pr` filter, or
+    # standalone `--month`'s process_efficiency) — every other
+    # combination (bare `report`, `--model`/`--role`/`--phase`/`--window`
+    # with no `--pr`, `--reconcile`) silently accepted and then ignored
+    # it, the same "flag parsed but never consulted" failure mode
+    # finding 2 fixed for `--pr`+`--month`.
+    repo_is_used = filter_pr is not None or (month_flag_present and view is None and not reconcile)
+    if explicit_repo is not None and not repo_is_used:
+        print("error: --repo has no effect without --pr (or standalone --month) — it only scopes PR attribution", file=sys.stderr)
         return 1
 
     root = storage_root()

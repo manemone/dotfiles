@@ -2433,6 +2433,37 @@ class ReportGroupedViewsTests(OcwMeterTestCase):
         self.assertEqual(data["repo"], real_repo)
         self.assertEqual(data["total_events"], 8)
 
+    # -- round-3 review finding 14: --repo validation + unused-flag guard --
+
+    def test_repo_flag_rejects_a_value_without_a_slash(self):
+        # A plausible typo (missing "owner/") must not silently match
+        # zero events with exit 0 — the same "garbage filter, plausible
+        # zero result" failure mode --month's 01-12 validation exists to
+        # prevent.
+        result = run_meter(["report", "--pr", "1", "--repo", "dotfiles"], self.home)
+        self.assertNotEqual(result.returncode, 0)
+
+    def test_repo_flag_rejects_empty_owner_or_name(self):
+        for bad in ("/dotfiles", "owner/", "owner/name/extra"):
+            result = run_meter(["report", "--pr", "1", "--repo", bad], self.home)
+            self.assertNotEqual(result.returncode, 0, f"--repo {bad!r} should have been rejected")
+
+    def test_repo_flag_without_pr_or_month_is_rejected(self):
+        # --repo only ever matters on paths that call events_for_pr
+        # (--pr, or standalone --month); anywhere else it would be
+        # silently accepted and ignored, same failure mode as --pr
+        # being silently ignored by --month/--reconcile (finding 2).
+        result = run_meter(["report", "--model", "--repo", "owner/bogus"], self.home)
+        self.assertNotEqual(result.returncode, 0)
+
+    def test_repo_flag_without_pr_or_month_is_rejected_even_for_bare_report(self):
+        result = run_meter(["report", "--repo", "owner/bogus"], self.home)
+        self.assertNotEqual(result.returncode, 0)
+
+    def test_repo_flag_is_accepted_with_standalone_month(self):
+        result = run_meter(["report", "--month", "2026-08", "--repo", "owner/name"], self.home)
+        self.assertEqual(result.returncode, 0)
+
     # -- round-2 review finding 11: cross-repo review.round leaking into --month --
 
     def test_month_process_efficiency_excludes_other_repo_approved_prs(self):
