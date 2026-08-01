@@ -72,6 +72,12 @@
   直接 `uname` を叩かない。
 - macOS の BSD 版コマンドと GNU 版の差異（`sed -i`、`date`、`readlink -f` など）に注意する。
 
+## コードの書き方
+
+シェルスクリプトを書く・直すときは
+[docs/design/DOC-DOCID_PLACEHOLDER_シェルスクリプトコーディング方針.md](docs/design/DOC-DOCID_PLACEHOLDER_シェルスクリプトコーディング方針.md)
+を参照すること。POSIX sh / bash の使い分け、bashism の回避、エラーハンドリングの既存方針などを定めている。
+
 ## コミット前の必須ステップ
 
 現時点では以下でよい:
@@ -79,16 +85,17 @@
 - 変更したシェルスクリプトが `sh -n` / `bash -n` で構文エラーにならないこと
 - `deploy-all.sh --dry-run`（個別スクリプトは `DRY_RUN=1 sh <tool>/deploy.sh`）で
   意図した動作になることを確認すること
+- `docs/` 配下に新規ファイルを追加する場合は
+  `DOC-DOCID_PLACEHOLDER_<説明的ファイル名>.md` という名前で作り、
+  `tools/doc-id assign` で採番する（詳細は `docs/README.md` を参照）
 
 ※ 孫4 で pre-commit が導入された時点でこの節は実際のコマンドに更新される。
 
 ## PR 作成時の注意
 
-PR を作る前に `docs/design/` の「プルリクエストの作法」を読むこと（孫2 で作成される予定の文書）。
-その文書が無い間は、最低限以下に従う:
-
-- 説明文は「背景・目的・実装内容・レビューで見てほしいところ・テスト結果・今後の予定」の構成で書く
-- ですます調・平易な言葉で書き、セッション内の固有名詞や個人的な文脈を入れない
+PR を作る前に
+[docs/design/DOC-DOCID_PLACEHOLDER_プルリクエストの作法.md](docs/design/DOC-DOCID_PLACEHOLDER_プルリクエストの作法.md)
+を読むこと。
 
 ## 実装時の注意
 
@@ -98,3 +105,5 @@ PR を作る前に `docs/design/` の「プルリクエストの作法」を読�
   ユーザーの `$HOME` に残り続ける。
 - README は「ルート `README.md`（全体）」と「各ツールの `README.md`（詳細）」の二層構造。
   片方だけ更新しない。
+- `docs/` の文書を参照するときは、ファイル名ではなく DOC-ID を使って参照する。
+  DOC-ID は不変のためファイルが移動・リネームされてもリンク切れが起きにくい。
