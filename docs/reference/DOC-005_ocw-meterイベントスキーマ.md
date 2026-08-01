@@ -154,6 +154,33 @@ phase.start/phase.endとして発火されない**:
 | `raw_ref` | string \| null | `OCW_METER_RAW=1`時のみ、redaction済みraw snapshotのファイル参照。既定`null` |
 | `cwd` | string \| null | statusLine JSONの`cwd`（作業ディレクトリ）。**`ENVELOPE_FIELDS`には含まれない forward-compatible な追加フィールド** — envelope標準の`worktree`とは別に、statusLineが報告した生の`cwd`をそのまま保存する |
 
+### 2.6 その他のevent_typeのペイロードフィールド（孫5で棚卸し・全て共通エンベロープに加えて）
+
+孫5レビューで判明: `usage.message`/`quota.sample`以外にもペイロードフィールドを持つ型があり、
+`EVENT_PAYLOAD_REQUIRED`（§2の「必須payload」列）には**必須のものしか載っていない**。
+以下は残り全型の**任意（optional）を含む全ペイロードフィールド**の棚卸し。
+
+| `event_type` | フィールド | 型 | 必須/任意 | 由来 |
+|---|---|---|---|---|
+| `run.start` | `base_ref` | string | 必須 | ベースブランチ名 |
+| | `command` | string | 必須 | 起動コマンド（例 `claude`） |
+| `run.end` | `outcome` | string | 必須 | enum制約なし（文字列自由）。`bin/ocw`実測では`success`（通常の`ocw rm`）/ `failure`（`ocw rm -f`の強制削除）の2値のみ |
+| `phase.start` | `phase` | string | 必須 | §2.3のphase列挙のいずれか（enum制約なし。文字列自由） |
+| `phase.end` | `phase` | string | 必須 | 同上 |
+| | `outcome` | string | 任意 | `success`/`failure`/`blocked`（enum制約あり、§2.1）。**`pr-review-loop`の実際の埋め込みでは`phase: "done"`のphase.endにしか渡されない** — 他のphaseのphase.endには存在しない |
+| | `duration_ms` | number | 任意（スキーマ定義のみ） | `NUMERIC_PAYLOAD_FIELDS`に列挙されているが、**実際にこれを渡す呼び出しはリポジトリ内に存在しない**（実データでも0件）。将来pr-review-loopが計測して渡すことを想定した予約フィールド |
+| `pr.bind` | `pr_number` | int | 必須 | envelopeの`pr_number`と同じ値（`pr.bind`はこのフィールドを主目的に持つイベント） |
+| `review.round` | `round` | int | 必須 | envelopeの`round`と同じ値 |
+| | `verdict` | string | 必須 | `approved`/`changes_requested`/`ambiguous`（enum制約あり、§2.2） |
+| | `findings_count` | int | 必須 | 未解決指摘の件数（承認なら0） |
+| | `reviewed_head_sha` | string | 任意（スキーマ定義のみ・実質常に存在） | レビュー対象のHEAD SHA。`EVENT_PAYLOAD_REQUIRED`には無いが、`claude/skills/pr-review-loop/SKILL.md`の実際の埋め込みは毎回渡しており、実ストアでも**10/10件**に存在する。本PR（孫5）が新設した`report --pr <n> --json`の`pr_detail.review_rounds[].reviewed_head_sha`としてこの値を出力する |
+| `human.intervention` | `reason` | string | 必須 | 停止条件の短い識別子（自由文字列。`claude/skills/pr-review-loop/SKILL.md`の「停止してユーザーに報告する条件」の一覧に対応する識別子を渡す想定だが、値そのものにenum制約は無い） |
+| `meter.error` | `stage` | string | 必須 | 自己診断が発生した処理段階（例 `ingest`） |
+| | `message` | string | 任意（スキーマ定義のみ・実質常に存在） | 例外メッセージ等の短い説明。**入力データそのものは含めない**（第9.2節「`meter.error`の`message`も例外文字列のみで、入力データを含めない」）。redactionは他フィールドと同じ規則が適用される |
+| `block.start` | `cause` | string | 必須（型は定義済みだが未実装） | `rate_limit`/`api_error`/`unknown`（enum制約あり）。**発火する呼び出しがリポジトリ内に無い**（§2参照） |
+| `block.end` | `cause` | string | 必須（同上） | 同上 |
+| | `wait_ms` | number | 任意（同上） | 待機時間（ミリ秒）。`NUMERIC_PAYLOAD_FIELDS`に列挙されているが`block.*`自体が未実装のため実例なし |
+
 ---
 
 ## 3. `idempotency_key` の生成規則

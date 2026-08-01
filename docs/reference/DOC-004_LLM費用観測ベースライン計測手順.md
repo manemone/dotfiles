@@ -87,28 +87,35 @@
 $ ocw-meter report --pr 31
 storage root:  /home/manemone/.local/state/ocw-meter
 filter:        pr=31
-total events:  127
-  quota.sample: 15
-  usage.message: 112
-completeness: complete 98.4% / partial 1.6% / unknown 0.0%
+total events:  136
+  quota.sample: 30
+  usage.message: 106
+completeness: complete 96.3% / partial 3.7% / unknown 0.0%
 quarantined:   0 lines (events this meter wrote)
 transcript lines quarantined (ingest source data): 2 lines
 meter.error diagnostics (state/meter-errors.jsonl): 2 lines
 malformed (not yet quarantined; run 'ocw-meter validate'): 0 lines
-coverage:      112 usage.message event(s); run 'ocw-meter report --reconcile' for model別 coverage against provider totals
-price_table:   deepseek-2026-08-01
-cost_basis:    estimated
-cost_estimate: $0.13 (estimated — not an invoice)
+coverage:      106 usage.message event(s); run 'ocw-meter report --reconcile' for model別 coverage against provider totals
+price_table:   (none applied)
+cost_basis:    subscription
+cost_estimate: null
 five_hour_window_completion: no (window_ids seen: 1785629075, 1785632400)
-duration_seconds: 2234706.305
+duration_seconds (承認まで。未承認ならnull): None
+total_span_seconds (このPRの全イベントの時刻スパン): 3112.846
 review_round_count: 0
 human_intervention_count: 0
 final_result: unknown
-cash_cost_usd: $0.1318
-capacity_message_count (claude subscription, no dollar figure): 0
+five_hour_used_pct_max: 52
+seven_day_used_pct_max: 21
+cash_cost_usd: null
+capacity_message_count (claude subscription, no dollar figure): 106
 ```
 
-`review_round_count: 0`や`final_result: unknown`のように「取れていない」ものは`0`/`unknown`で
+このPR #31はAnthropicモデル（`claude-*`）だけで作業したため`cash_cost_usd: null`
+（`cost_basis: subscription`。定額契約はAPI単価に換算しない — §5.5参照）で、
+`capacity_message_count`（Claude subscriptionのメッセージ数）だけが埋まっている。
+`duration_seconds`が`None`なのは、このPRにまだ`verdict: "approved"`の`review.round`が
+無いため（`review_round_count: 0`）。`review_round_count: 0`や`final_result: unknown`のように「取れていない」ものは`0`/`unknown`で
 はっきり出る（推測で埋めない、が全体方針 — `docs/reference/DOC-005_...`§5参照）。ベースライン集計時は
 こうした欠損もそのまま記録し、後から「なぜこのPRは取れなかったか」を調べられるようにすること。
 
@@ -149,11 +156,11 @@ capacity_message_count (claude subscription, no dollar figure): 0
    $ ocw-meter report --month 2026-08
    month:         2026-08
    cash cost (metered API — currently DeepSeek only):
-     usage.message count: 4931
+     usage.message count: 6202
      cash_cost_usd:       $0.19 (estimated — not an invoice)
    capacity cost (Claude subscription quota — never summed with cash cost):
-     capacity_message_count: 4750
-     quota_sample_count: 74
+     capacity_message_count: 6021
+     quota_sample_count: 122
      five_hour_used_pct_max: 71
      seven_day_used_pct_max: 78
      distinct_five_hour_windows: 2
@@ -162,9 +169,9 @@ capacity_message_count (claude subscription, no dollar figure): 0
      avg_cash_cost_usd: None
      avg_review_round_count: 3.0
      avg_human_intervention_count: 0.0
-     avg_duration_seconds: 2261934.57
+     avg_duration_seconds: 5381.868
      five_hour_window_completion_breakdown: {'yes': 0, 'no': 1, 'unknown': 0}
-   quality_guardrail: 未計測 — 第一段階では収集項目が無い（計画書16章）。defect.escaped 等のevent_typeを将来追加可能
+   quality_guardrail: 未計測 — 第一段階では収集項目が無い（計画書16章）。この行は 'report --month' の出力にのみ現れる
    ```
 
    `avg_cash_cost_usd: None`のように承認済みPR個別の値が欠損する場合がある
@@ -182,10 +189,16 @@ capacity_message_count (claude subscription, no dollar figure): 0
 
 | PR# | 承認までの所要時間 | レビューラウンド数 | 各ラウンドの指摘数 | 人間介入回数 | 推定API費(cash) | 5h枠消費 | 同一窓完走 | 最終結果 |
 |---|---|---|---|---|---|---|---|---|
-| 31 | (`duration_seconds`/3600 h) | (`review_round_count`) | (`review_rounds[].findings_count`) | (`human_intervention_count`) | (`cash_cost_usd`) | — | (`five_hour_window_completion`) | (`final_result`) |
+| 31 | (`duration_seconds`/3600 h) | (`review_round_count`) | (`review_rounds[].findings_count`) | (`human_intervention_count`) | (`cash_cost_usd`) | (`five_hour_used_pct_max`) | (`five_hour_window_completion`) | (`final_result`) |
 | ... | | | | | | | | |
 
-`ocw-meter report --pr <N> --json`の該当フィールドをそのまま転記する。
+`ocw-meter report --pr <N> --json`の`pr_detail`配下の該当フィールドをそのまま転記する。
+
+- `duration_seconds`は**承認までの所要時間**（`review.round`のうち`verdict: "approved"`の最後のものの
+  時刻 − このPRの最初のイベント時刻）。**未承認なら`null`**。PR全体のイベント時刻スパン
+  （承認後のマージ関連イベント等も含む）が別途必要な場合は`total_span_seconds`を使う（本表には載せない）
+- `five_hour_used_pct_max`はこのPRに帰属した`quota.sample`の`five_hour_used_pct`の最大値
+  （消費量の差分ではなく、観測できた最大到達率）。`quota.sample`が1件も紐付かなければ`null`
 
 ### 4.2 工程別
 
@@ -226,8 +239,8 @@ capacity_message_count (claude subscription, no dollar figure): 0
 （推測で埋めない）。
 
 1. **DeepSeek代の何割が初回実装 / 自己レビュー / 修正往復か** — §4.2の工程別表から
-   `implement`（＝`(unassigned)`。§2.3節参照）/ `self_review` / `fix`の`cost_estimate_usd`の
-   構成比を出す
+   `implement`（＝`(unassigned)`。`docs/reference/DOC-005_ocw-meterイベントスキーマ.md`§2.3参照）/
+   `self_review` / `fix`の`cost_estimate_usd`の構成比を出す
 2. **Claude 5時間枠の何割が初回レビュー / 再レビュー / 別設計作業か** — §4.4の窓別表と§4.2の
    工程別表を突き合わせ、`review_request`/`rereview_request`ウィンドウの`five_hour_used_pct`の
    変化量で見積もる（`quota.sample`は差分ではなく各時点のスナップショットである点に注意 —
@@ -265,8 +278,10 @@ capacity_message_count (claude subscription, no dollar figure): 0
 ## 7. 品質guardrailについて（現状の限界）
 
 第一段階では品質guardrail（レビューの見逃し・回帰の有無）を測る収集項目が無いため、
-「未計測」として扱う。`ocw-meter report`の全出力に`quality_guardrail: 未計測 ...`という
-文言が出るのはこのため（推測や代理指標で埋めていない）。
+「未計測」として扱う。`ocw-meter report --month`の出力にのみ`quality_guardrail: 未計測 ...`という
+文言が出るのはこのため（推測や代理指標で埋めていない。他の`report`出力経路には
+`quality_guardrail`キー自体が存在しない — `--month`が集計単位として「承認済みPRあたりの
+効率」を扱う唯一のビューであるため、この文言もそこにのみ付く）。
 
 将来必要になった場合、`event_type`の追加だけでschemaを後付けできる設計になっている
 （`docs/reference/DOC-005_...`§6「schema_versionの変更ルール」参照）:

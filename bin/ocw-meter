@@ -1527,29 +1527,50 @@ def print_footer_text(footer_completeness, footer_cost, total):
     print(f"cost_estimate: {footer_cost['cost_estimate_usd']}")
 
 
-def events_for_pr(valid_events, pr_number):
+def events_for_pr(valid_events, pr_number, repo):
     """PR帰属ロジック（plan §7.4）: an event belongs to `pr_number` if it
     says so directly, OR its run_id was bound to that PR number via a
     `pr.bind` event. Shared by cmd_report's default --pr view and the
     new --phase/--model/--role/--window/--month(process efficiency)
-    views (孫5) so every view resolves "this PR's events" identically."""
+    views (孫5) so every view resolves "this PR's events" identically.
+
+    Round-1 review finding 1 (most severe): `~/.local/state/ocw-meter/`
+    is ONE shared store across every repo this machine's `ocw-meter` is
+    ever pointed at (plan §9.1 doesn't scope storage by repo), but
+    `pr_number` is only unique WITHIN a repo — a direct `pr_number`
+    match with no `repo` check let PR #32 in a completely different
+    repo contaminate `report --pr 32` run from this repo (measured:
+    100% of the wrongly-reported cash cost and 99.9% of the wrongly-
+    reported duration came from another repo's same-numbered PR).
+    `repo` is filtered on the DIRECT `pr_number` match only — a `run_id`
+    match does NOT need it, since `run_id` (an ocw-generated ULID-style
+    value) is already effectively unique across repos on its own; adding
+    a `repo` filter there would just be redundant, not more correct.
+    An event with `repo: null` (e.g. `ingest` couldn't resolve a repo
+    slug for that message's `cwd` — the same class of gap as the
+    `run_id` resolution issue documented in DOC-005 §2.4/§4) is
+    EXCLUDED from the direct match rather than assumed to belong to the
+    caller's own repo — guessing it in would reopen exactly the
+    cross-repo contamination this fix closes."""
     bound_run_ids = {
         e.get("run_id")
         for e in valid_events
-        if e.get("event_type") == "pr.bind" and e.get("pr_number") == pr_number and e.get("run_id")
+        if e.get("event_type") == "pr.bind" and e.get("pr_number") == pr_number
+        and e.get("run_id") and e.get("repo") == repo
     }
     return [
         e for e in valid_events
-        if e.get("pr_number") == pr_number or e.get("run_id") in bound_run_ids
+        if (e.get("pr_number") == pr_number and e.get("repo") == repo) or e.get("run_id") in bound_run_ids
     ]
 
 
 def pr_review_summary(pr_events):
     """孫5 §1 --pr: review round list / human intervention count / final
-    result / cash+capacity cost split for one PR's own (already
-    resolved via `events_for_pr`) event set. Reads ONLY the events
-    already attributed to this PR — no additional time-range guessing
-    beyond what plan §7.4's PR-attribution priority already resolved."""
+    result / cash+capacity cost split / 5h枠消費 for one PR's own
+    (already resolved via `events_for_pr`) event set. Reads ONLY the
+    events already attributed to this PR — no additional time-range
+    guessing beyond what plan §7.4's PR-attribution priority already
+    resolved."""
     review_rounds = []
     for e in pr_events:
         if e.get("event_type") == "review.round":
@@ -1558,6 +1579,7 @@ def pr_review_summary(pr_events):
                 "verdict": e.get("verdict"),
                 "findings_count": e.get("findings_count"),
                 "reviewed_head_sha": e.get("reviewed_head_sha"),
+                "ts": e.get("ts"),
             })
     review_rounds.sort(key=lambda r: (r["round"] is None, r["round"]))
 
@@ -1571,7 +1593,22 @@ def pr_review_summary(pr_events):
     final_result = done_ends[-1].get("outcome") if done_ends else None
 
     timestamps = [ts for ts in (parse_ts(e.get("ts")) for e in pr_events) if ts is not None]
-    duration_seconds = (max(timestamps) - min(timestamps)).total_seconds() if timestamps else None
+    total_span_seconds = (max(timestamps) - min(timestamps)).total_seconds() if timestamps else None
+
+    # Round-1 review finding 3: 計画書 孫5プロンプト §1 の`--pr`表は
+    # 「承認までの所要時間」を要求している。全イベントのスパン
+    # （`total_span_seconds`。マージ後のquota.sample等も含みうる）
+    # とは意味が異なるため分離する。「承認」は最後（最新ts）の
+    # verdict=="approved" review.roundとする — 承認取り消し後の
+    # 再承認がある場合、直近の承認だけが「実際に到達した承認」。
+    approved_rounds = [r for r in review_rounds if r["verdict"] == "approved" and r.get("ts")]
+    duration_seconds = None
+    if approved_rounds and timestamps:
+        approval_ts = max(parse_ts(r["ts"]) for r in approved_rounds if parse_ts(r["ts"]) is not None)
+        if approval_ts is not None:
+            duration_seconds = (approval_ts - min(timestamps)).total_seconds()
+    for r in review_rounds:
+        del r["ts"]  # internal-only; not part of the plan §8.2 review.round payload
 
     cash_cost, has_cash_cost = 0.0, False
     capacity_message_count = 0
@@ -1586,13 +1623,28 @@ def pr_review_summary(pr_events):
             cash_cost += cost
             has_cash_cost = True
 
+    # Round-1 review finding 4: 計画書が`--pr`に要求する「5h枠消費」。
+    # `report_by_window`と同じ元データ（quota.sample）から、このPRに
+    # 帰属したサンプルのみでmax used_pctを出す。
+    five_hour_vals = [
+        e["five_hour_used_pct"] for e in pr_events
+        if e.get("event_type") == "quota.sample" and isinstance(e.get("five_hour_used_pct"), (int, float))
+    ]
+    seven_day_vals = [
+        e["seven_day_used_pct"] for e in pr_events
+        if e.get("event_type") == "quota.sample" and isinstance(e.get("seven_day_used_pct"), (int, float))
+    ]
+
     return {
         "duration_seconds": duration_seconds,
+        "total_span_seconds": total_span_seconds,
         "review_rounds": review_rounds,
         "review_round_count": len(review_rounds),
         "human_intervention_count": len(human_events),
         "human_intervention_reasons": human_reasons,
         "final_result": final_result or "unknown",
+        "five_hour_used_pct_max": max(five_hour_vals) if five_hour_vals else None,
+        "seven_day_used_pct_max": max(seven_day_vals) if seven_day_vals else None,
         "cash_cost_usd": cash_cost if has_cash_cost else None,
         "capacity_message_count": capacity_message_count,
     }
@@ -1814,11 +1866,20 @@ def report_by_window(valid_events):
     return out
 
 
-def find_approved_pr_numbers_in_month(valid_events, month):
+def find_approved_pr_numbers_in_month(valid_events, month, repo):
+    """Round-1 review finding 1 (extended to --month): the `run_id` ->
+    `pr_number` map used to resolve a `review.round`'s PR must itself be
+    repo-scoped, or a `review.round` from repo A could resolve to repo
+    B's identically-numbered PR via a `pr.bind` collision — the exact
+    cross-repo contamination `events_for_pr` was fixed for, one level
+    up. A `review.round`'s own direct `pr_number` (when set) is trusted
+    as-is; it was written by THIS repo's `pr-review-loop` run, so it is
+    inherently repo-scoped already."""
     run_to_pr = {
         e.get("run_id"): e.get("pr_number")
         for e in valid_events
         if e.get("event_type") == "pr.bind" and e.get("run_id") and e.get("pr_number") is not None
+        and e.get("repo") == repo
     }
     approved = set()
     for e in valid_events:
@@ -1833,16 +1894,18 @@ def find_approved_pr_numbers_in_month(valid_events, month):
     return approved
 
 
-def report_month_process_efficiency(valid_events, month):
+def report_month_process_efficiency(valid_events, month, repo):
     """孫5 §1 --month: process efficiency for PRs *approved* within this
     UTC month (identified by a `review.round` with verdict "approved"
     whose own timestamp falls in the month) — a PR's full event set
     (which may itself span a month boundary) is used for its own
     per-PR numbers, matching how `report --pr` already resolves one
-    PR's events."""
+    PR's events. `repo` scopes both "which PRs count as approved" and
+    "which events belong to each one" to the invoking repo (round-1
+    review finding 1)."""
     per_pr = []
-    for pr in sorted(find_approved_pr_numbers_in_month(valid_events, month)):
-        pr_events = events_for_pr(valid_events, pr)
+    for pr in sorted(find_approved_pr_numbers_in_month(valid_events, month, repo)):
+        pr_events = events_for_pr(valid_events, pr, repo)
         detail = pr_review_summary(pr_events)
         completion, _ = pr_five_hour_window_completion(pr_events, valid_events)
         per_pr.append({"pr_number": pr, "five_hour_window_completion": completion, **detail})
@@ -2119,8 +2182,13 @@ def _print_grouped_report(title, group_label, groups, as_json, storage_root_str,
         print(json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True))
         return 0
     print(f"storage root:  {storage_root_str}")
+    # Round-1 review finding 8: text mode used to print the raw JSON key
+    # ("filter_pr=32"), while the default (non-grouped) --pr view prints
+    # "pr=32" for the exact same concept — same data, two different
+    # labels depending on which flag combo you happened to use.
+    TEXT_LABEL = {"filter_pr": "pr"}
     for key, value in (extra_top or {}).items():
-        print(f"filter:        {key}={value}")
+        print(f"filter:        {TEXT_LABEL.get(key, key)}={value}")
     print(f"{title}:")
     if not groups:
         print("  (no data)")
@@ -2197,6 +2265,18 @@ def cmd_report(args):
     if month_flag_present and not reconcile and view is not None:
         print(f"error: --month cannot be combined with --{view} (it can be combined with --reconcile, or used standalone)", file=sys.stderr)
         return 1
+    # Round-1 review finding 2: --month/--reconcile used to accept --pr
+    # silently and then ignore it entirely (ALL of the store's events
+    # for that month, not that PR's) — the exact "garbage-but-
+    # plausible-looking output" failure mode `report`'s fail-loud half
+    # (plan §10.1) exists to prevent. Neither view has a defined
+    # "one PR's slice of the monthly store" semantic (report --pr N
+    # already answers "one PR's own numbers"), so this is rejected
+    # outright rather than silently implemented as a filter.
+    if filter_pr is not None and (reconcile or month_flag_present):
+        flag = "--reconcile" if reconcile else "--month"
+        print(f"error: --pr cannot be combined with {flag} (use 'report --pr <n>' for one PR's own numbers)", file=sys.stderr)
+        return 1
 
     root = storage_root()
     if in_git_worktree(root):
@@ -2228,7 +2308,7 @@ def cmd_report(args):
         return _report_month_standalone(paths, valid_events, malformed, month, as_json)
 
     if filter_pr is not None:
-        filtered = events_for_pr(valid_events, filter_pr)
+        filtered = events_for_pr(valid_events, filter_pr, git_repo_slug())
     else:
         filtered = valid_events
 
@@ -2295,12 +2375,15 @@ def cmd_report(args):
             ids_str = ", ".join(five_hour_window_ids_seen) if five_hour_window_ids_seen else "(none)"
             print(f"five_hour_window_completion: {five_hour_window_completion} (window_ids seen: {ids_str})")
             detail = summary["pr_detail"]
-            print(f"duration_seconds: {detail['duration_seconds']}")
+            print(f"duration_seconds (承認まで。未承認ならnull): {detail['duration_seconds']}")
+            print(f"total_span_seconds (このPRの全イベントの時刻スパン): {detail['total_span_seconds']}")
             print(f"review_round_count: {detail['review_round_count']}")
             for r in detail["review_rounds"]:
                 print(f"  round {r['round']}: verdict={r['verdict']} findings={r['findings_count']}")
             print(f"human_intervention_count: {detail['human_intervention_count']}")
             print(f"final_result: {detail['final_result']}")
+            print(f"five_hour_used_pct_max: {detail['five_hour_used_pct_max']}")
+            print(f"seven_day_used_pct_max: {detail['seven_day_used_pct_max']}")
             cash_str = f"${detail['cash_cost_usd']:.4f}" if isinstance(detail["cash_cost_usd"], (int, float)) else "null"
             print(f"cash_cost_usd: {cash_str}")
             print(f"capacity_message_count (claude subscription, no dollar figure): {detail['capacity_message_count']}")
@@ -2324,8 +2407,8 @@ def _report_month_standalone(paths, valid_events, malformed, month, as_json):
     summary = {
         "month": month,
         "cash_cost": report_month_cash_and_capacity(valid_events, month),
-        "process_efficiency": report_month_process_efficiency(valid_events, month),
-        "quality_guardrail": "未計測 — 第一段階では収集項目が無い（計画書16章）。defect.escaped 等のevent_typeを将来追加可能",
+        "process_efficiency": report_month_process_efficiency(valid_events, month, git_repo_slug()),
+        "quality_guardrail": "未計測 — 第一段階では収集項目が無い（計画書16章）。この行は 'report --month' の出力にのみ現れる（他の report ビューには quality_guardrail キー自体が無い）",
         **footer_completeness,
         **footer_cost,
     }

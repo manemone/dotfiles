@@ -2346,6 +2346,47 @@ class ReportGroupedViewsTests(OcwMeterTestCase):
         self.assertEqual(data["filter_pr"], 5)
         self.assertEqual(data["by_model"]["deepseek/deepseek-v4-pro"]["messages"], 1)
 
+    # -- cross-repo PR-number collision (round-1 review finding 1) --
+
+    def test_pr_filter_excludes_a_same_numbered_pr_in_a_different_repo(self):
+        # The store is shared across every repo ocw-meter is ever
+        # pointed at (plan §9.1). `pr_number` alone is only unique
+        # WITHIN a repo, so a same-numbered PR in a completely
+        # different repo must never leak into this repo's --pr report.
+        self._seed_full_pr(999, "run-thisrepo")
+        run_meter(["event", "usage.message", "--idempotency-key", "other-repo-u1",
+                   "--message-id", "other-repo-m1", "--repo", "someone/other-repo",
+                   "--model", "deepseek-v4-pro", "--cost-basis", "estimated",
+                   "--cost-estimate-usd", "999.0", "--pr-number", "999",
+                   "--input-tokens", "1", "--cache-read-input-tokens", "0",
+                   "--cache-creation-input-tokens", "0", "--output-tokens", "1",
+                   "--ts", "2026-08-01T09:07:00.000Z"], self.home)
+        data = json.loads(run_meter(["report", "--pr", "999", "--json"], self.home).stdout)
+        # Only the same-repo usage.message (cost 0.01, seeded by
+        # _seed_full_pr) counts; the other-repo $999.0 message must be
+        # excluded entirely.
+        self.assertAlmostEqual(data["pr_detail"]["cash_cost_usd"], 0.01)
+
+    def test_pr_filter_excludes_repo_null_events_from_direct_pr_number_match(self):
+        # An event with repo:null (e.g. `ingest` couldn't resolve a repo
+        # slug for that message's cwd — DOC-005 §2.4/§4's documented
+        # run_id-resolution gap has the same root cause) must not be
+        # guessed into belonging to the caller's own repo; that would
+        # silently reopen the exact cross-repo contamination class this
+        # fix closes. `--repo ""` is normalized to `null` (empty string
+        # -> null, same as every other envelope field).
+        run_meter(["event", "usage.message", "--idempotency-key", "norepo-u1",
+                   "--message-id", "norepo-m1", "--model", "deepseek-v4-pro",
+                   "--cost-basis", "estimated", "--cost-estimate-usd", "5.0",
+                   "--pr-number", "1000", "--repo", "",
+                   "--input-tokens", "1", "--cache-read-input-tokens", "0",
+                   "--cache-creation-input-tokens", "0", "--output-tokens", "1",
+                   "--ts", "2026-08-01T09:07:00.000Z"], self.home)
+        events = read_events(self.home)
+        self.assertIsNone(next(e for e in events if e["idempotency_key"] == "norepo-u1")["repo"])
+        data = json.loads(run_meter(["report", "--pr", "1000", "--json"], self.home).stdout)
+        self.assertIsNone(data["pr_detail"]["cash_cost_usd"])
+
     # -- --pr detail additions (round list / human intervention / final result / cash cost) --
 
     def test_pr_detail_includes_rounds_final_result_and_cash_cost(self):
@@ -2389,6 +2430,56 @@ class ReportGroupedViewsTests(OcwMeterTestCase):
     def test_repeating_the_same_grouped_view_flag_is_fine(self):
         result = run_meter(["report", "--phase", "--phase"], self.home)
         self.assertEqual(result.returncode, 0)
+
+    # -- round-1 review finding 2: --pr silently ignored by --month/--reconcile --
+
+    def test_pr_cannot_combine_with_standalone_month(self):
+        result = run_meter(["report", "--month", "2026-08", "--pr", "5"], self.home)
+        self.assertNotEqual(result.returncode, 0)
+
+    def test_pr_cannot_combine_with_reconcile(self):
+        result = run_meter(["report", "--reconcile", "--pr", "5"], self.home)
+        self.assertNotEqual(result.returncode, 0)
+
+    # -- round-1 review finding 3/4: duration_seconds semantics + 5h quota in --pr --
+
+    def test_pr_detail_duration_seconds_is_null_without_an_approval(self):
+        # A run with no review.round event at all (never reviewed yet).
+        run_meter(["event", "run.start", "--idempotency-key", "run-bare-start", "--run-id", "run-bare",
+                   "--ts", "2026-08-01T09:00:00.000Z"], self.home)
+        run_meter(["bind-pr", "--run", "run-bare", "--pr", "12"], self.home)
+        run_meter(["event", "usage.message", "--idempotency-key", "run-bare-u1", "--run-id", "run-bare",
+                   "--message-id", "run-bare-m1", "--model", "deepseek-v4-pro", "--cost-basis", "estimated",
+                   "--cost-estimate-usd", "0.02", "--pr-number", "12",
+                   "--input-tokens", "1", "--cache-read-input-tokens", "0",
+                   "--cache-creation-input-tokens", "0", "--output-tokens", "1",
+                   "--ts", "2026-08-01T09:05:00.000Z"], self.home)
+        data = json.loads(run_meter(["report", "--pr", "12", "--json"], self.home).stdout)
+        self.assertIsNone(data["pr_detail"]["duration_seconds"])
+        self.assertIsNotNone(data["pr_detail"]["total_span_seconds"])
+
+    def test_pr_detail_duration_seconds_measures_time_to_approval_not_full_span(self):
+        self._seed_full_pr(13, "run-approved-then-more")
+        # _seed_full_pr's approval round.round is at 09:30:00Z, but the
+        # PR's overall span extends to the usage.message at 09:06:00Z
+        # .. review.round at 09:30:00Z .. phase.end(done) at 09:35:00Z.
+        # Add an event AFTER the approval to prove duration_seconds
+        # does NOT grow with it (only total_span_seconds should).
+        run_meter(["event", "quota.sample", "--idempotency-key", "run-approved-then-more-late-q",
+                   "--run-id", "run-approved-then-more", "--plan-source", "statusline",
+                   "--pr-number", "13", "--ts", "2026-08-01T12:00:00.000Z"], self.home)
+        data = json.loads(run_meter(["report", "--pr", "13", "--json"], self.home).stdout)
+        detail = data["pr_detail"]
+        # approval at 09:30:00, earliest event (run.start) at 09:00:00 -> 1800s to approval.
+        self.assertAlmostEqual(detail["duration_seconds"], 1800.0)
+        # total span now reaches the 12:00:00 event -> much larger.
+        self.assertGreater(detail["total_span_seconds"], detail["duration_seconds"])
+
+    def test_pr_detail_includes_five_hour_quota_consumption(self):
+        self._seed_full_pr(14, "run-quota-detail")
+        data = json.loads(run_meter(["report", "--pr", "14", "--json"], self.home).stdout)
+        # _seed_full_pr's quota.sample has five_hour_used_pct=20.
+        self.assertEqual(data["pr_detail"]["five_hour_used_pct_max"], 20)
 
 
 class ReportMonthStandaloneTests(OcwMeterTestCase):

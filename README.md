@@ -79,14 +79,14 @@ Options can be combined:
 ├── docs/                      # Documentation (see docs/README.md for the full index)
 │   ├── README.md              # Index: quick-nav + full DOC-ID list. Only file allowed directly under docs/
 │   ├── adr/                   # Accepted architecture decision records
-│   ├── planning/               # Umbrella-branch plans and roadmaps (historical once merged)
-│   └── reference/              # Operational references kept current (schemas, runbooks)
+│   ├── planning/              # Umbrella-branch plans and roadmaps (historical once merged)
+│   └── reference/             # Operational references kept current (schemas, runbooks)
 ├── shared/
 │   └── helpers.sh             # Shared shell functions (logging, symlinks, platform detection)
 ├── bin/
 │   ├── ocw                    # Git worktree manager with Herdr integration
 │   ├── claude-ds              # Claude Code via DeepSeek API wrapper
-│   ├── ocw-meter               # LLM cost / Claude quota observability (read-only, fail-open)
+│   ├── ocw-meter              # LLM cost / Claude quota observability (read-only, fail-open)
 │   ├── deploy.sh              # bin deployment script
 │   └── README.md
 ├── claude/
