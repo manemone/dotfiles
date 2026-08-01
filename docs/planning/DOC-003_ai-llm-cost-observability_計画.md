@@ -655,7 +655,7 @@ cost_basis: estimated — not an invoice
 | 5 | `ai/ph-05-reports-baseline` | 集計レポート（PR別/工程別/model別/5h窓別/月次）+ ベースライン計測手順 | ⬜ 待機中 |
 
 各孫の詳細（目的 / 変更対象 / 変更しない対象 / 依存 / 完了条件 / テスト / ロールバック / レビュー重点）は
-第19章以降の「孫N用プロンプト」に implementer 向けの形で完全記述する。ここでは要点のみ。
+後半の「孫N用プロンプト」に implementer 向けの形で完全記述する。ここでは要点のみ。
 
 | 孫 | 変更対象 | 変更しない対象 | 依存 |
 |---|---|---|---|
@@ -878,7 +878,7 @@ instrumentationが実際のPR1本を通しても
 
 ---
 
-## 19. 孫0用プロンプト:
+## 孫0用プロンプト:
 
 ````
 ## タスク: feasibility probe の実施と ADR の作成
@@ -1020,7 +1020,7 @@ probe結果によって計画書の記述（特に第5章・第6章・第17章�
 
 ---
 
-## 20. 孫1用プロンプト:
+## 孫1用プロンプト:
 
 ````
 ## タスク: `bin/ocw-meter` コアとテスト基盤の実装
@@ -1160,7 +1160,7 @@ test_cmd: "python3 -m unittest discover -s bin/tests -v"
 
 ---
 
-## 21. 孫2用プロンプト:
+## 孫2用プロンプト:
 
 ````
 ## タスク: `ocw` と `pr-review-loop` への工程イベント埋め込み
@@ -1281,7 +1281,7 @@ command -v ocw-meter >/dev/null && ocw-meter event phase.start --phase self_revi
 
 ---
 
-## 22. 孫3用プロンプト:
+## 孫3用プロンプト:
 
 ````
 ## タスク: DeepSeek usage の transcript ingest と費用推定
@@ -1414,7 +1414,7 @@ cost = ( cache_read_input_tokens * cache_hit_in
 
 ---
 
-## 23. 孫4用プロンプト:
+## 孫4用プロンプト:
 
 ````
 ## タスク: Claude 利用枠スナップショットの収集（statusLine経由）
@@ -1530,7 +1530,7 @@ statusLine コマンドから呼ばれ、stdin の JSON を読んで `quota.samp
 
 ---
 
-## 24. 孫5用プロンプト:
+## 孫5用プロンプト:
 
 ````
 ## タスク: 集計レポートとベースライン計測手順
