@@ -647,7 +647,7 @@ cost_basis: estimated — not an invoice
 
 | 孫 | ブランチ | 内容 | 状況 |
 |---|---|---|---|
-| 0 | `ai/ph-00-feasibility-probes` | feasibility probe実施 + ADR作成（本番コードなし・docsのみ） | ⬜ 待機中 |
+| 0 | `ai/ph-00-feasibility-probes` | feasibility probe実施 + ADR作成（本番コードなし・docsのみ） | 🔄 実装中 |
 | 1 | `ai/ph-01-meter-core` | `bin/ocw-meter` コア（schema / storage / event / bind-pr / validate / report骨格）+ テスト基盤 | ⬜ 待機中 |
 | 2 | `ai/ph-02-instrumentation` | `ocw` と `pr-review-loop` への工程イベント埋め込み（挙動不変・fail-open） | ⬜ 待機中 |
 | 3 | `ai/ph-03-deepseek-usage` | transcript ingest + 価格表 + 費用推定 + 突合レポート | ⬜ 待機中 |
