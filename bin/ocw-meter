@@ -1451,7 +1451,7 @@ def cmd_report(args):
     if reconcile:
         if month is None:
             month = datetime.now(timezone.utc).strftime("%Y-%m")
-        elif not re.match(r"^\d{4}-\d{2}$", month):
+        elif not re.match(r"^\d{4}-(0[1-9]|1[0-2])$", month):
             # PR #27 review round 1 finding 6a: `_report_reconcile` used
             # to filter with `ts.startswith(month)`, so a malformed value
             # like "2026" silently aggregated the WHOLE year under a
@@ -1460,7 +1460,13 @@ def cmd_report(args):
             # fail-loud half of this CLI (plan §10.1) — a garbage filter
             # producing a garbage-but-plausible-looking number is exactly
             # the failure mode that policy exists to prevent.
-            print(f"error: --month must be YYYY-MM, got: {month!r}", file=sys.stderr)
+            #
+            # Round 2 finding "持ち越し6a": the first fix only checked
+            # digit-count shape (`\d{4}-\d{2}`), so "2026-13"/"2026-00"
+            # still passed through and silently matched zero events —
+            # the exact same failure mode, just moved to the month
+            # digits. The month component is now restricted to 01-12.
+            print(f"error: --month must be YYYY-MM with a valid month (01-12), got: {month!r}", file=sys.stderr)
             return 1
         return _report_reconcile(paths, month, provider_totals, as_json)
 
@@ -1746,7 +1752,21 @@ def load_session_pr_links(paths):
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return {}
-    return data if isinstance(data, dict) else {}
+    if not isinstance(data, dict):
+        return {}
+    # PR #27 review round 2 finding "新規3": `load_ingest_cursor` treats
+    # a malformed file/entry as "start fresh", never raising — this
+    # state file (written only by this meter itself, but still worth
+    # being defensive about, e.g. a future format change leaving old
+    # entries around) previously validated only the top-level container,
+    # so a single malformed VALUE crashed `ingest` entirely with an
+    # unhelpful AttributeError deep inside `build_usage_event`. Drop
+    # individual bad entries instead of failing the whole run over them.
+    return {
+        session_id: value
+        for session_id, value in data.items()
+        if isinstance(value, dict) and isinstance(value.get("pr_number"), int)
+    }
 
 
 def save_session_pr_links(paths, mapping):
@@ -1824,6 +1844,22 @@ def quarantine_ingest_line(paths, source_file, reason, byte_length):
         fh.write(json.dumps(record_, ensure_ascii=False) + "\n")
     with contextlib.suppress(OSError):
         os.chmod(qpath, 0o600)
+
+
+def quarantine_this_run(paths, since_dt, source_file, reason, byte_length):
+    """Wraps `quarantine_ingest_line` with the same --since read-only
+    rule the cursor follows (PR #27 review round 2 finding "新規2"): a
+    --since run re-reads the same unconsumed byte range every time
+    (since it never advances the persisted cursor — round 1 finding 1),
+    so unconditionally quarantining would append a duplicate record for
+    the SAME broken line on every single --since invocation, silently
+    inflating `report`'s transcript-quarantine count in proportion to
+    how many times --since happened to be run rather than how much
+    source data is actually broken. `quarantined_count` (this run's
+    stdout summary) still reflects what was found, just not persisted
+    twice — the eventual --since-less run permanently records it once."""
+    if since_dt is None:
+        quarantine_ingest_line(paths, source_file, reason, byte_length)
 
 
 # ── transcript line extraction ─────────────────────────────────────────
@@ -1946,13 +1982,15 @@ def resolve_herdr_role_map():
 
 # ── run_id / PR attribution from this meter's own local event store ────
 
-def load_local_pr_binds(paths):
-    """Single pass over every stored event, building the pr.bind lookup
-    table `ingest` needs for plan §7.4's attribution priority (PR
-    resolution once a run_id is known). Tolerates malformed lines by
-    skipping them — this is advisory context-building, not `validate`,
-    so a corrupt line here just means less context, not an error."""
-    binds = {}
+def load_local_pr_binds_and_run_starts(paths):
+    """Single pass over every stored event, building two lookup tables
+    `ingest` needs: the pr.bind table (plan §7.4 PR resolution once a
+    run_id is known) and run_id -> run.start ts (PR #27 review round 2
+    finding "新規1", see resolve_run_id_via_ocw_run_id_file's caller).
+    Tolerates malformed lines by skipping them — this is advisory
+    context-building, not `validate`, so a corrupt line here just means
+    less context, not an error."""
+    binds, run_starts = {}, {}
     for target in sorted(paths.events_dir.glob("*.jsonl")):
         try:
             text = target.read_text(encoding="utf-8", errors="replace")
@@ -1965,13 +2003,17 @@ def load_local_pr_binds(paths):
                 obj = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            if obj.get("event_type") != "pr.bind":
-                continue
+            event_type = obj.get("event_type")
             run_id = obj.get("run_id")
-            pr_number = obj.get("pr_number")
-            if run_id and isinstance(pr_number, int):
-                binds[run_id] = {"pr_number": pr_number, "pr_url": obj.get("pr_url")}
-    return binds
+            if event_type == "pr.bind" and run_id:
+                pr_number = obj.get("pr_number")
+                if isinstance(pr_number, int):
+                    binds[run_id] = {"pr_number": pr_number, "pr_url": obj.get("pr_url")}
+            elif event_type == "run.start" and run_id:
+                ts = parse_ts(obj.get("ts"))
+                if ts is not None:
+                    run_starts[run_id] = ts
+    return binds, run_starts
 
 
 def resolve_run_id_via_ocw_run_id_file(cwd, cache):
@@ -1992,12 +2034,24 @@ def resolve_run_id_via_ocw_run_id_file(cwd, cache):
     positives (misattributing implementer/reviewer messages to whatever
     run happened to be starting in the origin worktree at that moment).
     Reading the git-dir file is authoritative for the EXACT worktree a
-    message came from and requires no cross-referencing at all.
+    message came from.
 
     Returns None once the worktree has been removed (git prunes its
     metadata dir, including this file, on `ocw rm`/`git worktree
     remove`) — that is correct, not a bug (plan §7.4: 不明なら null。
-    推測しない), not every historical message can still be traced back."""
+    推測しない), not every historical message can still be traced back.
+
+    PR #27 review round 2 finding "新規1": this file answers "which
+    run_id does THIS PATH currently belong to", not "which run_id was
+    active when this specific message was generated". `ocw rm <name>`
+    followed by `ocw new <name>` reuses the same worktree path for a
+    brand new run, so a message generated under the OLD incarnation
+    (never ingested before that happened) would otherwise get
+    silently re-attributed to the NEW run_id. The caller
+    (`build_usage_event`) cross-checks the returned run_id's own
+    `run.start` timestamp against the message's timestamp and discards
+    the match (falls back to null) if the message predates that
+    run.start — see `run_starts` there."""
     if cwd is None:
         return None
     if cwd in cache:
@@ -2062,7 +2116,7 @@ def gh_pr_for_branch(branch):
 
 # ── assembling usage.message events ─────────────────────────────────────
 
-def build_usage_event(candidate, price_tables, today_str, role_map, binds, pr_link_map, gh_cache, run_id_cache, repo_cache):
+def build_usage_event(candidate, price_tables, today_str, role_map, binds, run_starts, pr_link_map, gh_cache, run_id_cache, repo_cache):
     usage = candidate["usage"] or {}
     input_tokens = usage.get("input_tokens")
     cache_read = usage.get("cache_read_input_tokens")
@@ -2097,6 +2151,20 @@ def build_usage_event(candidate, price_tables, today_str, role_map, binds, pr_li
 
     worktree = candidate["cwd"]
     run_id = resolve_run_id_via_ocw_run_id_file(worktree, run_id_cache)
+    # PR #27 review round 2 finding "新規1": the ocw-run-id file answers
+    # "which run_id does THIS PATH belong to NOW", not "...when this
+    # message was generated". `ocw rm <name>` + `ocw new <name>` reuses
+    # the worktree path for a brand new run — a message from the OLD
+    # incarnation would otherwise silently re-attribute to the new
+    # run_id. If we know that run_id's own run.start ts and the message
+    # predates it, the match is from a stale path reuse: discard it
+    # (null, not guessed). Unknown run.start ts (e.g. from before this
+    # meter started recording, or a different machine) gives the match
+    # the benefit of the doubt rather than nulling everything out.
+    if run_id is not None and ts_dt is not None:
+        run_start_ts = run_starts.get(run_id)
+        if run_start_ts is not None and ts_dt < run_start_ts:
+            run_id = None
 
     pr_info = binds.get(run_id) if run_id else None
     if pr_info is None:
@@ -2349,13 +2417,13 @@ def cmd_ingest(args):
             try:
                 text_line = raw_line.decode("utf-8")
             except UnicodeDecodeError:
-                quarantine_ingest_line(paths, file_path, "invalid UTF-8 encoding", len(raw_line))
+                quarantine_this_run(paths, since_dt, file_path, "invalid UTF-8 encoding", len(raw_line))
                 quarantined_count += 1
                 continue
             try:
                 obj = json.loads(text_line)
             except json.JSONDecodeError:
-                quarantine_ingest_line(paths, file_path, "malformed JSON", len(raw_line))
+                quarantine_this_run(paths, since_dt, file_path, "malformed JSON", len(raw_line))
                 quarantined_count += 1
                 continue
             if not isinstance(obj, dict):
@@ -2365,7 +2433,7 @@ def cmd_ingest(args):
             if obj_type == "assistant":
                 candidate = extract_assistant_candidate(obj)
                 if candidate is None:
-                    quarantine_ingest_line(paths, file_path, "assistant line missing message.id", len(raw_line))
+                    quarantine_this_run(paths, since_dt, file_path, "assistant line missing message.id", len(raw_line))
                     quarantined_count += 1
                     continue
                 if since_dt is not None:
@@ -2392,13 +2460,13 @@ def cmd_ingest(args):
         }
 
     role_map = resolve_herdr_role_map()
-    binds = load_local_pr_binds(paths)
+    binds, run_starts = load_local_pr_binds_and_run_starts(paths)
     price_tables = load_price_tables(price_table_dir())
     today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     gh_cache, run_id_cache, repo_cache = {}, {}, {}
 
     events = [
-        build_usage_event(candidate, price_tables, today_str, role_map, binds, pr_link_map, gh_cache, run_id_cache, repo_cache)
+        build_usage_event(candidate, price_tables, today_str, role_map, binds, run_starts, pr_link_map, gh_cache, run_id_cache, repo_cache)
         for candidate in candidates.values()
     ]
 

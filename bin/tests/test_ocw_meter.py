@@ -1183,6 +1183,47 @@ class IngestTests(OcwMeterTestCase):
         self.assertNotIn("raw_line", quarantined[0])
         self.assertNotIn("THIS-IS-NOT-VALID-JSON", json.dumps(quarantined[0]))
 
+    def test_ingest_since_does_not_duplicate_quarantine_records_on_repeat(self):
+        # PR #27 review round 2 finding "新規2": a --since run never
+        # advances the cursor (round 1 finding 1's fix), so it re-reads
+        # the same broken line on every invocation. Quarantining it
+        # every time would inflate `transcript lines quarantined` in
+        # proportion to how many times --since was run, not how much
+        # source data is actually broken.
+        session_dir = self.projects_dir / "proj"
+        session_dir.mkdir(parents=True)
+        (session_dir / "sess-bad-since.jsonl").write_text(
+            json.dumps(assistant_line("sess-bad-since", "m1", timestamp="2026-07-15T10:00:00.000Z"), ensure_ascii=False) + "\n"
+            + "{broken json\n",
+            encoding="utf-8",
+        )
+        for _ in range(3):
+            result = run_ingest(self.home, self.projects_dir, args=["--since", "2026-01-01T00:00:00Z"])
+            self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(len(read_quarantine(self.home)), 0)  # never persisted under --since
+
+        # A --since-less run finally persists it, exactly once.
+        result = run_ingest(self.home, self.projects_dir)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(len(read_quarantine(self.home)), 1)
+        result2 = run_ingest(self.home, self.projects_dir)
+        self.assertEqual(result2.returncode, 0, result2.stderr)
+        self.assertEqual(len(read_quarantine(self.home)), 1)  # still just once
+
+    def test_ingest_tolerates_malformed_session_pr_links_state_file(self):
+        # PR #27 review round 2 finding "新規3": a malformed entry in
+        # state/session-pr-links.json (this meter's own state, but
+        # future format changes could leave stale entries around) must
+        # not crash `ingest` with an AttributeError — same
+        # start-fresh-on-corruption policy as load_ingest_cursor.
+        write_transcript(self.projects_dir, "proj", "sess-badstate", [assistant_line("sess-badstate", "m1")])
+        run_ingest(self.home, self.projects_dir)  # creates state/ dir
+        state_path = self.home / "state" / "session-pr-links.json"
+        state_path.write_text(json.dumps({"some-session": "not-a-dict"}), encoding="utf-8")
+
+        result = run_ingest(self.home, self.projects_dir)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_ingest_never_persists_message_content_anywhere(self):
         line = assistant_line("sess-content", "m1")
         line["message"]["content"] = [{"type": "text", "text": "THIS-IS-SECRET-PROMPT-CONTENT"}]
@@ -1414,6 +1455,70 @@ class IngestTests(OcwMeterTestCase):
         result = run_ingest(self.home, self.projects_dir)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIsNone(read_events(self.home)[0]["run_id"])
+
+    def test_ingest_run_id_not_misattributed_when_worktree_path_is_reused(self):
+        # PR #27 review round 2 finding "新規1": `ocw rm <name>` followed
+        # by `ocw new <name>` reuses the SAME worktree path for a brand
+        # new run. The ocw-run-id file only knows "which run_id does
+        # this PATH belong to now" — a message generated under the OLD
+        # incarnation (never ingested before the path got reused) must
+        # NOT be silently re-attributed to the NEW run_id.
+        worktree_dir = make_ocw_style_worktree(self.tmpdir.name, run_id="RUN-OLD-111")
+        run_meter(
+            ["event", "run.start", "--idempotency-key", "old-run-start", "--run-id", "RUN-OLD-111",
+             "--ts", "2026-07-01T00:00:00.000Z", "--base-ref", "origin/main", "--command", "claude"],
+            self.home,
+        )
+        # The message predates RUN-OLD-111's own run.start? No — it's
+        # AFTER RUN-OLD-111 started but the worktree path gets reused for
+        # a NEW run whose run.start is even later, and the message
+        # predates THAT new run.start — the same worktree path, but the
+        # message belongs to the old incarnation.
+        write_transcript(self.projects_dir, "proj", "sess-reuse", [
+            assistant_line("sess-reuse", "old-run-msg", cwd=str(worktree_dir), timestamp="2026-07-15T00:00:00.000Z"),
+        ])
+        # Simulate `ocw rm` + `ocw new` reusing the same path: overwrite
+        # ocw-run-id with a NEW run_id whose run.start is AFTER the
+        # message's own timestamp.
+        git_dir = subprocess.run(
+            ["git", "-C", str(worktree_dir), "rev-parse", "--absolute-git-dir"],
+            capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        (pathlib.Path(git_dir) / "ocw-run-id").write_text("RUN-NEW-999\n", encoding="utf-8")
+        run_meter(
+            ["event", "run.start", "--idempotency-key", "new-run-start", "--run-id", "RUN-NEW-999",
+             "--ts", "2026-07-20T00:00:00.000Z", "--base-ref", "origin/main", "--command", "claude"],
+            self.home,
+        )
+
+        result = run_ingest(self.home, self.projects_dir)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        # Two run.start events (different days) plus the usage.message
+        # sort chronologically across day-files — pick the message
+        # explicitly rather than assuming index 0.
+        event = next(e for e in read_events(self.home) if e["event_type"] == "usage.message")
+        # Must NOT be attributed to RUN-NEW-999 (the message predates its
+        # run.start) — and RUN-OLD-111's own run.start ts isn't checked
+        # against here since the file no longer points at it at all, so
+        # the only safe answer is null.
+        self.assertIsNone(event["run_id"])
+
+    def test_ingest_run_id_accepted_when_message_is_after_its_run_start(self):
+        # The cross-check must not become overly strict: a message
+        # genuinely generated after its run_id's own run.start must
+        # still resolve normally (this is the common, correct case).
+        worktree_dir = make_ocw_style_worktree(self.tmpdir.name, run_id="run-normal")
+        run_meter(
+            ["event", "run.start", "--idempotency-key", "normal-run-start", "--run-id", "run-normal",
+             "--ts", "2026-07-01T00:00:00.000Z", "--base-ref", "origin/main", "--command", "claude"],
+            self.home,
+        )
+        write_transcript(self.projects_dir, "proj", "sess-normal", [
+            assistant_line("sess-normal", "m1", cwd=str(worktree_dir), timestamp="2026-07-15T00:00:00.000Z"),
+        ])
+        result = run_ingest(self.home, self.projects_dir)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(read_events(self.home)[0]["run_id"], "run-normal")
 
     def test_ingest_pr_number_resolved_via_run_id_bind_using_ocw_run_id_file(self):
         # End-to-end: pr.bind's run_id must line up with what the fixed
@@ -1666,12 +1771,20 @@ class ReportReconcileTests(OcwMeterTestCase):
         self.assertIsNone(flash["cost_estimate_usd"])
 
     def test_reconcile_rejects_malformed_month(self):
-        # PR #27 review round 1 finding 6a: report is the fail-loud half
-        # of this CLI (plan §10.1) — a garbage --month must not silently
-        # aggregate a whole year or silently match nothing.
-        for bad_month in ("2026", "07-2026", "2026-13x", "not-a-month"):
+        # PR #27 review round 1 finding 6a (round 2 "持ち越し6a" extended
+        # this to out-of-range month numbers, which the first fix's
+        # digit-count-only regex still let through as a silent 0-result
+        # match): report is the fail-loud half of this CLI (plan §10.1)
+        # — a garbage --month must not silently aggregate a whole year
+        # or silently match nothing.
+        for bad_month in ("2026", "07-2026", "2026-13x", "not-a-month", "2026-13", "2026-00"):
             result = run_meter(["report", "--reconcile", "--month", bad_month], self.home)
             self.assertNotEqual(result.returncode, 0, f"--month {bad_month!r} should have been rejected")
+
+    def test_reconcile_accepts_boundary_valid_months(self):
+        for good_month in ("2026-01", "2026-12"):
+            result = run_meter(["report", "--reconcile", "--month", good_month], self.home)
+            self.assertEqual(result.returncode, 0, f"--month {good_month!r} should have been accepted")
 
     def test_reconcile_known_gaps_mentions_utc_month_boundary_caveat(self):
         # PR #27 review round 1 finding 6b (plan §17 R8): month
