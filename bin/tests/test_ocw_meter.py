@@ -9,21 +9,24 @@ touches real state or the repo itself.
 No network access. No secrets. See docs/planning/DOC-003_..._計画.md §13
 for the numbered test-case list (T01, T02, ...) this file implements.
 
-Coverage of §13.2 across 孫1 + 孫3 (this file):
+Coverage of §13.2 across 孫1 + 孫3 + 孫4 (this file):
 
-  implemented: T01 T02 T03 T04 T05 T06 T07 T08
-               T11 (forward-compat half: unknown fields survive)
+  implemented: T01 T02 T03 T04 T05 T06 T07 T08 T09 T10 T11
                T12 T13 T14 T16
                T17 T18 (regression guard) T19 T20 T21 T22
+    T09 (孫4): SnapshotQuotaWindowTests / ReportFiveHourWindowCompletionTests
+      — stale resets_at, same-window used_pct decrease, and the
+      same-window PR-completion judgment in `report --pr`.
+    T10 (孫4 half): SnapshotQuotaBasicsTests covers the rate_limits-
+      absent (DeepSeek/claude-ds session) half; the usage-absence half
+      was already covered by
+      IngestTests.test_ingest_missing_usage_field_is_completeness_unknown,
+      and the generic "missing required field -> quarantined" half by
+      EventSchemaValidationTests.
+    T11 (孫4 half): SnapshotQuotaBasicsTests covers the "known
+      statusLine key disappears" half; the forward-compat "unknown
+      field survives" half was already covered generically elsewhere.
   deferred, not implementable until a later phase exists to test:
-    T09 - 5h window reset/staleness is quota.sample-specific (孫4).
-    T10 - the rate_limits half is quota-specific (孫4); the
-          usage-absence half IS covered here
-          (IngestTests.test_ingest_missing_usage_field_is_completeness_unknown)
-          and the generic "missing required field -> quarantined" half
-          is covered by EventSchemaValidationTests.
-    T11 - the "known key disappears" half is statusLine-parser-
-          specific (孫4).
     T15 - API error -> block.*/error_category is pr-review-loop
           instrumentation (孫2's scope, already covered there), not
           something `ingest` (a read-only transcript scanner) produces.
@@ -63,6 +66,27 @@ def run_meter(args, home, extra_env=None, timeout=30):
         [str(OCW_METER), *args],
         cwd=str(REPO_ROOT),
         env=env,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+    )
+
+
+def run_snapshot_quota(stdin_text, home, extra_env=None, timeout=30):
+    """Like run_meter, but feeds `stdin_text` to `ocw-meter snapshot-quota`
+    on its own real stdin (via subprocess input=) — this is the one
+    subcommand that reads real stdin data, not CLI flags."""
+    env = dict(os.environ)
+    env["OCW_METER_HOME"] = str(home)
+    for key in ("OCW_RUN_ID", "OCW_ROLE", "HERDR_WORKSPACE_ID", "HERDR_PANE_ID"):
+        env.pop(key, None)
+    if extra_env:
+        env.update(extra_env)
+    return subprocess.run(
+        [str(OCW_METER), "snapshot-quota"],
+        cwd=str(REPO_ROOT),
+        env=env,
+        input=stdin_text,
         capture_output=True,
         text=True,
         timeout=timeout,
@@ -1859,6 +1883,324 @@ class ReportReconcileTests(OcwMeterTestCase):
         data = json.loads(report.stdout)
         self.assertEqual(data["transcript_lines_quarantined"], 1)
         self.assertEqual(data["quarantined_lines"], 0)
+
+
+CLAUDE_STATUSLINE_SAMPLE = {
+    "session_id": "756f06ff-28b8-412d-92db-cbd9dcece939",
+    "cwd": "/tmp",
+    "model": {"id": "claude-opus-5", "display_name": "Opus 5"},
+    "cost": {"total_cost_usd": 4.56},
+    "rate_limits": {
+        "five_hour": {"used_percentage": 37, "resets_at": 99999999999},
+        "seven_day": {"used_percentage": 12, "resets_at": 99999999999},
+    },
+    "context_window": {
+        "total_input_tokens": 24000, "total_output_tokens": 100,
+        "context_window_size": 100000, "used_percentage": 24,
+    },
+}
+
+
+class SnapshotQuotaBasicsTests(OcwMeterTestCase):
+    """孫4: `ocw-meter snapshot-quota`. See docs/planning/DOC-003_..._
+    計画.md §8.5 / 孫4プロンプト and ADR-001 §2.1/§8."""
+
+    def test_empty_stdin_prints_blank_and_exits_zero(self):
+        result = run_snapshot_quota("", self.home)
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(result.stdout, "\n")
+        self.assertEqual(read_events(self.home), [])
+
+    def test_malformed_json_prints_blank_and_exits_zero(self):
+        result = run_snapshot_quota("not json {{{", self.home)
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(result.stdout, "\n")
+        self.assertEqual(read_events(self.home), [])
+
+    def test_json_array_not_object_is_treated_as_no_data(self):
+        result = run_snapshot_quota("[1, 2, 3]", self.home)
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(result.stdout, "\n")
+        self.assertEqual(read_events(self.home), [])
+
+    def test_huge_input_does_not_crash(self):
+        # Defends against a pathologically large payload (plan §1: this
+        # must never hang or crash the caller's status bar).
+        huge = json.dumps({"junk": "x" * 5_000_000})
+        result = run_snapshot_quota(huge, self.home, timeout=30)
+        self.assertEqual(result.returncode, 0)
+
+    def test_claude_session_prints_display_and_records_complete_sample(self):
+        result = run_snapshot_quota(json.dumps(CLAUDE_STATUSLINE_SAMPLE), self.home)
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(result.stdout.strip(), "5h:37% 7d:12% ctx:24%")
+
+        events = read_events(self.home)
+        self.assertEqual(len(events), 1)
+        event = events[0]
+        self.assertEqual(event["event_type"], "quota.sample")
+        self.assertEqual(event["completeness"], "complete")
+        self.assertEqual(event["source"], "statusline")
+        self.assertEqual(event["plan_source"], "statusline")
+        self.assertEqual(event["provider"], "anthropic")
+        self.assertEqual(event["model"], "claude-opus-5")
+        self.assertEqual(event["session_id"], "756f06ff-28b8-412d-92db-cbd9dcece939")
+        self.assertEqual(event["five_hour_used_pct"], 37)
+        self.assertEqual(event["five_hour_resets_at"], 99999999999)
+        self.assertEqual(event["seven_day_used_pct"], 12)
+        self.assertEqual(event["window_id"], "99999999999")
+        self.assertEqual(event["context_used_pct"], 24)
+        # Regression guard for the to_number() float-truncation bug found
+        # while implementing this: build_envelope() previously turned an
+        # already-float 4.56 into 4 because int(4.56) succeeds instead
+        # of raising. Must survive as a real float, not silently
+        # truncated with no completeness downgrade to show for it.
+        self.assertEqual(event["session_cost_usd"], 4.56)
+        self.assertIsNone(event["raw_ref"])
+
+    def test_deepseek_session_missing_rate_limits_is_completeness_unknown(self):
+        # T10 (quota half) / ADR-001 §2.1: every claude-ds session (58/58
+        # real samples) — a documented, expected shape, not an error.
+        obj = {
+            "session_id": "ds-session",
+            "cwd": "/tmp",
+            "model": {"id": "deepseek-v4-pro[1m]"},
+            "cost": {"total_cost_usd": 0.02},
+        }
+        result = run_snapshot_quota(json.dumps(obj), self.home)
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(result.stdout.strip(), "")  # no rate_limits, no context_window -> nothing to show
+
+        event = read_events(self.home)[0]
+        self.assertEqual(event["completeness"], "unknown")
+        self.assertIsNone(event["five_hour_used_pct"])
+        self.assertIsNone(event["five_hour_resets_at"])
+        self.assertIsNone(event["window_id"])
+        self.assertEqual(event["provider"], "deepseek")
+        self.assertEqual(event["model"], "deepseek-v4-pro")  # [1m] suffix stripped
+        self.assertEqual(event["session_cost_usd"], 0.02)
+
+    def test_context_used_pct_falls_back_to_token_ratio_when_null(self):
+        # ADR-001 §2.1: used_percentage was null in 7/66 real samples;
+        # total_input_tokens/context_window_size were "常に取得可能".
+        obj = {
+            "rate_limits": {"five_hour": {"used_percentage": 5, "resets_at": 99999999999}},
+            "context_window": {"total_input_tokens": 25000, "context_window_size": 100000, "used_percentage": None},
+        }
+        result = run_snapshot_quota(json.dumps(obj), self.home)
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(result.stdout.strip(), "5h:5% ctx:25%")
+        event = read_events(self.home)[0]
+        self.assertEqual(event["context_used_pct"], 25.0)
+
+    def test_context_used_pct_null_when_no_fallback_possible(self):
+        obj = {"rate_limits": {"five_hour": {"used_percentage": 5, "resets_at": 99999999999}}}
+        result = run_snapshot_quota(json.dumps(obj), self.home)
+        self.assertEqual(result.stdout.strip(), "5h:5%")
+        event = read_events(self.home)[0]
+        self.assertIsNone(event["context_used_pct"])
+
+    def test_unknown_top_level_and_nested_keys_do_not_break_parsing(self):
+        # T11 forward-compat half: a future statusLine schema version
+        # adding fields must not break this at all.
+        obj = dict(CLAUDE_STATUSLINE_SAMPLE)
+        obj["some_future_field"] = {"nested": ["stuff", 1, 2]}
+        obj["rate_limits"] = dict(obj["rate_limits"])
+        obj["rate_limits"]["some_new_window"] = {"used_percentage": 99}
+        result = run_snapshot_quota(json.dumps(obj), self.home)
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(result.stdout.strip(), "5h:37% 7d:12% ctx:24%")
+        self.assertEqual(read_events(self.home)[0]["completeness"], "complete")
+
+    def test_known_keys_missing_does_not_crash(self):
+        # T11 "known key disappears" half: a future statusLine schema
+        # version could drop rate_limits/context_window/cost entirely
+        # without warning (they are all documented as optional/absent
+        # in some session types already — ADR-001 §2.1).
+        result = run_snapshot_quota(json.dumps({"session_id": "x"}), self.home)
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(result.stdout.strip(), "")
+        event = read_events(self.home)[0]
+        self.assertEqual(event["completeness"], "unknown")
+
+    def test_raw_capture_is_off_by_default(self):
+        run_snapshot_quota(json.dumps(CLAUDE_STATUSLINE_SAMPLE), self.home)
+        self.assertFalse((self.home / "raw").exists())
+        self.assertIsNone(read_events(self.home)[0]["raw_ref"])
+
+    def test_raw_capture_redacts_secrets_when_enabled(self):
+        # T17.
+        obj = dict(CLAUDE_STATUSLINE_SAMPLE)
+        obj["api_key"] = "sk-should-not-survive-1234567890"
+        result = run_snapshot_quota(json.dumps(obj), self.home, extra_env={"OCW_METER_RAW": "1"})
+        self.assertEqual(result.returncode, 0)
+
+        raw_files = list((self.home / "raw").glob("*/*.json"))
+        self.assertEqual(len(raw_files), 1)
+        raw_text = raw_files[0].read_text(encoding="utf-8")
+        self.assertNotIn("sk-should-not-survive-1234567890", raw_text)
+        self.assertIn("[REDACTED]", raw_text)
+
+        event = read_events(self.home)[0]
+        self.assertEqual(event["raw_ref"], str(raw_files[0]))
+
+    def test_git_worktree_home_refuses_write_but_still_prints_display(self):
+        repo_dir = pathlib.Path(self.tmpdir.name) / "repo"
+        subprocess.run(["git", "init", "-q", str(repo_dir)], check=True)
+        bad_home = repo_dir / "ocw-meter-home"
+        result = run_snapshot_quota(json.dumps(CLAUDE_STATUSLINE_SAMPLE), bad_home)
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(result.stdout.strip(), "5h:37% 7d:12% ctx:24%")
+        self.assertIn("resolves inside a Git worktree", result.stderr)
+        self.assertFalse((bad_home / "events").exists())
+
+
+class SnapshotQuotaThrottleTests(OcwMeterTestCase):
+    def test_second_call_within_interval_is_throttled(self):
+        r1 = run_snapshot_quota(json.dumps(CLAUDE_STATUSLINE_SAMPLE), self.home)
+        r2 = run_snapshot_quota(json.dumps(CLAUDE_STATUSLINE_SAMPLE), self.home)
+        self.assertEqual(r1.returncode, 0)
+        self.assertEqual(r2.returncode, 0)
+        # Both calls still print a display string — throttling only
+        # skips the storage write, never the stdout contract.
+        self.assertEqual(r1.stdout.strip(), "5h:37% 7d:12% ctx:24%")
+        self.assertEqual(r2.stdout.strip(), "5h:37% 7d:12% ctx:24%")
+        self.assertEqual(len(read_events(self.home)), 1)
+
+    def test_interval_zero_disables_throttling(self):
+        for _ in range(3):
+            run_snapshot_quota(json.dumps(CLAUDE_STATUSLINE_SAMPLE), self.home, extra_env={"OCW_METER_QUOTA_INTERVAL": "0"})
+        self.assertEqual(len(read_events(self.home)), 3)
+
+    def test_non_numeric_interval_falls_back_to_default_not_zero(self):
+        run_snapshot_quota(json.dumps(CLAUDE_STATUSLINE_SAMPLE), self.home, extra_env={"OCW_METER_QUOTA_INTERVAL": "not-a-number"})
+        run_snapshot_quota(json.dumps(CLAUDE_STATUSLINE_SAMPLE), self.home, extra_env={"OCW_METER_QUOTA_INTERVAL": "not-a-number"})
+        self.assertEqual(len(read_events(self.home)), 1)
+
+
+class SnapshotQuotaWindowTests(OcwMeterTestCase):
+    """T09: 5-hour window reset/staleness handling (plan §8.5, ADR-001
+    §2.1/§8 instruction 4)."""
+
+    def test_stale_resets_at_is_marked_partial_with_null_window_id(self):
+        # ADR-001 §2.1: 3/8 real samples had an already-past resets_at.
+        obj = {"rate_limits": {"five_hour": {"used_percentage": 50, "resets_at": 1}}}
+        result = run_snapshot_quota(json.dumps(obj), self.home)
+        self.assertEqual(result.returncode, 0)
+        event = read_events(self.home)[0]
+        self.assertEqual(event["completeness"], "partial")
+        self.assertIsNone(event["window_id"])
+        # Raw value is still recorded (plan §7.4: 捏造しない — don't
+        # erase what was actually reported, just don't trust it as a
+        # window identifier).
+        self.assertEqual(event["five_hour_resets_at"], 1)
+
+    def test_used_pct_decrease_within_same_window_is_flagged_partial(self):
+        far_future = 99999999999
+        obj1 = {"rate_limits": {"five_hour": {"used_percentage": 50, "resets_at": far_future}}}
+        obj2 = {"rate_limits": {"five_hour": {"used_percentage": 30, "resets_at": far_future}}}
+        r1 = run_snapshot_quota(json.dumps(obj1), self.home, extra_env={"OCW_METER_QUOTA_INTERVAL": "0"})
+        r2 = run_snapshot_quota(json.dumps(obj2), self.home, extra_env={"OCW_METER_QUOTA_INTERVAL": "0"})
+        self.assertEqual(r1.returncode, 0)
+        self.assertEqual(r2.returncode, 0)
+        self.assertIn("decreased within the same window_id", r2.stderr)
+
+        events = read_events(self.home)
+        self.assertEqual(len(events), 2)
+        self.assertEqual(events[0]["completeness"], "complete")
+        self.assertEqual(events[1]["completeness"], "partial")
+        # Still the truthfully-reported value, just flagged as anomalous.
+        self.assertEqual(events[1]["five_hour_used_pct"], 30)
+
+    def test_used_pct_increase_within_same_window_stays_complete(self):
+        far_future = 99999999999
+        obj1 = {"rate_limits": {"five_hour": {"used_percentage": 10, "resets_at": far_future}}}
+        obj2 = {"rate_limits": {"five_hour": {"used_percentage": 20, "resets_at": far_future}}}
+        run_snapshot_quota(json.dumps(obj1), self.home, extra_env={"OCW_METER_QUOTA_INTERVAL": "0"})
+        run_snapshot_quota(json.dumps(obj2), self.home, extra_env={"OCW_METER_QUOTA_INTERVAL": "0"})
+        events = read_events(self.home)
+        self.assertEqual([e["completeness"] for e in events], ["complete", "complete"])
+
+    def test_different_window_id_after_reset_does_not_trigger_anomaly(self):
+        obj1 = {"rate_limits": {"five_hour": {"used_percentage": 90, "resets_at": 99999999999}}}
+        obj2 = {"rate_limits": {"five_hour": {"used_percentage": 5, "resets_at": 99999999998}}}
+        run_snapshot_quota(json.dumps(obj1), self.home, extra_env={"OCW_METER_QUOTA_INTERVAL": "0"})
+        result = run_snapshot_quota(json.dumps(obj2), self.home, extra_env={"OCW_METER_QUOTA_INTERVAL": "0"})
+        self.assertNotIn("decreased within the same window_id", result.stderr)
+        events = read_events(self.home)
+        self.assertEqual(events[1]["completeness"], "complete")
+
+
+class ReportFiveHourWindowCompletionTests(OcwMeterTestCase):
+    """T09 (report half) / 孫4プロンプト §2: 「PRが同一5時間窓で完走でき
+    たか」— report --pr <n>."""
+
+    def _seed_pr(self, pr_number, start_ts, end_ts):
+        run_meter(
+            ["event", "phase.start", "--idempotency-key", f"p{pr_number}-start",
+             "--phase", "implement", "--pr-number", str(pr_number), "--ts", start_ts],
+            self.home,
+        )
+        run_meter(
+            ["event", "phase.end", "--idempotency-key", f"p{pr_number}-end",
+             "--phase", "done", "--pr-number", str(pr_number), "--ts", end_ts],
+            self.home,
+        )
+
+    def _seed_quota_sample(self, key, window_id, ts):
+        run_meter(
+            ["event", "quota.sample", "--idempotency-key", key,
+             "--plan-source", "statusline", "--window-id", window_id, "--ts", ts],
+            self.home,
+        )
+
+    def test_yes_when_all_in_range_samples_share_one_window_id(self):
+        self._seed_pr(42, "2026-08-01T10:00:00.000Z", "2026-08-01T12:00:00.000Z")
+        self._seed_quota_sample("q1", "winA", "2026-08-01T10:30:00.000Z")
+        self._seed_quota_sample("q2", "winA", "2026-08-01T11:30:00.000Z")
+        result = run_meter(["report", "--pr", "42", "--json"], self.home)
+        data = json.loads(result.stdout)
+        self.assertEqual(data["five_hour_window_completion"], "yes")
+        self.assertEqual(data["five_hour_window_ids_seen"], ["winA"])
+
+    def test_no_when_in_range_samples_span_two_window_ids(self):
+        self._seed_pr(42, "2026-08-01T10:00:00.000Z", "2026-08-01T12:00:00.000Z")
+        self._seed_quota_sample("q1", "winA", "2026-08-01T10:30:00.000Z")
+        self._seed_quota_sample("q2", "winB", "2026-08-01T11:30:00.000Z")
+        result = run_meter(["report", "--pr", "42", "--json"], self.home)
+        data = json.loads(result.stdout)
+        self.assertEqual(data["five_hour_window_completion"], "no")
+        self.assertEqual(sorted(data["five_hour_window_ids_seen"]), ["winA", "winB"])
+
+    def test_unknown_when_no_quota_samples_in_range(self):
+        self._seed_pr(7, "2026-08-01T10:00:00.000Z", "2026-08-01T12:00:00.000Z")
+        result = run_meter(["report", "--pr", "7", "--json"], self.home)
+        data = json.loads(result.stdout)
+        self.assertEqual(data["five_hour_window_completion"], "unknown")
+        self.assertEqual(data["five_hour_window_ids_seen"], [])
+
+    def test_out_of_range_and_windowless_samples_are_excluded(self):
+        self._seed_pr(42, "2026-08-01T10:00:00.000Z", "2026-08-01T12:00:00.000Z")
+        self._seed_quota_sample("q1", "winA", "2026-08-01T10:30:00.000Z")
+        # Outside the PR's own time range — must not count as a second window.
+        self._seed_quota_sample("q2", "winB", "2026-08-01T15:00:00.000Z")
+        # In range but window_id-less (e.g. a stale/DeepSeek sample) — must
+        # not count as evidence either way.
+        run_meter(
+            ["event", "quota.sample", "--idempotency-key", "q3", "--plan-source", "statusline",
+             "--completeness", "unknown", "--ts", "2026-08-01T11:00:00.000Z"],
+            self.home,
+        )
+        result = run_meter(["report", "--pr", "42", "--json"], self.home)
+        data = json.loads(result.stdout)
+        self.assertEqual(data["five_hour_window_completion"], "yes")
+        self.assertEqual(data["five_hour_window_ids_seen"], ["winA"])
+
+    def test_no_pr_filter_omits_window_completion_fields(self):
+        result = run_meter(["report", "--json"], self.home)
+        data = json.loads(result.stdout)
+        self.assertNotIn("five_hour_window_completion", data)
+        self.assertNotIn("five_hour_window_ids_seen", data)
 
 
 if __name__ == "__main__":
