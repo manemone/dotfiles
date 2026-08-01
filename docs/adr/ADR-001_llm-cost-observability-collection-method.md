@@ -22,31 +22,33 @@
 ### 2.1 P1: statusLine `rate_limits`（✅ 実証完了）
 
 **方法**: `~/.claude/statusline-probe.sh` を設置し、stdin JSON を `/tmp/claude-statusline-probe.jsonl` に追記。
-2026-08-01 に実セッションで約1時間観測。55サンプル / 13セッションを収集。
+2026-08-01 に実セッションで約1時間観測。66サンプル / 13セッションを収集。
 
 **結果**:
 
 #### Claude（Anthropic本家）セッション — `rate_limits` 取得可 ✅
 
-実データ（`claude-opus-5`、2026-08-01T17:04:36+09:00採取、66サンプルから代表例を抜粋）:
+実データ（`claude-opus-5`、2026-08-01T17:04:36+09:00採取。セッション名・パスは秘匿のため代表値を記載）:
 
 ```json
 {
   "session_id": "756f06ff-28b8-412d-92db-cbd9dcece939",
-  "session_name": "PRレビュー",
+  "session_name": "AI LLMコスト可視化の実装とPR作成",
+  "prompt_id": "42f6cd60-9b99-4ad2-8c04-db12cf255f12",
   "cwd": "/home/manemone/projects/lora-dataset-forge/sweep-throughput",
-  "transcript_path": "/home/manemone/.claude/projects/.../756f06ff-....jsonl",
+  "transcript_path": "/home/manemone/.claude/projects/<slug>/756f06ff-....jsonl",
   "version": "2.1.220",
   "effort": { "level": "medium" },
   "thinking": { "enabled": true },
   "fast_mode": false,
   "exceeds_200k_tokens": false,
-  "output_style": "default",
+  "output_style": { "name": "default" },
   "model": { "id": "claude-opus-5", "display_name": "Opus 5" },
   "workspace": {
     "current_dir": "/home/manemone/projects/lora-dataset-forge/sweep-throughput",
-    "project_dir": "/home/manemone/projects/lora-dataset-forge",
-    "git_worktree": null,
+    "project_dir": "/home/manemone/projects/lora-dataset-forge/sweep-throughput",
+    "added_dirs": [],
+    "git_worktree": "sweep-throughput",
     "repo": { "host": "github.com", "owner": "manemone", "name": "lora-dataset-forge" }
   },
   "cost": {
@@ -72,7 +74,6 @@
 ```
 
 > **注**: `pr` と `worktree` キーは計画書5.6の公式スキーマには記載されているが、**今回収集した66サンプル中1件も出現しなかった**。PR番号の取得は transcript の `pr-link` または `ocw-meter bind-pr` に委ねる。
-```
 
 **確認事項**（2026-08-01T17:04+09:00 時点のスナップショット、66サンプル / 13セッション）:
 
@@ -83,7 +84,7 @@
 | `five_hour.resets_at` | ✅ Unix epoch秒。実測値: `1785520200` / `1785562800` / `1785578400`（3種類 / 8サンプル）。**⚠️ ただし全8件は同一時刻（17:04:36）の1バーストであり、時系列での安定性は未検証** |
 | `seven_day.used_percentage` | ✅ 実測値: 0, 1, 77, 78（4種類） |
 | `seven_day.resets_at` | ✅ Unix epoch秒 |
-| `resets_at` の窓識別子としての信頼性 | ⚠️ **注意**: 8サンプル中3件が観測時点で**既に過去の `resets_at`**（例: `1785520200` = 2026-08-01T02:50Z、観測は17:04JST=08:04Z）。これらは前の5時間窓に属するstale値であり、`window_id` として使うには現在時刻との比較による**鮮度判定**が必須 |
+| `resets_at` の窓識別子としての信頼性 | ⚠️ **注意**: 8サンプル中3件が観測時点で**既に過去の `resets_at`**（例: `1785520200` = 2026-07-31T17:50Z = 2026-08-01T02:50JST、観測は2026-08-01T17:04JST=08:04Z）。これらは前の5時間窓に属するstale値であり、`window_id` として使うには現在時刻との比較による**鮮度判定**が必須 |
 | `context_window.used_percentage` | ⚠️ **59/66が非null**（範囲: 4%–48%）。Claude本家: 4/8非null（4%–48%）。DeepSeek: 55/58非null（8%–9%）。**「常にnull」は誤り。** ただしnullのケースもあるため null-safe な処理は必要 |
 | `cost.total_cost_usd` | ✅ **66/66サンプルすべてに存在**。セッション開始からの累積コスト（USD）。DeepSeekセッションでも取得可能。**費用観測の1次データとして極めて有用** |
 | statusLine トップレベルキー | 実測: `context_window`, `cost`, `cwd`, `effort`, `exceeds_200k_tokens`, `fast_mode`, `model`, `output_style`, `prompt_id`, `rate_limits`, `session_id`, `session_name`, `thinking`, `transcript_path`, `version`, `workspace`（`pr`/`worktree` は出現せず） |
@@ -96,7 +97,7 @@
 
 #### statusLine の呼び出し頻度 ⚠️
 
-1セッションあたり**最大55サンプル/約1時間**（DeepSeekセッション）。statusLine は描画のたびに呼ばれるため、
+1セッションあたり**最大54サンプル/約1時間**（DeepSeekセッション）。statusLine は描画のたびに呼ばれるため、
 サンプリング間隔の自制（既定60秒）が必須（計画書R6のリスクが実在することを確認）。
 
 ### 2.2 P3: transcript突合（✅ 実証完了）
@@ -164,9 +165,10 @@ probe期間中（2026-08-01）に5時間枠への到達は発生しなかった�
 
 ---
 
-## 3. 取得できない項目（重要な限界）
+## 3. 取得できない項目と未確認項目
 
-以下は本方式では**原理的に取得できない**。曖昧にせず明示する。
+以下は本方式では**現時点で取得できない、または未確認**の項目である。曖昧にせず明示する。
+「原理的に取得不可」と「未確認（P2/P4/P5待ち）」を区別して記載する。
 
 | 項目 | 理由 |
 |---|---|
@@ -190,7 +192,7 @@ probe期間中（2026-08-01）に5時間枠への到達は発生しなかった�
 | `message.id` の形式変更 | 重複排除が効かず過大計上 | `validate` で distinct 比率を監視。異常検出時に警告 |
 | transcript のスキーマ変更 | ingest が失敗 | `parser_version` + `quarantine` に退避。データを捨てない |
 | Herdr が `~/.claude/settings.json` の `hooks` を書き換える | statusLine 消失 or Herdr 機能停止 | **deploy 前後の `hooks` 確認を必須手順化**（計画書R3。本probeでも実際に1度hooks消失が発生した） |
-| `resets_at` が過去時刻を返す（stale値） | 前窓の値を新窓の `window_id` として誤用 | 現在時刻と比較し `resets_at < now - 5h` ならstaleと判定。孫4で鮮度チェックを実装（本probeで3/8件のstaleを実測） |
+| `resets_at` が過去時刻を返す（stale値） | 前窓の値を新窓の `window_id` として誤用 | 現在時刻と比較し `resets_at <= now` ならstaleと判定。孫4で鮮度チェックを実装（本probeで3/8件のstaleを実測） |
 | `context_window.used_percentage` がnull | 一部セッションで使用率欠落 | null-safe処理。`total_input_tokens / context_window_size` をフォールバック計算（本probeで7/66件のnullを実測） |
 | DeepSeek ピーク/オフピーク料金開始 | 費用推定が外れる | 価格表をversion管理。新version追加（上書き禁止）。過去データは再計算しない |
 
@@ -253,7 +255,7 @@ transcript   herdr list    statusLine
 
 **制約（許容可能と判断）**:
 
-1. v4-flash のカバレッジが0%（金額寄与が小さい: 107M tokens ≒ 最大$1未満）
+1. v4-flash のカバレッジが0%（金額寄与は限定的: 107M tokens ≒ 最大$15、大半がhitなら$1未満）
 2. v4-pro カバレッジが約89%（coverageを全レポートに併記することで誤認防止）
 3. streaming中断分は捕捉不可（`cost_basis: estimated` を明示）
 
@@ -288,9 +290,9 @@ probe結果を踏まえ、計画書の孫3・孫4プロンプトに以下の反�
 ### 孫4（Claude quota収集）への指示
 
 1. **`rate_limits` は Claude本家セッションでのみ取得可能**。DeepSeekセッションは `null` + `completeness: "unknown"`（P1実測）
-2. **サンプリング間隔の自制（既定60秒）が必須**（P1で1セッション最大55サンプル/1時間を実測。予想以上に高頻度）
+2. **サンプリング間隔の自制（既定60秒）が必須**（P1で1セッション最大54サンプル/1時間を実測。予想以上に高頻度）
 3. **`context_window.used_percentage` は非nullが多数（59/66）だがnullのケースもある**（P1実測）。null-safeに処理し、null時は `total_input_tokens / context_window_size` をフォールバック計算する
-4. **`resets_at` を `window_id` として使用する際は鮮度判定が必須**（P1で8サンプル中3件がstale値＝過去窓の `resets_at` を返していた）。現在時刻と比較し `resets_at < now - 5h` ならstaleとして扱う
+4. **`resets_at` を `window_id` として使用する際は鮮度判定が必須**（P1で8サンプル中3件がstale値＝過去窓の `resets_at` を返していた）。現在時刻と比較し `resets_at <= now` ならstaleとして扱う
 5. **`cost.total_cost_usd` が全セッションで取得可能**（P1実測、66/66サンプル）。Claude本家・DeepSeek両方で出現。quotaサンプルに含めて `report` で参照できるようにする
 6. **`settings.json` の `hooks` 消失リスクが実在する**（本probe中に1度発生）。PR説明文に必ず `hooks` 確認の証跡を含めること
 7. **statusLine の表示文字列は `5h:37% 7d:12% ctx:24%` 程度の最小限に**。`context_window.used_percentage` がnullの場合は `ctx` を非表示にする

@@ -20,6 +20,10 @@ if [ ! -f "$API_KEY_FILE" ]; then
   exit 1
 fi
 API_KEY=$(tr -d '\r\n' < "$API_KEY_FILE")
+if [ -z "$API_KEY" ]; then
+  echo "ERROR: API key is empty. Check $API_KEY_FILE"
+  exit 1
+fi
 
 BASE_URL="https://api.deepseek.com/anthropic/v1/messages"
 MODEL="deepseek-v4-pro[1m]"
