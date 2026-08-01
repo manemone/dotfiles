@@ -9,9 +9,9 @@
 | 目的 | 最初に読むべきファイル | 備考 |
 |---|---|---|
 | このリポジトリのルールを知る | [../AGENTS.md](../AGENTS.md) | 最重要ルール・ディレクトリ構成・デプロイの仕組みなど |
-| PR を出す前に読む | [design/README.md](design/README.md) の「プルリクエストの作法」 | 説明文の構成・コメントのプレフィクス・ブランチ構成 |
-| シェルを書く前に読む | [design/README.md](design/README.md) の「シェルスクリプトコーディング方針」 | POSIX sh / bash の使い分け、bashism の回避 |
-| デプロイを検証する | [design/README.md](design/README.md) の「テスト方針」 | 実 HOME を汚さずに検証する4層の方法 |
+| PR を出す前に読む | [design/DOC-DOCID_PLACEHOLDER_プルリクエストの作法.md](design/DOC-DOCID_PLACEHOLDER_プルリクエストの作法.md) | 説明文の構成・コメントのプレフィクス・ブランチ構成 |
+| シェルを書く前に読む | [design/DOC-DOCID_PLACEHOLDER_シェルスクリプトコーディング方針.md](design/DOC-DOCID_PLACEHOLDER_シェルスクリプトコーディング方針.md) | POSIX sh / bash の使い分け、bashism の回避 |
+| デプロイを検証する | [design/DOC-DOCID_PLACEHOLDER_テスト方針.md](design/DOC-DOCID_PLACEHOLDER_テスト方針.md) | 実 HOME を汚さずに検証する4層の方法 |
 | 傘ブランチの計画を確認する | [planning/](planning/) 配下の各計画書 | 進行中・完了した傘ブランチの計画書 |
 
 ## フォルダ構成
@@ -56,11 +56,18 @@
 `docs/` 配下に新しい `.md` ファイルを追加する際は、以下の3ステップを必ず実行してください。
 いずれかを省略すると索引から漏れ、発見不能なファイルが生まれます。
 
+> **注意**: `tools/doc-id` は現時点で未実装です（別タスクで導入予定）。導入されるまでは
+> ステップ1を実行せず、ファイル名を `DOC-DOCID_PLACEHOLDER_<説明的ファイル名>.md` のまま追加してください。
+> `tools/doc-id` 導入時に既存のプレースホルダをまとめて採番します。
+
 1. **DOC-ID の割り当て**: `tools/doc-id assign docs/path/to/new_file.md` を実行する
+   （未導入の間は前述のとおりプレースホルダのままでよい）
 2. **全 DOC-ID 索引への追記**: このファイル（`docs/README.md`）の該当フォルダの表に、
    DOC-ID・ファイル名・1行説明を追記する
-3. **フォルダ README への追記**: ファイルを追加したフォルダの `README.md`（`design/README.md` など）
-   の表にも同様に追記する
+3. **フォルダ README への追記**: ファイルを追加したフォルダに `README.md` が存在する場合は、
+   その表にも同様に追記する（`design/README.md` など）。`planning/` には現時点で `README.md` を
+   置いておらず、`planning/` 配下の索引はこのファイルの表のみで管理する
+   （計画書は本数が少なく、専用の索引ファイルを設けるほどの規模になっていないため）
 
 ### DOC-ID 命名規則
 
@@ -75,6 +82,8 @@ DOC-YYMMDDHHMM_<説明的ファイル名>.md
   採番ツールがプレースホルダをタイムスタンプに一括置換し、リポジトリ内の参照も同時に更新する
 
 ### 検証コマンド
+
+`tools/doc-id` の導入後は以下のコマンドで検証できます（現時点では未導入のため実行できません）。
 
 ```bash
 tools/doc-id check    # 命名規則違反を検出
