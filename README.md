@@ -111,6 +111,38 @@ Options can be combined:
     └── README.md
 ```
 
+## Deploying from a git worktree
+
+Deploy scripts symlink files **from this checkout** into `$HOME`. If you deploy
+from a linked git worktree (created by `git worktree add`, or by `ocw`), those
+symlinks point into that worktree — and they break silently the moment the
+worktree is removed (`ocw rm`, `git worktree remove`). `~/.zshrc`,
+`~/.claude/skills/*` and `~/bin/*` all stop working, long after the deploy
+reported success.
+
+The deploy scripts warn when this happens:
+
+```
+[WARN] Deploying from a linked git worktree:
+[WARN]   /path/to/dotfiles/my-feature
+[WARN] Symlinks will point INTO this worktree and will break when it is
+[WARN] removed (e.g. by 'ocw rm').
+[WARN] After merging, re-run the deploy from the main worktree:
+[WARN]   cd /path/to/dotfiles/master && ./deploy-all.sh
+```
+
+Deploying from a worktree is fine while testing a change. Just **re-run the
+deploy from the main worktree once the change is merged**, before removing the
+worktree. Set `DOTFILES_QUIET_WORKTREE_WARNING=1` to silence the warning.
+
+If symlinks are already broken, list the dangling ones with:
+
+```bash
+find ~ ~/.config ~/.claude ~/.claude/skills ~/bin -maxdepth 1 -type l ! -exec test -e {} \; -print
+```
+
+then re-run `./deploy-all.sh` from the main worktree.
+
 ## Uninstalling
 
 ```bash
