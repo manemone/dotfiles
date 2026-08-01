@@ -255,8 +255,8 @@ Claude Code 2.1.220 の statusLine コマンドは stdin に JSON を渡す。�
 と明記されている。つまり:
 
 - Claude Pro セッションでは初回API応答後に取得可能（**孫0 P1で実証済み ✅**。ADR-001 §2.1参照）
-- `claude-ds`（DeepSeek）セッションでは**存在しない**（**孫0 P1で実証済み ✅**。38/38サンプルで不在）
-- **`resets_at` が窓の識別子**になるため、5時間窓のreset跨ぎを単純減算せずに扱える（**孫0 P1で安定性確認済み ✅**）
+- `claude-ds`（DeepSeek）セッションでは**存在しない**（**孫0 P1で実証済み ✅**。58/58サンプルで不在）
+- **`resets_at` が窓の識別子**になるため、5時間窓のreset跨ぎを単純減算せずに扱える。ただし一部セッションでstale値（過去窓の `resets_at`）を返すため、`window_id` として使うには鮮度判定（`resets_at <= now`）が必要（ADR-001 §2.1）
 - ⚠️ **孫0 P1の新発見**: `context_window.used_percentage` は非nullが多数（59/66）だがnullのケースもある（7/66）。
   `total_input_tokens` / `total_output_tokens` / `context_window_size` は常に取得可能。
   null-safe処理が必要（ADR-001 §2.1）
