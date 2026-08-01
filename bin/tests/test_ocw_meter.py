@@ -33,6 +33,7 @@ import os
 import pathlib
 import stat
 import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -784,6 +785,13 @@ class MeterErrorSelfDiagnosticTests(unittest.TestCase):
             self.assertEqual(diagnostics[0]["completeness"], "unknown")
             self.assertEqual(diagnostics[0]["stage"], "storage_home_inside_git_worktree")
 
+            # Round-5 review: emit_meter_error may be the very first thing
+            # to ever create this root (nothing else has run yet), so it
+            # must chmod the root itself, not just state_dir — otherwise
+            # the root sits at umask-default 755 until something else
+            # happens to call ensure_storage.
+            self.assertEqual(stat.S_IMODE(os.stat(default_root).st_mode), 0o700)
+
             # Round-2 review: a persistent misconfiguration must not grow
             # this file without bound — a second failure on the same day
             # must not add a second line.
@@ -805,13 +813,26 @@ class MeterErrorSelfDiagnosticTests(unittest.TestCase):
         # emit_meter_error, which used to need the *same* lock and would
         # therefore almost never actually record anything while the lock
         # was genuinely contended. A dedicated, lock-free diagnostic file
-        # fixes that; verify it by holding the lock with `flock` while a
-        # separate `event` call times out acquiring it.
+        # fixes that; verify it by holding the lock in a separate python
+        # process (fcntl.flock — the same primitive ocw-meter itself
+        # uses) while a separate `event` call times out acquiring it.
+        #
+        # Round-5 review: this used to shell out to the `flock(1)`
+        # command, which doesn't exist on macOS (a supported platform
+        # per the root README) and would ERROR the whole test suite
+        # there, not just skip this one test.
         home = pathlib.Path(tempfile.mkdtemp()) / "ocw-meter-home"
         lock_file = home / "state" / ".lock"
         lock_file.parent.mkdir(parents=True, exist_ok=True)
         lock_file.touch()
-        holder = subprocess.Popen(["flock", str(lock_file), "-c", "sleep 2"])
+        holder = subprocess.Popen([
+            sys.executable, "-c",
+            "import fcntl, sys, time\n"
+            "f = open(sys.argv[1], 'w')\n"
+            "fcntl.flock(f, fcntl.LOCK_EX)\n"
+            "time.sleep(2)\n",
+            str(lock_file),
+        ])
         try:
             import time as _time
 

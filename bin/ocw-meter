@@ -775,6 +775,13 @@ def emit_meter_error(root, stage, exc):
             fell_back = True
 
         paths = Paths(target_root)
+        # Round-5 review: `ensure_dir` only chmods the leaf directory it's
+        # given, so passing state_dir alone left the storage ROOT at
+        # umask-default 755 whenever this ran before `ensure_storage` had
+        # a chance to (e.g. this exact fallback path, or any failure
+        # this fires from on a brand-new root). Plan §9.1/§9.3 require
+        # 700 on every directory, root included.
+        ensure_dir(paths.root, 0o700)
         ensure_dir(paths.state_dir, 0o700)
         now = datetime.now(timezone.utc)
         idempotency_key = f"meter-error:{stage}:{now.strftime('%Y-%m-%d')}"

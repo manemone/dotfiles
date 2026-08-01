@@ -32,7 +32,10 @@ done < <(
 echo "== embedded python3 heredoc in bin/ocw-meter =="
 meter_script="$repo_root/bin/ocw-meter"
 if [ -f "$meter_script" ]; then
-  tmp_py="$(mktemp -t ocw-meter-heredoc-XXXXXX.py)"
+  # "${TMPDIR:-/tmp}/name-XXXXXX.py" rather than `mktemp -t name-XXXXXX.py`:
+  # BSD mktemp (macOS) treats the whole `-t` argument as a literal prefix,
+  # not a template, so the ".py" suffix would be silently dropped there.
+  tmp_py="$(mktemp "${TMPDIR:-/tmp}/ocw-meter-heredoc-XXXXXX.py")"
   trap 'rm -f "$tmp_py"' EXIT
   awk "/<<'PY'/{flag=1; next} /^PY\$/{flag=0} flag" "$meter_script" > "$tmp_py"
   if [ -s "$tmp_py" ]; then
