@@ -1,0 +1,2 @@
+lint_cmd: "bin/tests/lint.sh"
+test_cmd: "python3 -m unittest discover -s bin/tests -v"

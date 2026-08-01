@@ -8,6 +8,7 @@
 |---|---|
 | `ocw` | Git worktree 作成・管理。Herdr 連携で commander/implementer/reviewer の三面体制を自動セットアップ |
 | `claude-ds` | Claude Code を DeepSeek API 経由で実行するラッパー |
+| `ocw-meter` | LLM費用・Claude利用枠の観測基盤。既存ログの事後読み取り専用。fail-open |
 
 ## 1. Requirements
 
@@ -39,7 +40,7 @@ which claude-ds
 
 The deploy script:
 - Creates `~/bin/` directory if missing
-- Symlinks `ocw` and `claude-ds` into `~/bin/`
+- Symlinks `ocw`, `claude-ds`, and `ocw-meter` into `~/bin/`
 
 ## 3. What's Included
 
@@ -93,6 +94,55 @@ claude-ds
 | Haiku / subagent | `deepseek-v4-flash` |
 
 API キーは `DEEPSEEK_API_KEY_FILE` 環境変数で指定可能（デフォルト: `~/.config/deepseek/api_key`）。
+
+### 3.3 ocw-meter — LLM費用・Claude利用枠の観測基盤
+
+`ocw` / `claude-ds` / `pr-review-loop` の**本番経路には一切割り込まない**、事後読み取り専用の観測ツール。
+詳細設計は `docs/planning/DOC-003_ai-llm-cost-observability_計画.md` を参照。
+
+**観測は fail-open。`ocw-meter` が無くても、PATH から消えても、書き込みに失敗しても、
+本スキル・`ocw` は完全に動作し続ける。** 呼び出し側は必ず次の形で呼ぶ:
+
+```bash
+command -v ocw-meter >/dev/null && ocw-meter event ... || true
+```
+
+```bash
+# 任意のイベントを1行append（--key value で任意フィールドを上書き・追加可能）
+ocw-meter event <event_type> [--key value ...]
+
+# PRの後付けbind（run_id → PR番号）
+ocw-meter bind-pr --run <run_id> --pr <n> [--url <url>]
+
+# 保存済みイベントのschema検証。壊れた行はquarantineへ隔離
+ocw-meter validate [--file <path>]
+
+# イベント件数・completeness・coverageの要約（骨格。費用集計は後続フェーズ）
+ocw-meter report [--pr <n>] [--json]
+```
+
+| サブコマンド | 失敗時の挙動 |
+|---|---|
+| `event` / `bind-pr` | **常に exit 0**。stderrに1行warnのみ。本番フローを止めない |
+| `validate` / `report` | 失敗したら非ゼロで落ちる（壊れたデータを黙って集計しない） |
+
+**保存先と環境変数:**
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `OCW_METER_HOME` | `~/.local/state/ocw-meter` | 保存先ルート。**git worktree内を指すと拒否される**（誤commit防止）。`event`/`bind-pr`は書き込みをスキップして exit 0、`validate`/`report`は非ゼロで停止する |
+| `OCW_METER_RAW` | `0` | 予約済み（将来フェーズのopt-in raw保存用）。現時点のサブコマンドでは未使用 |
+
+保存レイアウト: `events/YYYY-MM-DD.jsonl`（append-only, mode 600）/ `state/seen-keys/YYYY-MM.txt`（`idempotency_key`による重複排除）/
+`quarantine/YYYY-MM-DD.jsonl`（schema不正・破損行の隔離先）。ディレクトリは mode 700。
+
+**プライバシー方針**: プロンプト全文・モデル応答全文・ソースコード本文・APIキー・認証ヘッダ・トークン類は
+一切保存しない。`--key value` で渡された値のうち `sk-...` 形式の文字列や `Authorization:` を含む値、
+キー名が `api_key` / `token` / `secret` / `password` / `authorization` に一致するものは
+保存前に `[REDACTED]` へ置換される。
+
+**このフェーズでの既知の限界**: `ingest`（DeepSeek transcript取り込み）と `snapshot-quota`（Claude利用枠取得）は
+まだ実装されていない。`report` の費用・coverage列はプレースホルダで、実データは後続フェーズで入る。
 
 ## 4. Customization
 

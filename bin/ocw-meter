@@ -1,0 +1,740 @@
+#!/usr/bin/env bash
+set -uo pipefail
+
+# NOTE on exit-code policy (docs/planning/DOC-003_..._計画.md §10.1):
+#   `event` / `bind-pr` must ALWAYS exit 0 (fail-open: observation must
+#   never break the production flow that calls it).
+#   `validate` / `report` must fail loud (non-zero) on unexpected errors,
+#   since silently trusting corrupted data would make every downstream
+#   number meaningless.
+# This file intentionally does NOT `set -e` — exit codes are managed by
+# hand so the fail-open guarantee holds even if python3 itself is
+# missing or the embedded script crashes outright.
+
+warn() { echo "warning: $*" >&2; }
+die() { echo "error: $*" >&2; exit 1; }
+
+usage() {
+  cat <<'USAGE'
+usage:
+  ocw-meter event <event_type> [--key value ...]
+  ocw-meter bind-pr --run <run_id> --pr <n> [--url <url>]
+  ocw-meter validate [--file <path>]
+  ocw-meter report [--pr <n>] [--json]
+  ocw-meter help
+
+subcommands:
+  event
+    Append one event line to the append-only event log. Common envelope
+    fields (run_id, role, phase, round, pr_number, source, ...) can be
+    overridden with "--field value" flags; unrecognized flags are stored
+    as extra top-level fields (forward compatible). Always exits 0.
+
+  bind-pr
+    Convenience wrapper around `event pr.bind`. Always exits 0.
+
+  validate
+    Re-reads stored events, quarantines malformed/incomplete lines, and
+    prints a summary. Exits non-zero on unexpected failure.
+
+  report
+    Prints an event-count / completeness / coverage summary. Skeleton
+    only in this phase — cost figures arrive with the DeepSeek ingest
+    and Claude quota phases. Exits non-zero on unexpected failure.
+
+environment:
+  OCW_METER_HOME
+    default: $HOME/.local/state/ocw-meter
+    Storage root. Refused if it resolves inside a Git worktree (event/
+    bind-pr silently skip the write; validate/report error out).
+
+  OCW_METER_RAW
+    default: 0
+    Reserved for a later phase (opt-in raw snapshot storage). Unused
+    by this subcommand set.
+
+notes:
+  - `ingest` and `snapshot-quota` are not implemented in this phase.
+  - Nothing here talks to the network or reads prompt/response content.
+  - Callers should guard every invocation with:
+      command -v ocw-meter >/dev/null && ocw-meter event ... || true
+    ocw-meter being entirely absent from PATH is a supported, normal
+    state — every other tool in this repo must keep working without it.
+USAGE
+}
+
+OCW_METER_HOME="${OCW_METER_HOME:-$HOME/.local/state/ocw-meter}"
+export OCW_METER_HOME
+export OCW_METER_RAW="${OCW_METER_RAW:-0}"
+
+cmd="${1:-}"
+if [ -z "$cmd" ]; then
+  usage
+  exit 1
+fi
+shift || true
+
+case "$cmd" in
+  help | -h | --help)
+    usage
+    exit 0
+    ;;
+  event | bind-pr | validate | report)
+    ;;
+  *)
+    usage >&2
+    die "unknown subcommand: $cmd"
+    ;;
+esac
+
+if ! command -v python3 >/dev/null 2>&1; then
+  case "$cmd" in
+    event | bind-pr)
+      warn "python3 not found; skipping '$cmd' (fail-open, no event recorded)"
+      exit 0
+      ;;
+    *)
+      die "required command not found: python3"
+      ;;
+  esac
+fi
+
+python3 - "$cmd" "$@" <<'PY'
+import contextlib
+import errno
+import fcntl
+import json
+import os
+import pathlib
+import re
+import subprocess
+import sys
+import tempfile
+import time
+import uuid
+from datetime import datetime, timezone
+
+SCHEMA_VERSION = 1
+
+ENVELOPE_FIELDS = (
+    "schema_version", "event_id", "idempotency_key", "event_type", "ts",
+    "ts_local_offset", "source", "parser_version", "completeness", "run_id",
+    "repo", "worktree", "branch", "head_sha", "workspace_id", "pane_id",
+    "role", "session_id", "provider", "model", "phase", "round",
+    "pr_number", "pr_url",
+)
+INT_FIELDS = ("schema_version", "round", "pr_number")
+REQUIRED_FIELDS = ("event_id", "event_type", "idempotency_key", "schema_version", "ts")
+
+# Secret-shaped values must never survive into stored events. This is the
+# one place every caller-supplied "--field value" flows through, so it is
+# the one place redaction is enforced (see plan §9.2 / T17).
+SECRET_KEY_RE = re.compile(r"(api[-_]?key|token|secret|password|authorization)", re.IGNORECASE)
+SECRET_VALUE_RE = re.compile(r"Authorization:\s*.*|Bearer\s+\S+|sk-[A-Za-z0-9_-]{10,}", re.IGNORECASE)
+
+
+class MeterTimeout(Exception):
+    pass
+
+
+# ── small helpers ──────────────────────────────────────────────────────
+
+def iso_utc(dt):
+    return dt.strftime("%Y-%m-%dT%H:%M:%S.") + f"{dt.microsecond // 1000:03d}Z"
+
+
+def parse_ts(value):
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def local_offset_str():
+    offset = datetime.now().astimezone().utcoffset()
+    if offset is None:
+        return "+00:00"
+    total_minutes = int(offset.total_seconds() // 60)
+    sign = "+" if total_minutes >= 0 else "-"
+    total_minutes = abs(total_minutes)
+    return f"{sign}{total_minutes // 60:02d}:{total_minutes % 60:02d}"
+
+
+def redact_value(key, value):
+    if not isinstance(value, str):
+        return value
+    if key and SECRET_KEY_RE.search(key):
+        return "[REDACTED]"
+    if SECRET_VALUE_RE.search(value):
+        return SECRET_VALUE_RE.sub("[REDACTED]", value)
+    return value
+
+
+def _git(args, cwd=None):
+    try:
+        result = subprocess.run(
+            ["git", *args],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+    except Exception:
+        return None
+    if result.returncode != 0:
+        return None
+    value = result.stdout.strip()
+    return value or None
+
+
+def git_worktree_root():
+    return _git(["rev-parse", "--show-toplevel"])
+
+
+def git_branch():
+    branch = _git(["rev-parse", "--abbrev-ref", "HEAD"])
+    return None if branch == "HEAD" else branch
+
+
+def git_head_sha():
+    return _git(["rev-parse", "HEAD"])
+
+
+def git_repo_slug():
+    url = _git(["remote", "get-url", "origin"])
+    if not url:
+        return None
+    m = re.search(r"[:/]([^/:]+)/([^/]+?)(?:\.git)?$", url)
+    return f"{m.group(1)}/{m.group(2)}" if m else None
+
+
+def in_git_worktree(path):
+    p = pathlib.Path(path)
+    try:
+        p = p.resolve()
+    except OSError:
+        pass
+    check_dir = p
+    while not check_dir.exists():
+        parent = check_dir.parent
+        if parent == check_dir:
+            return False
+        check_dir = parent
+    return _git(["rev-parse", "--is-inside-work-tree"], cwd=str(check_dir)) == "true"
+
+
+# ── storage layout ─────────────────────────────────────────────────────
+
+class Paths:
+    def __init__(self, root):
+        self.root = pathlib.Path(root)
+        self.events_dir = self.root / "events"
+        self.state_dir = self.root / "state"
+        self.seen_keys_dir = self.state_dir / "seen-keys"
+        self.quarantine_dir = self.root / "quarantine"
+        self.lock_file = self.state_dir / ".lock"
+
+
+def storage_root():
+    return os.environ.get("OCW_METER_HOME") or str(pathlib.Path.home() / ".local" / "state" / "ocw-meter")
+
+
+def ensure_dir(path, mode=0o700):
+    path.mkdir(parents=True, exist_ok=True)
+    try:
+        os.chmod(path, mode)
+    except OSError:
+        pass
+
+
+def ensure_storage(root):
+    paths = Paths(root)
+    for d in (paths.root, paths.events_dir, paths.state_dir, paths.seen_keys_dir, paths.quarantine_dir):
+        ensure_dir(d, 0o700)
+    return paths
+
+
+@contextlib.contextmanager
+def acquire_lock(lock_path, timeout=0.1, poll=0.005):
+    ensure_dir(lock_path.parent, 0o700)
+    fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o600)
+    start = time.monotonic()
+    acquired = False
+    try:
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                acquired = True
+                break
+            except OSError as exc:
+                if exc.errno not in (errno.EAGAIN, errno.EACCES):
+                    raise
+                if time.monotonic() - start >= timeout:
+                    break
+                time.sleep(poll)
+        yield acquired
+    finally:
+        if acquired:
+            with contextlib.suppress(OSError):
+                fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
+
+
+def append_line(path, line, mode=0o600):
+    fd = os.open(str(path), os.O_CREAT | os.O_WRONLY | os.O_APPEND, mode)
+    try:
+        os.write(fd, (line + "\n").encode("utf-8"))
+    finally:
+        os.close(fd)
+
+
+def write_event(paths, event):
+    """Single flock-guarded check-then-append: dedup via idempotency_key,
+    one write() per file (plan §10.3 concurrent-writer requirement)."""
+    dt = parse_ts(event["ts"]) or datetime.now(timezone.utc)
+    events_file = paths.events_dir / f"{dt.strftime('%Y-%m-%d')}.jsonl"
+    seen_file = paths.seen_keys_dir / f"{dt.strftime('%Y-%m')}.txt"
+
+    with acquire_lock(paths.lock_file, timeout=0.1) as acquired:
+        if not acquired:
+            raise MeterTimeout("could not acquire storage lock within 100ms")
+
+        seen = set()
+        if seen_file.exists():
+            with open(seen_file, "r", encoding="utf-8") as fh:
+                seen = {line.rstrip("\n") for line in fh if line.strip()}
+
+        key = event["idempotency_key"]
+        if key in seen:
+            return "duplicate"
+
+        ensure_dir(paths.events_dir, 0o700)
+        ensure_dir(paths.seen_keys_dir, 0o700)
+        append_line(events_file, json.dumps(event, ensure_ascii=False, sort_keys=True))
+        append_line(seen_file, key)
+        return "written"
+
+
+# ── envelope construction ──────────────────────────────────────────────
+
+def coerce(key, value):
+    if value is None or key not in INT_FIELDS:
+        return value
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return value  # left as-is; `validate` will flag the type mismatch
+
+
+def parse_flags(args, mapping=None):
+    """Parse a flat "--flag value" arg list. With no mapping, the flag
+    name itself (dashes -> underscores) becomes the field name — this is
+    what makes `event <type> --any-field value` forward-extensible."""
+    result = {}
+    i = 0
+    while i < len(args):
+        token = args[i]
+        if not token.startswith("--"):
+            raise ValueError(f"expected a --flag, got: {token!r}")
+        if i + 1 >= len(args):
+            raise ValueError(f"flag {token} is missing a value")
+        value = args[i + 1]
+        if mapping is not None:
+            key = mapping.get(token)
+            if key is None:
+                raise ValueError(f"unknown flag: {token}")
+        else:
+            key = token[2:].replace("-", "_")
+        result[key] = value
+        i += 2
+    return result
+
+
+def build_envelope(event_type, overrides):
+    if not event_type or not isinstance(event_type, str):
+        raise ValueError("event_type must be a non-empty string")
+
+    now = datetime.now(timezone.utc)
+    event_id = overrides.get("event_id") or str(uuid.uuid4())
+
+    defaults = {
+        "schema_version": SCHEMA_VERSION,
+        "event_id": event_id,
+        "idempotency_key": f"auto:{event_id}",
+        "event_type": event_type,
+        "ts": iso_utc(now),
+        "ts_local_offset": local_offset_str(),
+        "source": None,
+        "parser_version": None,
+        "completeness": "complete",
+        "run_id": os.environ.get("OCW_RUN_ID"),
+        "repo": git_repo_slug(),
+        "worktree": git_worktree_root(),
+        "branch": git_branch(),
+        "head_sha": git_head_sha(),
+        "workspace_id": os.environ.get("HERDR_WORKSPACE_ID"),
+        "pane_id": os.environ.get("HERDR_PANE_ID"),
+        "role": os.environ.get("OCW_ROLE"),
+        "session_id": None,
+        "provider": None,
+        "model": None,
+        "phase": None,
+        "round": None,
+        "pr_number": None,
+        "pr_url": None,
+    }
+
+    event = {}
+    for field in ENVELOPE_FIELDS:
+        event[field] = coerce(field, overrides[field]) if field in overrides else defaults[field]
+
+    # Unknown flags become extra top-level fields (e.g. run.start's
+    # base_ref) — forward compatible, never silently dropped.
+    for key, value in overrides.items():
+        if key not in ENVELOPE_FIELDS:
+            event[key] = value
+
+    for key in list(event.keys()):
+        event[key] = redact_value(key, event[key])
+
+    if not event.get("idempotency_key"):
+        event["idempotency_key"] = f"auto:{event_id}"
+
+    return event
+
+
+def record(event_type, overrides):
+    root = storage_root()
+    if in_git_worktree(root):
+        print(
+            f"warning: OCW_METER_HOME ({root}) resolves inside a Git worktree; "
+            "refusing to write there (no event recorded)",
+            file=sys.stderr,
+        )
+        return 0
+
+    paths = ensure_storage(root)
+    event = build_envelope(event_type, overrides)
+    try:
+        result = write_event(paths, event)
+    except MeterTimeout as exc:
+        print(f"warning: {exc}", file=sys.stderr)
+        return 0
+    print(result)
+    return 0
+
+
+# ── subcommands: event / bind-pr (fail-open) ───────────────────────────
+
+def cmd_event(args):
+    if not args or args[0].startswith("--"):
+        print("error: event requires an <event_type> argument", file=sys.stderr)
+        return 0
+    event_type, rest = args[0], args[1:]
+    overrides = parse_flags(rest)
+    return record(event_type, overrides)
+
+
+def cmd_bind_pr(args):
+    parsed = parse_flags(args, {"--run": "run_id", "--pr": "pr_number", "--url": "pr_url"})
+    run_id = parsed.get("run_id")
+    pr_number_raw = parsed.get("pr_number")
+    if not run_id or pr_number_raw is None:
+        print("error: bind-pr requires --run <run_id> and --pr <n>", file=sys.stderr)
+        return 0
+    try:
+        pr_number = int(pr_number_raw)
+    except ValueError:
+        print(f"error: --pr must be an integer, got: {pr_number_raw!r}", file=sys.stderr)
+        return 0
+
+    overrides = {
+        "run_id": run_id,
+        "pr_number": pr_number,
+        "pr_url": parsed.get("pr_url"),
+        "idempotency_key": f"bind:{run_id}:{pr_number}",
+    }
+    return record("pr.bind", overrides)
+
+
+# ── validate / report (fail-loud) ───────────────────────────────────────
+
+def line_errors(obj):
+    if not isinstance(obj, dict):
+        return ["not a JSON object"]
+    errors = []
+    for field in REQUIRED_FIELDS:
+        if obj.get(field) in (None, ""):
+            errors.append(f"missing required field: {field}")
+    if "schema_version" in obj and obj["schema_version"] is not None and not isinstance(obj["schema_version"], int):
+        errors.append("schema_version must be an int")
+    if obj.get("ts") and parse_ts(obj["ts"]) is None:
+        errors.append("ts is not a valid RFC3339 timestamp")
+    for field in ("round", "pr_number"):
+        value = obj.get(field)
+        if value is not None and not isinstance(value, int):
+            errors.append(f"{field} must be an int or null")
+    return errors
+
+
+def validate_file(path, quarantine_dir):
+    path = pathlib.Path(path)
+    if not path.exists():
+        return {"total": 0, "valid": 0, "quarantined": 0}
+
+    text = path.read_text(encoding="utf-8", errors="replace")
+    lines = text.split("\n")
+    trailing_incomplete = bool(lines and lines[-1] != "")
+    if lines and lines[-1] == "":
+        lines = lines[:-1]
+
+    good, bad = [], []  # bad: (raw_line, reason)
+    for idx, raw_line in enumerate(lines):
+        if not raw_line.strip():
+            continue
+        is_last = trailing_incomplete and idx == len(lines) - 1
+        try:
+            obj = json.loads(raw_line)
+        except json.JSONDecodeError:
+            reason = "truncated/malformed JSON (possible process crash)" if is_last else "malformed JSON"
+            bad.append((raw_line, reason))
+            continue
+        errors = line_errors(obj)
+        if errors:
+            bad.append((raw_line, "; ".join(errors)))
+        else:
+            good.append(raw_line)
+
+    if bad:
+        date_str = path.stem
+        qpath = pathlib.Path(quarantine_dir) / f"{date_str}.jsonl"
+        ensure_dir(qpath.parent, 0o700)
+        with open(qpath, "a", encoding="utf-8") as fh:
+            for raw_line, reason in bad:
+                record_ = {
+                    "quarantined_at": iso_utc(datetime.now(timezone.utc)),
+                    "reason": reason,
+                    "source_file": path.name,
+                    "raw_line": raw_line,
+                }
+                fh.write(json.dumps(record_, ensure_ascii=False) + "\n")
+        with contextlib.suppress(OSError):
+            os.chmod(qpath, 0o600)
+
+        tmp_fd, tmp_path = tempfile.mkstemp(dir=str(path.parent), prefix=".tmp-", suffix=".jsonl")
+        try:
+            with os.fdopen(tmp_fd, "w", encoding="utf-8") as fh:
+                for raw_line in good:
+                    fh.write(raw_line + "\n")
+            os.chmod(tmp_path, 0o600)
+            os.replace(tmp_path, path)
+        except Exception:
+            with contextlib.suppress(OSError):
+                os.unlink(tmp_path)
+            raise
+
+    return {"total": len(good) + len(bad), "valid": len(good), "quarantined": len(bad)}
+
+
+def cmd_validate(args):
+    parsed = parse_flags(args, {"--file": "file"}) if args else {}
+
+    root = storage_root()
+    if in_git_worktree(root):
+        print(f"error: OCW_METER_HOME ({root}) resolves inside a Git worktree; refusing to operate", file=sys.stderr)
+        return 1
+    paths = ensure_storage(root)
+
+    targets = [pathlib.Path(parsed["file"])] if parsed.get("file") else sorted(paths.events_dir.glob("*.jsonl"))
+
+    with acquire_lock(paths.lock_file, timeout=2.0) as acquired:
+        if not acquired:
+            print("error: could not acquire storage lock within 2s", file=sys.stderr)
+            return 1
+        totals = {"total": 0, "valid": 0, "quarantined": 0}
+        for target in targets:
+            result = validate_file(target, paths.quarantine_dir)
+            for k in totals:
+                totals[k] += result[k]
+
+    print(f"files checked:     {len(targets)}")
+    print(f"lines total:       {totals['total']}")
+    print(f"lines valid:       {totals['valid']}")
+    print(f"lines quarantined: {totals['quarantined']}")
+    return 0
+
+
+def iter_stored_events(paths):
+    """Yield (event_or_None, raw_line, error_or_None) for every stored
+    line. Malformed lines are reported here, not moved — moving them is
+    `validate`'s job, so `report` stays read-only."""
+    for target in sorted(paths.events_dir.glob("*.jsonl")):
+        try:
+            text = target.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        for raw_line in text.split("\n"):
+            if not raw_line.strip():
+                continue
+            try:
+                obj = json.loads(raw_line)
+            except json.JSONDecodeError:
+                yield None, raw_line, "malformed JSON"
+                continue
+            errors = line_errors(obj)
+            yield obj, raw_line, ("; ".join(errors) if errors else None)
+
+
+def count_quarantine_lines(paths):
+    total = 0
+    for target in sorted(paths.quarantine_dir.glob("*.jsonl")):
+        try:
+            with open(target, encoding="utf-8") as fh:
+                total += sum(1 for line in fh if line.strip())
+        except OSError:
+            continue
+    return total
+
+
+def cmd_report(args):
+    filter_pr = None
+    as_json = False
+    i = 0
+    while i < len(args):
+        token = args[i]
+        if token == "--pr":
+            if i + 1 >= len(args):
+                print("error: --pr requires a value", file=sys.stderr)
+                return 1
+            filter_pr = int(args[i + 1])
+            i += 2
+        elif token == "--json":
+            as_json = True
+            i += 1
+        else:
+            print(f"error: unknown report flag: {token}", file=sys.stderr)
+            return 1
+
+    root = storage_root()
+    if in_git_worktree(root):
+        print(f"error: OCW_METER_HOME ({root}) resolves inside a Git worktree; refusing to operate", file=sys.stderr)
+        return 1
+    paths = ensure_storage(root)
+
+    valid_events, malformed = [], 0
+    for obj, _raw, error in iter_stored_events(paths):
+        if error:
+            malformed += 1
+        else:
+            valid_events.append(obj)
+
+    if filter_pr is not None:
+        bound_run_ids = {
+            e.get("run_id")
+            for e in valid_events
+            if e.get("event_type") == "pr.bind" and e.get("pr_number") == filter_pr and e.get("run_id")
+        }
+        filtered = [
+            e for e in valid_events
+            if e.get("pr_number") == filter_pr or e.get("run_id") in bound_run_ids
+        ]
+    else:
+        filtered = valid_events
+
+    by_type = {}
+    for e in filtered:
+        by_type[e.get("event_type")] = by_type.get(e.get("event_type"), 0) + 1
+
+    completeness_counts = {"complete": 0, "partial": 0, "unknown": 0}
+    for e in filtered:
+        c = e.get("completeness")
+        completeness_counts[c if c in completeness_counts else "unknown"] += 1
+
+    total = len(filtered)
+    quarantined = count_quarantine_lines(paths)
+
+    summary = {
+        "storage_root": str(paths.root),
+        "filter_pr": filter_pr,
+        "total_events": total,
+        "by_event_type": by_type,
+        "completeness": completeness_counts,
+        "malformed_unvalidated_lines": malformed,
+        "quarantined_lines": quarantined,
+        "coverage": "not available yet (usage.message events are produced by a later ingest phase)",
+        "price_table": "not applicable (no cost data ingested yet)",
+        "cost_basis": "not applicable (no cost data ingested yet)",
+    }
+
+    if as_json:
+        print(json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True))
+    else:
+        print(f"storage root:  {summary['storage_root']}")
+        if filter_pr is not None:
+            print(f"filter:        pr={filter_pr}")
+        print(f"total events:  {total}")
+        for event_type, count in sorted(by_type.items(), key=lambda kv: (kv[0] or "")):
+            print(f"  {event_type or '(none)'}: {count}")
+
+        def pct(n):
+            return (100.0 * n / total) if total else 0.0
+
+        print(
+            "completeness: "
+            f"complete {pct(completeness_counts['complete']):.1f}% / "
+            f"partial {pct(completeness_counts['partial']):.1f}% / "
+            f"unknown {pct(completeness_counts['unknown']):.1f}%"
+        )
+        print(f"quarantined:   {quarantined} lines")
+        print(f"malformed (not yet quarantined; run 'ocw-meter validate'): {malformed} lines")
+        print(f"coverage:      {summary['coverage']}")
+        print(f"price_table:   {summary['price_table']}")
+        print(f"cost_basis:    {summary['cost_basis']}")
+
+    return 0
+
+
+# ── entry point ──────────────────────────────────────────────────────
+
+def main():
+    argv = sys.argv[1:]
+    if not argv:
+        print("error: missing subcommand", file=sys.stderr)
+        return 1
+    cmd, rest = argv[0], argv[1:]
+
+    if cmd in ("event", "bind-pr"):
+        try:
+            return cmd_event(rest) if cmd == "event" else cmd_bind_pr(rest)
+        except Exception as exc:  # belt-and-suspenders: fail-open no matter what
+            print(f"warning: ocw-meter {cmd} failed unexpectedly: {type(exc).__name__}: {exc}", file=sys.stderr)
+            return 0
+
+    if cmd in ("validate", "report"):
+        try:
+            return cmd_validate(rest) if cmd == "validate" else cmd_report(rest)
+        except Exception as exc:
+            print(f"error: ocw-meter {cmd} failed: {type(exc).__name__}: {exc}", file=sys.stderr)
+            return 1
+
+    print(f"error: unknown subcommand: {cmd}", file=sys.stderr)
+    return 1
+
+
+sys.exit(main())
+PY
+py_status=$?
+
+case "$cmd" in
+  event | bind-pr)
+    if [ "$py_status" -ne 0 ]; then
+      warn "'$cmd' exited $py_status internally; fail-open, treating as success"
+    fi
+    exit 0
+    ;;
+  *)
+    exit "$py_status"
+    ;;
+esac
