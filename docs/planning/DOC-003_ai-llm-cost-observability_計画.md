@@ -254,9 +254,12 @@ Claude Code 2.1.220 の statusLine コマンドは stdin に JSON を渡す。�
 `rate_limits` のコメントに **「Optional: Claude.ai subscription usage limits. Only present for subscribers after first API response.」**
 と明記されている。つまり:
 
-- Claude Pro セッションでは初回API応答後に取得可能（**要実機確認 → 孫0 P1**）
-- `claude-ds`（DeepSeek）セッションでは**存在しない**。これは正しい挙動であり、`unknown` として記録する
-- **`resets_at` が窓の識別子**になるため、5時間窓のreset跨ぎを単純減算せずに扱える
+- Claude Pro セッションでは初回API応答後に取得可能（**孫0 P1で実証済み ✅**。ADR-001 §2.1参照）
+- `claude-ds`（DeepSeek）セッションでは**存在しない**（**孫0 P1で実証済み ✅**。38/38サンプルで不在）
+- **`resets_at` が窓の識別子**になるため、5時間窓のreset跨ぎを単純減算せずに扱える（**孫0 P1で安定性確認済み ✅**）
+- ⚠️ **孫0 P1の新発見**: `context_window.used_percentage` と `remaining_percentage` は常に `null`。
+  `total_input_tokens` / `total_output_tokens` / `context_window_size` は取得可能だが、
+  使用率の計算には自前のトラッキングが必要（ADR-001 §2.1）
 
 `/usage` はバイナリ内に2実装ある。`{type:"local-jsx", name:"usage", aliases:["cost","stats"], requires:{ink:true}}`（TUI）と、
 `{type:"local", name:"usage", supportsNonInteractive:true, ...}`（条件付き有効）。
@@ -328,14 +331,14 @@ DeepSeek管理画面の7月実績 v4-flash **2,793 requests / 107M tokens** に�
 
 | ID | 未確定事項 | probe | 課金 | 秘密情報 | 生成物 |
 |---|---|---|---|---|---|
-| U1 | Claude Pro 契約で statusLine の `rate_limits` が実際に来るか。来るタイミング・更新頻度 | P1 | なし | なし | `/tmp` にJSONダンプ |
-| U2 | `resets_at` が5時間窓の識別子として安定か（窓跨ぎで値が変わるか） | P1（長時間サンプル） | なし | なし | 同上 |
-| U3 | streaming中断・retry・APIエラー時に課金されたリクエストがtranscriptから漏れる量 | P2 | 微小 | APIキー（非出力） | 生SSEのヘッダ/最終usageのみ |
-| U4 | `deepseek-v4-pro[1m]` 指定時の実課金モデル名・レスポンスヘッダ（request-id / rate limit） | P2 | 微小 | 同上 | 同上 |
-| U5 | reasoning（thinking）トークンが出力トークンに含まれるか、別項目か | P2 + transcript精査 | 微小 | なし | 集計結果 |
-| U6 | transcript由来集計 vs DeepSeek管理画面の乖離率（カバレッジ） | P3 | なし | なし | 突合レポート |
-| U7 | `claude -p "/usage"` が機械可読な出力を返すか | P4 | 1ターン分 + Claude枠消費 | なし | 出力テキスト |
-| U8 | 5時間枠に到達して待機した際、transcript / statusLine に何が現れるか | P5（受動観測） | なし | なし | 観測メモ |
+| U1 | Claude Pro 契約で statusLine の `rate_limits` が実際に来るか。来るタイミング・更新頻度 | P1 ✅ 実証済み | なし | なし | `/tmp` にJSONダンプ → ADR-001 §2.1 |
+| U2 | `resets_at` が5時間窓の識別子として安定か（窓跨ぎで値が変わるか） | P1 ✅ 実証済み（同一窓内で安定） | なし | なし | 同上 |
+| U3 | streaming中断・retry・APIエラー時に課金されたリクエストがtranscriptから漏れる量 | P2（人間実行待ち） | 微小 | APIキー（非出力） | 生SSEのヘッダ/最終usageのみ |
+| U4 | `deepseek-v4-pro[1m]` 指定時の実課金モデル名・レスポンスヘッダ（request-id / rate limit） | P2（人間実行待ち） | 微小 | 同上 | 同上 |
+| U5 | reasoning（thinking）トークンが出力トークンに含まれるか、別項目か | P2（人間実行待ち） + transcript精査 | 微小 | なし | 集計結果 |
+| U6 | transcript由来集計 vs DeepSeek管理画面の乖離率（カバレッジ） | P3 ⚠️ 集計完了、管理画面値は人間確認待ち | なし | なし | 突合レポート → ADR-001 §2.2 |
+| U7 | `claude -p "/usage"` が機械可読な出力を返すか | P4（人間確認待ち） | 1ターン分 + Claude枠消費 | なし | 出力テキスト |
+| U8 | 5時間枠に到達して待機した際、transcript / statusLine に何が現れるか | P5 ⚠️ 未観測（期間中に到達せず） | なし | なし | 観測メモ → ADR-001 §2.5 |
 
 ### probe 詳細（**すべて承認後に実施**）
 
@@ -847,7 +850,7 @@ OCW_IMPLEMENTER_COMMAND='claude --model sonnet --permission-mode auto' \
 |---|---|---|---|
 | R1 | transcriptのカバレッジが約87%（背景flash呼び出しが不可視） | 費用の一部が見えない | coverage を全レポートに常時併記。孫3で比率を実測。許容できなければ将来gateway案（不採用案A）を再検討 |
 | R2 | streaming中断・retryで課金されたが記録されないリクエスト | 過少計上 | 孫0 P2 で発生条件を確認。突合の乖離として吸収し、`cost_basis: estimated` を明示 |
-| R3 | `~/.claude/settings.json` は Herdr も `claude/deploy.sh` も書き込む競合地帯 | statusLine追加でHerdrのhooksが飛ぶ / deployで統計設定が消える | 孫4は `claude/settings.json`（追跡ファイル）に `statusLine` を追加してdeploy経路に乗せる。**hooksには触らない**。デプロイ前後で `~/.claude/settings.json` の `hooks` を目視確認する手順をPRに含める |
+| R3 | `~/.claude/settings.json` は Herdr も `claude/deploy.sh` も書き込む競合地帯 | statusLine追加でHerdrのhooksが飛ぶ / deployで統計設定が消える | **孫0 P1でhooks消失を実体験済み。** `claude/deploy.sh` は `settings.machine.json` が無い場合、または `hooks` を含まない `settings.machine.json` を使った場合に Herdr の `SessionStart` を消し飛ばす。対策: `settings.machine.json` に `hooks` を明記する。孫4は `claude/settings.json`（追跡ファイル）に `statusLine` を追加してdeploy経路に乗せる。デプロイ前後で `~/.claude/settings.json` の `hooks` を目視確認する手順をPRに含める |
 | R4 | statusLine の `rate_limits` が Pro契約で来ない可能性 | 孫4が成立しない | 孫0 P1 で先に実証。来なければ孫4は「取得不可」と結論し、`blocked` の受動観測のみに縮小する（捏造しない） |
 | R5 | DeepSeekのピーク/オフピーク2倍料金が計測期間中に開始 | 費用推定が外れる | 価格表をversion管理し `effective_date` を持つ。開始を検知したら新version追加。**過去データは再計算しない** |
 | R6 | statusLine コマンドは描画のたびに実行される（高頻度） | I/O負荷・ログ肥大 | `snapshot-quota` は最短サンプリング間隔（既定60秒）を state ファイルで自制。超高速パス（前回から60秒未満なら即return） |
