@@ -221,9 +221,19 @@ ocw-meter snapshot-quota
   として記録する。`usage.message`の`cost_estimate_usd`（ocw-meter自身の推定値）とは**別カラム**であり、
   合算しない
 - `report --pr <n>` はPRの最初と最後のイベント時刻の範囲に収まる`quota.sample`の`window_id`を集計し、
-  同一5時間窓で完走できたか（`five_hour_window_completion`: `yes`/`no`/`unknown`）を出力する
+  同一5時間窓で完走できたか（`five_hour_window_completion`: `yes`/`no`/`unknown`）を出力する。
+  **判定はレビュー待ち等の待機時間を含むPRの実時間レンジで行う**（＝PRが長時間openだと、
+  実作業がどれだけ短くても`no`になりやすい。「実装に要した時間」ではなく「イベント時刻の
+  span」で見ている点に注意）
+- **同一`window_id`内でのサンプル間の消費量差分（累積消費のグラフ化等）は現時点では未実装。**
+  `snapshot-quota`が記録するのは`window_id`と`five_hour_used_pct`の各時点の値のみで、差分算出・
+  グラフ化・時系列集計は将来の集計レポート機能で扱う想定（現時点では`report --pr`の
+  同一窓完走判定にのみ利用している）
 - `OCW_METER_RAW=1`のときのみ、redaction済みのstatusLine生JSONを`raw/YYYY-MM-DD/`へ保存し、
   イベントの`raw_ref`にそのパスを記録する（既定では一切保存しない）
+- **事前準備（必須）**: `ocw-meter` が PATH に無い環境では statusLine コマンド自体が
+  `command not found` になり表示が壊れる。必ず先に `bin/deploy.sh` を実行して
+  `~/bin/ocw-meter` を配置し、`~/bin` が PATH に入っていることを確認すること（本ドキュメント §5 参照）
 
 **保存先と環境変数:**
 
@@ -232,9 +242,24 @@ ocw-meter snapshot-quota
 | `OCW_METER_HOME` | `~/.local/state/ocw-meter` | 保存先ルート。**git worktree内を指すと拒否される**（誤commit防止）。`event`/`bind-pr`は書き込みをスキップして exit 0（設定ミスが誰にも気づかれないままにならないよう、既定の保存先へ `meter.error` を1件/日で記録し、fallbackした旨をstderrに警告する）、`validate`/`report`/`ingest`は非ゼロで停止する |
 | `OCW_METER_RAW` | `0` | `1`にすると `snapshot-quota` がredaction済みのstatusLine生JSONを `raw/YYYY-MM-DD/` へ保存する（既定オフ） |
 | `OCW_METER_CLAUDE_PROJECTS_DIR` | `~/.claude/projects` | `ingest` がtranscriptを探すディレクトリ |
-| `OCW_METER_PRICE_DIR` | `<このファイルのあるディレクトリ>/prices` | `ingest` が価格表（`*.json`）を探すディレクトリ |
+| `OCW_METER_PRICE_DIR` | `<このファイルのあるディレクトリ>/prices` | `ingest` が価格表(`*.json`)を探すディレクトリ |
 | `OCW_METER_INGEST_USE_GH` | `0` | `1` にすると、PR番号未解決時に `gh pr list --head <branch>` へフォールバックする（既定オフ = ネットワークを一切叩かない） |
 | `OCW_METER_QUOTA_INTERVAL` | `60`（秒） | `snapshot-quota` が実際に `quota.sample` を書き込む最短間隔。数値でない値・負値は既定値にフォールバックする |
+
+**`quota.sample` の保存量について（計画書 §9.1 の前提を上回る規模）**: 計画書 §9.1 の
+「JSONLで十分」という判断は「全期間で39,805メッセージ、1イベント約600B」という実績に基づくが、
+`quota.sample` は実測 **約1,022B/件**で、既定60秒スロットルの上限（＝1セッションあたり最大60件/時）
+まで書き込まれうる。Herdr の commander/implementer/reviewer 3ペイン構成で1日10時間稼働した場合、
+理論上限は 60件/時 × 10時間 × 3セッション × 365日 ≈ **65.7万件/年（約650MB/年）**で、
+既存の全履歴（39,805件、`usage.message`等これまでの累計実績）を1年で一桁上回りうる規模になる
+（実際の呼び出し頻度は ADR-001 §2.1実測で最大54回/時であり、スロットルが常に上限まで
+効くとは限らないため、これは理論上限であって実測の目安ではない）。
+
+現時点では自動的なローテーション・削除の仕組みは無い（`OCW_METER_RAW=1`時の`raw/`ディレクトリを除き、
+`events/`全体に対する`prune`相当のサブコマンドは未実装）。`ocw-meter report`/`validate`は
+`events/`配下を毎回全走査するため、上記規模になった場合はその実行時間にも影響する。
+運用上は、`OCW_METER_QUOTA_INTERVAL`を既定の60秒より大きくする、または手動で古い
+`events/YYYY-MM-DD.jsonl`を別途アーカイブ・削除する、のいずれかを検討すること。
 
 保存レイアウト: `events/YYYY-MM-DD.jsonl`（基本はappend-only, mode 600。**例外**: 同一`idempotency_key`を再送すると
 後勝ち(last-write-wins)でその日のファイル内の該当行をmkstemp+os.replaceで原子的に置き換える）/

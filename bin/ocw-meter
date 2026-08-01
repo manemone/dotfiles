@@ -301,6 +301,7 @@ import math
 import os
 import pathlib
 import re
+import select
 import shutil
 import subprocess
 import sys
@@ -2717,6 +2718,25 @@ def cmd_ingest(args):
 # string and never raises past its own boundary (see its docstring).
 
 QUOTA_STATE_FILENAME = "quota-last-sample.json"
+# round-1 review finding 3: this lives in the machine's DEFAULT storage
+# root (never the possibly-misconfigured `OCW_METER_HOME`), because it
+# exists specifically to survive being called while that configured
+# root is refused (a git-worktree path) — see record_quota_sample.
+QUOTA_WORKTREE_REFUSAL_FILENAME = "quota-worktree-refusal.json"
+# round-1 review finding 2: throttling keys on session_id so concurrent
+# panes each keep their OWN session_cost_usd/context_used_pct instead of
+# starving each other under one global 60s gate. A statusLine payload
+# with no (or a non-string) session_id falls back to this shared key —
+# still better than recording nothing, and matches every other
+# "unknown -> shared/degraded, not silently dropped" fallback in this
+# file rather than inventing a fake per-call unique key.
+QUOTA_SESSION_FALLBACK_KEY = "__no_session__"
+# round-1 review finding 2: without pruning, `sessions` in
+# quota-last-sample.json would grow by one entry per DISTINCT session_id
+# ever seen on this machine, forever. 24h comfortably outlives any
+# single work session (Claude 5-hour windows are the longest-lived
+# thing this file otherwise tracks) while still bounding growth.
+QUOTA_SESSION_STATE_MAX_AGE_SECONDS = 24 * 60 * 60
 DEFAULT_QUOTA_INTERVAL_SECONDS = 60.0
 # Bumped whenever this subcommand's statusLine-JSON -> quota.sample
 # extraction logic changes shape (plan §8.1 `parser_version`, mirroring
@@ -2743,19 +2763,57 @@ def raw_capture_enabled():
     return os.environ.get("OCW_METER_RAW", "0").strip().lower() in _TRUE_STRINGS
 
 
-def read_stdin_statusline_json(max_bytes=2_000_000):
-    """Reads at most max_bytes+1 from stdin (defends against a
-    pathologically large payload hanging or exhausting memory — nothing
-    documented about the statusLine JSON schema bounds its size, and a
-    hung read here would hang the user's status bar forever). Returns
-    the parsed dict, or None for anything that isn't cleanly parseable
-    as one — empty stdin, non-UTF-8 bytes, malformed JSON, valid JSON
+STDIN_READ_TIMEOUT_SECONDS = 2.0
+
+
+def read_stdin_statusline_json(max_bytes=2_000_000, timeout_seconds=STDIN_READ_TIMEOUT_SECONDS):
+    """Reads up to max_bytes from stdin (defends against a pathologically
+    large payload exhausting memory — nothing documented about the
+    statusLine JSON schema bounds its size) within an overall wall-clock
+    budget (defends against the caller keeping the pipe open without
+    writing/closing it — a plain `sys.stdin.buffer.read()` blocks until
+    EOF with NO time bound, so a hung/misbehaving caller — or a human
+    running this command interactively at a real TTY, since Claude Code
+    itself always pipes and closes — would hang the status bar forever;
+    found via review: `(sleep 20) | ocw-meter snapshot-quota` blocked for
+    the full 20s). Returns the parsed dict, or None for anything that
+    isn't cleanly parseable as one — empty stdin, a TTY with nothing
+    piped, a read timeout, non-UTF-8 bytes, malformed JSON, valid JSON
     that isn't an object. None is a fully supported input: every caller
-    of this treats it the same as "no usable data", never an error."""
+    of this treats it the same as "no usable data", never an error.
+
+    Uses `select.select()` + `os.read()` on the raw fd rather than
+    `sys.stdin.buffer.read()`: the latter has no way to bound how long a
+    single call blocks, and this needs to bound the WHOLE read (looping
+    while there is still budget left), not just one syscall."""
     try:
-        raw = sys.stdin.buffer.read(max_bytes + 1)
+        stdin = sys.stdin
+        if stdin is None or stdin.closed or stdin.isatty():
+            return None
+        fd = stdin.fileno()
     except Exception:
         return None
+
+    chunks = []
+    total = 0
+    deadline = time.monotonic() + timeout_seconds
+    try:
+        while total <= max_bytes:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            ready, _, _ = select.select([fd], [], [], remaining)
+            if not ready:
+                break  # timed out waiting for more data than we already have
+            chunk = os.read(fd, 65536)
+            if not chunk:
+                break  # EOF — the normal, expected end of a real statusLine invocation
+            chunks.append(chunk)
+            total += len(chunk)
+    except Exception:
+        return None
+
+    raw = b"".join(chunks)
     if len(raw) > max_bytes:
         raw = raw[:max_bytes]
     try:
@@ -2819,12 +2877,24 @@ def _fmt_pct(value):
 
 
 def format_quota_display(obj):
-    """Builds the minimal statusLine text (孫4プロンプト §3: "5h:37%
-    7d:12% ctx:24%" 程度) — omits whatever wasn't obtainable rather than
-    showing a placeholder. Never raises: `_get`/`_as_number` degrade to
-    None at every step, so a totally unparseable `obj` (including None
-    itself) just produces an empty string, which is exactly what
-    cmd_snapshot_quota falls back to on any earlier failure anyway."""
+    """Builds the minimal statusLine text (ADR-001 §8 instruction 7:
+    "5h:37% 7d:12% ctx:24%" 程度に。`context_window.used_percentage` が
+    nullの場合は `ctx` を非表示にする) — omits whatever wasn't obtainable
+    rather than showing a placeholder. Never raises: `_get`/`_as_number`
+    degrade to None at every step, so a totally unparseable `obj`
+    (including None itself) just produces an empty string, which is
+    exactly what cmd_snapshot_quota falls back to on any earlier
+    failure anyway.
+
+    Deliberately uses the RAW `context_window.used_percentage` here, not
+    `resolve_context_used_pct()`'s fallback-computed value: ADR-001 §8-3
+    (the RECORDED `context_used_pct` field) and §8-7 (the DISPLAYED
+    string) are two separate instructions with two different answers for
+    the null case — record the fallback estimate, but hide `ctx` from
+    the status bar rather than show a number the instruction explicitly
+    says to omit (round-1 review: these were conflated, showing a
+    fallback-derived `ctx:25%` even when the instruction called for no
+    `ctx` segment at all)."""
     parts = []
     five_hour_pct = _as_number(_get(obj, "rate_limits", "five_hour", "used_percentage"))
     if five_hour_pct is not None:
@@ -2832,9 +2902,9 @@ def format_quota_display(obj):
     seven_day_pct = _as_number(_get(obj, "rate_limits", "seven_day", "used_percentage"))
     if seven_day_pct is not None:
         parts.append(f"7d:{_fmt_pct(seven_day_pct)}%")
-    context_pct = resolve_context_used_pct(obj)
-    if context_pct is not None:
-        parts.append(f"ctx:{_fmt_pct(context_pct)}%")
+    raw_context_pct = _as_number(_get(obj, "context_window", "used_percentage"))
+    if raw_context_pct is not None:
+        parts.append(f"ctx:{_fmt_pct(raw_context_pct)}%")
     return " ".join(parts)
 
 
@@ -2864,8 +2934,14 @@ def resolve_quota_git_context(cwd):
     return ctx
 
 
-def load_quota_state(paths):
-    path = paths.state_dir / QUOTA_STATE_FILENAME
+def load_json_state_file(paths, filename):
+    """Generic small-JSON-file read used by both quota-last-sample.json
+    (per-`OCW_METER_HOME` root) and quota-worktree-refusal.json (always
+    the DEFAULT root — see QUOTA_WORKTREE_REFUSAL_FILENAME). Never
+    raises: a missing/corrupt file is treated as "no state yet", the
+    same as everywhere else this file reads its own small state
+    sidecars (load_ingest_cursor, load_session_pr_links, ...)."""
+    path = paths.state_dir / filename
     if not path.exists():
         return {}
     try:
@@ -2875,8 +2951,8 @@ def load_quota_state(paths):
     return data if isinstance(data, dict) else {}
 
 
-def save_quota_state(paths, state):
-    path = paths.state_dir / QUOTA_STATE_FILENAME
+def save_json_state_file(paths, filename, state):
+    path = paths.state_dir / filename
     ensure_dir(paths.state_dir, 0o700)
     tmp_fd, tmp_path = tempfile.mkstemp(dir=str(paths.state_dir), prefix=".tmp-", suffix=".json")
     try:
@@ -2888,6 +2964,41 @@ def save_quota_state(paths, state):
         with contextlib.suppress(OSError):
             os.unlink(tmp_path)
         raise
+
+
+def load_quota_state(paths):
+    return load_json_state_file(paths, QUOTA_STATE_FILENAME)
+
+
+def save_quota_state(paths, state):
+    save_json_state_file(paths, QUOTA_STATE_FILENAME, state)
+
+
+def load_worktree_refusal_state(paths):
+    return load_json_state_file(paths, QUOTA_WORKTREE_REFUSAL_FILENAME)
+
+
+def save_worktree_refusal_state(paths, state):
+    save_json_state_file(paths, QUOTA_WORKTREE_REFUSAL_FILENAME, state)
+
+
+def prune_stale_sessions(sessions, now):
+    """Drops session-throttle entries whose last sample is older than
+    QUOTA_SESSION_STATE_MAX_AGE_SECONDS (round-1 review finding 2: keeps
+    `sessions` in quota-last-sample.json from growing without bound as
+    new session_ids appear over the machine's lifetime). Tolerates
+    malformed entries (drops them) rather than raising — this state
+    file is only ever written by this meter itself, but a future format
+    change or hand-edit shouldn't be able to take `snapshot-quota`
+    down over it."""
+    pruned = {}
+    for session_id, entry in sessions.items():
+        if not isinstance(entry, dict):
+            continue
+        ts = parse_ts(entry.get("last_sample_ts"))
+        if ts is not None and (now - ts).total_seconds() <= QUOTA_SESSION_STATE_MAX_AGE_SECONDS:
+            pruned[session_id] = entry
+    return pruned
 
 
 def save_raw_quota_snapshot(paths, obj, now):
@@ -2912,6 +3023,36 @@ def save_raw_quota_snapshot(paths, obj, now):
     return str(target)
 
 
+def resolve_five_hour_window(five_hour_resets_at, now):
+    """Returns (stale, window_id) for a `five_hour.resets_at` epoch-
+    second value already known to be an int (or None -> (False, None),
+    i.e. nothing to evaluate).
+
+    round-1 review finding 1: `datetime.fromtimestamp()` raises
+    ValueError/OverflowError/OSError for an out-of-range timestamp
+    (confirmed: a `resets_at` in milliseconds instead of seconds — a
+    plausible upstream format change, exactly what plan's "UI出力形式
+    変更で落ちない" requirement anticipates — produces "year 58552 is
+    out of range"). That exception used to propagate out of
+    record_quota_sample() uncaught, meaning it was swallowed by
+    cmd_snapshot_quota()'s outer try/except and NO event was written at
+    all — the display string kept working (masking the failure from the
+    screen) while quota collection silently stopped. An unconvertible
+    value is treated exactly like a stale one: not adopted as a window
+    identifier, but the sample is still recorded (partial, not
+    dropped) — plan §7.4 "不明なら null。捏造しない", not "不明なら
+    諦める"."""
+    if five_hour_resets_at is None:
+        return False, None
+    try:
+        resets_dt = datetime.fromtimestamp(five_hour_resets_at, tz=timezone.utc)
+    except (ValueError, OverflowError, OSError):
+        return True, None
+    if resets_dt <= now:
+        return True, None
+    return False, str(five_hour_resets_at)
+
+
 def record_quota_sample(obj):
     """The actual storage side-effect of `snapshot-quota` (plan §8.5).
     Deliberately does NOT go through `record()`: that helper re-resolves
@@ -2934,6 +3075,25 @@ def record_quota_sample(obj):
     if not root:
         return
 
+    now = datetime.now(timezone.utc)
+    interval = quota_interval_seconds()
+
+    # round-1 review finding 2: throttling keys on session_id (falling
+    # back to a shared key when the payload has none) so that N
+    # concurrent panes (this repo's own standard Herdr commander/
+    # implementer/reviewer setup) each keep recording their OWN
+    # session_cost_usd/context_used_pct, instead of the first pane to
+    # call in any given interval silently starving every other pane's
+    # data for that whole window. The account-wide rate_limits fields
+    # stay in a SEPARATE top-level slot of the same state file (see
+    # save_quota_state below) — those are correctly shared across every
+    # session already (ADR-001: `rate_limits` reflects the whole
+    # Claude.ai account, not a single session), so per-session
+    # throttling only applies to "have I sampled THIS session recently",
+    # not to the window/anomaly bookkeeping.
+    session_id_hint = obj.get("session_id")
+    session_key = session_id_hint if isinstance(session_id_hint, str) and session_id_hint else QUOTA_SESSION_FALLBACK_KEY
+
     # Cheap, I/O-light throttle check FIRST (plan §1 / ADR-001 §8-2: up
     # to 54 calls/hour measured, so the common case must stay light —
     # no git subprocess calls, no mkdir/chmod, no lock). Paths(root) is
@@ -2943,11 +3103,32 @@ def record_quota_sample(obj):
     # we're actually about to write).
     paths = Paths(root)
     prev_state = load_quota_state(paths)
-    now = datetime.now(timezone.utc)
-    last_ts = parse_ts(prev_state.get("last_sample_ts")) if prev_state.get("last_sample_ts") else None
-    interval = quota_interval_seconds()
+    prev_sessions = prev_state.get("sessions")
+    prev_sessions = prev_sessions if isinstance(prev_sessions, dict) else {}
+    session_entry = prev_sessions.get(session_key)
+    last_ts = parse_ts(session_entry.get("last_sample_ts")) if isinstance(session_entry, dict) else None
     if last_ts is not None and (now - last_ts).total_seconds() < interval:
         return  # throttled: display string was already computed independently by the caller
+
+    # round-1 review finding 3: `root` being refused below means NOTHING
+    # can ever be persisted under it — so the per-session throttle check
+    # just above NEVER finds a previous sample for a permanently
+    # misconfigured OCW_METER_HOME, and would re-run the (subprocess-
+    # backed) in_git_worktree() check on every single high-frequency
+    # statusLine call forever. Since state can't live under the refused
+    # root, this suppression cache lives at the machine's DEFAULT root
+    # instead (same fallback target emit_meter_error already uses for
+    # the same underlying reason), keyed by the configured (bad) root's
+    # own path string so multiple distinct misconfigurations don't
+    # clobber each other.
+    default_root = default_storage_root()
+    refusal_paths = Paths(default_root) if (default_root and default_root != root) else None
+    if refusal_paths is not None:
+        refusal_state = load_worktree_refusal_state(refusal_paths)
+        last_refused_at = refusal_state.get(root)
+        last_refused_at = parse_ts(last_refused_at) if isinstance(last_refused_at, str) else None
+        if last_refused_at is not None and (now - last_refused_at).total_seconds() < interval:
+            return  # still within the suppression window from a previous refusal
 
     if in_git_worktree(root):
         print(
@@ -2956,6 +3137,15 @@ def record_quota_sample(obj):
             file=sys.stderr,
         )
         emit_meter_error(root, "storage_home_inside_git_worktree", None)
+        if refusal_paths is not None:
+            with contextlib.suppress(Exception):
+                updated = {}
+                for bad_root, checked_at in load_worktree_refusal_state(refusal_paths).items():
+                    checked_ts = parse_ts(checked_at) if isinstance(checked_at, str) else None
+                    if checked_ts is not None and (now - checked_ts).total_seconds() <= QUOTA_SESSION_STATE_MAX_AGE_SECONDS:
+                        updated[bad_root] = checked_at
+                updated[root] = iso_utc(now)
+                save_worktree_refusal_state(refusal_paths, updated)
         return
 
     paths = ensure_storage(root)
@@ -2971,16 +3161,9 @@ def record_quota_sample(obj):
     seven_day_resets_at = _as_int(_get(seven_day, "resets_at")) if isinstance(seven_day, dict) else None
 
     # ADR-001 §2.1 observed stale (already-past) resets_at in 3/8 real
-    # samples. plan §8.5: such a value must not be adopted as a NEW
-    # window's identifier — window_id stays null, and the sample is
-    # flagged partial rather than silently trusted (round below).
-    stale = False
-    window_id = None
-    if five_hour_resets_at is not None:
-        if datetime.fromtimestamp(five_hour_resets_at, tz=timezone.utc) <= now:
-            stale = True
-        else:
-            window_id = str(five_hour_resets_at)
+    # samples, and an out-of-range value must be tolerated the same way
+    # (round-1 review finding 1) — see resolve_five_hour_window.
+    stale, window_id = resolve_five_hour_window(five_hour_resets_at, now)
 
     # plan §8.5: "同一window_id内でused_percentageが減少したら異常"。Only
     # meaningful to compare against the immediately preceding sample if
@@ -3062,6 +3245,13 @@ def record_quota_sample(obj):
         "session_cost_usd": session_cost_usd,
         "plan_source": "statusline",
         "raw_ref": raw_ref,
+        # round-1 review finding 4 (孫4プロンプト §1's field list explicitly
+        # names `cwd`): `json_cwd` was already extracted to resolve
+        # git_ctx below, but never made it into the event itself — the
+        # statusLine-reported working directory was silently dropped.
+        # Not part of ENVELOPE_FIELDS, so it lands as a top-level extra
+        # field via build_envelope's forward-compatible extras loop.
+        "cwd": json_cwd,
     }
     overrides.update(git_ctx)
 
@@ -3074,10 +3264,18 @@ def record_quota_sample(obj):
         return
 
     try:
+        # round-1 review finding 2: `sessions` holds ONLY the per-session
+        # throttle timestamp; `five_hour_window_id`/`five_hour_used_pct`
+        # stay top-level/global (account-wide, shared correctly across
+        # every session — see the session_key comment above). Pruned on
+        # every write so a machine that has seen many distinct
+        # session_ids over time doesn't grow this file without bound.
+        new_sessions = prune_stale_sessions(prev_sessions, now)
+        new_sessions[session_key] = {"last_sample_ts": iso_utc(now)}
         save_quota_state(paths, {
-            "last_sample_ts": iso_utc(now),
             "five_hour_window_id": window_id,
             "five_hour_used_pct": five_hour_used_pct,
+            "sessions": new_sessions,
         })
     except Exception:
         pass  # best-effort throttle/anomaly bookkeeping; a failure here

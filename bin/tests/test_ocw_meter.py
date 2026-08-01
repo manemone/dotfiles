@@ -47,6 +47,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
@@ -1983,15 +1984,28 @@ class SnapshotQuotaBasicsTests(OcwMeterTestCase):
     def test_context_used_pct_falls_back_to_token_ratio_when_null(self):
         # ADR-001 §2.1: used_percentage was null in 7/66 real samples;
         # total_input_tokens/context_window_size were "常に取得可能".
+        # ADR-001 §8 instruction 7 draws a line between the RECORDED
+        # value (fallback estimate is fine) and the DISPLAYED string
+        # (hide `ctx` entirely when the raw used_percentage is null,
+        # rather than show a number the instruction says to omit —
+        # round-1 review finding: these were conflated pre-fix).
         obj = {
             "rate_limits": {"five_hour": {"used_percentage": 5, "resets_at": 99999999999}},
             "context_window": {"total_input_tokens": 25000, "context_window_size": 100000, "used_percentage": None},
         }
         result = run_snapshot_quota(json.dumps(obj), self.home)
         self.assertEqual(result.returncode, 0)
-        self.assertEqual(result.stdout.strip(), "5h:5% ctx:25%")
+        self.assertEqual(result.stdout.strip(), "5h:5%")
         event = read_events(self.home)[0]
         self.assertEqual(event["context_used_pct"], 25.0)
+
+    def test_context_used_pct_displayed_when_raw_value_present(self):
+        obj = {
+            "rate_limits": {"five_hour": {"used_percentage": 5, "resets_at": 99999999999}},
+            "context_window": {"used_percentage": 25},
+        }
+        result = run_snapshot_quota(json.dumps(obj), self.home)
+        self.assertEqual(result.stdout.strip(), "5h:5% ctx:25%")
 
     def test_context_used_pct_null_when_no_fallback_possible(self):
         obj = {"rate_limits": {"five_hour": {"used_percentage": 5, "resets_at": 99999999999}}}
@@ -2201,6 +2215,170 @@ class ReportFiveHourWindowCompletionTests(OcwMeterTestCase):
         data = json.loads(result.stdout)
         self.assertNotIn("five_hour_window_completion", data)
         self.assertNotIn("five_hour_window_ids_seen", data)
+
+
+# ── Round 1 review regression tests ─────────────────────────────────────
+# https://github.com/manemone/dotfiles/pull/28 round-1 review findings.
+
+class SnapshotQuotaRoundOneReviewTests(OcwMeterTestCase):
+    def test_out_of_range_resets_at_does_not_prevent_recording(self):
+        # Finding 1: resets_at in milliseconds instead of seconds (a
+        # plausible upstream format change) previously crashed
+        # datetime.fromtimestamp() uncaught inside record_quota_sample(),
+        # silently dropping the WHOLE sample (display string kept
+        # working, masking the failure). Must be tolerated like a stale
+        # value instead: window_id null, completeness partial, sample
+        # still recorded.
+        obj = {"rate_limits": {"five_hour": {"used_percentage": 10, "resets_at": 1785562800000}}}
+        result = run_snapshot_quota(json.dumps(obj), self.home)
+        self.assertEqual(result.returncode, 0)
+        events = read_events(self.home)
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["completeness"], "partial")
+        self.assertIsNone(events[0]["window_id"])
+        self.assertEqual(events[0]["five_hour_resets_at"], 1785562800000)
+
+    def test_negative_resets_at_does_not_prevent_recording(self):
+        obj = {"rate_limits": {"five_hour": {"used_percentage": 10, "resets_at": -99999999999999}}}
+        result = run_snapshot_quota(json.dumps(obj), self.home)
+        self.assertEqual(result.returncode, 0)
+        events = read_events(self.home)
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["completeness"], "partial")
+        self.assertIsNone(events[0]["window_id"])
+
+    def test_different_sessions_are_both_recorded_within_one_interval(self):
+        # Finding 2: throttling used to be one global gate, so a second
+        # PANE's statusLine sample within the same 60s window was
+        # dropped entirely — losing that session's session_cost_usd/
+        # context_used_pct permanently (this repo's own standard Herdr
+        # commander/implementer/reviewer setup runs 2-3 panes at once).
+        obj_a = {
+            "session_id": "sess-A", "cost": {"total_cost_usd": 1.11},
+            "rate_limits": {"five_hour": {"used_percentage": 10, "resets_at": 99999999999}},
+            "context_window": {"used_percentage": 20},
+        }
+        obj_b = {
+            "session_id": "sess-B", "cost": {"total_cost_usd": 9.99},
+            "rate_limits": {"five_hour": {"used_percentage": 15, "resets_at": 99999999999}},
+            "context_window": {"used_percentage": 80},
+        }
+        run_snapshot_quota(json.dumps(obj_a), self.home)
+        run_snapshot_quota(json.dumps(obj_b), self.home)
+        events = read_events(self.home)
+        self.assertEqual(len(events), 2)
+        by_session = {e["session_id"]: e for e in events}
+        self.assertEqual(by_session["sess-A"]["session_cost_usd"], 1.11)
+        self.assertEqual(by_session["sess-B"]["session_cost_usd"], 9.99)
+
+    def test_same_session_still_throttled_within_interval(self):
+        obj1 = {"session_id": "sess-A", "cost": {"total_cost_usd": 1.0}}
+        obj2 = {"session_id": "sess-A", "cost": {"total_cost_usd": 2.0}}
+        run_snapshot_quota(json.dumps(obj1), self.home)
+        run_snapshot_quota(json.dumps(obj2), self.home)
+        events = read_events(self.home)
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["session_cost_usd"], 1.0)
+
+    def test_missing_session_id_falls_back_to_a_shared_key_and_still_throttles(self):
+        obj1 = {"cost": {"total_cost_usd": 1.0}}
+        obj2 = {"cost": {"total_cost_usd": 2.0}}
+        run_snapshot_quota(json.dumps(obj1), self.home)
+        run_snapshot_quota(json.dumps(obj2), self.home)
+        self.assertEqual(len(read_events(self.home)), 1)
+
+    def test_global_window_anomaly_detection_still_works_across_sessions(self):
+        # The five_hour_window_id/five_hour_used_pct anomaly check must
+        # stay account-wide (global), not per-session — rate_limits
+        # reflects the whole Claude.ai account (ADR-001), so a decrease
+        # reported by session B right after session A must still be
+        # caught even though the two are throttled independently now.
+        far_future = 99999999999
+        obj_a = {"session_id": "sess-A", "rate_limits": {"five_hour": {"used_percentage": 50, "resets_at": far_future}}}
+        obj_b = {"session_id": "sess-B", "rate_limits": {"five_hour": {"used_percentage": 30, "resets_at": far_future}}}
+        run_snapshot_quota(json.dumps(obj_a), self.home)
+        result_b = run_snapshot_quota(json.dumps(obj_b), self.home)
+        self.assertIn("decreased within the same window_id", result_b.stderr)
+        events = read_events(self.home)
+        by_session = {e["session_id"]: e for e in events}
+        self.assertEqual(by_session["sess-B"]["completeness"], "partial")
+
+    def test_worktree_refusal_is_throttled_and_stops_rewarning(self):
+        # Finding 3: nothing can ever be persisted under a refused
+        # (in-worktree) root, so the per-root throttle state was always
+        # empty and in_git_worktree() (a git subprocess call) ran on
+        # EVERY single call — unthrottled, unlike every other
+        # misconfiguration this file guards against. HOME is overridden
+        # too so the suppression cache (which must live outside the
+        # refused root, at the machine's default root) doesn't touch
+        # this developer's real ~/.local/state/ocw-meter.
+        fake_home = pathlib.Path(self.tmpdir.name) / "fake-home-for-default-root"
+        fake_home.mkdir()
+        repo_dir = pathlib.Path(self.tmpdir.name) / "repo-for-refusal-throttle"
+        subprocess.run(["git", "init", "-q", str(repo_dir)], check=True)
+        bad_home = repo_dir / "ocw-meter-home"
+        env = {"HOME": str(fake_home)}
+
+        r1 = run_snapshot_quota(json.dumps(CLAUDE_STATUSLINE_SAMPLE), bad_home, extra_env=env)
+        r2 = run_snapshot_quota(json.dumps(CLAUDE_STATUSLINE_SAMPLE), bad_home, extra_env=env)
+
+        self.assertEqual(r1.returncode, 0)
+        self.assertEqual(r2.returncode, 0)
+        self.assertIn("resolves inside a Git worktree", r1.stderr)
+        self.assertNotIn("resolves inside a Git worktree", r2.stderr)
+        # Both calls still print the display string — the point of the
+        # fix is suppressing the wasted git subprocess call and stderr
+        # noise, never the stdout contract.
+        self.assertEqual(r1.stdout.strip(), "5h:37% 7d:12% ctx:24%")
+        self.assertEqual(r2.stdout.strip(), "5h:37% 7d:12% ctx:24%")
+
+    def test_cwd_is_recorded_on_the_event(self):
+        # Finding 4: `json_cwd` was already extracted (to resolve git
+        # context) but never actually stored on the event itself.
+        obj = dict(CLAUDE_STATUSLINE_SAMPLE)
+        obj["cwd"] = "/some/statusline/reported/cwd"
+        run_snapshot_quota(json.dumps(obj), self.home)
+        event = read_events(self.home)[0]
+        self.assertEqual(event["cwd"], "/some/statusline/reported/cwd")
+
+    def test_stdin_kept_open_without_eof_does_not_hang_forever(self):
+        # Finding 8: a caller that opens the pipe but never writes/closes
+        # it used to block sys.stdin.buffer.read() with NO time bound at
+        # all — only a size bound. This must return within
+        # STDIN_READ_TIMEOUT_SECONDS (2s), not hang indefinitely.
+        proc = subprocess.Popen(
+            [str(OCW_METER), "snapshot-quota"],
+            cwd=str(REPO_ROOT),
+            env={**os.environ, "OCW_METER_HOME": str(self.home)},
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        start = time.monotonic()
+        try:
+            stdout, _stderr = proc.communicate(timeout=15)
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+        elapsed = time.monotonic() - start
+        self.assertEqual(proc.returncode, 0)
+        # Generous slack above the 2s internal timeout for CI/sandbox
+        # scheduling jitter — the old code would have blocked for the
+        # full 15s `communicate` timeout (or forever, without one).
+        self.assertLess(elapsed, 10)
+
+    def test_interactive_tty_like_stdin_returns_immediately(self):
+        # Finding 8 (isatty half): `sys.stdin.isatty()` short-circuits
+        # before ever calling select() — verified indirectly here by
+        # confirming empty (already-closed) stdin still returns fast and
+        # clean, matching the documented "no piped data" contract; a
+        # literal TTY is not spawnable inside this test harness.
+        start = time.monotonic()
+        result = run_snapshot_quota("", self.home)
+        elapsed = time.monotonic() - start
+        self.assertEqual(result.returncode, 0)
+        self.assertLess(elapsed, 5)
 
 
 if __name__ == "__main__":

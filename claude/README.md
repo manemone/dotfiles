@@ -144,6 +144,11 @@ Claude Code のステータスバーに 5時間枠 / 週間枠 / コンテキス
 取得できない項目は表示しない（例: `claude-ds`（DeepSeek）セッションでは `rate_limits` が
 一切来ないため `5h:`/`7d:` は出ず、`ctx:` のみになるか、コンテキスト情報も無ければ完全に空になる）。
 
+**事前準備（必須）**: `ocw-meter` が PATH に無い環境では statusLine コマンド自体が
+`command not found` になり、表示が壊れる。必ず先に `bin/deploy.sh` を実行して
+`~/bin/ocw-meter` を配置し、`~/bin` が PATH に入っていることを確認すること
+（`~/bin` の PATH 追加は `zsh/.zshrc` 依存。`bin/README.md` §5 参照）。
+
 **観測は既存フローに一切割り込まない。** `snapshot-quota` は例外が起きても必ず表示文字列を
 stdout に返し exit 0 する（statusLine が壊れて画面が崩れる事態を避けるための最優先事項）。
 サンプリングは既定60秒に1回（`OCW_METER_QUOTA_INTERVAL` で変更可）に自制されており、
