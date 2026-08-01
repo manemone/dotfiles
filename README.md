@@ -69,6 +69,8 @@ Options can be combined:
 
 ```
 ~/.dotfiles/
+├── AGENTS.md                  # Rules for AI agents developing this repo
+├── CLAUDE.md                  # `@AGENTS.md` (Claude Code entry point)
 ├── deploy-all.sh              # Unified deployment orchestrator
 ├── uninstall.sh               # Clean removal of known symlinks, restores backups where available
 ├── Brewfile                   # macOS Homebrew packages (zsh, tmux, git, curl)
