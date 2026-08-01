@@ -60,7 +60,7 @@
    ```
 
    これは孫5で実データ検証して判明した制約への対策（`docs/reference/DOC-005_ocw-meterイベントスキーマ.md`
-   §2.4参照）: `usage.message`の`run_id`は「そのメッセージの`cwd`（worktreeパス）配下の
+   §2.3参照）: `usage.message`の`run_id`は「そのメッセージの`cwd`（worktreeパス）配下の
    `<git-dir>/ocw-run-id`ファイルを**ingest実行時点**で読む」方式で解決される。`ocw rm`は
    そのファイルをworktreeごと削除するため、**worktree削除後にingestすると、そのPRのメッセージは
    `run_id: null`のまま永久に保存される**（後から再ingestしても直らない — 「過去は再計算しない」
@@ -112,7 +112,8 @@ capacity_message_count (claude subscription, no dollar figure): 106
 ```
 
 このPR #31はAnthropicモデル（`claude-*`）だけで作業したため`cash_cost_usd: null`
-（`cost_basis: subscription`。定額契約はAPI単価に換算しない — §5.5参照）で、
+（`cost_basis: subscription`。定額契約はAPI単価に換算しない —
+`docs/reference/DOC-005_ocw-meterイベントスキーマ.md`§4参照）で、
 `capacity_message_count`（Claude subscriptionのメッセージ数）だけが埋まっている。
 `duration_seconds`が`None`なのは、このPRにまだ`verdict: "approved"`の`review.round`が
 無いため（`review_round_count: 0`）。`review_round_count: 0`や`final_result: unknown`のように「取れていない」ものは`0`/`unknown`で

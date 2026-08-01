@@ -363,7 +363,7 @@ GitHub token形式（`ghp_...` 等 / `github_pat_...`）に一致する値、キ
   読む方式であり、`ocw rm`はそのファイルをworktreeごと削除する。一度`run_id`無しで書き込まれた
   `usage.message`は、後から同じtranscriptを再ingestしても直らない（他のフィールドと同じ
   「過去は再計算しない」不変条件のため）。`ocw-meter report --phase`（工程別トークン内訳。
-  `run_id`でphase.start/endの時間窓と対応付ける — `docs/reference/DOC-005_...`§2.4参照）を
+  `run_id`でphase.start/endの時間窓と対応付ける — `docs/reference/DOC-005_...`§2.3参照）を
   意味のある形で使うには、**PRの作業中〜マージ直後、worktreeを消す前に`ocw-meter ingest`を
   実行する運用が必須**（`docs/reference/DOC-004_...`§2の計測手順に反映済み）。`--model`/`--role`/
   `--pr`はこの制約の影響を受けない（`run_id`ではなく`model`/`role`/`pr_number`を直接見るため）

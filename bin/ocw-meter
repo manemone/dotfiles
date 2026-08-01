@@ -1548,7 +1548,7 @@ def events_for_pr(valid_events, pr_number, repo):
     a `repo` filter there would just be redundant, not more correct.
     An event with `repo: null` (e.g. `ingest` couldn't resolve a repo
     slug for that message's `cwd` — the same class of gap as the
-    `run_id` resolution issue documented in DOC-005 §2.4/§4) is
+    `run_id` resolution issue documented in DOC-005 §2.3) is
     EXCLUDED from the direct match rather than assumed to belong to the
     caller's own repo — guessing it in would reopen exactly the
     cross-repo contamination this fix closes."""
@@ -1872,9 +1872,20 @@ def find_approved_pr_numbers_in_month(valid_events, month, repo):
     repo-scoped, or a `review.round` from repo A could resolve to repo
     B's identically-numbered PR via a `pr.bind` collision — the exact
     cross-repo contamination `events_for_pr` was fixed for, one level
-    up. A `review.round`'s own direct `pr_number` (when set) is trusted
-    as-is; it was written by THIS repo's `pr-review-loop` run, so it is
-    inherently repo-scoped already."""
+    up.
+
+    Round-2 review finding 11: the store is shared across every repo
+    ocw-meter is ever pointed at (same premise as finding 1), and a
+    `review.round` event CAN carry its own direct `pr_number` — the
+    previous version of this docstring claimed that was "inherently
+    repo-scoped" because "it was written by THIS repo's pr-review-loop
+    run", but that reasoning only holds for a single-repo store. It does
+    NOT hold here: a different repo's `pr-review-loop` run writes to the
+    exact same shared file with its own direct `pr_number`, so an
+    UNSCOPED direct match on `e.get("pr_number")` is just as vulnerable
+    to cross-repo collision as `events_for_pr`'s was. Both the
+    `review.round` event itself AND its direct `pr_number` fallback must
+    be repo-checked."""
     run_to_pr = {
         e.get("run_id"): e.get("pr_number")
         for e in valid_events
@@ -1883,7 +1894,7 @@ def find_approved_pr_numbers_in_month(valid_events, month, repo):
     }
     approved = set()
     for e in valid_events:
-        if e.get("event_type") != "review.round" or e.get("verdict") != "approved":
+        if e.get("event_type") != "review.round" or e.get("verdict") != "approved" or e.get("repo") != repo:
             continue
         ts = e.get("ts")
         if not isinstance(ts, str) or not ts.startswith(month):
@@ -2211,6 +2222,7 @@ def cmd_report(args):
     month = None
     month_flag_present = False
     view = None
+    explicit_repo = None
     provider_totals = {}
     i = 0
     while i < len(args):
@@ -2220,6 +2232,12 @@ def cmd_report(args):
                 print("error: --pr requires a value", file=sys.stderr)
                 return 1
             filter_pr = int(args[i + 1])
+            i += 2
+        elif token == "--repo":
+            if i + 1 >= len(args):
+                print("error: --repo requires a value (<owner>/<name>)", file=sys.stderr)
+                return 1
+            explicit_repo = args[i + 1]
             i += 2
         elif token == "--json":
             as_json = True
@@ -2291,6 +2309,34 @@ def cmd_report(args):
             return 1
         return _report_reconcile(paths, month, provider_totals, as_json)
 
+    # Round-2 review finding 10 (regression introduced by round-1's own
+    # fix for finding 1): `events_for_pr`'s repo scoping only works if a
+    # repo is actually resolved. `report` is a read-only command that
+    # can be run from ANYWHERE (unlike `event`, which is only ever
+    # called from inside a worktree by `ocw`/`pr-review-loop`) — running
+    # it from outside any git repo makes `git_repo_slug()` return None,
+    # and `e.get("repo") == None` then matches every repo:null event
+    # (exactly the class of event `events_for_pr`'s docstring promises
+    # to EXCLUDE), while every `pr.bind`/legitimate event WITH a repo
+    # set gets rejected. Measured: this flips finding 1's fix from
+    # "correct data + contamination" to "contamination only, zero
+    # correct events" when run from outside a git repo. Since resolving
+    # "which repo" is required for --pr and for --month's
+    # process_efficiency (both call `events_for_pr`), fail loud instead
+    # of silently scoping to the wrong (or no) repo. `--repo
+    # <owner>/<name>` is the escape hatch for a case where this needs to
+    # run from outside the target repo's own worktree.
+    repo = explicit_repo or git_repo_slug()
+    needs_repo = filter_pr is not None or (month_flag_present and view is None)
+    if needs_repo and not repo:
+        print(
+            "error: could not resolve a repo for PR-scoped reporting (not inside a git repo with an "
+            "'origin' remote, and --repo <owner>/<name> was not given). --pr and --month both need this "
+            "to avoid scoping to another repo's same-numbered PR in the shared ocw-meter store.",
+            file=sys.stderr,
+        )
+        return 1
+
     valid_events, malformed = [], 0
     for obj, _raw, error in iter_stored_events(paths):
         if error:
@@ -2305,10 +2351,10 @@ def cmd_report(args):
         if err:
             print(err, file=sys.stderr)
             return 1
-        return _report_month_standalone(paths, valid_events, malformed, month, as_json)
+        return _report_month_standalone(paths, valid_events, malformed, month, repo, as_json)
 
     if filter_pr is not None:
-        filtered = events_for_pr(valid_events, filter_pr, git_repo_slug())
+        filtered = events_for_pr(valid_events, filter_pr, repo)
     else:
         filtered = valid_events
 
@@ -2317,7 +2363,7 @@ def cmd_report(args):
     if view is not None:
         footer_completeness = completeness_footer(paths, filtered, malformed)
         footer_cost = usage_cost_footer(usage_events)
-        extra_top = {"filter_pr": filter_pr} if filter_pr is not None else {}
+        extra_top = {"filter_pr": filter_pr, "repo": repo} if filter_pr is not None else {}
         if view == "model":
             groups = report_by_model(usage_events)
         elif view == "role":
@@ -2352,6 +2398,9 @@ def cmd_report(args):
         **footer_cost,
     }
     if filter_pr is not None:
+        # Round-2 review finding 10: which repo `--pr` scoped to must be
+        # visible in the output, not just silently correct/incorrect.
+        summary["repo"] = repo
         # plan §8.5 / 孫4プロンプト §2: same-5-hour-window completion.
         # Only meaningful with a PR filter — it's a per-PR judgment.
         summary["five_hour_window_completion"] = five_hour_window_completion
@@ -2365,7 +2414,7 @@ def cmd_report(args):
     else:
         print(f"storage root:  {summary['storage_root']}")
         if filter_pr is not None:
-            print(f"filter:        pr={filter_pr}")
+            print(f"filter:        pr={filter_pr} (repo={repo})")
         print(f"total events:  {total}")
         for event_type, count in sorted(by_type.items(), key=lambda kv: (kv[0] or "")):
             print(f"  {event_type or '(none)'}: {count}")
@@ -2391,14 +2440,17 @@ def cmd_report(args):
     return 0
 
 
-def _report_month_standalone(paths, valid_events, malformed, month, as_json):
+def _report_month_standalone(paths, valid_events, malformed, month, repo, as_json):
     """`ocw-meter report --month [YYYY-MM]` (孫5 §1, NOT --reconcile):
     cash cost / capacity cost / process efficiency for one UTC month,
     always kept in separate top-level keys — see
     `report_month_cash_and_capacity`'s docstring for why they are never
     summed. Quality guardrail has no collected data in this phase (plan
     §16), so that key is always the literal string below, never
-    fabricated from something else."""
+    fabricated from something else. `repo` (resolved by the caller,
+    never None — round-2 review finding 10) scopes `process_efficiency`
+    (the only part of this view that calls `events_for_pr`); cash/
+    capacity are store-wide by design and don't need it."""
     month_events = [e for e in valid_events if isinstance(e.get("ts"), str) and e["ts"].startswith(month)]
     footer_completeness = completeness_footer(paths, month_events, malformed)
     usage_month = [e for e in month_events if e.get("event_type") == "usage.message"]
@@ -2406,8 +2458,9 @@ def _report_month_standalone(paths, valid_events, malformed, month, as_json):
 
     summary = {
         "month": month,
+        "repo": repo,
         "cash_cost": report_month_cash_and_capacity(valid_events, month),
-        "process_efficiency": report_month_process_efficiency(valid_events, month, git_repo_slug()),
+        "process_efficiency": report_month_process_efficiency(valid_events, month, repo),
         "quality_guardrail": "未計測 — 第一段階では収集項目が無い（計画書16章）。この行は 'report --month' の出力にのみ現れる（他の report ビューには quality_guardrail キー自体が無い）",
         **footer_completeness,
         **footer_cost,
@@ -2434,6 +2487,7 @@ def _report_month_standalone(paths, valid_events, malformed, month, as_json):
         return 0
 
     print(f"month:         {summary['month']}")
+    print(f"repo (process_efficiency scope): {summary['repo']}")
     print("cash cost (metered API — currently DeepSeek only):")
     cash_str = f"${summary['cash_cost']['cash_cost_usd']:.2f}" if isinstance(summary["cash_cost"]["cash_cost_usd"], (int, float)) else "null"
     print(f"  usage.message count: {summary['cash_cost']['usage_message_count']}")

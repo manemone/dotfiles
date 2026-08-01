@@ -55,7 +55,7 @@ REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
 OCW_METER = REPO_ROOT / "bin" / "ocw-meter"
 
 
-def run_meter(args, home, extra_env=None, timeout=30):
+def run_meter(args, home, extra_env=None, timeout=30, cwd=None):
     env = dict(os.environ)
     env["OCW_METER_HOME"] = str(home)
     # Isolate from whatever role/run/Herdr context this test happens to run
@@ -66,7 +66,7 @@ def run_meter(args, home, extra_env=None, timeout=30):
         env.update(extra_env)
     return subprocess.run(
         [str(OCW_METER), *args],
-        cwd=str(REPO_ROOT),
+        cwd=str(cwd) if cwd is not None else str(REPO_ROOT),
         env=env,
         capture_output=True,
         text=True,
@@ -2386,6 +2386,63 @@ class ReportGroupedViewsTests(OcwMeterTestCase):
         self.assertIsNone(next(e for e in events if e["idempotency_key"] == "norepo-u1")["repo"])
         data = json.loads(run_meter(["report", "--pr", "1000", "--json"], self.home).stdout)
         self.assertIsNone(data["pr_detail"]["cash_cost_usd"])
+
+    # -- round-2 review finding 10: git_repo_slug() == None must fail loud, not flip scope --
+
+    def test_pr_filter_fails_loud_when_repo_cannot_be_resolved(self):
+        # A tempdir with no .git at all -> `git remote get-url origin`
+        # fails -> git_repo_slug() returns None. Previously this flipped
+        # `events_for_pr`'s repo scoping into matching ONLY repo:null
+        # events (the exact opposite of what round-1's fix intended),
+        # silently resurrecting cross-repo contamination with zero
+        # legitimate events surviving. `report` (the fail-loud half of
+        # this CLI) must refuse instead.
+        self._seed_full_pr(50, "run-norepo-check")
+        no_git_dir = pathlib.Path(self.tmpdir.name) / "not-a-git-repo"
+        no_git_dir.mkdir()
+        result = run_meter(["report", "--pr", "50"], self.home, cwd=no_git_dir)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("--repo", result.stderr)
+
+    def test_standalone_month_fails_loud_when_repo_cannot_be_resolved(self):
+        # report --month also calls events_for_pr (via
+        # report_month_process_efficiency) once per approved PR, so it
+        # needs the same guard.
+        no_git_dir = pathlib.Path(self.tmpdir.name) / "not-a-git-repo-month"
+        no_git_dir.mkdir()
+        result = run_meter(["report", "--month", "2026-08"], self.home, cwd=no_git_dir)
+        self.assertNotEqual(result.returncode, 0)
+
+    def test_pr_filter_explicit_repo_flag_works_outside_any_git_repo(self):
+        # The escape hatch: --repo <owner>/<name> lets `report --pr`
+        # run from anywhere, as long as the caller states which repo's
+        # PR numbering they mean.
+        self._seed_full_pr(51, "run-explicit-repo")
+        no_git_dir = pathlib.Path(self.tmpdir.name) / "not-a-git-repo-2"
+        no_git_dir.mkdir()
+        # _seed_full_pr's events were written from inside REPO_ROOT, so
+        # their `repo` field is REPO_ROOT's own git remote slug.
+        real_repo = json.loads(
+            run_meter(["report", "--pr", "51", "--json"], self.home).stdout
+        )["repo"]
+        result = run_meter(
+            ["report", "--pr", "51", "--repo", real_repo, "--json"], self.home, cwd=no_git_dir,
+        )
+        self.assertEqual(result.returncode, 0)
+        data = json.loads(result.stdout)
+        self.assertEqual(data["repo"], real_repo)
+        self.assertEqual(data["total_events"], 8)
+
+    # -- round-2 review finding 11: cross-repo review.round leaking into --month --
+
+    def test_month_process_efficiency_excludes_other_repo_approved_prs(self):
+        run_meter(["event", "review.round", "--idempotency-key", "other-repo-approval",
+                   "--repo", "someone/other-repo", "--pr-number", "777", "--round", "1",
+                   "--verdict", "approved", "--findings-count", "0",
+                   "--ts", "2026-08-05T09:00:00.000Z"], self.home)
+        data = json.loads(run_meter(["report", "--month", "2026-08", "--json"], self.home).stdout)
+        self.assertEqual(data["process_efficiency"]["approved_pr_count"], 0)
+        self.assertNotIn(777, [p["pr_number"] for p in data["process_efficiency"]["per_pr"]])
 
     # -- --pr detail additions (round list / human intervention / final result / cash cost) --
 

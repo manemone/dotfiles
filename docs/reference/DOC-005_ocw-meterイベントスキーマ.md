@@ -38,7 +38,7 @@
 | `session_id` | string \| null | — | Claude Codeのsession_id。`ingest`（transcript由来）のみ設定される |
 | `provider` | string \| null | — | `anthropic` / `deepseek` / `unknown` / `null`。`model`名から`infer_provider()`で機械的に判定（`claude-`prefix→anthropic、`deepseek-`prefix→deepseek） |
 | `model` | string \| null | — | 実モデル名。`ingest`は`[1m]`等のcontext-windowサフィックスを`normalize_model_name()`で除去して保存 |
-| `phase` | string \| null | — | §2.3の phase 列挙のいずれか。**`usage.message`（ingest由来）は常に`null`** — transcriptにはpr-review-loopの工程情報が無いため、`ingest`はこのフィールドを解決しない。`ocw-meter report --phase`はここではなく時刻範囲でのベストエフォート対応を行う（§4参照） |
+| `phase` | string \| null | — | §2.3の phase 列挙のいずれか。**`usage.message`（ingest由来）は常に`null`** — transcriptにはpr-review-loopの工程情報が無いため、`ingest`はこのフィールドを解決しない。`ocw-meter report --phase`はここではなく時刻範囲でのベストエフォート対応を行う（§2.3参照） |
 | `round` | int \| null | — | レビューラウンド（1始まり） |
 | `pr_number` | int \| null | — | 後からbind可能。計画書§7.4のPR帰属ロジック（①`pr.bind` ②transcriptの`pr-link`行 ③`gh pr list --head`フォールバック）で解決 |
 | `pr_url` | string \| null | — | 同上 |
@@ -110,7 +110,8 @@ phase.start/phase.endとして発火されない**:
 > **⚠️ 孫5で実データ検証して判明した重大な制約（実測）**: このマシンの実ストア
 > （`~/.local/state/ocw-meter/events/`、44,425件の`usage.message`）を集計すると、**`run_id`が
 > 設定されている`usage.message`は0件**だった。`report --phase`のトークン内訳は、この時点の実データでは
-> **全件が`(unassigned)`になる**（§4「実行結果」参照）。原因は`ingest`の`run_id`解決ロジック
+> **全件が`(unassigned)`になる**（実行結果は`docs/reference/DOC-004_LLM費用観測ベースライン計測手順.md`
+> §2.2参照）。原因は`ingest`の`run_id`解決ロジック
 > （`resolve_run_id_via_ocw_run_id_file`）が「そのメッセージの`cwd`（＝worktreeパス）の
 > `<git-dir>/ocw-run-id`ファイルを**ingest実行時点**で読む」方式であること: `ocw rm`はworktreeごと
 > このファイルを削除するため、**PRマージ後にworktreeを消してから`ingest`を実行すると、
