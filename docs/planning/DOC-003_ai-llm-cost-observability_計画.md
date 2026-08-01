@@ -337,7 +337,7 @@ DeepSeek管理画面の7月実績 v4-flash **2,793 requests / 107M tokens** に�
 |---|---|---|---|---|---|
 | U1 | Claude Pro 契約で statusLine の `rate_limits` が実際に来るか。来るタイミング・更新頻度 | P1 ✅ 実証済み | なし | なし | `/tmp` にJSONダンプ → ADR-001 §2.1 |
 | U2 | `resets_at` が5時間窓の識別子として安定か（窓跨ぎで値が変わるか） | P1 ⚠️ epoch秒としての安定性は確認。ただし8件中3件でstale値（過去窓のresets_at）を観測。鮮度判定が必要 | なし | なし | 同上 |
-| U3 | streaming中断・retry・APIエラー時に課金されたリクエストがtranscriptから漏れる量 | P2（人間実行待ち） | 微小 | APIキー（非出力） | 生SSEのヘッダ/最終usageのみ |
+| U3 | streaming中断・retry・APIエラー時に課金されたリクエストがtranscriptから漏れる量 | P2（スクリプト作成済み・人間実行待ち。中断テストは管理画面で翌日確認） | 微小 | APIキー（非出力） | 生SSEのヘッダ/最終usageのみ |
 | U4 | `deepseek-v4-pro[1m]` 指定時の実課金モデル名・レスポンスヘッダ（request-id / rate limit） | P2（人間実行待ち） | 微小 | 同上 | 同上 |
 | U5 | reasoning（thinking）トークンが出力トークンに含まれるか、別項目か | P2（人間実行待ち） + transcript精査 | 微小 | なし | 集計結果 |
 | U6 | transcript由来集計 vs DeepSeek管理画面の乖離率（カバレッジ） | P3 ⚠️ 集計完了、管理画面値は人間確認待ち | なし | なし | 突合レポート → ADR-001 §2.2 |
