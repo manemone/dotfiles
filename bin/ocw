@@ -447,8 +447,18 @@ create_worktree() {
   # directory we can drop a file into directly. That metadata dir is the
   # actual git-managed, never-committed, auto-pruned-on-removal location, so
   # store the run-id file there instead of literally at "<worktree>/.git/".
-  worktree_git_dir="$(git -C "$worktree_dir" rev-parse --absolute-git-dir)"
-  printf '%s\n' "$run_id" >"${worktree_git_dir}/ocw-run-id"
+  #
+  # This is best-effort/fail-open like every other ocw-meter-adjacent call
+  # here: a `rev-parse` failure or an unwritable git dir (disk full, RO
+  # mount) must not take down `ocw` itself (which already succeeded at the
+  # one thing that matters, `git worktree add`) or leave an orphaned
+  # worktree with no rollback. Losing the persisted run_id only means
+  # `ocw rm` later won't find one to emit run.end with — the run.start
+  # emitted just below still went out.
+  worktree_git_dir="$(git -C "$worktree_dir" rev-parse --absolute-git-dir 2>/dev/null)" || worktree_git_dir=""
+  if [ -n "$worktree_git_dir" ]; then
+    printf '%s\n' "$run_id" >"${worktree_git_dir}/ocw-run-id" 2>/dev/null || true
+  fi
 
   echo "run:         ${run_id}"
 
@@ -695,7 +705,16 @@ remove_worktree() {
 
   close_herdr_workspaces_for_checkout "$worktree_dir"
 
+  # -f discards a worktree without requiring it merged or clean (usage's own
+  # "ocw rm -f failed-experiment" example) — that's a run that didn't reach
+  # a mergeable result, so record it as failure rather than success. A
+  # plain `rm` only ever gets here after the merged+clean checks above pass,
+  # so it's always a successful run.end.
+  local run_end_outcome="success"
+
   if [ "$force" = "true" ]; then
+    run_end_outcome="failure"
+
     git -C "$repo_root" \
       worktree remove --force "$worktree_dir"
 
@@ -713,7 +732,7 @@ remove_worktree() {
     ocw_meter_event run.end \
       --run-id "$run_id" \
       --source ocw \
-      --outcome success
+      --outcome "$run_end_outcome"
   fi
 }
 

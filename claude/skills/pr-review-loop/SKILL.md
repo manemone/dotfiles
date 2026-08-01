@@ -120,30 +120,28 @@ fi
 
 サイクル開始時に1回だけ実行:
 
-工程計測（サイクル全体で1回だけ。レビューラウンドは `$ROUND` に保持し、以降のPhaseで使う）:
+**工程計測についての注記（このPhase以降で共通）**: `$ROUND` はシェル変数ではない。本スキルの各コードブロックは独立したBashツール呼び出しとして実行され、シェル変数は呼び出しをまたいで保持されない。`$ROUND` は「エージェントが追跡している現在のレビューサイクル数（1始まり。Phase 7の報告項目にある『レビューサイクル数』と同じ値、安全制約の『6サイクル』のカウントと同じ値）」を指す記法であり、`--round` を実行する際は、この時点のサイクル数をリテラルな整数値として埋めること。`$PR` / `$HEAD_SHA` / `$FINDINGS_COUNT` / `$URL` / `$OCW_RUN_ID` も同様に、直前に取得・保持した実際の値をその場でリテラルに埋め込む記法であり、新しいシェル変数を宣言する意味ではない。
+
+工程計測（サイクル1周目の開始）:
 
 ```bash
-ROUND=1
-command -v ocw-meter >/dev/null && ocw-meter event phase.start --phase pr_create || true
+command -v ocw-meter >/dev/null && ocw-meter event phase.start --phase pr_create --source pr-review-loop --round "$ROUND" || true
 ```
 
-1. PR番号、タイトル、URL、base/head ref、stateを取得:
+1. PR番号、タイトル、URL、base/head ref、stateを取得。取得した `url` を `$URL` として以降で参照する:
 
 ```bash
 gh pr view $PR --json number,title,url,baseRefName,headRefName,state
 ```
 
-PR番号が確定したら、`run_id` を後付けbindする（`OCW_RUN_ID` が環境にあれば）:
+PR番号が確定したら、`run_id` を後付けbindする（`OCW_RUN_ID` が環境にあれば。`bind-pr` は `--source` を受け付けないため、同じ情報を汎用の `event pr.bind` で発行し `--source` を明示する）:
 
 ```bash
-command -v ocw-meter >/dev/null && ocw-meter bind-pr --run "$OCW_RUN_ID" --pr "$PR" --url "$URL" || true
+command -v ocw-meter >/dev/null && ocw-meter event pr.bind --run-id "$OCW_RUN_ID" --pr-number "$PR" --pr-url "$URL" --source pr-review-loop --idempotency-key "bind:$OCW_RUN_ID:$PR" || true
+command -v ocw-meter >/dev/null && ocw-meter event phase.end --phase pr_create --source pr-review-loop --round "$ROUND" || true
 ```
 
-```bash
-command -v ocw-meter >/dev/null && ocw-meter event phase.end --phase pr_create || true
-```
-
-2. 現在のHEAD SHAを取得:
+2. 現在のHEAD SHAを取得。この値を `$HEAD_SHA` として、以降このサイクルでレビュー対象とするHEADの参照に使う:
 
 ```bash
 git rev-parse HEAD
@@ -167,7 +165,7 @@ ls docs/ 2>/dev/null || echo "NO_DOCS_DIR"
 工程計測:
 
 ```bash
-command -v ocw-meter >/dev/null && ocw-meter event phase.start --phase self_review --round "$ROUND" || true
+command -v ocw-meter >/dev/null && ocw-meter event phase.start --phase self_review --source pr-review-loop --round "$ROUND" || true
 ```
 
 ### なぜ必要か
@@ -192,10 +190,10 @@ command -v ocw-meter >/dev/null && ocw-meter event phase.start --phase self_revi
 
 3. **コードを実行して確認する**（コマンドが設定されている場合のみ）:
    ```bash
-   command -v ocw-meter >/dev/null && ocw-meter event phase.start --phase lint_test --round "$ROUND" || true
+   command -v ocw-meter >/dev/null && ocw-meter event phase.start --phase lint_test --source pr-review-loop --round "$ROUND" || true
    # LINT_CMD が設定されていれば実行
    # TEST_CMD が設定されていれば実行
-   command -v ocw-meter >/dev/null && ocw-meter event phase.end --phase lint_test --round "$ROUND" || true
+   command -v ocw-meter >/dev/null && ocw-meter event phase.end --phase lint_test --source pr-review-loop --round "$ROUND" || true
    ```
 
 4. **自分で見つけた問題は、レビュー前に自分で直す。**
@@ -223,7 +221,7 @@ command -v ocw-meter >/dev/null && ocw-meter event phase.start --phase self_revi
 工程計測:
 
 ```bash
-command -v ocw-meter >/dev/null && ocw-meter event phase.end --phase self_review --round "$ROUND" || true
+command -v ocw-meter >/dev/null && ocw-meter event phase.end --phase self_review --source pr-review-loop --round "$ROUND" || true
 ```
 
 ## Phase 2: レビュー依頼
@@ -231,7 +229,7 @@ command -v ocw-meter >/dev/null && ocw-meter event phase.end --phase self_review
 工程計測:
 
 ```bash
-command -v ocw-meter >/dev/null && ocw-meter event phase.start --phase review_request --round "$ROUND" || true
+command -v ocw-meter >/dev/null && ocw-meter event phase.start --phase review_request --source pr-review-loop --round "$ROUND" || true
 ```
 
 レビュー指示をファイルに書き出し、短いコマンドでレビュワーに読ませる。**長文を pane run に詰め込むとペースト確認が入って2往復になるため絶対にやらない。**
@@ -380,7 +378,7 @@ herdr pane read "$REVIEWER_PANE" --source detection --lines 3
 工程計測:
 
 ```bash
-command -v ocw-meter >/dev/null && ocw-meter event phase.end --phase review_request --round "$ROUND" || true
+command -v ocw-meter >/dev/null && ocw-meter event phase.end --phase review_request --source pr-review-loop --round "$ROUND" || true
 ```
 
 ## Phase 3: レビュワーの完了を待つ
@@ -388,7 +386,7 @@ command -v ocw-meter >/dev/null && ocw-meter event phase.end --phase review_requ
 工程計測:
 
 ```bash
-command -v ocw-meter >/dev/null && ocw-meter event phase.start --phase review_wait --round "$ROUND" || true
+command -v ocw-meter >/dev/null && ocw-meter event phase.start --phase review_wait --source pr-review-loop --round "$ROUND" || true
 ```
 
 ### 作業開始を待つ
@@ -429,7 +427,7 @@ STATUS=$(herdr pane get "$REVIEWER_PANE" | python3 -c "import json,sys; d=json.l
 工程計測:
 
 ```bash
-command -v ocw-meter >/dev/null && ocw-meter event phase.end --phase review_wait --round "$ROUND" || true
+command -v ocw-meter >/dev/null && ocw-meter event phase.end --phase review_wait --source pr-review-loop --round "$ROUND" || true
 ```
 
 ### Phase 3b: 結果の収集
@@ -437,7 +435,7 @@ command -v ocw-meter >/dev/null && ocw-meter event phase.end --phase review_wait
 工程計測:
 
 ```bash
-command -v ocw-meter >/dev/null && ocw-meter event phase.start --phase review_collect --round "$ROUND" || true
+command -v ocw-meter >/dev/null && ocw-meter event phase.start --phase review_collect --source pr-review-loop --round "$ROUND" || true
 ```
 
 エージェントがidleに達したらレビュー完了。全内容（レビュー本文＋インラインコメント）はGitHubに投稿済み。以下両方で確認:
@@ -457,10 +455,12 @@ herdr pane read "$REVIEWER_PANE" --source recent-unwrapped --lines 120
 
 画面上の出力だけをレビュー結果として扱うな。GitHub投稿だけが本物。
 
+収集したインラインコメント・レビュー本文中の修正要求のうち、未解決のものの件数を数え、`$FINDINGS_COUNT` として保持する（Phase 4 末尾の工程計測で使う）。
+
 工程計測:
 
 ```bash
-command -v ocw-meter >/dev/null && ocw-meter event phase.end --phase review_collect --round "$ROUND" || true
+command -v ocw-meter >/dev/null && ocw-meter event phase.end --phase review_collect --source pr-review-loop --round "$ROUND" || true
 ```
 
 ## Phase 4: レビュー状態の判定
@@ -479,13 +479,20 @@ command -v ocw-meter >/dev/null && ocw-meter event phase.end --phase review_coll
 承認 → Phase 7（報告）。
 変更要求 → Phase 5（修正）。
 
-## Phase 5: 修正
-
-工程計測（Phase 4の判定結果を記録。`$FINDINGS_COUNT` はPhase 3bで収集した未解決指摘の件数、`$HEAD_SHA` はレビュー対象のHEAD）:
+工程計測（この判定の直後、Phase 5/6/7のいずれに進む場合も1回だけ実行する。`--verdict` には確定した判定を
+`approved` / `changes_requested` / `ambiguous` のいずれかでリテラルに入れる。`$FINDINGS_COUNT` はPhase 3bで
+保持した未解決指摘の件数（承認なら0）、`$HEAD_SHA` はレビュー対象のHEAD）:
 
 ```bash
-command -v ocw-meter >/dev/null && ocw-meter event review.round --round "$ROUND" --verdict changes_requested --findings-count "$FINDINGS_COUNT" --reviewed-head-sha "$HEAD_SHA" || true
-command -v ocw-meter >/dev/null && ocw-meter event phase.start --phase fix --round "$ROUND" || true
+command -v ocw-meter >/dev/null && ocw-meter event review.round --round "$ROUND" --verdict <approved|changes_requested|ambiguous> --findings-count "$FINDINGS_COUNT" --reviewed-head-sha "$HEAD_SHA" --source pr-review-loop || true
+```
+
+## Phase 5: 修正
+
+工程計測:
+
+```bash
+command -v ocw-meter >/dev/null && ocw-meter event phase.start --phase fix --source pr-review-loop --round "$ROUND" || true
 ```
 
 ### Step 0: 修正前の必須チェック（毎ラウンド実行）
@@ -542,7 +549,7 @@ git push origin HEAD
 工程計測:
 
 ```bash
-command -v ocw-meter >/dev/null && ocw-meter event phase.end --phase fix --round "$ROUND" || true
+command -v ocw-meter >/dev/null && ocw-meter event phase.end --phase fix --source pr-review-loop --round "$ROUND" || true
 ```
 
 ## Phase 6: 返信と再依頼
@@ -550,7 +557,7 @@ command -v ocw-meter >/dev/null && ocw-meter event phase.end --phase fix --round
 工程計測:
 
 ```bash
-command -v ocw-meter >/dev/null && ocw-meter event phase.start --phase reply --round "$ROUND" || true
+command -v ocw-meter >/dev/null && ocw-meter event phase.start --phase reply --source pr-review-loop --round "$ROUND" || true
 ```
 
 1. 各指摘にGitHub上で `{{REPLY_MARKER}}` で返信。各返信にコミットSHAを含める。
@@ -567,8 +574,8 @@ git rev-parse HEAD
 工程計測:
 
 ```bash
-command -v ocw-meter >/dev/null && ocw-meter event phase.end --phase reply --round "$ROUND" || true
-command -v ocw-meter >/dev/null && ocw-meter event phase.start --phase rereview_request --round "$ROUND" || true
+command -v ocw-meter >/dev/null && ocw-meter event phase.end --phase reply --source pr-review-loop --round "$ROUND" || true
+command -v ocw-meter >/dev/null && ocw-meter event phase.start --phase rereview_request --source pr-review-loop --round "$ROUND" || true
 ```
 
 4. **最小限の**再レビュー依頼を送信。修正内容を列挙するな。レビュワーはGitHubのコメントを読む:
@@ -579,26 +586,19 @@ herdr pane run "$REVIEWER_PANE" "PR #$PR 再レビュー依頼。全指摘に対
 
 5. 配信確認（Phase 2 Step 3と同様）。
 
-工程計測（次のラウンドへ。Phase 3に戻る前に実行する）:
+工程計測:
 
 ```bash
-command -v ocw-meter >/dev/null && ocw-meter event phase.end --phase rereview_request --round "$ROUND" || true
-ROUND=$((ROUND + 1))
+command -v ocw-meter >/dev/null && ocw-meter event phase.end --phase rereview_request --source pr-review-loop --round "$ROUND" || true
 ```
 
-6. レビュワーの作業開始を待ち、Phase 3に戻る。
+6. レビュワーの作業開始を待ち、Phase 3に戻る。次のサイクルに入るため、`$ROUND` が指すサイクル数を1つ進める（次にPhase 1.5以降で `--round` を発行するときは、この進めた後の値をリテラルに使う）。
 
 ### アンチパターン: 冗長な再レビュープロンプト
 
 修正内容とテスト結果を列挙した再レビュープロンプトを送るな。レビュワーはGitHubコメントを読む。長いプロンプトはトークンを浪費し本質を埋没させる。プロンプトは厳密に1行。
 
 ## Phase 7: 完了報告
-
-工程計測（Phase 4の判定結果を記録。承認は未解決指摘0件を意味する）:
-
-```bash
-command -v ocw-meter >/dev/null && ocw-meter event review.round --round "$ROUND" --verdict approved --findings-count 0 --reviewed-head-sha "$HEAD_SHA" || true
-```
 
 承認に達したら:
 
@@ -620,7 +620,7 @@ command -v ocw-meter >/dev/null && ocw-meter event review.round --round "$ROUND"
 工程計測:
 
 ```bash
-command -v ocw-meter >/dev/null && ocw-meter event phase.end --phase done --outcome success --round "$ROUND" || true
+command -v ocw-meter >/dev/null && ocw-meter event phase.end --phase done --outcome success --source pr-review-loop --round "$ROUND" || true
 ```
 
 ## 安全制約
@@ -659,5 +659,5 @@ command -v ocw-meter >/dev/null && ocw-meter event phase.end --phase done --outc
 （`--reason` には該当条件を表す短い識別子を入れる。理由の説明文そのものは記録しない）:
 
 ```bash
-command -v ocw-meter >/dev/null && ocw-meter event human.intervention --reason "<該当条件の短い識別子>" || true
+command -v ocw-meter >/dev/null && ocw-meter event human.intervention --reason "<該当条件の短い識別子>" --source pr-review-loop || true
 ```

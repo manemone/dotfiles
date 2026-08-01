@@ -192,6 +192,35 @@ class RunIdAndMeterEventsTests(OcwTestCase):
         self.assertEqual(ends[0]["source"], "ocw")
         self.assertEqual(ends[0]["outcome"], "success")
 
+    def test_force_remove_records_run_end_with_failure_outcome(self):
+        # `ocw rm -f` discards a worktree without requiring it merged/clean
+        # (usage's own "ocw rm -f failed-experiment" example) — a run that
+        # didn't reach a mergeable result, so it must be distinguishable
+        # from the successful-completion `run.end` above.
+        create = run_ocw(
+            ["widget-maker"], self.repo_root, meter_on_path=True, meter_home=self.meter_home
+        )
+        self.assertEqual(create.returncode, 0, create.stderr)
+        run_id = extract_run_id(create.stdout)
+
+        worktree_dir = self.repo_root.parent / "widget-maker"
+        (worktree_dir / "extra.txt").write_text("unmerged change\n", encoding="utf-8")
+        _git(["add", "extra.txt"], worktree_dir)
+        _git(["commit", "-q", "-m", "unmerged commit"], worktree_dir)
+
+        remove = run_ocw(
+            ["rm", "-f", "widget-maker"],
+            self.repo_root,
+            meter_on_path=True,
+            meter_home=self.meter_home,
+        )
+        self.assertEqual(remove.returncode, 0, remove.stderr)
+
+        events = read_events(self.meter_home)
+        ends = [e for e in events if e["event_type"] == "run.end" and e["run_id"] == run_id]
+        self.assertEqual(len(ends), 1, events)
+        self.assertEqual(ends[0]["outcome"], "failure")
+
 
 class MeterAbsentRegressionTests(OcwTestCase):
     """T18: ocw-meter entirely absent from PATH must not change ocw's behavior."""
@@ -217,30 +246,59 @@ class MeterAbsentRegressionTests(OcwTestCase):
 
 
 class MeterStorageUnwritableTests(OcwTestCase):
-    """T19: ocw-meter present but unable to write must not affect ocw."""
+    """T19: ocw-meter present but unable to write must not affect ocw.
 
-    def test_create_and_remove_succeed_when_meter_storage_is_read_only(self):
+    ocw-meter's own contract (bin/ocw-meter's design + bin/README.md) is to
+    print a one-line stderr warning on a write failure rather than stay
+    silent about it ("never silent about failures" — verified directly
+    below). So "ocw's behavior is unaffected" is checked on stdout, which
+    is exactly what ocw itself prints; it deliberately is NOT checked by
+    asserting stderr is empty, since a warning there is by design, not a
+    regression.
+    """
+
+    def test_stdout_is_unaffected_when_storage_is_read_only(self):
         ro_parent = pathlib.Path(self.tmpdir.name) / "ro-parent"
         ro_parent.mkdir()
         os.chmod(ro_parent, 0o500)
         unwritable_home = ro_parent / "ocw-meter-home"
+        working_home = pathlib.Path(self.tmpdir.name) / "working-home"
         try:
+            baseline_create = run_ocw(
+                ["widget-maker"], self.repo_root, meter_on_path=True, meter_home=working_home
+            )
+            self.assertEqual(baseline_create.returncode, 0, baseline_create.stderr)
+            baseline_run_id = extract_run_id(baseline_create.stdout)
+            baseline_remove = run_ocw(
+                ["rm", "widget-maker"], self.repo_root, meter_on_path=True, meter_home=working_home
+            )
+            self.assertEqual(baseline_remove.returncode, 0, baseline_remove.stderr)
+
             create = run_ocw(
-                ["widget-maker"],
-                self.repo_root,
-                meter_on_path=True,
-                meter_home=unwritable_home,
+                ["widget-maker"], self.repo_root, meter_on_path=True, meter_home=unwritable_home
             )
             self.assertEqual(create.returncode, 0, create.stderr)
-            self.assertRegex(create.stdout, RUN_LINE_RE)
+            create_run_id = extract_run_id(create.stdout)
+            # Confirms the failure path was actually exercised (not a
+            # silent no-op that would make the stdout comparison vacuous).
+            self.assertIn("ocw-meter", create.stderr)
+
+            # stdout identical modulo the run_id token (a fresh random
+            # value each run) proves the read-only storage didn't add,
+            # drop, or reorder a single line of ocw's own output.
+            self.assertEqual(
+                baseline_create.stdout.replace(baseline_run_id, "<RUN_ID>"),
+                create.stdout.replace(create_run_id, "<RUN_ID>"),
+            )
 
             remove = run_ocw(
-                ["rm", "widget-maker"],
-                self.repo_root,
-                meter_on_path=True,
-                meter_home=unwritable_home,
+                ["rm", "widget-maker"], self.repo_root, meter_on_path=True, meter_home=unwritable_home
             )
             self.assertEqual(remove.returncode, 0, remove.stderr)
+            self.assertEqual(
+                baseline_remove.stdout,
+                remove.stdout,
+            )
         finally:
             os.chmod(ro_parent, 0o700)
 

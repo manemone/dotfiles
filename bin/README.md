@@ -83,9 +83,28 @@ Herdrモードでは、commander/implementer/reviewer の各ペイン起動時�
 `herdr pane split --env` 経由で自動的に渡される。`ocw-meter event` はこれらの環境変数を
 自動的に読み取り役割・runを紐付けるため、呼び出し側で明示的に指定する必要はない。
 
-`ocw-meter` が PATH に無い場合、`run:` 行と `.git/worktrees/<slug>/ocw-run-id` の保存は変わらず行われる
+**非Herdrモード（`ocw <name>`、VS Codeを開く既定モード）では `OCW_RUN_ID` は自動では渡らない。**
+`run_id` は `run:` 行と `ocw-run-id` ファイルには保存されるが、それを読んで環境変数へ載せる主体が
+Herdrのペイン起動以外に存在しないため、そのworktree内で動く `ocw-meter event`（`pr-review-loop` の
+工程イベント等）は明示的にexportしない限り `run_id: null` として記録される。紐付けたい場合は
+worktree内で以下を実行してから作業を始めること:
+
+```bash
+export OCW_RUN_ID="$(cat "$(git rev-parse --absolute-git-dir)/ocw-run-id" 2>/dev/null)"
+```
+
+`ocw-meter` が PATH に無い場合、`run:` 行と `ocw-run-id` の保存は変わらず行われる
 （純粋なgit/bashロジックのため）が、`ocw-meter event` 呼び出しは `command -v` ガードにより静かにスキップされ、
-`ocw` 自体の動作・終了コードには一切影響しない。
+`ocw` 自体の動作・終了コードには一切影響しない。`ocw-meter` はあるがそのイベントの書き込みだけが失敗する場合
+（例: `OCW_METER_HOME` が読み取り専用）も、`run_id` の採番・`run:` 出力・`ocw-run-id` の保存・`ocw` 自体の
+終了コードは影響を受けない（fail-open）。ただし `ocw-meter` 自身は書き込み失敗を stderr に1行warnとして出す
+設計（`bin/ocw-meter` 自身の既知の限界。誤りを隠さない方針のため）であり、これは `ocw` の出力への追加として
+現れうる。
+
+**`run.end` が記録されない run が存在しうる**（best-effort の限界）: `ocw rm` は「未マージ」「未コミット
+変更あり」等で `die` して停止する経路が複数あり、そこに到達する前に停止した場合は `run.end` が一切
+記録されない。`ocw rm -f` は完了時に必ず記録するが、その `outcome` は `failure`（`-f` は「未マージ・未コミット
+のまま強制的に捨てる」経路であり、通常の `rm` の `success` と区別する）になる。
 
 ### 3.2 claude-ds — Claude Code via DeepSeek API
 
