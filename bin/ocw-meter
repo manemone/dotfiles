@@ -20,6 +20,7 @@ usage:
   ocw-meter event <event_type> [--key value ...]
   ocw-meter bind-pr --run <run_id> --pr <n> [--url <url>]
   ocw-meter ingest [--since <rfc3339-ts>]
+  ocw-meter snapshot-quota
   ocw-meter validate [--file <path>]
   ocw-meter report [--pr <n>] [--json]
   ocw-meter report --reconcile [--month <YYYY-MM>] [--provider-total <model>=<tokens> ...] [--json]
@@ -88,6 +89,39 @@ subcommands:
     deepseek-v4-pro is ~89% covered) — this output is never meant to
     read as "the complete picture".
 
+  snapshot-quota
+    Meant to be invoked BY Claude Code itself as the `statusLine`
+    command (claude/settings.json: {"statusLine": {"type": "command",
+    "command": "ocw-meter snapshot-quota"}}). Reads one statusLine JSON
+    object from stdin, appends one `quota.sample` event (rate_limits /
+    context usage / session cost — plan §8.5, ADR-001 §2.1/§8), and
+    ALWAYS prints a short display string to stdout (e.g. "5h:37% 7d:12%
+    ctx:24%") and exits 0 — no matter what: empty stdin, malformed
+    JSON, a missing `rate_limits` (every DeepSeek/claude-ds session —
+    ADR-001 §2.1), python3 itself being unavailable, or an unexpected
+    exception. A broken statusLine command would blank out or corrupt
+    every Claude Code session's status bar, so this is fail-open even
+    more strictly than `event`/`bind-pr`: those are silent on success
+    and only warn to stderr on failure, but this one's STDOUT is the
+    actual UI, so it is guaranteed non-crashing at three nested layers
+    (the bash wrapper below, main()'s dispatch, and the subcommand's
+    own internal try/except).
+
+    Self-throttled: a real statusLine command is invoked on every
+    redraw (ADR-001 §2.1 measured up to 54 calls/hour in one session),
+    so a `quota.sample` event is only actually recorded once per
+    OCW_METER_QUOTA_INTERVAL seconds (default 60) — tracked in
+    state/quota-last-sample.json. Calls inside that window still print
+    a fresh display string (cheap, pure JSON parsing) but skip the
+    storage write entirely (no lock, no mkdir), so throttled calls stay
+    fast. `rate_limits.five_hour.resets_at` is used as `window_id`
+    ONLY when it is still in the future relative to "now" — ADR-001
+    §2.1 observed stale (already-past) `resets_at` values in 3/8
+    samples, and plan §8.5 forbids treating a stale value as a new
+    window's identifier. A `used_percentage` that goes DOWN between two
+    samples sharing the same `window_id` is flagged (completeness:
+    "partial", stderr warning) rather than silently trusted.
+
 environment:
   OCW_METER_HOME
     default: $HOME/.local/state/ocw-meter
@@ -100,8 +134,17 @@ environment:
 
   OCW_METER_RAW
     default: 0
-    Reserved for a later phase (opt-in raw snapshot storage). Unused
-    by this subcommand set.
+    Set to 1 to have `snapshot-quota` save a redacted copy of each
+    recorded statusLine JSON snapshot under raw/YYYY-MM-DD/ (plan §9.3).
+    Off by default. Redaction (the same key-name/value-pattern rules as
+    everywhere else in this file) is applied recursively before the
+    file is ever written — a raw snapshot is never the untouched input.
+
+  OCW_METER_QUOTA_INTERVAL
+    default: 60
+    Minimum seconds between recorded `quota.sample` events (see
+    `snapshot-quota` above). A non-numeric or negative value falls back
+    to the default rather than disabling throttling by accident.
 
   OCW_METER_CLAUDE_PROJECTS_DIR
     default: $HOME/.claude/projects
@@ -121,7 +164,6 @@ environment:
     Off by default so `ingest` never touches the network unless asked.
 
 notes:
-  - `snapshot-quota` is not implemented in this phase.
   - `ingest` reads Herdr's `pane list`/`workspace list` (if the `herdr`
     command exists and its server is reachable) to resolve role/
     workspace_id/pane_id, and this meter's own locally stored events to
@@ -167,7 +209,7 @@ case "$cmd" in
     usage
     exit 0
     ;;
-  event | bind-pr | validate | report | ingest)
+  event | bind-pr | validate | report | ingest | snapshot-quota)
     ;;
   *)
     usage >&2
@@ -179,6 +221,11 @@ if [ -z "$OCW_METER_HOME" ]; then
   case "$cmd" in
     event | bind-pr)
       warn "OCW_METER_HOME is not set and HOME is not set; skipping '$cmd' (fail-open, no event recorded)"
+      exit 0
+      ;;
+    snapshot-quota)
+      warn "OCW_METER_HOME is not set and HOME is not set; skipping quota recording (fail-open)"
+      echo ""
       exit 0
       ;;
     *)
@@ -193,13 +240,33 @@ if ! command -v python3 >/dev/null 2>&1; then
       warn "python3 not found; skipping '$cmd' (fail-open, no event recorded)"
       exit 0
       ;;
+    snapshot-quota)
+      warn "python3 not found; skipping quota recording (fail-open)"
+      echo ""
+      exit 0
+      ;;
     *)
       die "required command not found: python3"
       ;;
   esac
 fi
 
-python3 - "$cmd" "$@" <<'PY'
+# NOTE on stdin: this used to be `python3 - "$cmd" "$@" <<'PY' ... PY`.
+# `python3 -` reads its OWN program text from stdin, and a `<<'PY'`
+# heredoc attached to that same command supplies that program text BY
+# REPLACING the process's stdin (fd 0) with the heredoc content. That
+# is invisible for every subcommand that never touches sys.stdin
+# (event/bind-pr/ingest/validate/report), but `snapshot-quota` (孫4)
+# needs to read the real piped statusLine JSON from its OWN stdin —
+# with the old form, python's parser would consume the heredoc as the
+# program, leaving sys.stdin at EOF, so snapshot-quota would ALWAYS see
+# empty input no matter what the caller piped in (caught by manual
+# testing while implementing 孫4 — every sample silently reported
+# rate_limits absent). Process substitution (`<(...)`) hands python a
+# FILE to read its program from instead of stdin, so fd 0 is never
+# touched here and passes through to the embedded script exactly as
+# the caller of `ocw-meter snapshot-quota` provided it.
+python3 <(cat <<'PY'
 # PERFORMANCE NOTE (why `ingest`, below, has its own write path instead
 # of calling `record`/`write_event` once per message): this CLI resolves
 # git metadata (repo slug, worktree root, branch, HEAD SHA, plus the
@@ -234,6 +301,7 @@ import math
 import os
 import pathlib
 import re
+import select
 import shutil
 import subprocess
 import sys
@@ -278,6 +346,12 @@ REQUIRED_FIELDS = ("event_id", "event_type", "idempotency_key", "schema_version"
 #   §8.5 numeric: five_hour_used_pct, five_hour_resets_at,
 #     seven_day_used_pct, seven_day_resets_at, context_used_pct
 #   §8.5 string/no-coercion: window_id, plan_source, raw_ref
+#   session_cost_usd: NOT in plan §8.5's original table — added per
+#     ADR-001 §8 (孫4 instruction 5): statusLine's own `cost.
+#     total_cost_usd` (self-reported by Claude Code, 66/66 samples in
+#     ADR-001 §2.1) is recorded alongside the rate_limits fields, kept
+#     in its own column, never summed with ocw-meter's own
+#     cost_estimate_usd (different data source, different trust level).
 #   other numeric payload fields (review.round/phase.end/block.end):
 #     findings_count, duration_ms, wait_ms
 NUMERIC_PAYLOAD_FIELDS = frozenset({
@@ -285,7 +359,7 @@ NUMERIC_PAYLOAD_FIELDS = frozenset({
     "input_tokens", "output_tokens", "cache_read_input_tokens",
     "cache_creation_input_tokens", "reasoning_tokens", "cost_estimate_usd",
     "five_hour_used_pct", "seven_day_used_pct", "context_used_pct",
-    "five_hour_resets_at", "seven_day_resets_at",
+    "five_hour_resets_at", "seven_day_resets_at", "session_cost_usd",
 })
 BOOL_PAYLOAD_FIELDS = frozenset({"is_sidechain"})
 _TRUE_STRINGS = frozenset({"true", "1", "yes"})
@@ -441,6 +515,21 @@ def redact_text(text):
     return SECRET_VALUE_RE.sub("[REDACTED]", text)
 
 
+def redact_json_deep(value, key=None):
+    """Recursive counterpart to `redact_value` for arbitrary nested JSON
+    (a full statusLine object, plan §9.3's opt-in raw snapshot storage)
+    rather than a single flat field. Applies the exact same key-name and
+    value-pattern rules, just walked through dicts/lists instead of
+    assumed to be one level deep."""
+    if isinstance(value, dict):
+        return {k: redact_json_deep(v, k) for k, v in value.items()}
+    if isinstance(value, list):
+        return [redact_json_deep(v, key) for v in value]
+    if isinstance(value, str):
+        return redact_value(key, value)
+    return value
+
+
 def _git(args, cwd=None):
     try:
         result = subprocess.run(
@@ -503,6 +592,9 @@ class Paths:
         self.state_dir = self.root / "state"
         self.seen_keys_dir = self.state_dir / "seen-keys"
         self.quarantine_dir = self.root / "quarantine"
+        # opt-in only (plan §9.3) — deliberately NOT created by
+        # ensure_storage() below, unlike every other directory here.
+        self.raw_dir = self.root / "raw"
         self.lock_file = self.state_dir / ".lock"
         # Deliberately NOT under events_dir: `_replace_line_by_
         # idempotency_key` only ever rewrites files under events_dir, so
@@ -686,7 +778,28 @@ def to_number(value):
     but `jq` and most other languages' parsers do not — round-4 review),
     so a non-finite result is treated the same as any other coercion
     failure: left as-is and flagged, which downgrades completeness to
-    "partial" rather than silently writing JSON nothing else can read."""
+    "partial" rather than silently writing JSON nothing else can read.
+
+    An already-numeric `value` (bool excluded) is handled BEFORE the
+    int()-then-float() string-parsing fallback below: found while
+    implementing 孫4's `snapshot-quota`, which is this file's first
+    caller to hand build_envelope() an already-typed python float
+    directly (every other caller's overrides arrive as CLI-flag
+    strings). `int(4.56)` silently SUCCEEDS (truncating to `4`) rather
+    than raising — Python's `int()` truncates floats instead of
+    rejecting them the way `int("4.56")` correctly does for strings —
+    so a real float like a statusLine session cost of $4.56 was being
+    silently mangled into $4 with no completeness downgrade to show for
+    it. The int()-first order below is still correct and necessary for
+    genuine strings (CLI flags): `int("37")` must produce a clean int
+    37, not float 37.0, and `int("4.56")` raising is exactly what makes
+    that fall through to float() correctly for a decimal STRING."""
+    if isinstance(value, bool):
+        pass  # bool is an int subclass; fall through to the normal string-shaped path rather than special-casing it (no known caller passes one here, and there's nothing more "correct" to do with it).
+    elif isinstance(value, int):
+        return value, True
+    elif isinstance(value, float):
+        return (value, True) if math.isfinite(value) else (value, False)
     try:
         return int(value), True
     except (TypeError, ValueError):
@@ -1410,6 +1523,50 @@ def _report_reconcile(paths, month, provider_totals, as_json):
     return 0
 
 
+def pr_five_hour_window_completion(pr_events, all_events):
+    """孫4プロンプト §2 / plan §8.5: "report側に「PRが同一5時間窓で完走
+    できたか」を判定するロジックを入れる(PRの最初と最後のイベント時刻が
+    同一window_idに収まるか)". `quota.sample` events are only rarely
+    tagged with the PR's own pr_number themselves (ADR-001 §2.1: the
+    statusLine JSON's own `pr` key was not observed in ANY of 66 real
+    samples), so this looks at ALL stored quota.sample events whose
+    timestamp falls within the PR's own event time range instead of
+    relying on quota.sample's pr_number being set.
+
+    A sample whose window_id is null (rate_limits absent entirely — a
+    DeepSeek/claude-ds session per ADR-001 §2.1 — or stale/anomalous,
+    see record_quota_sample) is excluded: plan §8.5 says a stale
+    resets_at must not "start a new window", so it must not count as
+    evidence for or against same-window completion either.
+
+    Returns (verdict, window_ids_seen) where verdict is "yes" (every
+    in-range sample shares one window_id), "no" (more than one seen —
+    the PR's work crossed a 5-hour reset), or "unknown" (no in-range
+    quota.sample data at all — plan §7.4: 不明なら推測しない, not
+    "assume yes")."""
+    pr_timestamps = [ts for ts in (parse_ts(e.get("ts")) for e in pr_events) if ts is not None]
+    if not pr_timestamps:
+        return "unknown", []
+    start, end = min(pr_timestamps), max(pr_timestamps)
+
+    window_ids = set()
+    for e in all_events:
+        if e.get("event_type") != "quota.sample":
+            continue
+        window_id = e.get("window_id")
+        if window_id is None:
+            continue
+        ts = parse_ts(e.get("ts"))
+        if ts is None or not (start <= ts <= end):
+            continue
+        window_ids.add(window_id)
+
+    distinct = sorted(window_ids)
+    if not distinct:
+        return "unknown", distinct
+    return ("yes" if len(distinct) == 1 else "no"), distinct
+
+
 def cmd_report(args):
     filter_pr = None
     as_json = False
@@ -1504,6 +1661,10 @@ def cmd_report(args):
     else:
         filtered = valid_events
 
+    five_hour_window_completion, five_hour_window_ids_seen = (
+        pr_five_hour_window_completion(filtered, valid_events) if filter_pr is not None else (None, [])
+    )
+
     by_type = {}
     for e in filtered:
         by_type[e.get("event_type")] = by_type.get(e.get("event_type"), 0) + 1
@@ -1559,6 +1720,11 @@ def cmd_report(args):
         "cost_basis": cost_basis_summary,
         "cost_estimate_usd": cost_estimate_summary,
     }
+    if filter_pr is not None:
+        # plan §8.5 / 孫4プロンプト §2: same-5-hour-window completion.
+        # Only meaningful with a PR filter — it's a per-PR judgment.
+        summary["five_hour_window_completion"] = five_hour_window_completion
+        summary["five_hour_window_ids_seen"] = five_hour_window_ids_seen
 
     if as_json:
         print(json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True))
@@ -1587,6 +1753,9 @@ def cmd_report(args):
         print(f"price_table:   {summary['price_table']}")
         print(f"cost_basis:    {summary['cost_basis']}")
         print(f"cost_estimate: {summary['cost_estimate_usd']}")
+        if filter_pr is not None:
+            ids_str = ", ".join(five_hour_window_ids_seen) if five_hour_window_ids_seen else "(none)"
+            print(f"five_hour_window_completion: {five_hour_window_completion} (window_ids seen: {ids_str})")
 
     return 0
 
@@ -2536,6 +2705,652 @@ def cmd_ingest(args):
     return 0
 
 
+# ── subcommand: snapshot-quota (statusLine → quota.sample, 孫4) ────────
+#
+# Invoked BY Claude Code itself as the `statusLine` command, once per
+# redraw (ADR-001 §2.1 measured up to 54 calls/hour in a single
+# session). This is the one subcommand whose stdout IS the product —
+# every other subcommand's stdout is either silent-on-success (event/
+# bind-pr) or a report a human reads on demand. A crash here doesn't
+# just fail to record data, it visibly breaks every Claude Code
+# session's status bar. Everything below is written around that single
+# constraint: cmd_snapshot_quota() below always returns a display
+# string and never raises past its own boundary (see its docstring).
+
+QUOTA_STATE_FILENAME = "quota-last-sample.json"
+# round-1 review finding 3: this lives in the machine's DEFAULT storage
+# root (never the possibly-misconfigured `OCW_METER_HOME`), because it
+# exists specifically to survive being called while that configured
+# root is refused (a git-worktree path) — see record_quota_sample.
+QUOTA_WORKTREE_REFUSAL_FILENAME = "quota-worktree-refusal.json"
+# round-1 review finding 2: throttling keys on session_id so concurrent
+# panes each keep their OWN session_cost_usd/context_used_pct instead of
+# starving each other under one global 60s gate. A statusLine payload
+# with no (or a non-string) session_id falls back to this shared key —
+# still better than recording nothing, and matches every other
+# "unknown -> shared/degraded, not silently dropped" fallback in this
+# file rather than inventing a fake per-call unique key.
+QUOTA_SESSION_FALLBACK_KEY = "__no_session__"
+# round-1 review finding 2: without pruning, `sessions` in
+# quota-last-sample.json would grow by one entry per DISTINCT session_id
+# ever seen on this machine, forever. 24h comfortably outlives any
+# single work session (Claude 5-hour windows are the longest-lived
+# thing this file otherwise tracks) while still bounding growth.
+QUOTA_SESSION_STATE_MAX_AGE_SECONDS = 24 * 60 * 60
+DEFAULT_QUOTA_INTERVAL_SECONDS = 60.0
+# Bumped whenever this subcommand's statusLine-JSON -> quota.sample
+# extraction logic changes shape (plan §8.1 `parser_version`, mirroring
+# INGEST_PARSER_VERSION's role for `ingest`).
+STATUSLINE_PARSER_VERSION = 1
+
+
+def quota_interval_seconds():
+    raw = os.environ.get("OCW_METER_QUOTA_INTERVAL")
+    if raw is None or raw == "":
+        return DEFAULT_QUOTA_INTERVAL_SECONDS
+    try:
+        value = float(raw)
+    except ValueError:
+        return DEFAULT_QUOTA_INTERVAL_SECONDS
+    # A negative interval would disable throttling by accident (every
+    # elapsed-time check trivially passes) — fall back instead of
+    # honoring it, matching to_number's "never silently do something
+    # nobody asked for" stance elsewhere in this file.
+    return value if value >= 0 else DEFAULT_QUOTA_INTERVAL_SECONDS
+
+
+def raw_capture_enabled():
+    return os.environ.get("OCW_METER_RAW", "0").strip().lower() in _TRUE_STRINGS
+
+
+STDIN_READ_TIMEOUT_SECONDS = 2.0
+
+
+def read_stdin_statusline_json(max_bytes=2_000_000, timeout_seconds=STDIN_READ_TIMEOUT_SECONDS):
+    """Reads up to max_bytes from stdin (defends against a pathologically
+    large payload exhausting memory — nothing documented about the
+    statusLine JSON schema bounds its size) within an overall wall-clock
+    budget (defends against the caller keeping the pipe open without
+    writing/closing it — a plain `sys.stdin.buffer.read()` blocks until
+    EOF with NO time bound, so a hung/misbehaving caller — or a human
+    running this command interactively at a real TTY, since Claude Code
+    itself always pipes and closes — would hang the status bar forever;
+    found via review: `(sleep 20) | ocw-meter snapshot-quota` blocked for
+    the full 20s). Returns the parsed dict, or None for anything that
+    isn't cleanly parseable as one — empty stdin, a TTY with nothing
+    piped, a read timeout, non-UTF-8 bytes, malformed JSON, valid JSON
+    that isn't an object. None is a fully supported input: every caller
+    of this treats it the same as "no usable data", never an error.
+
+    Uses `select.select()` + `os.read()` on the raw fd rather than
+    `sys.stdin.buffer.read()`: the latter has no way to bound how long a
+    single call blocks, and this needs to bound the WHOLE read (looping
+    while there is still budget left), not just one syscall."""
+    try:
+        stdin = sys.stdin
+        if stdin is None or stdin.closed or stdin.isatty():
+            return None
+        fd = stdin.fileno()
+    except Exception:
+        return None
+
+    chunks = []
+    total = 0
+    deadline = time.monotonic() + timeout_seconds
+    try:
+        while total <= max_bytes:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            ready, _, _ = select.select([fd], [], [], remaining)
+            if not ready:
+                break  # timed out waiting for more data than we already have
+            chunk = os.read(fd, 65536)
+            if not chunk:
+                break  # EOF — the normal, expected end of a real statusLine invocation
+            chunks.append(chunk)
+            total += len(chunk)
+    except Exception:
+        return None
+
+    raw = b"".join(chunks)
+    if len(raw) > max_bytes:
+        raw = raw[:max_bytes]
+    try:
+        text = raw.decode("utf-8", errors="replace").strip()
+    except Exception:
+        return None
+    if not text:
+        return None
+    try:
+        obj = json.loads(text)
+    except json.JSONDecodeError:
+        return None
+    return obj if isinstance(obj, dict) else None
+
+
+def _get(obj, *keys):
+    """Nested dict lookup that returns None the moment anything along
+    the path isn't a dict — plan §8.5 / ADR-001 §2.1's "未知キーが増え
+    ても落ちない。既知キーが消えても落ちない" applies to every level of
+    the statusLine JSON, not just the top one (T11)."""
+    cur = obj
+    for k in keys:
+        if not isinstance(cur, dict):
+            return None
+        cur = cur.get(k)
+    return cur
+
+
+def _as_number(value):
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
+    return value
+
+
+def _as_int(value):
+    n = _as_number(value)
+    return int(n) if n is not None else None
+
+
+def resolve_context_used_pct(obj):
+    """ADR-001 §2.1 / 孫4プロンプト §1: `context_window.used_percentage`
+    was non-null in 59/66 real samples but null in the rest — null-safe
+    by design, not an error case. Falls back to
+    total_input_tokens/context_window_size (the two fields ADR-001
+    found "常に取得可能") when the direct percentage is unavailable."""
+    used = _as_number(_get(obj, "context_window", "used_percentage"))
+    if used is not None:
+        return used
+    total_input = _as_number(_get(obj, "context_window", "total_input_tokens"))
+    window_size = _as_number(_get(obj, "context_window", "context_window_size"))
+    if total_input is not None and window_size:
+        return (total_input / window_size) * 100.0
+    return None
+
+
+def _fmt_pct(value):
+    n = _as_number(value)
+    return f"{n:.0f}" if n is not None else None
+
+
+def format_quota_display(obj):
+    """Builds the minimal statusLine text (ADR-001 §8 instruction 7:
+    "5h:37% 7d:12% ctx:24%" 程度に。`context_window.used_percentage` が
+    nullの場合は `ctx` を非表示にする) — omits whatever wasn't obtainable
+    rather than showing a placeholder. Never raises: `_get`/`_as_number`
+    degrade to None at every step, so a totally unparseable `obj`
+    (including None itself) just produces an empty string, which is
+    exactly what cmd_snapshot_quota falls back to on any earlier
+    failure anyway.
+
+    Deliberately uses the RAW `context_window.used_percentage` here, not
+    `resolve_context_used_pct()`'s fallback-computed value: ADR-001 §8-3
+    (the RECORDED `context_used_pct` field) and §8-7 (the DISPLAYED
+    string) are two separate instructions with two different answers for
+    the null case — record the fallback estimate, but hide `ctx` from
+    the status bar rather than show a number the instruction explicitly
+    says to omit (round-1 review: these were conflated, showing a
+    fallback-derived `ctx:25%` even when the instruction called for no
+    `ctx` segment at all)."""
+    parts = []
+    five_hour_pct = _as_number(_get(obj, "rate_limits", "five_hour", "used_percentage"))
+    if five_hour_pct is not None:
+        parts.append(f"5h:{_fmt_pct(five_hour_pct)}%")
+    seven_day_pct = _as_number(_get(obj, "rate_limits", "seven_day", "used_percentage"))
+    if seven_day_pct is not None:
+        parts.append(f"7d:{_fmt_pct(seven_day_pct)}%")
+    raw_context_pct = _as_number(_get(obj, "context_window", "used_percentage"))
+    if raw_context_pct is not None:
+        parts.append(f"ctx:{_fmt_pct(raw_context_pct)}%")
+    return " ".join(parts)
+
+
+def resolve_quota_git_context(cwd):
+    """Resolves repo/worktree/branch/head_sha from the statusLine JSON's
+    OWN `cwd` field, not this process's own working directory — mirrors
+    `resolve_run_id_via_ocw_run_id_file`'s reasoning for `ingest`
+    (trust the data's own stated location over ambient process state).
+    Only fills in what git actually resolves; missing pieces are left
+    for build_envelope's own process-cwd-based defaults to fill via the
+    normal "field not in overrides -> defaults[field]" path."""
+    ctx = {}
+    if not cwd or not isinstance(cwd, str):
+        return ctx
+    repo = git_repo_slug(cwd=cwd)
+    if repo:
+        ctx["repo"] = repo
+    worktree = _git(["rev-parse", "--show-toplevel"], cwd=cwd)
+    if worktree:
+        ctx["worktree"] = worktree
+    branch = _git(["rev-parse", "--abbrev-ref", "HEAD"], cwd=cwd)
+    if branch and branch != "HEAD":
+        ctx["branch"] = branch
+    head_sha = _git(["rev-parse", "HEAD"], cwd=cwd)
+    if head_sha:
+        ctx["head_sha"] = head_sha
+    return ctx
+
+
+def load_json_state_file(paths, filename):
+    """Generic small-JSON-file read used by both quota-last-sample.json
+    (per-`OCW_METER_HOME` root) and quota-worktree-refusal.json (always
+    the DEFAULT root — see QUOTA_WORKTREE_REFUSAL_FILENAME). Never
+    raises: a missing/corrupt file is treated as "no state yet", the
+    same as everywhere else this file reads its own small state
+    sidecars (load_ingest_cursor, load_session_pr_links, ...)."""
+    path = paths.state_dir / filename
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def save_json_state_file(paths, filename, state):
+    path = paths.state_dir / filename
+    ensure_dir(paths.state_dir, 0o700)
+    tmp_fd, tmp_path = tempfile.mkstemp(dir=str(paths.state_dir), prefix=".tmp-", suffix=".json")
+    try:
+        with os.fdopen(tmp_fd, "w", encoding="utf-8") as fh:
+            json.dump(state, fh, ensure_ascii=False, sort_keys=True)
+        os.chmod(tmp_path, 0o600)
+        os.replace(tmp_path, path)
+    except Exception:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp_path)
+        raise
+
+
+def load_quota_state(paths):
+    return load_json_state_file(paths, QUOTA_STATE_FILENAME)
+
+
+def save_quota_state(paths, state):
+    save_json_state_file(paths, QUOTA_STATE_FILENAME, state)
+
+
+def load_worktree_refusal_state(paths):
+    return load_json_state_file(paths, QUOTA_WORKTREE_REFUSAL_FILENAME)
+
+
+def save_worktree_refusal_state(paths, state):
+    save_json_state_file(paths, QUOTA_WORKTREE_REFUSAL_FILENAME, state)
+
+
+def prune_stale_sessions(sessions, now):
+    """Drops session-throttle entries whose last sample is older than
+    QUOTA_SESSION_STATE_MAX_AGE_SECONDS (round-1 review finding 2: keeps
+    `sessions` in quota-last-sample.json from growing without bound as
+    new session_ids appear over the machine's lifetime). Tolerates
+    malformed entries (drops them) rather than raising — this state
+    file is only ever written by this meter itself, but a future format
+    change or hand-edit shouldn't be able to take `snapshot-quota`
+    down over it."""
+    pruned = {}
+    for session_id, entry in sessions.items():
+        if not isinstance(entry, dict):
+            continue
+        ts = parse_ts(entry.get("last_sample_ts"))
+        if ts is not None and (now - ts).total_seconds() <= QUOTA_SESSION_STATE_MAX_AGE_SECONDS:
+            pruned[session_id] = entry
+    return pruned
+
+
+def save_raw_quota_snapshot(paths, obj, now):
+    """plan §9.3: opt-in only (OCW_METER_RAW=1), redacted before it ever
+    touches disk, mode 700/600. Returns the absolute path written, for
+    the event's own `raw_ref` field."""
+    ensure_dir(paths.raw_dir, 0o700)
+    day_dir = paths.raw_dir / now.strftime("%Y-%m-%d")
+    ensure_dir(day_dir, 0o700)
+    target = day_dir / f"quota-{now.strftime('%H%M%S')}-{uuid.uuid4().hex[:8]}.json"
+    redacted = redact_json_deep(obj)
+    tmp_fd, tmp_path = tempfile.mkstemp(dir=str(day_dir), prefix=".tmp-", suffix=".json")
+    try:
+        with os.fdopen(tmp_fd, "w", encoding="utf-8") as fh:
+            json.dump(redacted, fh, ensure_ascii=False, indent=2, sort_keys=True)
+        os.chmod(tmp_path, 0o600)
+        os.replace(tmp_path, target)
+    except Exception:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp_path)
+        raise
+    return str(target)
+
+
+def resolve_five_hour_window(five_hour_resets_at, now):
+    """Returns (stale, window_id) for a `five_hour.resets_at` epoch-
+    second value already known to be an int (or None -> (False, None),
+    i.e. nothing to evaluate).
+
+    round-1 review finding 1: `datetime.fromtimestamp()` raises
+    ValueError/OverflowError/OSError for an out-of-range timestamp
+    (confirmed: a `resets_at` in milliseconds instead of seconds — a
+    plausible upstream format change, exactly what plan's "UI出力形式
+    変更で落ちない" requirement anticipates — produces "year 58552 is
+    out of range"). That exception used to propagate out of
+    record_quota_sample() uncaught, meaning it was swallowed by
+    cmd_snapshot_quota()'s outer try/except and NO event was written at
+    all — the display string kept working (masking the failure from the
+    screen) while quota collection silently stopped. An unconvertible
+    value is treated exactly like a stale one: not adopted as a window
+    identifier, but the sample is still recorded (partial, not
+    dropped) — plan §7.4 "不明なら null。捏造しない", not "不明なら
+    諦める"."""
+    if five_hour_resets_at is None:
+        return False, None
+    try:
+        resets_dt = datetime.fromtimestamp(five_hour_resets_at, tz=timezone.utc)
+    except (ValueError, OverflowError, OSError):
+        return True, None
+    if resets_dt <= now:
+        return True, None
+    return False, str(five_hour_resets_at)
+
+
+def record_quota_sample(obj):
+    """The actual storage side-effect of `snapshot-quota` (plan §8.5).
+    Deliberately does NOT go through `record()`: that helper re-resolves
+    storage_root()/in_git_worktree()/ensure_storage() from scratch, and
+    this function already needs to do those itself (to read the
+    throttle state cheaply BEFORE paying for a git subprocess call —
+    see the ordering below), so calling through `record()` on top would
+    mean doing the worktree-safety git call twice per actual write.
+
+    Raises on genuinely unexpected failures; the caller
+    (cmd_snapshot_quota) is the one that turns any exception here into
+    "warn to stderr, still print a display string, exit 0" — this
+    function itself only handles the EXPECTED not-fully-available cases
+    (missing rate_limits, stale window, throttled) by returning early,
+    matching plan §7.4's "不明なら null。捏造しない"."""
+    if not isinstance(obj, dict):
+        return  # nothing usable to record — not an error (see caller)
+
+    root = storage_root()
+    if not root:
+        return
+
+    now = datetime.now(timezone.utc)
+    interval = quota_interval_seconds()
+
+    # round-1 review finding 2: throttling keys on session_id (falling
+    # back to a shared key when the payload has none) so that N
+    # concurrent panes (this repo's own standard Herdr commander/
+    # implementer/reviewer setup) each keep recording their OWN
+    # session_cost_usd/context_used_pct, instead of the first pane to
+    # call in any given interval silently starving every other pane's
+    # data for that whole window. The account-wide rate_limits fields
+    # stay in a SEPARATE top-level slot of the same state file (see
+    # save_quota_state below) — those are correctly shared across every
+    # session already (ADR-001: `rate_limits` reflects the whole
+    # Claude.ai account, not a single session), so per-session
+    # throttling only applies to "have I sampled THIS session recently",
+    # not to the window/anomaly bookkeeping.
+    session_id_hint = obj.get("session_id")
+    session_key = session_id_hint if isinstance(session_id_hint, str) and session_id_hint else QUOTA_SESSION_FALLBACK_KEY
+
+    # Cheap, I/O-light throttle check FIRST (plan §1 / ADR-001 §8-2: up
+    # to 54 calls/hour measured, so the common case must stay light —
+    # no git subprocess calls, no mkdir/chmod, no lock). Paths(root) is
+    # pure path-string construction, not I/O; reading a small state file
+    # that may not even exist yet is safe regardless of whether `root`
+    # turns out to be misconfigured (checked next, only once we know
+    # we're actually about to write).
+    paths = Paths(root)
+    prev_state = load_quota_state(paths)
+    prev_sessions = prev_state.get("sessions")
+    prev_sessions = prev_sessions if isinstance(prev_sessions, dict) else {}
+    session_entry = prev_sessions.get(session_key)
+    last_ts = parse_ts(session_entry.get("last_sample_ts")) if isinstance(session_entry, dict) else None
+    if last_ts is not None and (now - last_ts).total_seconds() < interval:
+        return  # throttled: display string was already computed independently by the caller
+
+    # round-1 review finding 3: `root` being refused below means NOTHING
+    # can ever be persisted under it — so the per-session throttle check
+    # just above NEVER finds a previous sample for a permanently
+    # misconfigured OCW_METER_HOME, and would re-run the (subprocess-
+    # backed) in_git_worktree() check on every single high-frequency
+    # statusLine call forever. Since state can't live under the refused
+    # root, this suppression cache lives at the machine's DEFAULT root
+    # instead (same fallback target emit_meter_error already uses for
+    # the same underlying reason), keyed by the configured (bad) root's
+    # own path string so multiple distinct misconfigurations don't
+    # clobber each other.
+    # round-2 review finding 3: `default_storage_root()` just builds a
+    # path string ("$HOME/.local/state/ocw-meter") — it does NOT check
+    # whether that path itself happens to sit inside a git worktree
+    # (e.g. $HOME pointed at a checkout, as this very repository's own
+    # dotfiles use case can produce). Writing the suppression cache
+    # there unconditionally would violate this file's own "never write
+    # under a git worktree" rule for exactly the state file that exists
+    # to STOP unwanted writes — confirmed: it left an untracked
+    # quota-worktree-refusal.json inside a test repo. `emit_meter_error`
+    # already re-checks its own default-root fallback the same way; this
+    # matches that precedent. If the default root itself is inside a
+    # worktree, there is nowhere left to cache the refusal — `root`
+    # simply gets re-checked every call in that (rare, doubly-
+    # misconfigured) case, same as before this suppression existed.
+    default_root = default_storage_root()
+    refusal_paths = (
+        Paths(default_root)
+        if (default_root and default_root != root and not in_git_worktree(default_root))
+        else None
+    )
+    if refusal_paths is not None:
+        refusal_state = load_worktree_refusal_state(refusal_paths)
+        last_refused_at = refusal_state.get(root)
+        last_refused_at = parse_ts(last_refused_at) if isinstance(last_refused_at, str) else None
+        if last_refused_at is not None and (now - last_refused_at).total_seconds() < interval:
+            return  # still within the suppression window from a previous refusal
+
+    if in_git_worktree(root):
+        print(
+            f"warning: OCW_METER_HOME ({root}) resolves inside a Git worktree; "
+            "refusing to write there (no quota.sample recorded)",
+            file=sys.stderr,
+        )
+        emit_meter_error(root, "storage_home_inside_git_worktree", None)
+        if refusal_paths is not None:
+            with contextlib.suppress(Exception):
+                updated = {}
+                for bad_root, checked_at in load_worktree_refusal_state(refusal_paths).items():
+                    checked_ts = parse_ts(checked_at) if isinstance(checked_at, str) else None
+                    if checked_ts is not None and (now - checked_ts).total_seconds() <= QUOTA_SESSION_STATE_MAX_AGE_SECONDS:
+                        updated[bad_root] = checked_at
+                updated[root] = iso_utc(now)
+                save_worktree_refusal_state(refusal_paths, updated)
+        return
+
+    paths = ensure_storage(root)
+
+    rate_limits = obj.get("rate_limits")
+    has_rate_limits = isinstance(rate_limits, dict) and bool(rate_limits)
+    five_hour = rate_limits.get("five_hour") if has_rate_limits else None
+    seven_day = rate_limits.get("seven_day") if has_rate_limits else None
+
+    five_hour_used_pct = _as_number(_get(five_hour, "used_percentage")) if isinstance(five_hour, dict) else None
+    five_hour_resets_at = _as_int(_get(five_hour, "resets_at")) if isinstance(five_hour, dict) else None
+    seven_day_used_pct = _as_number(_get(seven_day, "used_percentage")) if isinstance(seven_day, dict) else None
+    seven_day_resets_at = _as_int(_get(seven_day, "resets_at")) if isinstance(seven_day, dict) else None
+
+    # ADR-001 §2.1 observed stale (already-past) resets_at in 3/8 real
+    # samples, and an out-of-range value must be tolerated the same way
+    # (round-1 review finding 1) — see resolve_five_hour_window.
+    stale, window_id = resolve_five_hour_window(five_hour_resets_at, now)
+
+    # plan §8.5: "同一window_id内でused_percentageが減少したら異常"。Only
+    # meaningful to compare against the immediately preceding sample if
+    # it reported the SAME window_id — a different window_id means the
+    # 5-hour quota legitimately reset in between.
+    anomaly = (
+        window_id is not None
+        and prev_state.get("five_hour_window_id") == window_id
+        and isinstance(prev_state.get("five_hour_used_pct"), (int, float))
+        and five_hour_used_pct is not None
+        and five_hour_used_pct < prev_state["five_hour_used_pct"]
+    )
+
+    if not has_rate_limits:
+        # ADR-001 §2.1: every DeepSeek/claude-ds session (58/58 samples).
+        # Not a failure — a documented, expected shape.
+        completeness = "unknown"
+    elif five_hour_used_pct is None and five_hour_resets_at is None and seven_day_used_pct is None and seven_day_resets_at is None:
+        completeness = "unknown"
+    elif five_hour_used_pct is None or five_hour_resets_at is None:
+        completeness = "partial"
+    else:
+        completeness = "complete"
+    if stale or anomaly:
+        completeness = "partial"
+        if anomaly:
+            print(
+                "warning: ocw-meter snapshot-quota: five_hour_used_pct decreased within the "
+                "same window_id (possible clock skew or upstream data anomaly) — marking partial",
+                file=sys.stderr,
+            )
+
+    context_used_pct = resolve_context_used_pct(obj)
+    # ADR-001 §8 (孫4 instruction 5): self-reported by Claude Code itself,
+    # present in 66/66 samples across both Anthropic and DeepSeek
+    # sessions — kept as its OWN column, never combined with ocw-meter's
+    # own cost_estimate_usd (different data source, different trust
+    # level; plan explicitly warns against conflating the two).
+    session_cost_usd = _as_number(_get(obj, "cost", "total_cost_usd"))
+
+    session_id = obj.get("session_id")
+    session_id = session_id if isinstance(session_id, str) and session_id else None
+
+    model_id = _get(obj, "model", "id")
+    model_id = model_id if isinstance(model_id, str) and model_id else None
+    model_normalized = normalize_model_name(model_id) if model_id else None
+    provider = infer_provider(model_normalized) if model_normalized else ("anthropic" if has_rate_limits else None)
+
+    pr_number = _as_int(_get(obj, "pr", "number"))
+    pr_url = _get(obj, "pr", "url")
+    pr_url = pr_url if isinstance(pr_url, str) and pr_url else None
+
+    json_cwd = obj.get("cwd")
+    json_cwd = json_cwd if isinstance(json_cwd, str) and json_cwd else None
+    git_ctx = resolve_quota_git_context(json_cwd)
+
+    raw_ref = None
+    if raw_capture_enabled():
+        try:
+            raw_ref = save_raw_quota_snapshot(paths, obj, now)
+        except Exception:
+            raw_ref = None  # best-effort; never fail the whole sample over this
+
+    overrides = {
+        "completeness": completeness,
+        "source": "statusline",
+        "parser_version": STATUSLINE_PARSER_VERSION,
+        "session_id": session_id,
+        "provider": provider,
+        "model": model_normalized,
+        "pr_number": pr_number,
+        "pr_url": pr_url,
+        "five_hour_used_pct": five_hour_used_pct,
+        "five_hour_resets_at": five_hour_resets_at,
+        "seven_day_used_pct": seven_day_used_pct,
+        "seven_day_resets_at": seven_day_resets_at,
+        "window_id": window_id,
+        "context_used_pct": context_used_pct,
+        "session_cost_usd": session_cost_usd,
+        "plan_source": "statusline",
+        "raw_ref": raw_ref,
+        # round-1 review finding 4 (孫4プロンプト §1's field list explicitly
+        # names `cwd`): `json_cwd` was already extracted to resolve
+        # git_ctx below, but never made it into the event itself — the
+        # statusLine-reported working directory was silently dropped.
+        # Not part of ENVELOPE_FIELDS, so it lands as a top-level extra
+        # field via build_envelope's forward-compatible extras loop.
+        "cwd": json_cwd,
+    }
+    overrides.update(git_ctx)
+
+    event = build_envelope("quota.sample", overrides)
+    try:
+        write_event(paths, event)
+    except MeterTimeout as exc:
+        print(f"warning: {exc}", file=sys.stderr)
+        emit_meter_error(root, "write_event_lock_timeout", exc)
+        return
+
+    try:
+        # round-1 review finding 2: `sessions` holds ONLY the per-session
+        # throttle timestamp; `five_hour_window_id`/`five_hour_used_pct`
+        # stay top-level/global (account-wide, shared correctly across
+        # every session — see the session_key comment above). Pruned on
+        # every write so a machine that has seen many distinct
+        # session_ids over time doesn't grow this file without bound.
+        #
+        # round-2 review finding 1: a sample with NO window info of its
+        # own (this sample's `window_id` is None — either a rate_limits-
+        # less DeepSeek/claude-ds session, ADR-001 §2.1's 58/58, or a
+        # stale/out-of-range resets_at) must NOT blank out the global
+        # window state a PREVIOUS Anthropic sample left behind. It used
+        # to overwrite unconditionally, so a single claude-ds sample
+        # landing between two Anthropic samples silently defeated plan
+        # §8.5's "同一window_id内でused_percentageが減少したら異常" check
+        # — and per-session throttling (this same round-1 fix) made that
+        # interleaving near-guaranteed in this repo's own standard Herdr
+        # setup (an Anthropic pane + a claude-ds pane both sampling every
+        # ~60s). Only replace the global slot when THIS sample actually
+        # carries fresh window info; otherwise carry the previous value
+        # forward untouched.
+        new_global_window_id = window_id if window_id is not None else prev_state.get("five_hour_window_id")
+        new_global_used_pct = five_hour_used_pct if window_id is not None else prev_state.get("five_hour_used_pct")
+        new_sessions = prune_stale_sessions(prev_sessions, now)
+        new_sessions[session_key] = {"last_sample_ts": iso_utc(now)}
+        save_quota_state(paths, {
+            "five_hour_window_id": new_global_window_id,
+            "five_hour_used_pct": new_global_used_pct,
+            "sessions": new_sessions,
+        })
+    except Exception:
+        pass  # best-effort throttle/anomaly bookkeeping; a failure here
+        # just means the next call re-attempts sooner / can't compare
+        # against this sample for the anomaly check, not data loss.
+
+
+def cmd_snapshot_quota(args):
+    """Always returns 0 and always prints exactly one display line to
+    stdout — the fail-open contract described at the top of this
+    section. Each of the three stages below is independently guarded so
+    that a failure in one (most likely: writing to storage) can never
+    suppress an earlier one that already succeeded (most importantly:
+    the display string itself)."""
+    obj = None
+    try:
+        obj = read_stdin_statusline_json()
+    except Exception:
+        obj = None
+
+    try:
+        display = format_quota_display(obj)
+    except Exception:
+        display = ""
+
+    try:
+        record_quota_sample(obj)
+    except Exception as exc:
+        with contextlib.suppress(Exception):
+            emit_meter_error(storage_root(), "snapshot_quota_unexpected_exception", exc)
+        print(
+            f"warning: ocw-meter snapshot-quota failed unexpectedly: "
+            f"{redact_text(f'{type(exc).__name__}: {exc}')}",
+            file=sys.stderr,
+        )
+
+    print(display)
+    return 0
+
+
 # ── entry point ──────────────────────────────────────────────────────
 
 def main():
@@ -2561,6 +3376,27 @@ def main():
                 emit_meter_error(storage_root(), f"cmd_{cmd.replace('-', '_')}_unexpected_exception", exc)
             return 0
 
+    if cmd == "snapshot-quota":
+        try:
+            return cmd_snapshot_quota(rest)
+        except Exception as exc:
+            # Last-resort safety net: cmd_snapshot_quota() already wraps
+            # its own body and always prints a display string (its own
+            # docstring). Reaching here means a bug in that wrapping
+            # itself — theoretically unreachable, but this is the one
+            # subcommand where "theoretically unreachable" isn't good
+            # enough, since a truly empty stdout would blank the user's
+            # status bar with zero explanation.
+            print("")
+            print(
+                f"warning: ocw-meter snapshot-quota failed unexpectedly: "
+                f"{redact_text(f'{type(exc).__name__}: {exc}')}",
+                file=sys.stderr,
+            )
+            with contextlib.suppress(Exception):
+                emit_meter_error(storage_root(), "cmd_snapshot_quota_unexpected_exception", exc)
+            return 0
+
     if cmd in ("validate", "report", "ingest"):
         try:
             if cmd == "validate":
@@ -2578,12 +3414,27 @@ def main():
 
 sys.exit(main())
 PY
+) "$cmd" "$@"
 py_status=$?
 
 case "$cmd" in
   event | bind-pr)
     if [ "$py_status" -ne 0 ]; then
       warn "'$cmd' exited $py_status internally; fail-open, treating as success"
+    fi
+    exit 0
+    ;;
+  snapshot-quota)
+    if [ "$py_status" -ne 0 ]; then
+      # Belt-and-suspenders: cmd_snapshot_quota() (and main()'s own
+      # wrapper around it) already print a display string and return 0
+      # no matter what happens internally. Reaching a non-zero exit
+      # here means python3 itself died before any of that ran (e.g. a
+      # syntax error introduced by a future edit) — the one failure
+      # mode those inner guards cannot catch. Emit a blank line so the
+      # statusLine command's stdout is never literally empty.
+      warn "'$cmd' exited $py_status internally; fail-open, treating as success"
+      echo ""
     fi
     exit 0
     ;;

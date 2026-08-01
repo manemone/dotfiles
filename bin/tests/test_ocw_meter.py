@@ -9,21 +9,24 @@ touches real state or the repo itself.
 No network access. No secrets. See docs/planning/DOC-003_..._計画.md §13
 for the numbered test-case list (T01, T02, ...) this file implements.
 
-Coverage of §13.2 across 孫1 + 孫3 (this file):
+Coverage of §13.2 across 孫1 + 孫3 + 孫4 (this file):
 
-  implemented: T01 T02 T03 T04 T05 T06 T07 T08
-               T11 (forward-compat half: unknown fields survive)
+  implemented: T01 T02 T03 T04 T05 T06 T07 T08 T09 T10 T11
                T12 T13 T14 T16
                T17 T18 (regression guard) T19 T20 T21 T22
+    T09 (孫4): SnapshotQuotaWindowTests / ReportFiveHourWindowCompletionTests
+      — stale resets_at, same-window used_pct decrease, and the
+      same-window PR-completion judgment in `report --pr`.
+    T10 (孫4 half): SnapshotQuotaBasicsTests covers the rate_limits-
+      absent (DeepSeek/claude-ds session) half; the usage-absence half
+      was already covered by
+      IngestTests.test_ingest_missing_usage_field_is_completeness_unknown,
+      and the generic "missing required field -> quarantined" half by
+      EventSchemaValidationTests.
+    T11 (孫4 half): SnapshotQuotaBasicsTests covers the "known
+      statusLine key disappears" half; the forward-compat "unknown
+      field survives" half was already covered generically elsewhere.
   deferred, not implementable until a later phase exists to test:
-    T09 - 5h window reset/staleness is quota.sample-specific (孫4).
-    T10 - the rate_limits half is quota-specific (孫4); the
-          usage-absence half IS covered here
-          (IngestTests.test_ingest_missing_usage_field_is_completeness_unknown)
-          and the generic "missing required field -> quarantined" half
-          is covered by EventSchemaValidationTests.
-    T11 - the "known key disappears" half is statusLine-parser-
-          specific (孫4).
     T15 - API error -> block.*/error_category is pr-review-loop
           instrumentation (孫2's scope, already covered there), not
           something `ingest` (a read-only transcript scanner) produces.
@@ -40,10 +43,12 @@ import concurrent.futures
 import json
 import os
 import pathlib
+import pty
 import stat
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
@@ -63,6 +68,27 @@ def run_meter(args, home, extra_env=None, timeout=30):
         [str(OCW_METER), *args],
         cwd=str(REPO_ROOT),
         env=env,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+    )
+
+
+def run_snapshot_quota(stdin_text, home, extra_env=None, timeout=30):
+    """Like run_meter, but feeds `stdin_text` to `ocw-meter snapshot-quota`
+    on its own real stdin (via subprocess input=) — this is the one
+    subcommand that reads real stdin data, not CLI flags."""
+    env = dict(os.environ)
+    env["OCW_METER_HOME"] = str(home)
+    for key in ("OCW_RUN_ID", "OCW_ROLE", "HERDR_WORKSPACE_ID", "HERDR_PANE_ID"):
+        env.pop(key, None)
+    if extra_env:
+        env.update(extra_env)
+    return subprocess.run(
+        [str(OCW_METER), "snapshot-quota"],
+        cwd=str(REPO_ROOT),
+        env=env,
+        input=stdin_text,
         capture_output=True,
         text=True,
         timeout=timeout,
@@ -1859,6 +1885,612 @@ class ReportReconcileTests(OcwMeterTestCase):
         data = json.loads(report.stdout)
         self.assertEqual(data["transcript_lines_quarantined"], 1)
         self.assertEqual(data["quarantined_lines"], 0)
+
+
+CLAUDE_STATUSLINE_SAMPLE = {
+    "session_id": "756f06ff-28b8-412d-92db-cbd9dcece939",
+    "cwd": "/tmp",
+    "model": {"id": "claude-opus-5", "display_name": "Opus 5"},
+    "cost": {"total_cost_usd": 4.56},
+    "rate_limits": {
+        "five_hour": {"used_percentage": 37, "resets_at": 99999999999},
+        "seven_day": {"used_percentage": 12, "resets_at": 99999999999},
+    },
+    "context_window": {
+        "total_input_tokens": 24000, "total_output_tokens": 100,
+        "context_window_size": 100000, "used_percentage": 24,
+    },
+}
+
+
+class SnapshotQuotaBasicsTests(OcwMeterTestCase):
+    """孫4: `ocw-meter snapshot-quota`. See docs/planning/DOC-003_..._
+    計画.md §8.5 / 孫4プロンプト and ADR-001 §2.1/§8."""
+
+    def test_empty_stdin_prints_blank_and_exits_zero(self):
+        result = run_snapshot_quota("", self.home)
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(result.stdout, "\n")
+        self.assertEqual(read_events(self.home), [])
+
+    def test_malformed_json_prints_blank_and_exits_zero(self):
+        result = run_snapshot_quota("not json {{{", self.home)
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(result.stdout, "\n")
+        self.assertEqual(read_events(self.home), [])
+
+    def test_json_array_not_object_is_treated_as_no_data(self):
+        result = run_snapshot_quota("[1, 2, 3]", self.home)
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(result.stdout, "\n")
+        self.assertEqual(read_events(self.home), [])
+
+    def test_huge_input_does_not_crash(self):
+        # Defends against a pathologically large payload (plan §1: this
+        # must never hang or crash the caller's status bar).
+        huge = json.dumps({"junk": "x" * 5_000_000})
+        result = run_snapshot_quota(huge, self.home, timeout=30)
+        self.assertEqual(result.returncode, 0)
+
+    def test_claude_session_prints_display_and_records_complete_sample(self):
+        result = run_snapshot_quota(json.dumps(CLAUDE_STATUSLINE_SAMPLE), self.home)
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(result.stdout.strip(), "5h:37% 7d:12% ctx:24%")
+
+        events = read_events(self.home)
+        self.assertEqual(len(events), 1)
+        event = events[0]
+        self.assertEqual(event["event_type"], "quota.sample")
+        self.assertEqual(event["completeness"], "complete")
+        self.assertEqual(event["source"], "statusline")
+        self.assertEqual(event["plan_source"], "statusline")
+        self.assertEqual(event["provider"], "anthropic")
+        self.assertEqual(event["model"], "claude-opus-5")
+        self.assertEqual(event["session_id"], "756f06ff-28b8-412d-92db-cbd9dcece939")
+        self.assertEqual(event["five_hour_used_pct"], 37)
+        self.assertEqual(event["five_hour_resets_at"], 99999999999)
+        self.assertEqual(event["seven_day_used_pct"], 12)
+        self.assertEqual(event["window_id"], "99999999999")
+        self.assertEqual(event["context_used_pct"], 24)
+        # Regression guard for the to_number() float-truncation bug found
+        # while implementing this: build_envelope() previously turned an
+        # already-float 4.56 into 4 because int(4.56) succeeds instead
+        # of raising. Must survive as a real float, not silently
+        # truncated with no completeness downgrade to show for it.
+        self.assertEqual(event["session_cost_usd"], 4.56)
+        self.assertIsNone(event["raw_ref"])
+
+    def test_deepseek_session_missing_rate_limits_is_completeness_unknown(self):
+        # T10 (quota half) / ADR-001 §2.1: every claude-ds session (58/58
+        # real samples) — a documented, expected shape, not an error.
+        obj = {
+            "session_id": "ds-session",
+            "cwd": "/tmp",
+            "model": {"id": "deepseek-v4-pro[1m]"},
+            "cost": {"total_cost_usd": 0.02},
+        }
+        result = run_snapshot_quota(json.dumps(obj), self.home)
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(result.stdout.strip(), "")  # no rate_limits, no context_window -> nothing to show
+
+        event = read_events(self.home)[0]
+        self.assertEqual(event["completeness"], "unknown")
+        self.assertIsNone(event["five_hour_used_pct"])
+        self.assertIsNone(event["five_hour_resets_at"])
+        self.assertIsNone(event["window_id"])
+        self.assertEqual(event["provider"], "deepseek")
+        self.assertEqual(event["model"], "deepseek-v4-pro")  # [1m] suffix stripped
+        self.assertEqual(event["session_cost_usd"], 0.02)
+
+    def test_context_used_pct_falls_back_to_token_ratio_when_null(self):
+        # ADR-001 §2.1: used_percentage was null in 7/66 real samples;
+        # total_input_tokens/context_window_size were "常に取得可能".
+        # ADR-001 §8 instruction 7 draws a line between the RECORDED
+        # value (fallback estimate is fine) and the DISPLAYED string
+        # (hide `ctx` entirely when the raw used_percentage is null,
+        # rather than show a number the instruction says to omit —
+        # round-1 review finding: these were conflated pre-fix).
+        obj = {
+            "rate_limits": {"five_hour": {"used_percentage": 5, "resets_at": 99999999999}},
+            "context_window": {"total_input_tokens": 25000, "context_window_size": 100000, "used_percentage": None},
+        }
+        result = run_snapshot_quota(json.dumps(obj), self.home)
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(result.stdout.strip(), "5h:5%")
+        event = read_events(self.home)[0]
+        self.assertEqual(event["context_used_pct"], 25.0)
+
+    def test_context_used_pct_displayed_when_raw_value_present(self):
+        obj = {
+            "rate_limits": {"five_hour": {"used_percentage": 5, "resets_at": 99999999999}},
+            "context_window": {"used_percentage": 25},
+        }
+        result = run_snapshot_quota(json.dumps(obj), self.home)
+        self.assertEqual(result.stdout.strip(), "5h:5% ctx:25%")
+
+    def test_context_used_pct_null_when_no_fallback_possible(self):
+        obj = {"rate_limits": {"five_hour": {"used_percentage": 5, "resets_at": 99999999999}}}
+        result = run_snapshot_quota(json.dumps(obj), self.home)
+        self.assertEqual(result.stdout.strip(), "5h:5%")
+        event = read_events(self.home)[0]
+        self.assertIsNone(event["context_used_pct"])
+
+    def test_unknown_top_level_and_nested_keys_do_not_break_parsing(self):
+        # T11 forward-compat half: a future statusLine schema version
+        # adding fields must not break this at all.
+        obj = dict(CLAUDE_STATUSLINE_SAMPLE)
+        obj["some_future_field"] = {"nested": ["stuff", 1, 2]}
+        obj["rate_limits"] = dict(obj["rate_limits"])
+        obj["rate_limits"]["some_new_window"] = {"used_percentage": 99}
+        result = run_snapshot_quota(json.dumps(obj), self.home)
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(result.stdout.strip(), "5h:37% 7d:12% ctx:24%")
+        self.assertEqual(read_events(self.home)[0]["completeness"], "complete")
+
+    def test_known_keys_missing_does_not_crash(self):
+        # T11 "known key disappears" half: a future statusLine schema
+        # version could drop rate_limits/context_window/cost entirely
+        # without warning (they are all documented as optional/absent
+        # in some session types already — ADR-001 §2.1).
+        result = run_snapshot_quota(json.dumps({"session_id": "x"}), self.home)
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(result.stdout.strip(), "")
+        event = read_events(self.home)[0]
+        self.assertEqual(event["completeness"], "unknown")
+
+    def test_raw_capture_is_off_by_default(self):
+        run_snapshot_quota(json.dumps(CLAUDE_STATUSLINE_SAMPLE), self.home)
+        self.assertFalse((self.home / "raw").exists())
+        self.assertIsNone(read_events(self.home)[0]["raw_ref"])
+
+    def test_raw_capture_redacts_secrets_when_enabled(self):
+        # T17.
+        obj = dict(CLAUDE_STATUSLINE_SAMPLE)
+        obj["api_key"] = "sk-should-not-survive-1234567890"
+        result = run_snapshot_quota(json.dumps(obj), self.home, extra_env={"OCW_METER_RAW": "1"})
+        self.assertEqual(result.returncode, 0)
+
+        raw_files = list((self.home / "raw").glob("*/*.json"))
+        self.assertEqual(len(raw_files), 1)
+        raw_text = raw_files[0].read_text(encoding="utf-8")
+        self.assertNotIn("sk-should-not-survive-1234567890", raw_text)
+        self.assertIn("[REDACTED]", raw_text)
+
+        event = read_events(self.home)[0]
+        self.assertEqual(event["raw_ref"], str(raw_files[0]))
+
+    def test_git_worktree_home_refuses_write_but_still_prints_display(self):
+        repo_dir = pathlib.Path(self.tmpdir.name) / "repo"
+        subprocess.run(["git", "init", "-q", str(repo_dir)], check=True)
+        bad_home = repo_dir / "ocw-meter-home"
+        result = run_snapshot_quota(json.dumps(CLAUDE_STATUSLINE_SAMPLE), bad_home)
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(result.stdout.strip(), "5h:37% 7d:12% ctx:24%")
+        self.assertIn("resolves inside a Git worktree", result.stderr)
+        self.assertFalse((bad_home / "events").exists())
+
+
+class SnapshotQuotaThrottleTests(OcwMeterTestCase):
+    def test_second_call_within_interval_is_throttled(self):
+        r1 = run_snapshot_quota(json.dumps(CLAUDE_STATUSLINE_SAMPLE), self.home)
+        r2 = run_snapshot_quota(json.dumps(CLAUDE_STATUSLINE_SAMPLE), self.home)
+        self.assertEqual(r1.returncode, 0)
+        self.assertEqual(r2.returncode, 0)
+        # Both calls still print a display string — throttling only
+        # skips the storage write, never the stdout contract.
+        self.assertEqual(r1.stdout.strip(), "5h:37% 7d:12% ctx:24%")
+        self.assertEqual(r2.stdout.strip(), "5h:37% 7d:12% ctx:24%")
+        self.assertEqual(len(read_events(self.home)), 1)
+
+    def test_interval_zero_disables_throttling(self):
+        for _ in range(3):
+            run_snapshot_quota(json.dumps(CLAUDE_STATUSLINE_SAMPLE), self.home, extra_env={"OCW_METER_QUOTA_INTERVAL": "0"})
+        self.assertEqual(len(read_events(self.home)), 3)
+
+    def test_non_numeric_interval_falls_back_to_default_not_zero(self):
+        run_snapshot_quota(json.dumps(CLAUDE_STATUSLINE_SAMPLE), self.home, extra_env={"OCW_METER_QUOTA_INTERVAL": "not-a-number"})
+        run_snapshot_quota(json.dumps(CLAUDE_STATUSLINE_SAMPLE), self.home, extra_env={"OCW_METER_QUOTA_INTERVAL": "not-a-number"})
+        self.assertEqual(len(read_events(self.home)), 1)
+
+
+class SnapshotQuotaWindowTests(OcwMeterTestCase):
+    """T09: 5-hour window reset/staleness handling (plan §8.5, ADR-001
+    §2.1/§8 instruction 4)."""
+
+    def test_stale_resets_at_is_marked_partial_with_null_window_id(self):
+        # ADR-001 §2.1: 3/8 real samples had an already-past resets_at.
+        obj = {"rate_limits": {"five_hour": {"used_percentage": 50, "resets_at": 1}}}
+        result = run_snapshot_quota(json.dumps(obj), self.home)
+        self.assertEqual(result.returncode, 0)
+        event = read_events(self.home)[0]
+        self.assertEqual(event["completeness"], "partial")
+        self.assertIsNone(event["window_id"])
+        # Raw value is still recorded (plan §7.4: 捏造しない — don't
+        # erase what was actually reported, just don't trust it as a
+        # window identifier).
+        self.assertEqual(event["five_hour_resets_at"], 1)
+
+    def test_used_pct_decrease_within_same_window_is_flagged_partial(self):
+        far_future = 99999999999
+        obj1 = {"rate_limits": {"five_hour": {"used_percentage": 50, "resets_at": far_future}}}
+        obj2 = {"rate_limits": {"five_hour": {"used_percentage": 30, "resets_at": far_future}}}
+        r1 = run_snapshot_quota(json.dumps(obj1), self.home, extra_env={"OCW_METER_QUOTA_INTERVAL": "0"})
+        r2 = run_snapshot_quota(json.dumps(obj2), self.home, extra_env={"OCW_METER_QUOTA_INTERVAL": "0"})
+        self.assertEqual(r1.returncode, 0)
+        self.assertEqual(r2.returncode, 0)
+        self.assertIn("decreased within the same window_id", r2.stderr)
+
+        events = read_events(self.home)
+        self.assertEqual(len(events), 2)
+        self.assertEqual(events[0]["completeness"], "complete")
+        self.assertEqual(events[1]["completeness"], "partial")
+        # Still the truthfully-reported value, just flagged as anomalous.
+        self.assertEqual(events[1]["five_hour_used_pct"], 30)
+
+    def test_used_pct_increase_within_same_window_stays_complete(self):
+        far_future = 99999999999
+        obj1 = {"rate_limits": {"five_hour": {"used_percentage": 10, "resets_at": far_future}}}
+        obj2 = {"rate_limits": {"five_hour": {"used_percentage": 20, "resets_at": far_future}}}
+        run_snapshot_quota(json.dumps(obj1), self.home, extra_env={"OCW_METER_QUOTA_INTERVAL": "0"})
+        run_snapshot_quota(json.dumps(obj2), self.home, extra_env={"OCW_METER_QUOTA_INTERVAL": "0"})
+        events = read_events(self.home)
+        self.assertEqual([e["completeness"] for e in events], ["complete", "complete"])
+
+    def test_different_window_id_after_reset_does_not_trigger_anomaly(self):
+        obj1 = {"rate_limits": {"five_hour": {"used_percentage": 90, "resets_at": 99999999999}}}
+        obj2 = {"rate_limits": {"five_hour": {"used_percentage": 5, "resets_at": 99999999998}}}
+        run_snapshot_quota(json.dumps(obj1), self.home, extra_env={"OCW_METER_QUOTA_INTERVAL": "0"})
+        result = run_snapshot_quota(json.dumps(obj2), self.home, extra_env={"OCW_METER_QUOTA_INTERVAL": "0"})
+        self.assertNotIn("decreased within the same window_id", result.stderr)
+        events = read_events(self.home)
+        self.assertEqual(events[1]["completeness"], "complete")
+
+
+class ReportFiveHourWindowCompletionTests(OcwMeterTestCase):
+    """T09 (report half) / 孫4プロンプト §2: 「PRが同一5時間窓で完走でき
+    たか」— report --pr <n>."""
+
+    def _seed_pr(self, pr_number, start_ts, end_ts):
+        run_meter(
+            ["event", "phase.start", "--idempotency-key", f"p{pr_number}-start",
+             "--phase", "implement", "--pr-number", str(pr_number), "--ts", start_ts],
+            self.home,
+        )
+        run_meter(
+            ["event", "phase.end", "--idempotency-key", f"p{pr_number}-end",
+             "--phase", "done", "--pr-number", str(pr_number), "--ts", end_ts],
+            self.home,
+        )
+
+    def _seed_quota_sample(self, key, window_id, ts):
+        run_meter(
+            ["event", "quota.sample", "--idempotency-key", key,
+             "--plan-source", "statusline", "--window-id", window_id, "--ts", ts],
+            self.home,
+        )
+
+    def test_yes_when_all_in_range_samples_share_one_window_id(self):
+        self._seed_pr(42, "2026-08-01T10:00:00.000Z", "2026-08-01T12:00:00.000Z")
+        self._seed_quota_sample("q1", "winA", "2026-08-01T10:30:00.000Z")
+        self._seed_quota_sample("q2", "winA", "2026-08-01T11:30:00.000Z")
+        result = run_meter(["report", "--pr", "42", "--json"], self.home)
+        data = json.loads(result.stdout)
+        self.assertEqual(data["five_hour_window_completion"], "yes")
+        self.assertEqual(data["five_hour_window_ids_seen"], ["winA"])
+
+    def test_no_when_in_range_samples_span_two_window_ids(self):
+        self._seed_pr(42, "2026-08-01T10:00:00.000Z", "2026-08-01T12:00:00.000Z")
+        self._seed_quota_sample("q1", "winA", "2026-08-01T10:30:00.000Z")
+        self._seed_quota_sample("q2", "winB", "2026-08-01T11:30:00.000Z")
+        result = run_meter(["report", "--pr", "42", "--json"], self.home)
+        data = json.loads(result.stdout)
+        self.assertEqual(data["five_hour_window_completion"], "no")
+        self.assertEqual(sorted(data["five_hour_window_ids_seen"]), ["winA", "winB"])
+
+    def test_unknown_when_no_quota_samples_in_range(self):
+        self._seed_pr(7, "2026-08-01T10:00:00.000Z", "2026-08-01T12:00:00.000Z")
+        result = run_meter(["report", "--pr", "7", "--json"], self.home)
+        data = json.loads(result.stdout)
+        self.assertEqual(data["five_hour_window_completion"], "unknown")
+        self.assertEqual(data["five_hour_window_ids_seen"], [])
+
+    def test_out_of_range_and_windowless_samples_are_excluded(self):
+        self._seed_pr(42, "2026-08-01T10:00:00.000Z", "2026-08-01T12:00:00.000Z")
+        self._seed_quota_sample("q1", "winA", "2026-08-01T10:30:00.000Z")
+        # Outside the PR's own time range — must not count as a second window.
+        self._seed_quota_sample("q2", "winB", "2026-08-01T15:00:00.000Z")
+        # In range but window_id-less (e.g. a stale/DeepSeek sample) — must
+        # not count as evidence either way.
+        run_meter(
+            ["event", "quota.sample", "--idempotency-key", "q3", "--plan-source", "statusline",
+             "--completeness", "unknown", "--ts", "2026-08-01T11:00:00.000Z"],
+            self.home,
+        )
+        result = run_meter(["report", "--pr", "42", "--json"], self.home)
+        data = json.loads(result.stdout)
+        self.assertEqual(data["five_hour_window_completion"], "yes")
+        self.assertEqual(data["five_hour_window_ids_seen"], ["winA"])
+
+    def test_no_pr_filter_omits_window_completion_fields(self):
+        result = run_meter(["report", "--json"], self.home)
+        data = json.loads(result.stdout)
+        self.assertNotIn("five_hour_window_completion", data)
+        self.assertNotIn("five_hour_window_ids_seen", data)
+
+
+# ── Round 1 review regression tests ─────────────────────────────────────
+# https://github.com/manemone/dotfiles/pull/28 round-1 review findings.
+
+class SnapshotQuotaRoundOneReviewTests(OcwMeterTestCase):
+    def test_out_of_range_resets_at_does_not_prevent_recording(self):
+        # Finding 1: resets_at in milliseconds instead of seconds (a
+        # plausible upstream format change) previously crashed
+        # datetime.fromtimestamp() uncaught inside record_quota_sample(),
+        # silently dropping the WHOLE sample (display string kept
+        # working, masking the failure). Must be tolerated like a stale
+        # value instead: window_id null, completeness partial, sample
+        # still recorded.
+        obj = {"rate_limits": {"five_hour": {"used_percentage": 10, "resets_at": 1785562800000}}}
+        result = run_snapshot_quota(json.dumps(obj), self.home)
+        self.assertEqual(result.returncode, 0)
+        events = read_events(self.home)
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["completeness"], "partial")
+        self.assertIsNone(events[0]["window_id"])
+        self.assertEqual(events[0]["five_hour_resets_at"], 1785562800000)
+
+    def test_negative_resets_at_does_not_prevent_recording(self):
+        obj = {"rate_limits": {"five_hour": {"used_percentage": 10, "resets_at": -99999999999999}}}
+        result = run_snapshot_quota(json.dumps(obj), self.home)
+        self.assertEqual(result.returncode, 0)
+        events = read_events(self.home)
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["completeness"], "partial")
+        self.assertIsNone(events[0]["window_id"])
+
+    def test_different_sessions_are_both_recorded_within_one_interval(self):
+        # Finding 2: throttling used to be one global gate, so a second
+        # PANE's statusLine sample within the same 60s window was
+        # dropped entirely — losing that session's session_cost_usd/
+        # context_used_pct permanently (this repo's own standard Herdr
+        # commander/implementer/reviewer setup runs 2-3 panes at once).
+        obj_a = {
+            "session_id": "sess-A", "cost": {"total_cost_usd": 1.11},
+            "rate_limits": {"five_hour": {"used_percentage": 10, "resets_at": 99999999999}},
+            "context_window": {"used_percentage": 20},
+        }
+        obj_b = {
+            "session_id": "sess-B", "cost": {"total_cost_usd": 9.99},
+            "rate_limits": {"five_hour": {"used_percentage": 15, "resets_at": 99999999999}},
+            "context_window": {"used_percentage": 80},
+        }
+        run_snapshot_quota(json.dumps(obj_a), self.home)
+        run_snapshot_quota(json.dumps(obj_b), self.home)
+        events = read_events(self.home)
+        self.assertEqual(len(events), 2)
+        by_session = {e["session_id"]: e for e in events}
+        self.assertEqual(by_session["sess-A"]["session_cost_usd"], 1.11)
+        self.assertEqual(by_session["sess-B"]["session_cost_usd"], 9.99)
+
+    def test_same_session_still_throttled_within_interval(self):
+        obj1 = {"session_id": "sess-A", "cost": {"total_cost_usd": 1.0}}
+        obj2 = {"session_id": "sess-A", "cost": {"total_cost_usd": 2.0}}
+        run_snapshot_quota(json.dumps(obj1), self.home)
+        run_snapshot_quota(json.dumps(obj2), self.home)
+        events = read_events(self.home)
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["session_cost_usd"], 1.0)
+
+    def test_missing_session_id_falls_back_to_a_shared_key_and_still_throttles(self):
+        obj1 = {"cost": {"total_cost_usd": 1.0}}
+        obj2 = {"cost": {"total_cost_usd": 2.0}}
+        run_snapshot_quota(json.dumps(obj1), self.home)
+        run_snapshot_quota(json.dumps(obj2), self.home)
+        self.assertEqual(len(read_events(self.home)), 1)
+
+    def test_global_window_anomaly_detection_still_works_across_sessions(self):
+        # The five_hour_window_id/five_hour_used_pct anomaly check must
+        # stay account-wide (global), not per-session — rate_limits
+        # reflects the whole Claude.ai account (ADR-001), so a decrease
+        # reported by session B right after session A must still be
+        # caught even though the two are throttled independently now.
+        far_future = 99999999999
+        obj_a = {"session_id": "sess-A", "rate_limits": {"five_hour": {"used_percentage": 50, "resets_at": far_future}}}
+        obj_b = {"session_id": "sess-B", "rate_limits": {"five_hour": {"used_percentage": 30, "resets_at": far_future}}}
+        run_snapshot_quota(json.dumps(obj_a), self.home)
+        result_b = run_snapshot_quota(json.dumps(obj_b), self.home)
+        self.assertIn("decreased within the same window_id", result_b.stderr)
+        events = read_events(self.home)
+        by_session = {e["session_id"]: e for e in events}
+        self.assertEqual(by_session["sess-B"]["completeness"], "partial")
+
+    def test_worktree_refusal_is_throttled_and_stops_rewarning(self):
+        # Finding 3: nothing can ever be persisted under a refused
+        # (in-worktree) root, so the per-root throttle state was always
+        # empty and in_git_worktree() (a git subprocess call) ran on
+        # EVERY single call — unthrottled, unlike every other
+        # misconfiguration this file guards against. HOME is overridden
+        # too so the suppression cache (which must live outside the
+        # refused root, at the machine's default root) doesn't touch
+        # this developer's real ~/.local/state/ocw-meter.
+        fake_home = pathlib.Path(self.tmpdir.name) / "fake-home-for-default-root"
+        fake_home.mkdir()
+        repo_dir = pathlib.Path(self.tmpdir.name) / "repo-for-refusal-throttle"
+        subprocess.run(["git", "init", "-q", str(repo_dir)], check=True)
+        bad_home = repo_dir / "ocw-meter-home"
+        env = {"HOME": str(fake_home)}
+
+        r1 = run_snapshot_quota(json.dumps(CLAUDE_STATUSLINE_SAMPLE), bad_home, extra_env=env)
+        r2 = run_snapshot_quota(json.dumps(CLAUDE_STATUSLINE_SAMPLE), bad_home, extra_env=env)
+
+        self.assertEqual(r1.returncode, 0)
+        self.assertEqual(r2.returncode, 0)
+        self.assertIn("resolves inside a Git worktree", r1.stderr)
+        self.assertNotIn("resolves inside a Git worktree", r2.stderr)
+        # Both calls still print the display string — the point of the
+        # fix is suppressing the wasted git subprocess call and stderr
+        # noise, never the stdout contract.
+        self.assertEqual(r1.stdout.strip(), "5h:37% 7d:12% ctx:24%")
+        self.assertEqual(r2.stdout.strip(), "5h:37% 7d:12% ctx:24%")
+
+    def test_cwd_is_recorded_on_the_event(self):
+        # Finding 4: `json_cwd` was already extracted (to resolve git
+        # context) but never actually stored on the event itself.
+        obj = dict(CLAUDE_STATUSLINE_SAMPLE)
+        obj["cwd"] = "/some/statusline/reported/cwd"
+        run_snapshot_quota(json.dumps(obj), self.home)
+        event = read_events(self.home)[0]
+        self.assertEqual(event["cwd"], "/some/statusline/reported/cwd")
+
+    def test_stdin_kept_open_without_eof_does_not_hang_forever(self):
+        # Finding 8: a caller that opens the pipe but never writes/closes
+        # it used to block sys.stdin.buffer.read() with NO time bound at
+        # all — only a size bound. This must return within
+        # STDIN_READ_TIMEOUT_SECONDS (2s), not hang indefinitely.
+        #
+        # round-2 review finding 2: `Popen(stdin=subprocess.PIPE)` +
+        # `communicate()` with no `input=` closes the CHILD's stdin
+        # immediately (an instant EOF) — that version of this test
+        # passed identically against the pre-fix code too (review
+        # measured 0.06s on both), so it never actually exercised the
+        # hang this is meant to guard against. A real "caller keeps the
+        # pipe open" scenario needs a fd whose write end the PARENT
+        # keeps open for the whole check: os.pipe()'s read end goes to
+        # the child as stdin, and the write end is held here, unclosed,
+        # until after the process has already returned.
+        read_fd, write_fd = os.pipe()
+        proc = None
+        try:
+            proc = subprocess.Popen(
+                [str(OCW_METER), "snapshot-quota"],
+                cwd=str(REPO_ROOT),
+                env={**os.environ, "OCW_METER_HOME": str(self.home)},
+                stdin=read_fd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            os.close(read_fd)  # the child has its own copy (dup'd by Popen); this process doesn't need it
+            read_fd = None
+            start = time.monotonic()
+            try:
+                stdout, _stderr = proc.communicate(timeout=15)
+            finally:
+                if proc.poll() is None:
+                    proc.kill()
+            elapsed = time.monotonic() - start
+        finally:
+            if read_fd is not None:
+                os.close(read_fd)
+            os.close(write_fd)  # kept open (unclosed, unwritten-to) for the entire wait above
+
+        self.assertEqual(proc.returncode, 0)
+        # STDIN_READ_TIMEOUT_SECONDS is 2.0; review measured the fixed
+        # code at ~2.07s under this exact harness. 5s leaves slack for
+        # CI/sandbox jitter without hiding a regression the way the
+        # previous 10s threshold could (a timeout silently growing from
+        # 2s to 8s would still pass under 10s).
+        self.assertLess(elapsed, 5)
+
+    def test_interactive_tty_like_stdin_returns_immediately(self):
+        # Finding 8 (isatty half). round-2 review finding 2: the
+        # previous version of this test fed already-closed/empty stdin,
+        # which hits EOF at the select()/read() stage and never actually
+        # exercises the isatty() short-circuit branch at all — and its
+        # own comment's claim that "a literal TTY is not spawnable
+        # inside this test harness" was simply wrong (review's own repro
+        # used exactly this pty.openpty() approach). A real pty fd, not
+        # a pipe, is required to exercise isatty() == True.
+        master_fd, slave_fd = pty.openpty()
+        proc = None
+        try:
+            proc = subprocess.Popen(
+                [str(OCW_METER), "snapshot-quota"],
+                cwd=str(REPO_ROOT),
+                env={**os.environ, "OCW_METER_HOME": str(self.home)},
+                stdin=slave_fd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            os.close(slave_fd)
+            slave_fd = None
+            start = time.monotonic()
+            try:
+                stdout, _stderr = proc.communicate(timeout=15)
+            finally:
+                if proc.poll() is None:
+                    proc.kill()
+            elapsed = time.monotonic() - start
+        finally:
+            if slave_fd is not None:
+                os.close(slave_fd)
+            os.close(master_fd)
+
+        self.assertEqual(proc.returncode, 0)
+        # isatty() short-circuits before select() ever runs (review
+        # measured ~0.06s) — much tighter than the pipe-timeout case.
+        self.assertLess(elapsed, 2)
+
+
+class SnapshotQuotaRoundTwoReviewTests(OcwMeterTestCase):
+    def test_rate_limits_less_sample_does_not_erase_global_window_state(self):
+        # Round-2 review finding 1 (most severe): the global
+        # five_hour_window_id/five_hour_used_pct slot used to be
+        # overwritten unconditionally on every write, including by a
+        # sample that has NO window info of its own (any claude-ds/
+        # DeepSeek sample — ADR-001 §2.1's 58/58). One such sample
+        # landing between two Anthropic samples silently defeated plan
+        # §8.5's "同一window_id内でused_percentageが減少したら異常" check
+        # — and round-1's OWN per-session-throttle fix made this near-
+        # guaranteed in this repo's standard Herdr setup (an Anthropic
+        # pane + a claude-ds pane both sampling roughly every interval).
+        far_future = 99999999999
+        obj_a1 = {"session_id": "sess-A", "rate_limits": {"five_hour": {"used_percentage": 50, "resets_at": far_future}}}
+        obj_ds = {"session_id": "sess-ds", "model": {"id": "deepseek-v4-pro[1m]"}}  # no rate_limits at all
+        obj_a2 = {"session_id": "sess-A", "rate_limits": {"five_hour": {"used_percentage": 30, "resets_at": far_future}}}
+
+        run_snapshot_quota(json.dumps(obj_a1), self.home, extra_env={"OCW_METER_QUOTA_INTERVAL": "0"})
+        r_ds = run_snapshot_quota(json.dumps(obj_ds), self.home, extra_env={"OCW_METER_QUOTA_INTERVAL": "0"})
+        r_a2 = run_snapshot_quota(json.dumps(obj_a2), self.home, extra_env={"OCW_METER_QUOTA_INTERVAL": "0"})
+
+        self.assertNotIn("decreased within the same window_id", r_ds.stderr)
+        self.assertIn("decreased within the same window_id", r_a2.stderr)
+
+        events = read_events(self.home)
+        by_session_and_ts = sorted(events, key=lambda e: e["ts"])
+        self.assertEqual([e["session_id"] for e in by_session_and_ts], ["sess-A", "sess-ds", "sess-A"])
+        self.assertEqual(by_session_and_ts[1]["completeness"], "unknown")  # the rate_limits-less sample itself
+        self.assertEqual(by_session_and_ts[2]["completeness"], "partial")  # A's decrease must still be caught
+
+    def test_suppression_cache_does_not_write_inside_a_git_worktree_home(self):
+        # Round-2 review finding 3: `default_storage_root()` is a pure
+        # path-string builder — it never checks whether $HOME itself
+        # happens to sit inside a git worktree (a real shape for this
+        # very repo's own dotfiles use case). Writing the round-1
+        # suppression cache there unconditionally left an untracked
+        # quota-worktree-refusal.json inside a test repo. This must not
+        # happen — `emit_meter_error`'s own default-root fallback
+        # already re-checks the same way, and the suppression cache must
+        # match that precedent.
+        home_repo = pathlib.Path(self.tmpdir.name) / "home-is-a-git-repo"
+        subprocess.run(["git", "init", "-q", str(home_repo)], check=True)
+        other_repo = pathlib.Path(self.tmpdir.name) / "other-repo-for-bad-ocw-meter-home"
+        subprocess.run(["git", "init", "-q", str(other_repo)], check=True)
+        bad_ocw_meter_home = other_repo / "ocw-meter-home"
+
+        result = run_snapshot_quota(
+            json.dumps(CLAUDE_STATUSLINE_SAMPLE), bad_ocw_meter_home,
+            extra_env={"HOME": str(home_repo)},
+        )
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("resolves inside a Git worktree", result.stderr)
+
+        status = subprocess.run(
+            ["git", "-C", str(home_repo), "status", "--porcelain"],
+            capture_output=True, text=True, check=True,
+        )
+        self.assertEqual(status.stdout.strip(), "", "suppression cache must not write inside $HOME's own git worktree")
 
 
 if __name__ == "__main__":
