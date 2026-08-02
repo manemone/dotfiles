@@ -4,8 +4,6 @@
 
 | DOC-ID | ファイル | 概要 |
 |---|---|---|
-| DOC-DOCID_PLACEHOLDER | [プルリクエストの作法.md](DOC-DOCID_PLACEHOLDER_プルリクエストの作法.md) | PR説明文の構成・コメントのプレフィクス・ブランチ構成の規約 |
-| DOC-DOCID_PLACEHOLDER | [シェルスクリプトコーディング方針.md](DOC-DOCID_PLACEHOLDER_シェルスクリプトコーディング方針.md) | POSIX sh / bash の使い分け・bashism・エラーハンドリングの規約 |
-| DOC-DOCID_PLACEHOLDER | [テスト方針.md](DOC-DOCID_PLACEHOLDER_テスト方針.md) | 実 HOME を汚さずにデプロイを検証する方法の定義 |
-
-> **注**: `DOC-DOCID_PLACEHOLDER` は DOC-ID 採番ツール（`tools/doc-id assign`）による採番待ちであることを示すプレースホルダです。採番後、この表と `docs/README.md` の索引は実際の DOC-ID に更新されます。
+| DOC-2608020715 | [プルリクエストの作法.md](DOC-2608020715_プルリクエストの作法.md) | PR説明文の構成・コメントのプレフィクス・ブランチ構成の規約 |
+| DOC-2608020715-a | [シェルスクリプトコーディング方針.md](DOC-2608020715-a_シェルスクリプトコーディング方針.md) | POSIX sh / bash の使い分け・bashism・エラーハンドリングの規約 |
+| DOC-2608020715-b | [テスト方針.md](DOC-2608020715-b_テスト方針.md) | 実 HOME を汚さずにデプロイを検証する方法の定義 |

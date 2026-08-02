@@ -82,6 +82,8 @@ Options can be combined:
 │   ├── README.md              # Index: quick nav, DOC-ID registry, folder rules
 │   ├── design/                # Active design docs (PR conventions, shell coding policy, test policy)
 │   └── planning/              # Umbrella-branch plans and roadmaps
+├── tools/                     # Repo-internal dev tools, not deployed to $HOME (unlike bin/)
+│   └── doc-id/                # DOC-ID assign/check/verify CLI (Ruby stdlib only)
 ├── shared/
 │   └── helpers.sh             # Shared shell functions (logging, symlinks, platform detection)
 ├── bin/
