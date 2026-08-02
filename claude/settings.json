@@ -58,5 +58,9 @@
   "theme": "dark",
   "editorMode": "normal",
   "autoCompactEnabled": true,
-  "switchModelsOnFlag": true
+  "switchModelsOnFlag": true,
+  "statusLine": {
+    "type": "command",
+    "command": "ocw-meter snapshot-quota"
+  }
 }

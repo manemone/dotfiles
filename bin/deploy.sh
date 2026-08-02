@@ -27,6 +27,7 @@ fi
 # --- Symlink scripts into ~/bin ---
 symlink_backup "$SCRIPT_DIR/ocw"       "$BIN_DIR/ocw"       || FAIL=1
 symlink_backup "$SCRIPT_DIR/claude-ds" "$BIN_DIR/claude-ds" || FAIL=1
+symlink_backup "$SCRIPT_DIR/ocw-meter" "$BIN_DIR/ocw-meter" || FAIL=1
 
 if [ "$FAIL" -ne 0 ]; then
   log_error "bin deployment completed with errors."

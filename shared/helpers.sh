@@ -4,6 +4,66 @@
 # Keep functions self-contained and side-effect free where possible.
 # This file uses POSIX sh (no bashisms).
 
+# ── Linked-worktree guard ─────────────────────────────────────────────
+#
+# Every deploy script symlinks files from THIS checkout into $HOME.  If the
+# checkout is a linked git worktree (created by `git worktree add`, e.g. by
+# `ocw`), those symlinks point into a directory that disappears when the
+# worktree is removed — silently breaking ~/.zshrc, ~/.claude/skills/*,
+# ~/bin/* and friends long after the deploy succeeded.
+#
+# Deploying from a worktree is legitimate while testing a change, so this is
+# a warning, not an error.  Set DOTFILES_QUIET_WORKTREE_WARNING=1 to silence.
+
+# is_linked_worktree <dir>
+# Returns 0 if dir is inside a *linked* git worktree (not the main one).
+# Returns 1 if it is the main worktree, not a repo, or git is unavailable.
+is_linked_worktree() {
+  _ilw_dir="${1:-.}"
+
+  command -v git >/dev/null 2>&1 || return 1
+
+  _ilw_gitdir=$(git -C "$_ilw_dir" rev-parse --absolute-git-dir 2>/dev/null) || return 1
+  _ilw_common=$(git -C "$_ilw_dir" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || return 1
+
+  [ "$_ilw_gitdir" != "$_ilw_common" ]
+}
+
+# warn_if_linked_worktree <dir>
+# Print a one-time warning when deploying from a linked worktree.
+# Warns at most once per process tree (the flag is exported so that
+# deploy-all.sh and the per-tool deploy scripts do not repeat it).
+warn_if_linked_worktree() {
+  [ -z "${DOTFILES_WORKTREE_WARNED:-}" ] || return 0
+  [ -z "${DOTFILES_QUIET_WORKTREE_WARNING:-}" ] || return 0
+
+  is_linked_worktree "${1:-.}" || return 0
+
+  DOTFILES_WORKTREE_WARNED=1
+  export DOTFILES_WORKTREE_WARNED
+
+  log_warn "Deploying from a linked git worktree:"
+  log_warn "  $(cd "${1:-.}" && pwd)"
+  log_warn "Symlinks will point INTO this worktree and will break when it is"
+  log_warn "removed (e.g. by 'ocw rm')."
+
+  # The main worktree is the parent of the common git dir.
+  _wilw_main=$(
+    git -C "${1:-.}" rev-parse --path-format=absolute --git-common-dir 2>/dev/null
+  )
+  if [ -n "$_wilw_main" ]; then
+    _wilw_main=$(cd "$_wilw_main/.." 2>/dev/null && pwd)
+  fi
+  if [ -n "$_wilw_main" ]; then
+    log_warn "After merging, re-run the deploy from the main worktree:"
+    log_warn "  cd $_wilw_main && ./deploy-all.sh"
+  else
+    log_warn "After merging, re-run the deploy from the main worktree."
+  fi
+
+  log_warn "Silence this with DOTFILES_QUIET_WORKTREE_WARNING=1."
+}
+
 # ── Platform detection ────────────────────────────────────────────────
 
 case "$(uname -s)" in
@@ -313,3 +373,14 @@ symlink_restore() {
 
   return "$_fail"
 }
+
+# ── Source-time guard ─────────────────────────────────────────────────
+#
+# Deliberate exception to the "side-effect free" rule at the top of this
+# file: every entry point (deploy-all.sh and each tool's deploy.sh, which
+# users also run directly) sources this file, so hooking here is the only
+# way to cover them all without touching six scripts.  The warning fires
+# at most once per process tree.
+#
+# "$0" is the sourcing script, which always lives inside the checkout.
+warn_if_linked_worktree "$(dirname -- "$0")"

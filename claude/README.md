@@ -71,6 +71,7 @@ Claude Code の設定ファイル。以下の汎用設定を含む（マシン�
 | `permissions.defaultMode` | `acceptEdits` | 権限のデフォルトモード |
 | `permissions.deny` | セキュリティポリシー（24件） | `.env`, `.ssh`, `.aws`, API キー等へのアクセスをブロック |
 | `permissions.ask` | 危険コマンドパターン（20件） | `git push --force`, `rm -rf`, `sudo` 等の実行前に確認 |
+| `statusLine` | `{"type":"command","command":"ocw-meter snapshot-quota"}` | Claude 利用枠(5時間枠・週間枠)のステータスバー表示。§3.4参照 |
 
 ### 3.3 Skills
 
@@ -81,6 +82,10 @@ Claude Code のカスタムスキル。`claude/skills/` 配下の各スキルデ
 |---|---|
 | `pr-review-loop` | PRレビューサイクルを自動化。Herdr の reviewer エージェントと連携し、レビュー→修正→再レビューを承認まで繰り返す |
 | `umbrella-orchestrator` | 傘ブランチの孫ライフサイクル管理。計画書の読み取り、孫ブランチの spawn、マージ検出と検証、計画書更新を自動化 |
+
+`pr-review-loop` は各Phaseの境界で `ocw-meter event`（工程計測。`docs/planning/DOC-003_ai-llm-cost-observability_計画.md` 参照）を呼び出す。
+すべて `command -v ocw-meter >/dev/null && ... || true` 形式の fail-open 呼び出しで、
+レビュー規約・判定基準・停止条件には一切変更が無く、`ocw-meter` が存在しない環境でもスキルは完全に動作する。
 
 **デプロイの仕組み:**
 
@@ -122,6 +127,71 @@ mkdir -p claude/skills/new-skill
 # ... SKILL.md を作成 ...
 ./deploy.sh  # 自動検出されて symlink が作られる
 ```
+
+### 3.4 statusLine — Claude 利用枠スナップショット
+
+`ocw-meter snapshot-quota`（`bin/README.md` §3.3 参照）を `statusLine` コマンドとして配線し、
+Claude Code のステータスバーに 5時間枠 / 週間枠 / コンテキスト使用率を表示する。
+詳細設計は `docs/planning/DOC-003_ai-llm-cost-observability_計画.md` 第5.6章・第8.5章、
+`docs/adr/ADR-001_llm-cost-observability-collection-method.md` §2.1・§8 を参照。
+
+**表示内容**（例）:
+
+```
+5h:37% 7d:12% ctx:24%
+```
+
+取得できない項目は表示しない（例: `claude-ds`（DeepSeek）セッションでは `rate_limits` が
+一切来ないため `5h:`/`7d:` は出ず、`ctx:` のみになるか、コンテキスト情報も無ければ完全に空になる）。
+`ctx` は `context_window.used_percentage` が生の値として取得できているときのみ表示する
+（推定値からのフォールバック計算は記録用イベントにのみ使い、表示には使わない）。
+
+**事前準備（必須）**: `ocw-meter` が PATH に無い環境では statusLine コマンド自体が
+`command not found` になり、表示が壊れる。必ず先に `bin/deploy.sh` を実行して
+`~/bin/ocw-meter` を配置し、`~/bin` が PATH に入っていることを確認すること
+（`~/bin` の PATH 追加は `zsh/.zshrc` 依存。`bin/README.md` §5 参照）。
+
+**観測は既存フローに一切割り込まない。** `snapshot-quota` は例外が起きても必ず表示文字列を
+stdout に返し exit 0 する（statusLine が壊れて画面が崩れる事態を避けるための最優先事項）。
+サンプリングは既定60秒に1回（`OCW_METER_QUOTA_INTERVAL` で変更可）に自制されており、
+statusLine が描画のたびに呼ばれても書き込みが肥大しない。
+
+**取得できない項目（実測に基づく既知の制約。詳細は ADR-001 §2.1 参照）:**
+
+- `claude-ds`（DeepSeek）セッションでは `rate_limits` が原理的に来ない
+  （Claude.ai サブスクリプションの利用枠であり、DeepSeek API 経由のセッションには適用されない）。
+  `five_hour_used_pct` 等は `null`、`completeness: "unknown"` として記録される（推測しない）
+- 5時間枠に到達して待機した際の挙動は**未観測**（その状況が発生した際のログをまだ収集できていない）。
+  `blocked` の検出は best-effort であり、`ocw-meter` は明示的な待機時間を計測しない
+- `rate_limits.five_hour.resets_at` が過去時刻（stale値）を返すケースが実測されている
+  （ADR-001 §2.1: 8サンプル中3件）。stale と判定された場合は `window_id` を `null` にして
+  `completeness: "partial"` で記録する（推測で新しい窓を開始しない）
+
+**⚠️ 重大な注意 — `~/.claude/settings.json` の `hooks` 消失リスク（計画書17章 R3）:**
+
+`~/.claude/settings.json` は **Herdr（`SessionStart` hook）と `claude/deploy.sh` の両方が書き込む
+競合地帯**である。`claude/deploy.sh` は `claude/settings.machine.json` が存在しない、または
+存在しても `hooks` を含まない場合、Herdr が実行時に書き足した `hooks` ごと上書きしてしまう
+（実機検証中に実際にこの事故が発生している — 詳細は ADR-001 Appendix A 参照）。
+
+**`statusLine` を配線した本設定を deploy する前に、必ず以下を確認・実施すること:**
+
+1. `~/.claude/settings.json` の現在の `hooks` を確認する:
+   ```bash
+   python3 -c "import json; print(json.dumps(json.load(open('$HOME/.claude/settings.json')).get('hooks'), indent=2))"
+   ```
+2. `claude/settings.machine.json`（無ければ `settings.machine.json.example` からコピー）に、
+   確認した `hooks`（通常は Herdr の `herdr-agent-state.sh`）を明記する（§4.3参照）
+3. `./deploy.sh` を実行する
+4. deploy 後、再度 手順1 のコマンドを実行し、`hooks.SessionStart` が健在であることを確認する
+
+**statusLine の無効化方法:**
+
+`claude/settings.machine.json` に `"statusLine": null` は効かない（machine側の shallow merge は
+`null` も値として上書きしてしまうだけで、キー自体を消せない）。無効化したい場合は
+`~/.claude/settings.json` の `statusLine` キーを deploy 後に手動で削除する
+（**次回 `./deploy.sh` 実行時に `claude/settings.json` の内容で再度上書きされる**ので、
+恒久的に無効化したい場合はリポジトリ側の `claude/settings.json` から `statusLine` を削除すること）。
 
 ## 4. Customization — マシン固有設定の追加
 

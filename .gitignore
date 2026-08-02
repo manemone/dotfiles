@@ -20,8 +20,19 @@ Session.vim
 .netrwhist
 *~
 
+# Python
+__pycache__/
+*.pyc
+
 # AI tools
-/.claude/
+/.claude/*
+!/.claude/pr-review.yml
 
 # Machine-specific Claude Code settings (not tracked — create from .example)
 claude/settings.machine.json
+
+# ocw-meter observation data must never land in the repo (belt-and-suspenders;
+# the real storage root lives under ~/.local/state/ocw-meter, outside any
+# worktree, and ocw-meter itself refuses to write inside one)
+*.ocw-meter.jsonl
+/ocw-meter-state/

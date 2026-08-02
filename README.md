@@ -9,7 +9,7 @@ Easily deployable, cross-platform dotfiles managed with [mise](https://mise.jdx.
 | **Zsh** | Shell | [Antidote](https://github.com/mattmc3/antidote) |
 | **NeoVim** | Editor | [lazy.nvim](https://github.com/folke/lazy.nvim) |
 | **tmux** | Terminal multiplexer | — (built-in) |
-| **bin** | Custom CLI tools (ocw, claude-ds) | — (standalone scripts) |
+| **bin** | Custom CLI tools (ocw, claude-ds, ocw-meter) | — (standalone scripts) |
 | **claude** | Claude Code config & skills | — (built-in) |
 
 ## Supported Platforms
@@ -76,13 +76,17 @@ Options can be combined:
 ├── .mise.toml                 # Runtime versions (python, node, ruby, rust, neovim, ripgrep, fd, lazygit)
 ├── .gitignore                 # Git ignore rules
 ├── LICENSE                    # MIT License
-├── docs/                      # Planning documents
-│   └── planning/
+├── docs/                      # Documentation (see docs/README.md for the full index)
+│   ├── README.md              # Index: quick-nav + full DOC-ID list. Only file allowed directly under docs/
+│   ├── adr/                   # Accepted architecture decision records
+│   ├── planning/              # Umbrella-branch plans and roadmaps (historical once merged)
+│   └── reference/             # Operational references kept current (schemas, runbooks)
 ├── shared/
 │   └── helpers.sh             # Shared shell functions (logging, symlinks, platform detection)
 ├── bin/
 │   ├── ocw                    # Git worktree manager with Herdr integration
 │   ├── claude-ds              # Claude Code via DeepSeek API wrapper
+│   ├── ocw-meter              # LLM cost / Claude quota observability (read-only, fail-open)
 │   ├── deploy.sh              # bin deployment script
 │   └── README.md
 ├── claude/
@@ -111,6 +115,38 @@ Options can be combined:
     └── README.md
 ```
 
+## Deploying from a git worktree
+
+Deploy scripts symlink files **from this checkout** into `$HOME`. If you deploy
+from a linked git worktree (created by `git worktree add`, or by `ocw`), those
+symlinks point into that worktree — and they break silently the moment the
+worktree is removed (`ocw rm`, `git worktree remove`). `~/.zshrc`,
+`~/.claude/skills/*` and `~/bin/*` all stop working, long after the deploy
+reported success.
+
+The deploy scripts warn when this happens:
+
+```
+[WARN] Deploying from a linked git worktree:
+[WARN]   /path/to/dotfiles/my-feature
+[WARN] Symlinks will point INTO this worktree and will break when it is
+[WARN] removed (e.g. by 'ocw rm').
+[WARN] After merging, re-run the deploy from the main worktree:
+[WARN]   cd /path/to/dotfiles/master && ./deploy-all.sh
+```
+
+Deploying from a worktree is fine while testing a change. Just **re-run the
+deploy from the main worktree once the change is merged**, before removing the
+worktree. Set `DOTFILES_QUIET_WORKTREE_WARNING=1` to silence the warning.
+
+If symlinks are already broken, list the dangling ones with:
+
+```bash
+find ~ ~/.config ~/.claude ~/.claude/skills ~/bin -maxdepth 1 -type l ! -exec test -e {} \; -print
+```
+
+then re-run `./deploy-all.sh` from the main worktree.
+
 ## Uninstalling
 
 ```bash
@@ -128,8 +164,9 @@ See each tool's deploy script for the full list of files it creates.
 
 See each tool's README for detailed configuration and troubleshooting:
 
-- [bin/README.md](bin/README.md) — CLI tools (ocw worktree manager, claude-ds DeepSeek wrapper)
+- [bin/README.md](bin/README.md) — CLI tools (ocw worktree manager, claude-ds DeepSeek wrapper, ocw-meter observability)
 - [claude/README.md](claude/README.md) — Claude Code config, skills, machine-specific customization
 - [zsh/README.md](zsh/README.md) — shell setup, plugin management, aliases, version managers
 - [nvim/README.md](nvim/README.md) — editor setup, LSP servers, keybindings, plugins
 - [tmux/README.md](tmux/README.md) — multiplexer setup, Vim-style keybindings, clipboard
+- [docs/README.md](docs/README.md) — documentation index (ADRs, umbrella-branch plans, operational references)
