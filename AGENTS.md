@@ -22,9 +22,11 @@
   `sh zsh/deploy.sh --dry-run` のように直接引数を渡しても無視され実際に書き換えが起きるため、
   個別スクリプトを dry-run するときは `DRY_RUN=1 sh zsh/deploy.sh` のように環境変数で渡すこと。
 - 指示された範囲外の機能を先回りして実装しない。
-- **linter の抑制ディレクティブ（`# shellcheck disable=...` 等）や linter 設定の除外・閾値緩和を、
-  AI の判断で追加しない。** 違反が設計上不合理だと判断した場合は、抑制せず違反内容・対象ファイル・
-  判断理由を人間に報告する。
+- **shellcheck / shfmt を含む linter の抑制ディレクティブ（`# shellcheck disable=...` 等）や、
+  `.pre-commit-config.yaml` の `exclude` / `exclude_types` 追加・`shfmt` のオプション緩和などの
+  linter 設定の除外・閾値緩和を、AI の判断で追加しない。** 指摘が設計上不合理だと判断した場合は、
+  抑制せず違反内容・対象ファイル・判断理由を人間に報告する。コードの構造を変えて指摘そのものを
+  解消できる場合（例: 動的変数名参照を case 文に置き換える）は、抑制よりそちらを優先する。
 
 ## ディレクトリ構成
 
@@ -120,12 +122,7 @@ uninstall を行い、symlink・既存ファイルの退避・冪等性・
 `tests/deploy_smoke.sh`）を省略しない。省略するのは人間が明示的に指示した
 場合に限る。**
 
-shellcheck / shfmt の指摘に対して、抑制ディレクティブ（`# shellcheck disable=...`
-等）や `.pre-commit-config.yaml` の `exclude` 追加・`shfmt` のオプション緩和を
-AI の判断で加えない。指摘が設計上不合理だと判断した場合は、抑制せず
-指摘内容・対象ファイル・判断理由を人間に報告する。コードの構造を変えて
-指摘そのものを解消できる場合（例: 動的変数名参照を case 文に置き換える）は
-それを優先する。
+shellcheck / shfmt の指摘への対応も「最重要ルール」の linter 抑制禁止に従う。
 
 `docs/` 配下に新規ファイルを追加する場合は、まず `DOC-DOCID_PLACEHOLDER_<説明的ファイル名>.md`
 という名前で作り、`./tools/doc-id/doc-id assign docs/path/to/new_file.md` で DOC-ID を採番する
@@ -141,7 +138,11 @@ PR を作る前に
 
 - 新しいツールディレクトリを足すときは `shared/helpers.sh` の `AVAILABLE_TOOLS` に加えて、
   `uninstall.sh` の `KNOWN_LINKS_<tool>`（生成ファイルがあれば `KNOWN_GENERATED_<tool>` も）にも
-  追加する。これを忘れると `uninstall.sh` は該当ツールを静かにスキップし、張った symlink が
+  追加する。**さらに、`uninstall.sh` 内の `_links` / `_generated` / `_skills_src` を求める
+  3つの `case "$_tool" in ... esac` にも、新しいツール名の arm を追加する。** `KNOWN_LINKS_<tool>`
+  変数を定義しただけで case 文に arm を足し忘れると、`_links` が空のまま扱われ「No link list
+  defined」で静かにスキップされる（変数の存在だけでは case 文の arm は自動生成されない）。
+  これを忘れると `uninstall.sh` は該当ツールを静かにスキップし、張った symlink が
   ユーザーの `$HOME` に残り続ける。
 - README は「ルート `README.md`（全体）」と「各ツールの `README.md`（詳細）」の二層構造。
   片方だけ更新しない。
