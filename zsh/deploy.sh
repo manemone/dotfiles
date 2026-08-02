@@ -1,6 +1,9 @@
 #!/bin/sh
 
-SCRIPT_DIR=$(cd "$(dirname "$0")" || exit 1; pwd)
+SCRIPT_DIR=$(
+  cd "$(dirname "$0")" || exit 1
+  pwd
+)
 # shellcheck source=SCRIPTDIR/../shared/helpers.sh
 . "$SCRIPT_DIR/../shared/helpers.sh"
 
@@ -26,7 +29,7 @@ if ! command -v mise >/dev/null 2>&1; then
 fi
 
 # --- Symlink config files ---
-symlink_backup "$SCRIPT_DIR/.zshrc"           "$HOME/.zshrc"           || FAIL=1
+symlink_backup "$SCRIPT_DIR/.zshrc" "$HOME/.zshrc" || FAIL=1
 symlink_backup "$SCRIPT_DIR/.zsh_plugins.txt" "$HOME/.zsh_plugins.txt" || FAIL=1
 
 # --- Install Antidote plugin manager ---

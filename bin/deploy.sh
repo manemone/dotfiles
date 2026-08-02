@@ -1,6 +1,9 @@
 #!/bin/sh
 
-SCRIPT_DIR=$(cd "$(dirname "$0")" || exit 1; pwd)
+SCRIPT_DIR=$(
+  cd "$(dirname "$0")" || exit 1
+  pwd
+)
 # shellcheck source=SCRIPTDIR/../shared/helpers.sh
 . "$SCRIPT_DIR/../shared/helpers.sh"
 
@@ -26,7 +29,7 @@ if [ ! -d "$BIN_DIR" ]; then
 fi
 
 # --- Symlink scripts into ~/bin ---
-symlink_backup "$SCRIPT_DIR/ocw"       "$BIN_DIR/ocw"       || FAIL=1
+symlink_backup "$SCRIPT_DIR/ocw" "$BIN_DIR/ocw" || FAIL=1
 symlink_backup "$SCRIPT_DIR/claude-ds" "$BIN_DIR/claude-ds" || FAIL=1
 
 if [ "$FAIL" -ne 0 ]; then

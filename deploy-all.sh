@@ -16,7 +16,10 @@
 
 set -u
 
-SCRIPT_DIR=$(cd "$(dirname "$0")" || exit 1; pwd)
+SCRIPT_DIR=$(
+  cd "$(dirname "$0")" || exit 1
+  pwd
+)
 # shellcheck source=SCRIPTDIR/shared/helpers.sh
 . "$SCRIPT_DIR/shared/helpers.sh"
 
@@ -76,7 +79,7 @@ while [ $# -gt 0 ]; do
       ONLY_TOOLS="$2"
       shift
       ;;
-    --help|-h)
+    --help | -h)
       usage
       exit 0
       ;;
@@ -122,7 +125,7 @@ if [ "$FORCE" -eq 0 ] && [ "$DRY_RUN" -eq 0 ]; then
     exit 1
   }
   case "$_answer" in
-    [Nn]|[Nn][Oo])
+    [Nn] | [Nn][Oo])
       log_warn "Aborted."
       exit 0
       ;;
@@ -154,7 +157,7 @@ for _tool in $TOOLS; do
       exit 1
     }
     case "$_answer" in
-      [Ss]|[Ss][Kk][Ii][Pp]*)
+      [Ss] | [Ss][Kk][Ii][Pp]*)
         log_info "Skipping remaining tools."
         break
         ;;
@@ -162,7 +165,7 @@ for _tool in $TOOLS; do
         log_warn "Aborted."
         exit 0
         ;;
-      [Nn]|[Nn][Oo])
+      [Nn] | [Nn][Oo])
         log_info "Skipping: $_tool"
         continue
         ;;

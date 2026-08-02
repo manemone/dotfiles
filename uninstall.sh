@@ -10,7 +10,10 @@
 
 set -u
 
-SCRIPT_DIR=$(cd "$(dirname "$0")" || exit 1; pwd)
+SCRIPT_DIR=$(
+  cd "$(dirname "$0")" || exit 1
+  pwd
+)
 # shellcheck source=SCRIPTDIR/shared/helpers.sh
 . "$SCRIPT_DIR/shared/helpers.sh"
 
@@ -23,28 +26,33 @@ ONLY_TOOLS=""
 # ── Known symlinks per tool (dst only) ────────────────────────────────
 # Each tool entry lists one symlink destination per line.
 # Use printf so the trailing-newline line-continuation works portably.
-KNOWN_LINKS_zsh=$(printf '%s\n' \
-  "$HOME/.zshrc" \
-  "$HOME/.zsh_plugins.txt" \
+KNOWN_LINKS_zsh=$(
+  printf '%s\n' \
+    "$HOME/.zshrc" \
+    "$HOME/.zsh_plugins.txt"
 )
 
-KNOWN_LINKS_nvim=$(printf '%s\n' \
-  "${XDG_CONFIG_HOME:-$HOME/.config}/nvim/init.lua" \
-  "${XDG_CONFIG_HOME:-$HOME/.config}/nvim/lua" \
-  "${XDG_CONFIG_HOME:-$HOME/.config}/nvim/lazy-lock.json" \
+KNOWN_LINKS_nvim=$(
+  printf '%s\n' \
+    "${XDG_CONFIG_HOME:-$HOME/.config}/nvim/init.lua" \
+    "${XDG_CONFIG_HOME:-$HOME/.config}/nvim/lua" \
+    "${XDG_CONFIG_HOME:-$HOME/.config}/nvim/lazy-lock.json"
 )
 
-KNOWN_LINKS_tmux=$(printf '%s\n' \
-  "$HOME/.tmux.conf" \
+KNOWN_LINKS_tmux=$(
+  printf '%s\n' \
+    "$HOME/.tmux.conf"
 )
 
-KNOWN_LINKS_bin=$(printf '%s\n' \
-  "$HOME/bin/ocw" \
-  "$HOME/bin/claude-ds" \
+KNOWN_LINKS_bin=$(
+  printf '%s\n' \
+    "$HOME/bin/ocw" \
+    "$HOME/bin/claude-ds"
 )
 
-KNOWN_LINKS_claude=$(printf '%s\n' \
-  "$HOME/.claude/CLAUDE.md" \
+KNOWN_LINKS_claude=$(
+  printf '%s\n' \
+    "$HOME/.claude/CLAUDE.md"
 )
 
 # Skills are symlinked individually by deploy.sh (auto-detected from
@@ -54,8 +62,9 @@ KNOWN_SKILLS_SRC_claude="$SCRIPT_DIR/claude/skills"
 
 # settings.json is a generated file (not a symlink) — handled separately.
 # symlink_restore would skip it because it's a real file.
-KNOWN_GENERATED_claude=$(printf '%s\n' \
-  "$HOME/.claude/settings.json" \
+KNOWN_GENERATED_claude=$(
+  printf '%s\n' \
+    "$HOME/.claude/settings.json"
 )
 
 # ── Usage ─────────────────────────────────────────────────────────────
@@ -79,18 +88,25 @@ EOF
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --dry-run)    DRY_RUN=1 ;;
-    --force)      FORCE=1 ;;
+    --dry-run) DRY_RUN=1 ;;
+    --force) FORCE=1 ;;
     --only)
       if [ $# -lt 2 ]; then
         log_error "--only requires a comma-separated list of tools."
         exit 1
       fi
-      ONLY_TOOLS="$2"; shift ;;
-    --help|-h)    usage; exit 0 ;;
+      ONLY_TOOLS="$2"
+      shift
+      ;;
+    --help | -h)
+      usage
+      exit 0
+      ;;
     *)
       log_error "Unknown option: $1"
-      usage >&2; exit 1 ;;
+      usage >&2
+      exit 1
+      ;;
   esac
   shift
 done
@@ -123,8 +139,11 @@ if [ "$FORCE" -eq 0 ] && [ "$DRY_RUN" -eq 0 ]; then
     exit 1
   }
   case "$_answer" in
-    [Yy]|[Yy][Ee][Ss]) ;;
-    *) log_warn "Aborted."; exit 0 ;;
+    [Yy] | [Yy][Ee][Ss]) ;;
+    *)
+      log_warn "Aborted."
+      exit 0
+      ;;
   esac
   printf '\n'
 fi
@@ -167,7 +186,7 @@ for _tool in $TOOLS; do
 '
     for _dst in $_links; do
       IFS="$_OLDIFS"
-      [ -z "$_dst" ] && continue  # skip blank lines
+      [ -z "$_dst" ] && continue # skip blank lines
       symlink_restore "$_dst" || OVERALL_OK=1
       IFS='
 '

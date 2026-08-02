@@ -1,6 +1,9 @@
 #!/bin/sh
 
-SCRIPT_DIR=$(cd "$(dirname "$0")" || exit 1; pwd)
+SCRIPT_DIR=$(
+  cd "$(dirname "$0")" || exit 1
+  pwd
+)
 # shellcheck source=SCRIPTDIR/../shared/helpers.sh
 . "$SCRIPT_DIR/../shared/helpers.sh"
 
@@ -62,7 +65,7 @@ if [ -f "$MACHINE_SRC" ]; then
       # Merge: base settings + machine overrides.
       # List-valued keys within "permissions" (allow, deny, ask) are concatenated;
       # all other keys use shallow .update() semantics (machine wins).
-      python3 - "$SETTINGS_SRC" "$MACHINE_SRC" "$MERGE_TMP" << 'PYEOF'
+      python3 - "$SETTINGS_SRC" "$MACHINE_SRC" "$MERGE_TMP" <<'PYEOF'
 import json, sys
 
 with open(sys.argv[1]) as f:

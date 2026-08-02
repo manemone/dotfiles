@@ -63,7 +63,10 @@ resolve_tools() {
       if [ "$_rt_t" = "$_rt_a" ]; then
         case " $_rt_result " in
           *" $_rt_t "*) _rt_found=1 ;;
-          *) _rt_result="$_rt_result $_rt_t"; _rt_found=1 ;;
+          *)
+            _rt_result="$_rt_result $_rt_t"
+            _rt_found=1
+            ;;
         esac
         break
       fi
