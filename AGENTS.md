@@ -54,9 +54,16 @@
 **`claude/CLAUDE.md`（配布物。個人の口調設定などが入っている。ルート `CLAUDE.md` とは別物）は、
 指示が無い限り編集しない。**
 
-`.claude/settings.json` は現時点ではまだ `.gitignore` の `/.claude/*` により追跡対象外（新規作成は
-`docs/planning/DOC-2608020558_repo-baseline_計画.md` の孫6の担当）。孫6で `!/.claude/settings.json`
-を足すまでは、上表の説明はこのファイルが作られた後の設計を指す。
+## AI 支援ツールの設定
+
+ルールの本体は常に `AGENTS.md`（このファイル）に書く。各 AI 製品向けの設定ファイルは、
+ルールを書き写さず `AGENTS.md` を指すことに徹する。新しい AI 製品を使い始めるときも同様に、
+その製品の設定ファイルから `AGENTS.md` を参照する形にする。
+
+| AI 製品 | 設定ファイル | 中身 |
+|---|---|---|
+| Claude Code | `CLAUDE.md` | `@AGENTS.md` の1行のみ |
+| opencode | `opencode.json` | `instructions` に `AGENTS.md` と `docs/design/` 配下の規約文書パスを列挙 |
 
 ## デプロイの仕組み
 

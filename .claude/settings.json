@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pre-commit run:*)",
+      "Bash(./tools/doc-id/doc-id check)",
+      "Bash(./tools/doc-id/doc-id verify)",
+      "Bash(ruby tools/doc-id/test/doc_id_test.rb)",
+      "Bash(./deploy-all.sh --dry-run:*)",
+      "Bash(shellcheck:*)",
+      "Bash(shfmt:*)",
+      "Bash(sh -n:*)",
+      "Bash(bash -n:*)",
+      "Bash(bin/tests/lint.sh)",
+      "Bash(python3 -m unittest discover -s bin/tests:*)"
+    ]
+  }
+}
