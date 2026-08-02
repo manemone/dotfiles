@@ -1,0 +1,54 @@
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-merge-conflict
+      - id: check-added-large-files
+      - id: check-yaml
+      - id: check-json
+
+  - repo: https://github.com/koalaman/shellcheck-precommit
+    rev: v0.11.0
+    hooks:
+      - id: shellcheck
+        args: ["-x"]
+        # zsh/.zshrc is zsh, not POSIX sh/bash/dash/ksh — shellcheck has no
+        # zsh dialect support and only produces false positives on it
+        # (SC2148 "shell is unknown" plus misparsed zsh-only syntax).
+        exclude: ^zsh/\.zshrc$
+
+  - repo: https://github.com/scop/pre-commit-shfmt
+    rev: v3.13.1-1
+    hooks:
+      - id: shfmt
+        args: ["-i", "2", "-ci"]
+
+  - repo: local
+    hooks:
+      - id: doc-id-check
+        name: doc-id check (命名規則違反の検出)
+        entry: ./tools/doc-id/doc-id check
+        language: ruby
+        pass_filenames: false
+
+      - id: doc-id-verify
+        name: doc-id verify (切れ参照の検出)
+        entry: ./tools/doc-id/doc-id verify
+        language: ruby
+        pass_filenames: false
+
+      - id: doc-id-test
+        name: doc-id test (minitest)
+        entry: ruby tools/doc-id/test/doc_id_test.rb
+        language: ruby
+        pass_filenames: false
+        files: ^tools/doc-id/
+
+      - id: deploy-dry-run
+        name: deploy-all.sh --dry-run
+        entry: ./deploy-all.sh --dry-run
+        language: system
+        pass_filenames: false
+        files: ^(deploy-all\.sh|uninstall\.sh|shared/helpers\.sh|[^/]+/deploy\.sh)$
