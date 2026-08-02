@@ -27,7 +27,7 @@ dotfiles にも同等の基盤を作る。さらに **その汎用部分を copi
 | 4 | `ai/rb-04-quality-gate` | pre-commit framework 導入 + shellcheck/shfmt + デプロイスモークテスト + CI | ✅ PR #35 マージ済 |
 | 5 | `ai/rb-05-docs-merge` | **master（ocw-meter 傘）の `docs/` 体系との統合。** フォルダ規約の和集合化 + master の DOC-001〜005/ADR-001 のタイムスタンプ移行 | ✅ PR #36 マージ済（判断6-a に従いマージコミットで統合） |
 | 6 | `ai/rb-06-ai-config` | リポジトリ用 `.claude/settings.json` + `opencode.json` + `.gitignore` 修正 | ✅ PR #37 マージ済 |
-| 7 | `ai/rb-07-copier-template` | ★ 汎用部分の抽出と copier テンプレート化 + 適用スキル | 🔄 実装中 |
+| 7 | `ai/rb-07-copier-template` | ★ 汎用部分の抽出と copier テンプレート化 + 適用スキル | ✅ PR #38 マージ済 |
 
 ## 依存関係と実行順序
 
