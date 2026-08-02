@@ -69,6 +69,11 @@ new_sandbox() {
     echo "エラー: mktemp -d に失敗しました" >&2
     exit 1
   }
+  # mktemp が返した時点でディレクトリは既にファイルシステム上に存在する。
+  # 下のガードで exit する経路でも trap cleanup が回収できるよう、ガードの
+  # 前に登録する（登録するのは常に mktemp が返したパスそのものなので、
+  # 「rm -rf の対象は自分が作ったものだけ」という不変条件は崩れない）。
+  CREATED_DIRS+=("$dir")
   case "$dir" in
     /tmp/* | /var/folders/* | "${TMPDIR:-/nonexistent-tmpdir}"/*) ;;
     *)
@@ -80,7 +85,6 @@ new_sandbox() {
     echo "エラー: サンドボックスが実 HOME または '/' と同一です。中止します。" >&2
     exit 1
   fi
-  CREATED_DIRS+=("$dir")
   SANDBOX_DIR="$dir"
 }
 
