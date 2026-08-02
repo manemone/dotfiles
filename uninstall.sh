@@ -10,7 +10,8 @@
 
 set -u
 
-SCRIPT_DIR=$(cd "$(dirname "$0")"; pwd)
+SCRIPT_DIR=$(cd "$(dirname "$0")" || exit 1; pwd)
+# shellcheck source=SCRIPTDIR/shared/helpers.sh
 . "$SCRIPT_DIR/shared/helpers.sh"
 
 # ── Defaults ──────────────────────────────────────────────────────────
@@ -137,17 +138,22 @@ for _tool in $TOOLS; do
   log_hr
   log_info "Uninstalling: $_tool"
 
-  # Get the list of known links for this tool.
-  # Guard: $_tool is validated by resolve_tools() above but we
-  # double-check it contains only alphanumeric characters before
-  # using it in a dynamic variable name to prevent injection.
+  # Get the list of known links for this tool. A case statement (rather
+  # than eval-based indirection through a "KNOWN_LINKS_$_tool" variable
+  # name) keeps each KNOWN_LINKS_* / KNOWN_GENERATED_* variable directly
+  # referenced, so shellcheck can see the use and avoids eval entirely.
+  _links=""
   case "$_tool" in
-    *[!a-zA-Z0-9_]*) log_error "Invalid tool name: '$_tool'"; continue ;;
+    zsh) _links="$KNOWN_LINKS_zsh" ;;
+    nvim) _links="$KNOWN_LINKS_nvim" ;;
+    tmux) _links="$KNOWN_LINKS_tmux" ;;
+    bin) _links="$KNOWN_LINKS_bin" ;;
+    claude) _links="$KNOWN_LINKS_claude" ;;
   esac
-  _links_var="KNOWN_LINKS_$_tool"
-  eval "_links=\${$_links_var:-}"
-  _gen_var="KNOWN_GENERATED_$_tool"
-  eval "_generated=\${$_gen_var:-}"
+  _generated=""
+  case "$_tool" in
+    claude) _generated="$KNOWN_GENERATED_claude" ;;
+  esac
 
   if [ -z "$_links" ] && [ -z "$_generated" ]; then
     log_warn "No link list defined for '$_tool'. Skipping."
@@ -170,8 +176,10 @@ for _tool in $TOOLS; do
   IFS="$_OLDIFS"
 
   # --- claude skills: walk ~/.claude/skills/ for repo-owned symlinks ---
-  _skills_var="KNOWN_SKILLS_SRC_$_tool"
-  eval "_skills_src=\${$_skills_var:-}"
+  _skills_src=""
+  case "$_tool" in
+    claude) _skills_src="$KNOWN_SKILLS_SRC_claude" ;;
+  esac
 
   if [ -n "$_skills_src" ] && [ -d "$HOME/.claude/skills" ]; then
     for _skill_link in "$HOME/.claude/skills"/*; do
@@ -236,13 +244,15 @@ for _tool in $TOOLS; do
         if [ "${DRY_RUN:-0}" -eq 1 ]; then
           printf '[DRY-RUN] mv %s %s (safety backup)\n' "$_dst" "$_safety_path"
         else
-          mv "$_dst" "$_safety_path" && log_info "Safety backup: $_dst → $_safety_path" || {
+          if mv "$_dst" "$_safety_path"; then
+            log_info "Safety backup: $_dst → $_safety_path"
+          else
             log_error "Failed to back up: $_dst"
             OVERALL_OK=1
             IFS='
 '
             continue
-          }
+          fi
         fi
       fi
 

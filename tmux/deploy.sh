@@ -1,6 +1,7 @@
 #!/bin/sh
 
-SCRIPT_DIR=$(cd "$(dirname "$0")"; pwd)
+SCRIPT_DIR=$(cd "$(dirname "$0")" || exit 1; pwd)
+# shellcheck source=SCRIPTDIR/../shared/helpers.sh
 . "$SCRIPT_DIR/../shared/helpers.sh"
 
 log_hr
@@ -33,10 +34,10 @@ install_tmux_linux() {
   # Prefer apt on Debian/Ubuntu; fall back to Homebrew
   if command -v apt-get >/dev/null 2>&1; then
     log_info "Installing tmux via apt..."
-    sudo apt-get update -qq && sudo apt-get install -y tmux || {
+    if ! sudo apt-get update -qq || ! sudo apt-get install -y tmux; then
       log_error "Failed to install tmux via apt."
       return 1
-    }
+    fi
     log_ok "tmux installed via apt."
   elif command -v brew >/dev/null 2>&1; then
     log_info "Installing tmux via Homebrew (Linux)..."

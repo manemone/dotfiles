@@ -16,7 +16,8 @@
 
 set -u
 
-SCRIPT_DIR=$(cd "$(dirname "$0")"; pwd)
+SCRIPT_DIR=$(cd "$(dirname "$0")" || exit 1; pwd)
+# shellcheck source=SCRIPTDIR/shared/helpers.sh
 . "$SCRIPT_DIR/shared/helpers.sh"
 
 # ── Defaults ──────────────────────────────────────────────────────────
