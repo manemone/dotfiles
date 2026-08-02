@@ -139,9 +139,13 @@ tests/template_smoke.sh
 ```
 
 代表的な質問への回答（全部盛り・最小構成）で `copier copy` を実際にレンダリングし、
-生成された `.pre-commit-config.yaml` / `ci.yml` が壊れていないかを検証する
-（`.pre-commit-config.yaml.jinja` / `ci.yml.jinja` は拡張子が `.jinja` のため
-`check-yaml` フックの対象外であり、このテストでしか検出できない）。
+生成された `.pre-commit-config.yaml` / `ci.yml` が壊れていないか、`AGENTS.md.jinja` の
+Jinja 空白制御ミスによる Markdown の崩れ（行ゼロの表・見出し直前の空行欠落・二重空行・
+Jinja 構文の残骸）が無いか、`_exclude` の効き（`use_doc_id=false` 時に `docs/` `tools/`
+`.github/` が生成されないこと）を検証する（`.pre-commit-config.yaml.jinja` /
+`ci.yml.jinja` は拡張子が `.jinja` のため `check-yaml` フックの対象外であり、YAML の
+壊れもMarkdownの崩れもこのテストでしか検出できない）。**`templates/repo-baseline/`
+配下のどのファイルを変更した場合も対象**であり、YAML を含むファイルに限らない。
 
 `bin/` 配下（`ocw` / `ocw-meter` 等）を変更した場合は、加えて以下も実行する。
 

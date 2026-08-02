@@ -72,7 +72,7 @@ new_log_file() {
   LOG_FILE="$file"
 }
 
-# assert_markdown_hygiene <file>
+# assert_markdown_hygiene <file> <label>
 # Jinja の空白制御ミスが生む3系統の崩れを検出する:
 #  1. 未展開の Jinja 構文（{% %} {{ }}）の残骸
 #  2. 見出し（## ...）の直前に空行が無い（段落結合・二重見出し隣接）
@@ -110,9 +110,15 @@ PYEOF
   fi
 }
 
+# check_combo <name> <comma区切りの生成されないはずのパス、無ければ空文字> --data ...
+# 「生成されないはずのパス」の検査は copier copy が成功した場合のみ行う。
+# 呼び出し順や外側のグローバル変数に依存させず、この関数の中で完結させる
+# （PR #38 ラウンド3レビュー: 末尾に check_combo を1つ足すと直前の
+# SANDBOX_DIR を検査してしまう問題、および copier copy 失敗時に空の
+# サンドボックスを見て false PASS が出る問題への対応）。
 check_combo() {
-  local name="$1"
-  shift
+  local name="$1" assert_absent_csv="$2"
+  shift 2
   local sbx
   new_sandbox
   sbx="$SANDBOX_DIR"
@@ -127,6 +133,18 @@ check_combo() {
     fail "copier copy が成功"
     cat "$log_file" >&2
     return
+  fi
+
+  if [ -n "$assert_absent_csv" ]; then
+    local p
+    local IFS=,
+    for p in $assert_absent_csv; do
+      if [ -e "$sbx/$p" ]; then
+        fail "$name: $p が生成されていない"
+      else
+        pass "$name: $p が生成されていない"
+      fi
+    done
   fi
 
   if [ -f "$sbx/.pre-commit-config.yaml" ]; then
@@ -158,7 +176,7 @@ check_combo() {
   fi
 }
 
-check_combo "全部盛り(use_doc_id/use_ci/has_long_running_commands/use_adr/use_reference すべて true, lint/test に特殊文字あり)" \
+check_combo "全部盛り(use_doc_id/use_ci/has_long_running_commands/use_adr/use_reference すべて true, lint/test に特殊文字あり)" "" \
   --data default_branch=main \
   --data 'lint_cmd=pytest -k "not slow"' \
   --data 'test_cmd=npm run lint -- --max-warnings: 0' \
@@ -168,26 +186,16 @@ check_combo "全部盛り(use_doc_id/use_ci/has_long_running_commands/use_adr/us
   --data use_adr=true \
   --data use_reference=true
 
-check_combo "最小構成(use_doc_id/use_ci/has_long_running_commands すべて false, lint/test 空欄)" \
+# _exclude による制御が効いていること（docs/ tools/ .github/ が生成され
+# ないこと）を最小構成のケースで確認する。テンプレート README の受け入れ
+# 条件の1つ。
+check_combo "最小構成(use_doc_id/use_ci/has_long_running_commands すべて false, lint/test 空欄)" "docs,tools,.github" \
   --data default_branch=main \
   --data lint_cmd= \
   --data test_cmd= \
   --data use_doc_id=false \
   --data use_ci=false \
   --data has_long_running_commands=false
-
-# 最小構成の展開結果（$SANDBOX_DIR が上の呼び出しから残っている）に対して、
-# _exclude による制御が効いていること（docs/ tools/ .github/ が
-# 生成されないこと）を確認する。テンプレート README の受け入れ条件の1つ。
-if [ -n "${SANDBOX_DIR:-}" ]; then
-  for d in docs tools .github; do
-    if [ -e "$SANDBOX_DIR/$d" ]; then
-      fail "最小構成: $d が生成されていない（use_doc_id=false / use_ci=false のはず）"
-    else
-      pass "最小構成: $d が生成されていない"
-    fi
-  done
-fi
 
 log
 if [ "$FAIL" -eq 0 ]; then
