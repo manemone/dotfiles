@@ -34,3 +34,14 @@ jobs:
 
       - name: Run deploy smoke test
         run: ./tests/deploy_smoke.sh
+
+  bin-tests:
+    # bin/tests/lint.sh (bash -n / py_compile) runs on every commit via
+    # pre-commit; the Python unittest suite (~40s, 190+ tests) is too slow
+    # for that and runs here on every PR instead.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Run bin/ Python test suite
+        run: python3 -m unittest discover -s bin/tests -v

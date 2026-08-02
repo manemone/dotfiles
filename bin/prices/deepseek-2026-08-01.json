@@ -1,0 +1,13 @@
+{
+  "price_table_version": "deepseek-2026-08-01",
+  "effective_date": "2026-08-01",
+  "source": "https://api-docs.deepseek.com/quick_start/pricing",
+  "fetched_at": "2026-08-01",
+  "currency": "USD",
+  "unit": "per_1m_tokens",
+  "models": {
+    "deepseek-v4-pro":   { "cache_hit_in": 0.003625, "cache_miss_in": 0.435, "out": 0.87 },
+    "deepseek-v4-flash": { "cache_hit_in": 0.0028,   "cache_miss_in": 0.14,  "out": 0.28 }
+  },
+  "notes": "peak/off-peak 2x pricing announced (Beijing 09:00-12:00, 14:00-18:00) — effective date TBD as of fetched_at"
+}
