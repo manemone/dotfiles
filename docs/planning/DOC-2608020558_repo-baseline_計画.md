@@ -26,8 +26,8 @@ dotfiles にも同等の基盤を作る。さらに **その汎用部分を copi
 | 3 | `ai/rb-03-doc-id` | DOC-ID ツール移植（Ruby, 自己完結）＋ 既存 `DOC-001/002` のタイムスタンプ形式への移行 | ✅ PR #34 マージ済 |
 | 4 | `ai/rb-04-quality-gate` | pre-commit framework 導入 + shellcheck/shfmt + デプロイスモークテスト + CI | ✅ PR #35 マージ済 |
 | 5 | `ai/rb-05-docs-merge` | **master（ocw-meter 傘）の `docs/` 体系との統合。** フォルダ規約の和集合化 + master の DOC-001〜005/ADR-001 のタイムスタンプ移行 | ✅ PR #36 マージ済（判断6-a に従いマージコミットで統合） |
-| 6 | `ai/rb-06-ai-config` | リポジトリ用 `.claude/settings.json` + `opencode.json` + `.gitignore` 修正 | 🔄 実装中 |
-| 7 | `ai/rb-07-copier-template` | ★ 汎用部分の抽出と copier テンプレート化 + 適用スキル | ⬜ 待機中 |
+| 6 | `ai/rb-06-ai-config` | リポジトリ用 `.claude/settings.json` + `opencode.json` + `.gitignore` 修正 | ✅ PR #37 マージ済 |
+| 7 | `ai/rb-07-copier-template` | ★ 汎用部分の抽出と copier テンプレート化 + 適用スキル | 🔄 実装中 |
 
 ## 依存関係と実行順序
 
@@ -201,10 +201,23 @@ squash は親が1つの新しいコミットを作るため、**master が傘の
 したがって孫5 の PR は `gh pr merge --merge`（マージコミット）で傘へ入れること。
 これにより master が傘の正真正銘の祖先となり、最終 PR の diff は本傘の変更のみになる。
 
-**判定条件**: `gh pr view <N> --json commits` 等でその PR が `origin/master` を
-マージするコミットを含むか、あるいは
-`git merge-base --is-ancestor origin/master <PRのheadRefOid>` が真であれば、
-その PR は master を取り込んでいるので `--merge` を使う。それ以外は従来どおり `--squash`。
+**判定条件**（孫6 で一度誤りかけたので正確に書く）:
+
+問うべきは「PR の head が master を祖先に持つか」ではなく、
+**「その PR が、傘にまだ無い master の系譜を新しく持ち込むか」**である。
+
+```
+git merge-base --is-ancestor origin/master origin/ai/repo-baseline
+```
+
+- **真**（傘が既に master を祖先に持つ。孫5 マージ以降は常にこれ）
+  → 傘の履歴はそのまま保たれるので **`--squash` で問題ない**
+- **偽** かつ PR の head が master を祖先に持つ
+  → その PR が master の系譜を持ち込む唯一の経路なので **`--merge` が必須**
+
+孫5 マージ以降、傘は master を祖先に持つため、孫6 以降は通常どおり `--squash` でよい。
+「head が master を祖先に持つか」だけで判定すると、孫5 以降の全 PR が
+不要なマージコミットになるため誤りである。
 
 #### 判断6-b: 孫5 の PR をレビューする際の注意
 
