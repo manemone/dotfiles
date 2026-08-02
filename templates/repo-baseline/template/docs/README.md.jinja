@@ -1,0 +1,119 @@
+# docs/ — 文書索引
+
+`docs/` 配下の全設計文書・計画書{% if use_adr %}・ADR{% endif %}{% if use_reference %}・運用リファレンス{% endif %}のナビゲーションと索引です。
+
+## クイックナビゲーション
+
+目的別に、最初に読むべきファイルを案内します。
+
+| 目的 | 最初に読むべきファイル | 備考 |
+|---|---|---|
+| このリポジトリのルールを知る | [../AGENTS.md](../AGENTS.md) | 最重要ルール・ディレクトリ構成など |
+| PR を出す前に読む | [design/DOC-DOCID_PLACEHOLDER_プルリクエストの作法.md](design/DOC-DOCID_PLACEHOLDER_プルリクエストの作法.md) | 説明文の構成・コメントのプレフィクス・ブランチ構成 |
+| コードを書く前に読む | [design/DOC-DOCID_PLACEHOLDER_コーディング方針.md](design/DOC-DOCID_PLACEHOLDER_コーディング方針.md) | このリポジトリの主要言語の規約（撒いた後に書き下ろす） |
+{% if use_adr -%}
+| なぜその技術決定にしたかを知る | [adr/](adr/) 配下の各文書 | 実測・調査結果に基づく決定の記録 |
+{% endif -%}
+{% if use_reference -%}
+| 運用中の事実（スキーマ・手順）を調べる | [reference/](reference/) 配下の各文書 | 確定した仕様の一次情報源 |
+{% endif -%}
+| 傘ブランチの計画を確認する | [planning/](planning/) 配下の各計画書 | 進行中・完了した傘ブランチの計画書 |
+
+## フォルダ構成
+
+| フォルダ | 役割 |
+|---|---|
+| `design/` | 設計書・仕様・規約。**実装の指針となる規範**（「〜する」「〜しない」）を記す現役の文書 |
+{% if use_adr -%}
+| `adr/` | **Architecture Decision Record** — 実測・調査結果に基づいて確定した技術的決定の記録。一度確定した決定の経緯を後から追うための文書。原則変更しない（新しい決定は新しい ADR を追加する） |
+{% endif -%}
+{% if use_reference -%}
+| `reference/` | **運用中に繰り返し引く文書** — 一度作って終わりではなく、日々の運用・デバッグ・拡張のたびに開く文書（スキーマ、手順書等）。確定した仕様の**事実の記録**（「〜である」）を記す調べ物用の文書で、design/ のような行動規範は含まない |
+{% endif -%}
+| `planning/` | **傘ブランチ計画書** — 傘ブランチ着手時に書く、目的・調査結果・設計・孫ブランチ分割・実装完了条件をまとめた文書。傘のマージが完了すると現役の指針ではなく歴史的記録になる |
+| `archive/` | 過去の経緯・履歴。現在の開発判断には使わない |
+
+現役フォルダの使い分け:
+
+- **`design/` と `planning/` の違い**: `design/` は今も従うべき**現在進行形のルール**（コードを書く・PR を出すときに参照し、変わりうる）です。`planning/` は傘ブランチ単位の**計画と経緯**の記録で、傘の完了後は歴史的記録として残ります
+{% if use_adr -%}
+- **`design/` と `adr/` の違い**: どちらも「決定・規範」を記しますが、`design/` は**現在進行形のルール**、`adr/` は**過去に確定した1回きりの技術選定の記録**（原則変更しない。新しい決定は新しい ADR を追加する）です
+{% endif -%}
+{% if use_reference -%}
+- **`design/` と `reference/` の違い**: `design/` はコードを書く・PR を出すときに**従うべきルール**を書く場所、`reference/` は「このコマンドのオプション一覧」のように、**すでに確定している仕様を調べるための記述**を書く場所です。迷ったら「読んだ人の行動を変えるか」を基準にし、変えるなら `design/`、変えず事実を確認するだけなら `reference/` に置きます
+{% endif -%}
+{% if use_adr and use_reference -%}
+- **`adr/` と `reference/` の違い**: `adr/` は「なぜその方式に決めたか」という**決定の経緯**を記録し、`reference/` は「その結果として今の仕様がどうなっているか」という**現在の事実**を記録します。実装が変わっても ADR は書き換えず、reference/ を更新します
+{% endif -%}
+
+> **注**: `docs/` 直下には索引（本ファイル）のみを置き、それ以外の文書は
+> `design/`{% if use_adr %} `adr/`{% endif %}{% if use_reference %} `reference/`{% endif %} `planning/` `archive/`
+> のいずれかに配置します。`archive/` は対象文書ができるまで作りません（git は空ディレクトリを追跡できないため）。
+
+## 全 DOC-ID 索引
+
+### design/ — 設計書・仕様・規約
+
+| DOC-ID | ファイル | 概要 |
+|---|---|---|
+| DOC-DOCID_PLACEHOLDER | [プルリクエストの作法.md](design/DOC-DOCID_PLACEHOLDER_プルリクエストの作法.md) | PR説明文の構成・コメントのプレフィクス・ブランチ構成の規約 |
+| DOC-DOCID_PLACEHOLDER | [コーディング方針.md](design/DOC-DOCID_PLACEHOLDER_コーディング方針.md) | このリポジトリの主要言語のコーディング規約（撒いた後に書き下ろす） |
+
+<!--
+  上記2件は `./tools/doc-id/doc-id assign` で採番後、DOC-ID 列を実際の値に手で更新してください
+  （assign はファイル名とファイル内・他ファイルからの参照は自動更新しますが、この索引表の
+  DOC-ID 列は別途更新が必要です。`doc-id check` / `doc-id verify` はどちらもこの列の値までは
+  検証しません）。design/ に文書を追加した場合も、この表に追記してください。
+-->
+{% if use_adr %}
+### adr/ — Architecture Decision Records
+
+まだ文書がありません。技術決定を確定させたら `docs/adr/DOC-DOCID_PLACEHOLDER_<説明>.md` として追加し、この表に追記してください。
+{% endif %}
+### planning/ — ロードマップ・計画
+
+まだ文書がありません。傘ブランチに着手したら `docs/planning/DOC-DOCID_PLACEHOLDER_<傘ブランチ名>_計画.md` として追加し、この表に追記してください。
+{% if use_reference %}
+### reference/ — 運用リファレンス
+
+まだ文書がありません。繰り返し引く運用知識ができたら `docs/reference/DOC-DOCID_PLACEHOLDER_<説明>.md` として追加し、この表に追記してください。
+{% endif %}
+## 新規ファイル追加時のルール
+
+`docs/` 配下に新しい `.md` ファイルを追加する際は、以下の3ステップを必ず実行してください。
+いずれかを省略すると索引から漏れ、発見不能なファイルが生まれます。
+
+1. **DOC-ID の割り当て**: `./tools/doc-id/doc-id assign docs/path/to/new_file.md` を実行する
+   （`DOC-DOCID_PLACEHOLDER_<説明的ファイル名>.md` という名前で作成しておけば、
+   このコマンドが実際のタイムスタンプへ置換し、リポジトリ内の参照も更新する）
+2. **全 DOC-ID 索引への追記**: このファイル（`docs/README.md`）の該当フォルダの表に、
+   DOC-ID・ファイル名・1行説明を追記する
+3. **フォルダ README への追記**: ファイルを追加したフォルダに `README.md` が存在する場合は、
+   その表にも同様に追記する（`design/README.md` など）
+
+配置先は「フォルダ構成」節の使い分けを参照して選んでください。`docs/` 直下には置きません。
+
+### DOC-ID 命名規則
+
+```
+DOC-YYMMDDHHMM_<説明的ファイル名>.md
+```
+
+- `YYMMDDHHMM` はファイルの作成日時（git 履歴から自動取得される）
+- DOC-ID は **不変**。ファイルの移動・リネームがあっても変更しない
+- 衝突時は `DOC-YYMMDDHHMM-a`、`DOC-YYMMDDHHMM-b` のようにサフィックスが付与される
+- 採番前のファイルは `DOC-DOCID_PLACEHOLDER_<説明的ファイル名>.md` という名前で作成してよい。
+  採番ツールがプレースホルダをタイムスタンプに一括置換し、リポジトリ内の参照も同時に更新する
+{% if use_adr %}- ADR も含め、`docs/` 配下の全文書がこの形式に統一されています。「ADR であること」は
+  `adr/` フォルダへの配置と文書内の見出しで表現し、`ADR-NNN` という別名前空間は使いません
+{% endif %}
+### 検証コマンド
+
+以下のコマンドで検証できます。
+
+```bash
+./tools/doc-id/doc-id check    # 命名規則違反を検出
+./tools/doc-id/doc-id verify   # 全 DOC-ID 参照先の実在確認
+```
+
+> **注意**: `README.md` は `doc-id check` の対象外です。DOC-ID の割り当ては不要です。

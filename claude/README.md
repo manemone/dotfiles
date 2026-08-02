@@ -8,7 +8,7 @@ Claude Code の設定ファイル群。`~/.claude/` にデプロイして使う�
 |---|---|---|
 | `CLAUDE.md` | Claude Code の個人指示（プロジェクト横断で適用されるグローバル指示） | symlink |
 | `settings.json` | Claude Code の汎用設定（モデル、権限ポリシー、テーマ等）。マシン固有設定は**含まない** | 生成（マージ） |
-| `skills/` | Claude Code スキル（`pr-review-loop`, `umbrella-orchestrator`） | スキルごとに個別 symlink |
+| `skills/` | Claude Code スキル（`pr-review-loop`, `umbrella-orchestrator`, `repo-baseline`） | スキルごとに個別 symlink |
 | `settings.machine.json.example` | マシン固有設定のテンプレート。コピーして使う | （手動コピー） |
 
 ## 1. Requirements
@@ -82,6 +82,7 @@ Claude Code のカスタムスキル。`claude/skills/` 配下の各スキルデ
 |---|---|
 | `pr-review-loop` | PRレビューサイクルを自動化。Herdr の reviewer エージェントと連携し、レビュー→修正→再レビューを承認まで繰り返す |
 | `umbrella-orchestrator` | 傘ブランチの孫ライフサイクル管理。計画書の読み取り、孫ブランチの spawn、マージ検出と検証、計画書更新を自動化 |
+| `repo-baseline` | `templates/repo-baseline/` copier テンプレートを既存リポジトリへ適用する手順と判断ガイド |
 
 `pr-review-loop` は各Phaseの境界で `ocw-meter event`（工程計測。`docs/planning/DOC-2608021229-a_ai-llm-cost-observability_計画.md` 参照）を呼び出す。
 すべて `command -v ocw-meter >/dev/null && ... || true` 形式の fail-open 呼び出しで、

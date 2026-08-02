@@ -35,6 +35,17 @@ jobs:
       - name: Run deploy smoke test
         run: ./tests/deploy_smoke.sh
 
+  template-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Run repo-baseline template smoke test
+        run: ./tests/template_smoke.sh
+
   bin-tests:
     # bin/tests/lint.sh (bash -n / py_compile) runs on every commit via
     # pre-commit; the Python unittest suite (~40s, 190+ tests) is too slow

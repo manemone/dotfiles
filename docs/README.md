@@ -16,6 +16,7 @@
 | `ocw-meter` のイベントスキーマを調べる | [reference/DOC-2608021229-c_ocw-meterイベントスキーマ.md](reference/DOC-2608021229-c_ocw-meterイベントスキーマ.md) | 全 event_type・全フィールド・費用計算式の一次情報源 |
 | LLM費用のベースラインを測る手順を知る | [reference/DOC-2608021229-b_LLM費用観測ベースライン計測手順.md](reference/DOC-2608021229-b_LLM費用観測ベースライン計測手順.md) | 実PR 5〜10本での計測手順 |
 | 傘ブランチの計画を確認する | [planning/](planning/) 配下の各計画書 | 進行中・完了した傘ブランチの計画書 |
+| このリポジトリの AI 支援基盤を他のリポジトリへ配布する | [../templates/repo-baseline/README.md](../templates/repo-baseline/README.md) | copier テンプレート。dotfiles 本体とは独立・自己完結 |
 
 ## フォルダ構成
 

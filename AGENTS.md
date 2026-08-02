@@ -40,6 +40,7 @@
 | `shared/` | 全 deploy スクリプトが共有するヘルパー（`helpers.sh`） |
 | `docs/` | このリポジトリ自体の設計文書・ADR・計画書・運用リファレンス。`design/`（現役の規約）・`adr/`（確定した技術決定の記録）・`planning/`（傘ブランチ計画書）・`reference/`（運用中に繰り返し引く事実）の4フォルダに分かれる。詳細は [docs/README.md](docs/README.md) を参照 |
 | `tools/` | このリポジトリ自体の開発を支援するツール（`doc-id` など）。`bin/` と異なり `$HOME` へは配布しない |
+| `templates/` | 他リポジトリへ配布する copier テンプレート（`repo-baseline` など）。`$HOME` へは配布せず、dotfiles 本体にも依存しない自己完結ディレクトリ |
 
 各ツールディレクトリは「設定ファイル本体 + `deploy.sh` + `README.md`」という共通構造を持つ。
 
@@ -108,8 +109,9 @@ pre-commit install
 （`trailing-whitespace` 等の基本チェック、`shellcheck` / `shfmt`、
 `./tools/doc-id/doc-id check` / `verify`、`tools/doc-id/` 配下の変更時の
 `ruby tools/doc-id/test/doc_id_test.rb`、シェルスクリプト変更時の
-`./deploy-all.sh --dry-run`、`bin/` 配下変更時の `bin/tests/lint.sh`）。
-手元でまとめて確認したい場合は次を実行する。
+`./deploy-all.sh --dry-run`、`bin/` 配下変更時の `bin/tests/lint.sh`、
+`tools/doc-id/` または `templates/repo-baseline/template/tools/doc-id/` 変更時の
+両者の同一性チェック）。手元でまとめて確認したい場合は次を実行する。
 
 ```
 pre-commit run --all-files
@@ -129,6 +131,21 @@ uninstall を行い、symlink・既存ファイルの退避・冪等性・
 人間の実 `$HOME` に対して直接実行しない。詳細は
 [docs/design/DOC-2608020715-b_テスト方針.md](docs/design/DOC-2608020715-b_テスト方針.md)
 を参照）。
+
+`templates/repo-baseline/` 配下を変更した場合は、加えて以下も実行する。
+
+```
+tests/template_smoke.sh
+```
+
+代表的な質問への回答（全部盛り・最小構成）で `copier copy` を実際にレンダリングし、
+生成された `.pre-commit-config.yaml` / `ci.yml` が壊れていないか、`AGENTS.md.jinja` の
+Jinja 空白制御ミスによる Markdown の崩れ（行ゼロの表・見出し直前の空行欠落・二重空行・
+Jinja 構文の残骸）が無いか、`_exclude` の効き（`use_doc_id=false` 時に `docs/` `tools/`
+`.github/` が生成されないこと）を検証する（`.pre-commit-config.yaml.jinja` /
+`ci.yml.jinja` は拡張子が `.jinja` のため `check-yaml` フックの対象外であり、YAML の
+壊れもMarkdownの崩れもこのテストでしか検出できない）。**`templates/repo-baseline/`
+配下のどのファイルを変更した場合も対象**であり、YAML を含むファイルに限らない。
 
 `bin/` 配下（`ocw` / `ocw-meter` 等）を変更した場合は、加えて以下も実行する。
 

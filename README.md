@@ -110,6 +110,8 @@ for details. `bin/` changes should additionally be verified with
 │   └── reference/             # Operational references kept current (schemas, runbooks)
 ├── tools/                     # Repo-internal dev tools, not deployed to $HOME (unlike bin/)
 │   └── doc-id/                # DOC-ID assign/check/verify CLI (Ruby stdlib only)
+├── templates/                 # Copier templates distributed to OTHER repositories (independent of dotfiles itself)
+│   └── repo-baseline/         # AGENTS.md/CLAUDE.md/opencode.json/pre-commit/DOC-ID/CI baseline; self-contained
 ├── shared/
 │   └── helpers.sh             # Shared shell functions (logging, symlinks, platform detection)
 ├── bin/
