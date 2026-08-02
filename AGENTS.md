@@ -54,6 +54,10 @@
 **`claude/CLAUDE.md`（配布物。個人の口調設定などが入っている。ルート `CLAUDE.md` とは別物）は、
 指示が無い限り編集しない。**
 
+`.claude/settings.json` は現時点ではまだ `.gitignore` の `/.claude/*` により追跡対象外（新規作成は
+`docs/planning/DOC-2608020558_repo-baseline_計画.md` の孫6の担当）。孫6で `!/.claude/settings.json`
+を足すまでは、上表の説明はこのファイルが作られた後の設計を指す。
+
 ## デプロイの仕組み
 
 - `deploy-all.sh` が `shared/helpers.sh` を source し、`AVAILABLE_TOOLS` を解決した上で
@@ -111,6 +115,14 @@ pre-commit のフックではデプロイの実動作までは検証しないた
 tests/deploy_smoke.sh
 ```
 
+`HOME` を一時ディレクトリへ差し替えたサンドボックス上で実際に deploy /
+uninstall を行い、symlink・既存ファイルの退避・冪等性・
+`claude/settings.json` の実ファイル生成を検証する（既定の対象は
+`bin,claude`。デプロイの検証は必ずこのサンドボックス経由で行い、
+人間の実 `$HOME` に対して直接実行しない。詳細は
+[docs/design/DOC-2608020715-b_テスト方針.md](docs/design/DOC-2608020715-b_テスト方針.md)
+を参照）。
+
 `bin/` 配下（`ocw` / `ocw-meter` 等）を変更した場合は、加えて以下も実行する。
 
 ```
@@ -122,14 +134,6 @@ python3 -m unittest discover -s bin/tests -v
 ジョブ）では毎PRで実行され、`bin/tests/lint.sh`（`bash -n` / `py_compile`。
 高速なため pre-commit にも組み込み済み）と合わせて `.claude/pr-review.yml`
 の `lint_cmd` / `test_cmd` としても定義されている。
-
-`HOME` を一時ディレクトリへ差し替えたサンドボックス上で実際に deploy /
-uninstall を行い、symlink・既存ファイルの退避・冪等性・
-`claude/settings.json` の実ファイル生成を検証する（既定の対象は
-`bin,claude`。デプロイの検証は必ずこのサンドボックス経由で行い、
-人間の実 `$HOME` に対して直接実行しない。詳細は
-[docs/design/DOC-2608020715-b_テスト方針.md](docs/design/DOC-2608020715-b_テスト方針.md)
-を参照）。
 
 **AI はこれらのステップ（pre-commit のフック相当の確認と
 `tests/deploy_smoke.sh`）を省略しない。省略するのは人間が明示的に指示した

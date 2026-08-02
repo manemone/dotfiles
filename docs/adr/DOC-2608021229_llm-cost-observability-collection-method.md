@@ -1,8 +1,8 @@
 # DOC-2608021229: LLM費用・利用枠の収集方式
 
-**Status**: Accepted
-**Date**: 2026-08-01
-**Decision by**: feasibility probe (孫0) の実測結果に基づく
+- **Status**: Accepted
+- **Date**: 2026-08-01
+- **Decision by**: feasibility probe (孫0) の実測結果に基づく
 
 > これは ADR（Architecture Decision Record）である。実測・調査に基づいて確定した技術的決定の記録であり、
 > 原則として変更しない（新しい決定は新しい ADR を追加する）。旧 ID は `ADR-001`
@@ -127,8 +127,7 @@
 | cache miss | 38,336,862 | $0.435 | $16.68 |
 | 出力 | 11,983,028 | $0.87 | $10.43 |
 
-**重複排除の重要性（計画書5.3の実証）**:
-assistant行 98,230行 → distinct message.id 39,888（**59.4%が重複**）。
+**重複排除の重要性（計画書5.3の実証）**: assistant行 98,230行 → distinct message.id 39,888（**59.4%が重複**）。
 `message.id` による重複排除がないと **2.5倍の過大計上**になる。
 
 **カバレッジ（計画書5.10の再確認）**:

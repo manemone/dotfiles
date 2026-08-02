@@ -25,6 +25,9 @@ __pycache__/
 *.pyc
 
 # AI tools
+# .claude/settings.json (repo-local AI permissions, see AGENTS.md "3つの領域")
+# is not yet tracked here — adding `!/.claude/settings.json` is pending work
+# tracked in docs/planning/DOC-2608020558_repo-baseline_計画.md's 孫6.
 /.claude/*
 !/.claude/pr-review.yml
 
