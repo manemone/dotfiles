@@ -2403,11 +2403,11 @@ class ReportGroupedViewsTests(OcwMeterTestCase):
         # Only our repo's PR 7 must appear; cross-repo PR 99 must NOT leak in
         self.assertEqual(row["prs_direct_link"], [7])
         self.assertEqual(row["prs_time_overlap"], [7])
-        # Without --repo, both repos' PRs would appear (verified by
-        # inspecting the cross-repo quota/usage events above). When
-        # --repo is unspecified and the store has multiple repos, the
-        # direct-link side in particular must not silently include
-        # cross-repo PRs.
+        # needs_repo (round-2 finding 10) requires --window to resolve a
+        # repo just like --pr: from outside a git repo, bare `--window`
+        # now fails loud; from inside one, the repo is auto-resolved.
+        # The explicit `--repo` flag tested here confirms the scoping is
+        # correct when the flag IS given.
 
     def test_window_view_without_repo_fails_loud_outside_git_repo(self):
         # Round-2 finding 10: --window also needs repo resolution (just
