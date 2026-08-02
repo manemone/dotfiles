@@ -24,8 +24,8 @@ dotfiles にも同等の基盤を作る。さらに **その汎用部分を copi
 | 1 | `ai/rb-01-agents-md` | ルート `AGENTS.md` + `CLAUDE.md`（`@AGENTS.md` 1行）の二層構造 | ✅ PR #29 マージ済 |
 | 2 | `ai/rb-02-docs` | `docs/` 基盤: 索引 README・フォルダ規約・PR の作法・シェルコーディング方針・テスト方針 | ✅ PR #31 マージ済 |
 | 3 | `ai/rb-03-doc-id` | DOC-ID ツール移植（Ruby, 自己完結）＋ 既存 `DOC-001/002` のタイムスタンプ形式への移行 | ✅ PR #34 マージ済 |
-| 4 | `ai/rb-04-quality-gate` | pre-commit framework 導入 + shellcheck/shfmt + デプロイスモークテスト + CI | 🔄 実装中 |
-| 5 | `ai/rb-05-ai-config` | リポジトリ用 `.claude/settings.json` + `opencode.json` + `.gitignore` 修正 | ⬜ 待機中 |
+| 4 | `ai/rb-04-quality-gate` | pre-commit framework 導入 + shellcheck/shfmt + デプロイスモークテスト + CI | ✅ PR #35 マージ済 |
+| 5 | `ai/rb-05-ai-config` | リポジトリ用 `.claude/settings.json` + `opencode.json` + `.gitignore` 修正 | 🔄 実装中 |
 | 6 | `ai/rb-06-copier-template` | ★ 汎用部分の抽出と copier テンプレート化 + 適用スキル | ⬜ 待機中 |
 
 ## 依存関係と実行順序
