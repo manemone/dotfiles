@@ -52,6 +52,17 @@ trap cleanup EXIT
 # mktemp -d でサンドボックス HOME を作り、実 $HOME と一致していないこと・
 # 一時ディレクトリ配下であることを確認してから返す。ここが壊れると人間の
 # 実 $HOME に対して deploy が走ってしまうため、この関数だけは慎重に扱う。
+#
+# 呼び出し規約: 結果は戻り値ではなくグローバル変数 SANDBOX_DIR に入れる。
+# `sbx="$(new_sandbox)"` のようにコマンド置換で呼ぶと、この関数はサブ
+# シェルで実行される。その結果 (1) 下のガードの `exit 1` がサブシェルしか
+# 終了させずスクリプト本体が空の $sbx のまま処理を続けてしまう、
+# (2) CREATED_DIRS+=(...) がサブシェル内の配列しか更新せず親シェルの
+# CREATED_DIRS が空のままになり trap cleanup が何も消せない、という2つの
+# 事故が起きる。実測でどちらも再現したため、通常呼び出し + グローバル変数
+# 経由に変更した。呼び出し側は `new_sandbox; sbx="$SANDBOX_DIR"` とする。
+SANDBOX_DIR=""
+
 new_sandbox() {
   local dir
   dir="$(mktemp -d)" || {
@@ -70,24 +81,38 @@ new_sandbox() {
     exit 1
   fi
   CREATED_DIRS+=("$dir")
-  printf '%s' "$dir"
+  SANDBOX_DIR="$dir"
+}
+
+# sandbox_env <sbx>
+# サンドボックス配下を指す環境変数の一覧を SANDBOX_ENV 配列にセットする。
+# run_deploy / run_uninstall の双方から使い、リストを1箇所に集約する
+# （テスト方針 DOC-2608020715-b が要求する XDG_* / ANTIDOTE_HOME の差し替え
+# が deploy 側にしか効いていないと、uninstall 側は実環境の値のままになり
+# 実 $HOME 配下の設定を触りにいく経路が残ってしまう）。
+sandbox_env() {
+  local sbx="$1"
+  SANDBOX_ENV=(
+    "HOME=$sbx"
+    "XDG_CONFIG_HOME=$sbx/.config"
+    "XDG_DATA_HOME=$sbx/.local/share"
+    "XDG_CACHE_HOME=$sbx/.cache"
+    "ANTIDOTE_HOME=$sbx/.antidote"
+  )
 }
 
 run_deploy() {
   local sbx="$1"
   shift
-  HOME="$sbx" \
-    XDG_CONFIG_HOME="$sbx/.config" \
-    XDG_DATA_HOME="$sbx/.local/share" \
-    XDG_CACHE_HOME="$sbx/.cache" \
-    ANTIDOTE_HOME="$sbx/.antidote" \
-    "$REPO_ROOT/deploy-all.sh" "$@"
+  sandbox_env "$sbx"
+  env "${SANDBOX_ENV[@]}" "$REPO_ROOT/deploy-all.sh" "$@"
 }
 
 run_uninstall() {
   local sbx="$1"
   shift
-  HOME="$sbx" "$REPO_ROOT/uninstall.sh" "$@"
+  sandbox_env "$sbx"
+  env "${SANDBOX_ENV[@]}" "$REPO_ROOT/uninstall.sh" "$@"
 }
 
 has_tool() {
@@ -95,6 +120,19 @@ has_tool() {
     *",$1,"*) return 0 ;;
     *) return 1 ;;
   esac
+}
+
+# list_repo_skills
+# claude/skills/ 配下の実ディレクトリ名を列挙する（1行1件）。ハードコード
+# すると、孫6で claude/skills/repo-baseline/ 等が増えたときにテストが
+# それを検証しないまま緑になり続けるため、claude/deploy.sh 自身と同じ
+# 「ディレクトリを見て自動検出する」入力からテストの期待値を導く。
+list_repo_skills() {
+  local d
+  for d in "$REPO_ROOT/claude/skills"/*/; do
+    [ -d "$d" ] || continue
+    basename "$d"
+  done
 }
 
 assert_symlink() {
@@ -134,18 +172,29 @@ assert_not_exists() {
 
 scenario_backup_symlink_idempotent_uninstall() {
   log "=== シナリオ1: 退避 / symlink / 冪等性 / uninstall 復元 (対象: $TOOLS) ==="
-  local sbx out rc
-  sbx="$(new_sandbox)"
+  local sbx out rc existing_skill
+  new_sandbox
+  sbx="$SANDBOX_DIR"
 
   if has_tool bin; then
     mkdir -p "$sbx/bin"
     printf 'dummy-ocw\n' >"$sbx/bin/ocw"
     printf 'dummy-claude-ds\n' >"$sbx/bin/claude-ds"
   fi
+  existing_skill=""
   if has_tool claude; then
     mkdir -p "$sbx/.claude"
     printf 'dummy-claude-md\n' >"$sbx/.claude/CLAUDE.md"
     printf '{"dummy": true}\n' >"$sbx/.claude/settings.json"
+
+    # claude/skills/ の退避（symlink_backup を通らず ~/.claude/skills-backup/
+    # に退避される例外パス）を通すため、実在するskill名の1つと衝突する
+    # ディレクトリを事前に置いておく。
+    existing_skill="$(list_repo_skills | head -n1)"
+    if [ -n "$existing_skill" ]; then
+      mkdir -p "$sbx/.claude/skills/$existing_skill"
+      printf 'dummy-existing-skill\n' >"$sbx/.claude/skills/$existing_skill/DUMMY_MARKER"
+    fi
   fi
 
   out="$(run_deploy "$sbx" --force --only "$TOOLS" 2>&1)"
@@ -177,8 +226,25 @@ scenario_backup_symlink_idempotent_uninstall() {
     else
       pass "settings.json が実際に生成し直されている"
     fi
-    assert_symlink "$sbx/.claude/skills/pr-review-loop" "$REPO_ROOT/claude/skills/pr-review-loop"
-    assert_symlink "$sbx/.claude/skills/umbrella-orchestrator" "$REPO_ROOT/claude/skills/umbrella-orchestrator"
+    local skill
+    while IFS= read -r skill; do
+      [ -n "$skill" ] || continue
+      assert_symlink "$sbx/.claude/skills/$skill" "$REPO_ROOT/claude/skills/$skill"
+    done <<EOF
+$(list_repo_skills)
+EOF
+
+    if [ -n "$existing_skill" ]; then
+      local backup_match=""
+      for cand in "$sbx/.claude/skills-backup/$existing_skill".*; do
+        [ -e "$cand" ] && backup_match="$cand" && break
+      done
+      if [ -n "$backup_match" ] && [ -f "$backup_match/DUMMY_MARKER" ]; then
+        pass "既存skillがsymlink_backupを通らずskills-backupへ退避された: $backup_match"
+      else
+        fail "既存skillがsymlink_backupを通らずskills-backupへ退避された: $sbx/.claude/skills-backup/$existing_skill.*"
+      fi
+    fi
   fi
 
   # --- 冪等性: 同じ内容で2回目を実行しても壊れない ---
@@ -222,6 +288,13 @@ scenario_backup_symlink_idempotent_uninstall() {
     else
       fail "uninstall で claude/CLAUDE.md が元のファイルに復元された"
     fi
+    if [ -n "$existing_skill" ]; then
+      if [ -d "$sbx/.claude/skills/$existing_skill" ] && [ ! -L "$sbx/.claude/skills/$existing_skill" ] && [ -f "$sbx/.claude/skills/$existing_skill/DUMMY_MARKER" ]; then
+        pass "uninstall で既存skillがskills-backupから復元された"
+      else
+        fail "uninstall で既存skillがskills-backupから復元された"
+      fi
+    fi
   fi
 }
 
@@ -233,7 +306,8 @@ scenario_no_backup() {
   fi
   log "=== シナリオ2: --no-backup で退避されず削除される ==="
   local sbx out rc
-  sbx="$(new_sandbox)"
+  new_sandbox
+  sbx="$SANDBOX_DIR"
   mkdir -p "$sbx/bin"
   printf 'dummy-ocw\n' >"$sbx/bin/ocw"
 
@@ -253,7 +327,8 @@ scenario_no_backup() {
 scenario_only_filter() {
   log "=== シナリオ3: --only フィルタで指定ツール以外は触られない ==="
   local sbx
-  sbx="$(new_sandbox)"
+  new_sandbox
+  sbx="$SANDBOX_DIR"
   run_deploy "$sbx" --force --only bin >/dev/null 2>&1
 
   if [ -L "$sbx/bin/ocw" ]; then
