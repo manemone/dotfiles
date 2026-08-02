@@ -92,29 +92,29 @@
 ```
 $ ocw-meter report --pr 31
 storage root:  /home/manemone/.local/state/ocw-meter
-filter:        pr=31
-total events:  136
+filter:        pr=31 (repo=manemone/dotfiles)
+total events:  163
   quota.sample: 30
-  usage.message: 106
-completeness: complete 96.3% / partial 3.7% / unknown 0.0%
+  usage.message: 133
+completeness: complete 96.9% / partial 3.1% / unknown 0.0%
 quarantined:   0 lines (events this meter wrote)
 transcript lines quarantined (ingest source data): 2 lines
-meter.error diagnostics (state/meter-errors.jsonl): 2 lines
+meter.error diagnostics (state/meter-errors.jsonl): 3 lines
 malformed (not yet quarantined; run 'ocw-meter validate'): 0 lines
-coverage:      106 usage.message event(s); run 'ocw-meter report --reconcile' for model別 coverage against provider totals
+coverage:      133 usage.message event(s); run 'ocw-meter report --reconcile' for model別 coverage against provider totals
 price_table:   (none applied)
 cost_basis:    subscription
 cost_estimate: null
 five_hour_window_completion: no (window_ids seen: 1785629075, 1785632400)
 duration_seconds (承認まで。未承認ならnull): None
-total_span_seconds (このPRの全イベントの時刻スパン): 3112.846
+total_span_seconds (このPRの全イベントの時刻スパン): 3158.023
 review_round_count: 0
 human_intervention_count: 0
 final_result: unknown
 five_hour_used_pct_max: 52
 seven_day_used_pct_max: 21
 cash_cost_usd: null
-capacity_message_count (claude subscription, no dollar figure): 106
+capacity_message_count (claude subscription, no dollar figure): 133
 ```
 
 このPR #31はAnthropicモデル（`claude-*`）だけで作業したため`cash_cost_usd: null`
@@ -162,23 +162,33 @@ capacity_message_count (claude subscription, no dollar figure): 106
    ```
    $ ocw-meter report --month 2026-08
    month:         2026-08
+   repo (process_efficiency scope): manemone/dotfiles
    cash cost (metered API — currently DeepSeek only):
-     usage.message count: 6202
+     usage.message count: 6597
      cash_cost_usd:       $0.19 (estimated — not an invoice)
    capacity cost (Claude subscription quota — never summed with cash cost):
-     capacity_message_count: 6021
-     quota_sample_count: 122
+     capacity_message_count: 6416
+     quota_sample_count: 223
      five_hour_used_pct_max: 71
      seven_day_used_pct_max: 78
-     distinct_five_hour_windows: 2
+     distinct_five_hour_windows: 3
    process efficiency (approved PRs in 2026-08):
-     approved_pr_count: 1
+     approved_pr_count: 2
      avg_cash_cost_usd: None
-     avg_review_round_count: 3.0
+     avg_review_round_count: 3.5
      avg_human_intervention_count: 0.0
-     avg_duration_seconds: 5381.868
-     five_hour_window_completion_breakdown: {'yes': 0, 'no': 1, 'unknown': 0}
-   quality_guardrail: 未計測 — 第一段階では収集項目が無い（計画書16章）。この行は 'report --month' の出力にのみ現れる
+     avg_duration_seconds: 5841.154500000001
+     five_hour_window_completion_breakdown: {'yes': 1, 'no': 1, 'unknown': 0}
+   quality_guardrail: 未計測 — 第一段階では収集項目が無い（計画書16章）。この行は 'report --month' の出力にのみ現れる（他の report ビューには quality_guardrail キー自体が無い）
+   completeness: complete 99.1% / partial 0.5% / unknown 0.4%
+   quarantined:   0 lines (events this meter wrote)
+   transcript lines quarantined (ingest source data): 2 lines
+   meter.error diagnostics (state/meter-errors.jsonl): 3 lines
+   malformed (not yet quarantined; run 'ocw-meter validate'): 0 lines
+   coverage:      6597 usage.message event(s); run 'ocw-meter report --reconcile' for model別 coverage against provider totals
+   price_table:   deepseek-2026-08-01
+   cost_basis:    estimated, subscription
+   cost_estimate: $0.19 (estimated — not an invoice)
    ```
 
    `avg_cash_cost_usd: None`のように承認済みPR個別の値が欠損する場合がある

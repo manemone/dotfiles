@@ -1805,30 +1805,34 @@ def report_by_phase(scoped_events, usage_events):
     windows = build_phase_windows(scoped_events)
     durations = {}
     for w in windows:
-        d = durations.setdefault(w["phase"], {"window_count": 0, "total_duration_seconds": 0.0})
+        key = w["phase"] or "(unassigned)"
+        d = durations.setdefault(key, {"window_count": 0, "total_duration_seconds": 0.0})
         d["window_count"] += 1
         d["total_duration_seconds"] += (w["end_ts"] - w["start_ts"]).total_seconds()
     tokens = assign_usage_to_phase_windows(usage_events, windows)
 
     out = {}
-    for phase in set(durations) | set(tokens):
-        key = phase or "(unassigned)"
-        row = finalize_token_bucket(tokens.get(phase, default_token_bucket()))
-        row["window_count"] = durations.get(phase, {}).get("window_count", 0)
-        row["total_duration_seconds"] = durations.get(phase, {}).get("total_duration_seconds")
+    for key in set(durations) | set(tokens):
+        row = finalize_token_bucket(tokens.get(key, default_token_bucket()))
+        row["window_count"] = durations.get(key, {}).get("window_count", 0)
+        row["total_duration_seconds"] = durations.get(key, {}).get("total_duration_seconds")
         out[key] = row
     return out
 
 
-def report_by_window(valid_events):
-    """孫5 §1 --window: `quota.sample` events grouped by `window_id`
+def report_by_window(valid_events, repo=None):
+    """孙5 §1 --window: `quota.sample` events grouped by `window_id`
     (plan §8.5 — the 5-hour reset boundary's identifier). `pr_number`
     on a quota.sample comes straight from the caller-supplied field
     when present, but ADR-001 §2.1 observed statusLine's own `pr` key
     populated in 0/66 real samples — so `prs_overlapping` ALSO includes
     PRs found via the same best-effort time-range overlap
     `pr_five_hour_window_completion` uses, kept in a separate key so a
-    reader can tell direct linkage from inferred overlap apart."""
+    reader can tell direct linkage from inferred overlap apart.
+
+    `repo` scopes `pr_ranges` so that `report --window` run from one
+    repo does not pollute the window's PR list with identically-numbered
+    PRs from a different repo in the shared ocw-meter store."""
     windows = {}
     for e in valid_events:
         if e.get("event_type") != "quota.sample":
@@ -1859,6 +1863,8 @@ def report_by_window(valid_events):
         pr = e.get("pr_number")
         ts = parse_ts(e.get("ts"))
         if pr is None or ts is None:
+            continue
+        if repo is not None and e.get("repo") != repo:
             continue
         lo, hi = pr_ranges.get(pr, (ts, ts))
         pr_ranges[pr] = (min(lo, ts), max(hi, ts))
@@ -2250,7 +2256,11 @@ def cmd_report(args):
             if i + 1 >= len(args):
                 print("error: --pr requires a value", file=sys.stderr)
                 return 1
-            filter_pr = int(args[i + 1])
+            try:
+                filter_pr = int(args[i + 1])
+            except ValueError:
+                print(f"error: --pr expects an integer PR number, got '{args[i + 1]}'", file=sys.stderr)
+                return 1
             i += 2
         elif token == "--repo":
             if i + 1 >= len(args):
@@ -2331,9 +2341,9 @@ def cmd_report(args):
     # with no `--pr`, `--reconcile`) silently accepted and then ignored
     # it, the same "flag parsed but never consulted" failure mode
     # finding 2 fixed for `--pr`+`--month`.
-    repo_is_used = filter_pr is not None or (month_flag_present and view is None and not reconcile)
+    repo_is_used = filter_pr is not None or (month_flag_present and view is None and not reconcile) or view == "window"
     if explicit_repo is not None and not repo_is_used:
-        print("error: --repo has no effect without --pr (or standalone --month) — it only scopes PR attribution", file=sys.stderr)
+        print("error: --repo has no effect without --pr, --window, or standalone --month — it only scopes PR attribution", file=sys.stderr)
         return 1
 
     root = storage_root()
@@ -2411,7 +2421,7 @@ def cmd_report(args):
         elif view == "phase":
             groups = report_by_phase(filtered, usage_events)
         elif view == "window":
-            groups = report_by_window(valid_events if filter_pr is None else filtered)
+            groups = report_by_window(valid_events if filter_pr is None else filtered, repo)
         return _print_grouped_report(
             f"by {view}", f"by_{view}", groups, as_json, str(paths.root),
             footer_completeness, footer_cost, len(filtered), extra_top,

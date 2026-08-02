@@ -46,11 +46,18 @@ NONSTREAM_OUT="/tmp/ds-probe-nonstreaming.txt"
   echo "Model requested: $MODEL"
   echo ""
 
+  # Round-1 review finding 7: pass the API key through a temporary header
+  # file so it never appears in `ps` output. The header file is cleaned up
+  # immediately after the request regardless of success/failure.
+  AUTH_HDR=$(mktemp)
+  trap 'rm -f "$AUTH_HDR"' EXIT
+  printf 'Authorization: Bearer %s\r\n' "$API_KEY" > "$AUTH_HDR"
+
   # Make request, capture response headers and body separately
   # -D - dumps headers to stdout, --trace-ascii would include body but we avoid that
   RESPONSE=$(curl -s -i \
     -X POST "$BASE_URL" \
-    -H "Authorization: Bearer ${API_KEY}" \
+    -H @"$AUTH_HDR" \
     -H "Content-Type: application/json" \
     -H "anthropic-version: 2023-06-01" \
     -d "$BODY" 2>&1)
@@ -108,7 +115,7 @@ STREAM_OUT="/tmp/ds-probe-streaming.txt"
   # Capture headers + first few SSE events
   # -N disables buffering, critical for streaming
   curl -s -N -X POST "$BASE_URL" \
-    -H "Authorization: Bearer ${API_KEY}" \
+    -H @"$AUTH_HDR" \
     -H "Content-Type: application/json" \
     -H "anthropic-version: 2023-06-01" \
     -d "$STREAM_BODY" 2>&1 | python3 -c "

@@ -49,7 +49,7 @@
 |---|---|---|
 | DOC-001 | [ai-housekeeping_計画.md](planning/DOC-001_ai-housekeeping_計画.md) | dotfilesリポジトリのリニューアル計画（傘`ai/housekeeping`、孫1〜8全マージ済）。.gitignore整理・LICENSE追加・mise環境固定・zsh Antidote移行・deploy統一・tmux/nvimクロスプラットフォーム化・vim/削除・README全面書き直し |
 | DOC-002 | [ai-dotfiles-add-tools_計画.md](planning/DOC-002_ai-dotfiles-add-tools_計画.md) | マシン上に散在していた自作ツール（ocw、claude-ds、pr-review-loop/umbrella-orchestratorスキル）をdotfilesリポジトリへ統合する計画（傘`ai/dotfiles-add-tools`、孫0〜4全マージ済）。`bin/`・`claude/`ディレクトリを新設 |
-| DOC-003 | [ai-llm-cost-observability_計画.md](planning/DOC-003_ai-llm-cost-observability_計画.md) | LLM費用・Claude利用枠の観測基盤（`ocw-meter`）構築計画（傘`ai/llm-cost-observability`、孫0〜4マージ済・孫5進行中）。既存transcript/statusLineの事後読み取りのみで、本番フローに一切割り込まずPR別・工程別・role別の費用とClaude利用枠を観測する設計 |
+| DOC-003 | [ai-llm-cost-observability_計画.md](planning/DOC-003_ai-llm-cost-observability_計画.md) | LLM費用・Claude利用枠の観測基盤（`ocw-meter`）構築計画（傘`ai/llm-cost-observability`、孫0〜5全マージ済）。既存transcript/statusLineの事後読み取りのみで、本番フローに一切割り込まずPR別・工程別・role別の費用とClaude利用枠を観測する設計 |
 
 ### 📖 reference/ — 運用リファレンス
 
