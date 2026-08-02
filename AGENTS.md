@@ -35,10 +35,10 @@
 | `zsh/` | Zsh 設定（Antidote でプラグイン管理） |
 | `nvim/` | NeoVim 設定（lazy.nvim でプラグイン管理） |
 | `tmux/` | tmux 設定 |
-| `bin/` | スタンドアロンの CLI ツール（`ocw`, `claude-ds`） |
+| `bin/` | スタンドアロンの CLI ツール（`ocw`, `claude-ds`, `ocw-meter`）。`bin/tests/` は `ocw-meter` 等の Python テスト、`bin/prices/` は費用計算用の価格表 |
 | `claude/` | Claude Code 向け配布物（設定・スキル） |
 | `shared/` | 全 deploy スクリプトが共有するヘルパー（`helpers.sh`） |
-| `docs/` | このリポジトリ自体の設計文書・計画書 |
+| `docs/` | このリポジトリ自体の設計文書・ADR・計画書・運用リファレンス。`design/`（現役の規約）・`adr/`（確定した技術決定の記録）・`planning/`（傘ブランチ計画書）・`reference/`（運用中に繰り返し引く事実）の4フォルダに分かれる。詳細は [docs/README.md](docs/README.md) を参照 |
 | `tools/` | このリポジトリ自体の開発を支援するツール（`doc-id` など）。`bin/` と異なり `$HOME` へは配布しない |
 
 各ツールディレクトリは「設定ファイル本体 + `deploy.sh` + `README.md`」という共通構造を持つ。
@@ -53,6 +53,10 @@
 
 **`claude/CLAUDE.md`（配布物。個人の口調設定などが入っている。ルート `CLAUDE.md` とは別物）は、
 指示が無い限り編集しない。**
+
+`.claude/settings.json` は現時点ではまだ `.gitignore` の `/.claude/*` により追跡対象外（新規作成は
+`docs/planning/DOC-2608020558_repo-baseline_計画.md` の孫6の担当）。孫6で `!/.claude/settings.json`
+を足すまでは、上表の説明はこのファイルが作られた後の設計を指す。
 
 ## デプロイの仕組み
 
@@ -97,7 +101,8 @@ pre-commit install
 （`trailing-whitespace` 等の基本チェック、`shellcheck` / `shfmt`、
 `./tools/doc-id/doc-id check` / `verify`、`tools/doc-id/` 配下の変更時の
 `ruby tools/doc-id/test/doc_id_test.rb`、シェルスクリプト変更時の
-`./deploy-all.sh --dry-run`）。手元でまとめて確認したい場合は次を実行する。
+`./deploy-all.sh --dry-run`、`bin/` 配下変更時の `bin/tests/lint.sh`）。
+手元でまとめて確認したい場合は次を実行する。
 
 ```
 pre-commit run --all-files
@@ -117,6 +122,18 @@ uninstall を行い、symlink・既存ファイルの退避・冪等性・
 人間の実 `$HOME` に対して直接実行しない。詳細は
 [docs/design/DOC-2608020715-b_テスト方針.md](docs/design/DOC-2608020715-b_テスト方針.md)
 を参照）。
+
+`bin/` 配下（`ocw` / `ocw-meter` 等）を変更した場合は、加えて以下も実行する。
+
+```
+python3 -m unittest discover -s bin/tests -v
+```
+
+193件・約40秒かかるため pre-commit には組み込んでいない（コミットのたびに
+待たされるコストが見合わない）。CI（`.github/workflows/ci.yml` の `bin-tests`
+ジョブ）では毎PRで実行され、`bin/tests/lint.sh`（`bash -n` / `py_compile`。
+高速なため pre-commit にも組み込み済み）と合わせて `.claude/pr-review.yml`
+の `lint_cmd` / `test_cmd` としても定義されている。
 
 **AI はこれらのステップ（pre-commit のフック相当の確認と
 `tests/deploy_smoke.sh`）を省略しない。省略するのは人間が明示的に指示した

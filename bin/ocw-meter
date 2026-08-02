@@ -1,0 +1,4248 @@
+#!/usr/bin/env bash
+set -uo pipefail
+
+# NOTE on exit-code policy (docs/planning/DOC-2608021229-a_..._計画.md §10.1):
+#   `event` / `bind-pr` must ALWAYS exit 0 (fail-open: observation must
+#   never break the production flow that calls it).
+#   `validate` / `report` must fail loud (non-zero) on unexpected errors,
+#   since silently trusting corrupted data would make every downstream
+#   number meaningless.
+# This file intentionally does NOT `set -e` — exit codes are managed by
+# hand so the fail-open guarantee holds even if python3 itself is
+# missing or the embedded script crashes outright.
+
+warn() { echo "warning: $*" >&2; }
+die() {
+  echo "error: $*" >&2
+  exit 1
+}
+
+usage() {
+  cat <<'USAGE'
+usage:
+  ocw-meter event <event_type> [--key value ...]
+  ocw-meter bind-pr --run <run_id> --pr <n> [--url <url>]
+  ocw-meter ingest [--since <rfc3339-ts>]
+  ocw-meter snapshot-quota
+  ocw-meter validate [--file <path>]
+  ocw-meter report [--pr <n>] [--repo <owner>/<name>] [--json]
+  ocw-meter report --phase [--pr <n>] [--repo <owner>/<name>] [--json]
+  ocw-meter report --model [--pr <n>] [--repo <owner>/<name>] [--json]
+  ocw-meter report --role [--pr <n>] [--repo <owner>/<name>] [--json]
+  ocw-meter report --window [--pr <n>] [--repo <owner>/<name>] [--json]
+  ocw-meter report --month [YYYY-MM] [--repo <owner>/<name>] [--json]
+  ocw-meter report --reconcile [--month <YYYY-MM>] [--provider-total <model>=<tokens> ...] [--json]
+  ocw-meter help
+
+subcommands:
+  event
+    Append one event line to the event log, append-only (a resend under
+    the same idempotency_key replaces the stored line instead —
+    last-write-wins). Common envelope fields (run_id, role, phase,
+    round, pr_number, source, ...) can be overridden with "--field
+    value" flags; unrecognized flags are stored as extra top-level
+    fields (forward compatible). Always exits 0.
+
+  bind-pr
+    Convenience wrapper around `event pr.bind`. Always exits 0.
+
+  ingest
+    Scans ~/.claude/projects/*/*.jsonl (override with
+    OCW_METER_CLAUDE_PROJECTS_DIR) for `type: "assistant"` lines and
+    writes one `usage.message` event per distinct `message.id`
+    (dedup — a single response is re-appended per content block, so
+    the same message.id can appear many times; the LAST occurrence
+    wins). Incremental and idempotent: a per-file
+    (inode, size, mtime, offset) cursor is kept in
+    state/ingest-cursor.json, so re-running produces identical
+    results, and a rotated/truncated file is re-read from the start
+    (duplicates are absorbed by the message.id dedup key either way).
+    Cost is estimated from bin/prices/*.json (never for `claude-*`,
+    which is `cost_basis: "subscription"` — a flat-rate plan has no
+    meaningful per-message price). Only ever reads
+    id/model/usage/stop_reason/timestamp/sessionId/gitBranch/cwd/
+    isSidechain/effort — `message.content` is never touched. Exits
+    non-zero on unexpected failure (like validate/report, not
+    fail-open like event/bind-pr — a silently-broken ingest would make
+    every downstream cost number meaningless).
+
+    --since is a READ-ONLY filter: a run using it does NOT advance the
+    persisted cursor, so nothing filtered out this way is ever lost —
+    a later run without --since re-reads and captures it. Cost is
+    priced by each message's OWN timestamp, not the date `ingest`
+    happens to run on. run_id is resolved by reading
+    <worktree's git-dir>/ocw-run-id directly (the same file bin/ocw
+    itself writes/reads), not by matching stored run.start events.
+
+  validate
+    Re-reads stored events. Quarantines (removes) lines that are
+    corrupt — malformed JSON or a broken core envelope. Lines with a
+    per-event-type payload shape issue (missing/invalid field) are kept
+    but rewritten with completeness downgraded to "partial", not
+    quarantined. `--file` must be inside the events directory. Exits
+    non-zero on unexpected failure.
+
+  report
+    Prints an event-count / completeness / coverage summary, including
+    total estimated cost and which price_table_version(s)/cost_basis
+    were applied once usage.message events exist. With `--pr <n>`, also
+    prints review-round/human-intervention/final-result/cash-cost
+    detail for that one PR and its same-5-hour-window-completion
+    verdict (孫5).
+
+  report --phase / --model / --role / --window
+    Grouped breakdowns (孫5), each combinable with `--pr <n>` to scope
+    to one PR: `--phase` (token/cost/duration per pr-review-loop phase,
+    best-effort time-correlated with usage.message — see
+    docs/reference/DOC-2608021229-c_...), `--model` (token/cost per
+    provider+model), `--role` (event count + token/cost per
+    commander/implementer/reviewer/unknown), `--window` (quota.sample
+    grouped by 5-hour window_id, with directly-linked and time-overlap-
+    inferred PRs kept in separate fields).
+
+  report --month [YYYY-MM]
+    Cash cost (metered API) / capacity cost (Claude subscription quota)
+    / process efficiency for one UTC month (default: current month),
+    always in separate top-level keys — never summed (孫5, plan §16).
+    Cannot be combined with --phase/--model/--role/--window. NOT the
+    same as `report --reconcile --month ...` below.
+
+  report ... --repo <owner>/<name>
+    ~/.local/state/ocw-meter is ONE store shared across every repo this
+    machine's ocw-meter is ever pointed at, but a PR number is only
+    unique WITHIN a repo — --pr and standalone --month (both resolve
+    "this PR"/"this month's approved PRs" via events_for_pr) need to
+    know which repo they're scoping to, or a same-numbered PR in a
+    different repo could contaminate the result. Normally this is
+    resolved automatically from `git remote get-url origin` in the
+    current working directory. --repo overrides that (required when
+    running from outside any git repo, e.g. after the PR's worktree has
+    already been `ocw rm`'d — see docs/reference/DOC-2608021229-b_...§2.1).
+    Must be exactly one `/` with non-empty owner and name on both
+    sides; a malformed value is rejected rather than silently matching
+    zero events. Passing --repo without --pr or standalone --month is
+    also rejected (it would have no effect — every other report path
+    doesn't call events_for_pr at all). If neither --repo is given NOR a
+    repo can be auto-resolved, --pr/standalone --month fail loud instead
+    of guessing.
+
+  report --reconcile
+    Prints model別 transcript token totals (miss/hit/creation/output)
+    and estimated cost for one month (default: current month, UTC).
+    Pass `--provider-total <model>=<tokens>` (repeatable) with a value
+    read off the provider's own billing dashboard to get a coverage
+    ratio. Always prints `cost_basis: estimated — not an invoice` and a
+    `known_gaps` line (plan §5.10: deepseek-v4-flash is 0% covered,
+    deepseek-v4-pro is ~89% covered) — this output is never meant to
+    read as "the complete picture".
+
+  snapshot-quota
+    Meant to be invoked BY Claude Code itself as the `statusLine`
+    command (claude/settings.json: {"statusLine": {"type": "command",
+    "command": "ocw-meter snapshot-quota"}}). Reads one statusLine JSON
+    object from stdin, appends one `quota.sample` event (rate_limits /
+    context usage / session cost — plan §8.5, DOC-2608021229 §2.1/§8), and
+    ALWAYS prints a short display string to stdout (e.g. "5h:37% 7d:12%
+    ctx:24%") and exits 0 — no matter what: empty stdin, malformed
+    JSON, a missing `rate_limits` (every DeepSeek/claude-ds session —
+    DOC-2608021229 §2.1), python3 itself being unavailable, or an unexpected
+    exception. A broken statusLine command would blank out or corrupt
+    every Claude Code session's status bar, so this is fail-open even
+    more strictly than `event`/`bind-pr`: those are silent on success
+    and only warn to stderr on failure, but this one's STDOUT is the
+    actual UI, so it is guaranteed non-crashing at three nested layers
+    (the bash wrapper below, main()'s dispatch, and the subcommand's
+    own internal try/except).
+
+    Self-throttled: a real statusLine command is invoked on every
+    redraw (DOC-2608021229 §2.1 measured up to 54 calls/hour in one session),
+    so a `quota.sample` event is only actually recorded once per
+    OCW_METER_QUOTA_INTERVAL seconds (default 60) — tracked in
+    state/quota-last-sample.json. Calls inside that window still print
+    a fresh display string (cheap, pure JSON parsing) but skip the
+    storage write entirely (no lock, no mkdir), so throttled calls stay
+    fast. `rate_limits.five_hour.resets_at` is used as `window_id`
+    ONLY when it is still in the future relative to "now" — DOC-2608021229
+    §2.1 observed stale (already-past) `resets_at` values in 3/8
+    samples, and plan §8.5 forbids treating a stale value as a new
+    window's identifier. A `used_percentage` that goes DOWN between two
+    samples sharing the same `window_id` is flagged (completeness:
+    "partial", stderr warning) rather than silently trusted.
+
+environment:
+  OCW_METER_HOME
+    default: $HOME/.local/state/ocw-meter
+    Storage root. Refused if it resolves inside a Git worktree:
+    event/bind-pr print a stderr warning and skip the write (never
+    silent), and also record a meter.error diagnostic under the
+    *default* storage root's state/meter-errors.jsonl, since the
+    configured one is exactly the path being refused. validate/report/
+    ingest error out instead.
+
+  OCW_METER_RAW
+    default: 0
+    Set to 1 to have `snapshot-quota` save a redacted copy of each
+    recorded statusLine JSON snapshot under raw/YYYY-MM-DD/ (plan §9.3).
+    Off by default. Redaction (the same key-name/value-pattern rules as
+    everywhere else in this file) is applied recursively before the
+    file is ever written — a raw snapshot is never the untouched input.
+
+  OCW_METER_QUOTA_INTERVAL
+    default: 60
+    Minimum seconds between recorded `quota.sample` events (see
+    `snapshot-quota` above). A non-numeric or negative value falls back
+    to the default rather than disabling throttling by accident.
+
+  OCW_METER_CLAUDE_PROJECTS_DIR
+    default: $HOME/.claude/projects
+    Where `ingest` looks for `<slug>/<session-id>.jsonl` transcripts.
+
+  OCW_METER_PRICE_DIR
+    default: <this script's directory>/prices
+    Where `ingest` looks for price_table_version-tagged pricing JSON
+    files (bin/prices/*.json). The one with the latest effective_date
+    <= today is applied to new events; past events keep whatever
+    version they were written with and are never recalculated.
+
+  OCW_METER_INGEST_USE_GH
+    default: 0
+    Set to 1 to allow `ingest` to shell out to `gh pr list --head
+    <branch>` as a last-resort PR-number fallback (plan §7.4 item 3).
+    Off by default so `ingest` never touches the network unless asked.
+
+notes:
+  - `ingest` reads Herdr's `pane list`/`workspace list` (if the `herdr`
+    command exists and its server is reachable) to resolve role/
+    workspace_id/pane_id, and this meter's own locally stored events to
+    resolve run_id/pr_number — neither is the network, and both are
+    best-effort: any failure just leaves the field "unknown"/null
+    rather than raising.
+  - Callers should guard every invocation with:
+      command -v ocw-meter >/dev/null && ocw-meter event ... || true
+    ocw-meter being entirely absent from PATH is a supported, normal
+    state — every other tool in this repo must keep working without it.
+  - state/meter-errors.jsonl holds ocw-meter's own best-effort
+    self-diagnostics (lock timeouts, the worktree refusal above,
+    unexpected exceptions) — `report` shows its line count alongside
+    quarantined lines.
+USAGE
+}
+
+# NOTE: do not write "${OCW_METER_HOME:-$HOME/...}" directly — under
+# `set -u`, if OCW_METER_HOME is unset AND HOME is unset, expanding $HOME
+# inside the default kills the whole script with a non-zero exit before
+# python is ever reached, which would break the fail-open guarantee for
+# `event`/`bind-pr` no matter what safety nets exist below. Resolve HOME
+# with its own safe default first.
+if [ -z "${OCW_METER_HOME:-}" ] && [ -n "${HOME:-}" ]; then
+  OCW_METER_HOME="$HOME/.local/state/ocw-meter"
+fi
+export OCW_METER_HOME="${OCW_METER_HOME:-}"
+export OCW_METER_RAW="${OCW_METER_RAW:-0}"
+# Lets `ingest` find bin/prices/*.json relative to this file regardless
+# of the caller's cwd, without hardcoding a path (OCW_METER_PRICE_DIR
+# still overrides this for tests/customization).
+OCW_METER_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+export OCW_METER_SCRIPT_DIR
+
+cmd="${1:-}"
+if [ -z "$cmd" ]; then
+  usage
+  exit 1
+fi
+shift || true
+
+case "$cmd" in
+  help | -h | --help)
+    usage
+    exit 0
+    ;;
+  event | bind-pr | validate | report | ingest | snapshot-quota)
+    ;;
+  *)
+    usage >&2
+    die "unknown subcommand: $cmd"
+    ;;
+esac
+
+if [ -z "$OCW_METER_HOME" ]; then
+  case "$cmd" in
+    event | bind-pr)
+      warn "OCW_METER_HOME is not set and HOME is not set; skipping '$cmd' (fail-open, no event recorded)"
+      exit 0
+      ;;
+    snapshot-quota)
+      warn "OCW_METER_HOME is not set and HOME is not set; skipping quota recording (fail-open)"
+      echo ""
+      exit 0
+      ;;
+    *)
+      die "OCW_METER_HOME is not set and HOME is not set; cannot determine a storage root"
+      ;;
+  esac
+fi
+
+if ! command -v python3 >/dev/null 2>&1; then
+  case "$cmd" in
+    event | bind-pr)
+      warn "python3 not found; skipping '$cmd' (fail-open, no event recorded)"
+      exit 0
+      ;;
+    snapshot-quota)
+      warn "python3 not found; skipping quota recording (fail-open)"
+      echo ""
+      exit 0
+      ;;
+    *)
+      die "required command not found: python3"
+      ;;
+  esac
+fi
+
+# NOTE on stdin: this used to be `python3 - "$cmd" "$@" <<'PY' ... PY`.
+# `python3 -` reads its OWN program text from stdin, and a `<<'PY'`
+# heredoc attached to that same command supplies that program text BY
+# REPLACING the process's stdin (fd 0) with the heredoc content. That
+# is invisible for every subcommand that never touches sys.stdin
+# (event/bind-pr/ingest/validate/report), but `snapshot-quota` (孫4)
+# needs to read the real piped statusLine JSON from its OWN stdin —
+# with the old form, python's parser would consume the heredoc as the
+# program, leaving sys.stdin at EOF, so snapshot-quota would ALWAYS see
+# empty input no matter what the caller piped in (caught by manual
+# testing while implementing 孫4 — every sample silently reported
+# rate_limits absent). Process substitution (`<(...)`) hands python a
+# FILE to read its program from instead of stdin, so fd 0 is never
+# touched here and passes through to the embedded script exactly as
+# the caller of `ocw-meter snapshot-quota` provided it.
+python3 <(
+  cat <<'PY'
+# PERFORMANCE NOTE (why `ingest`, below, has its own write path instead
+# of calling `record`/`write_event` once per message): this CLI resolves
+# git metadata (repo slug, worktree root, branch, HEAD SHA, plus the
+# worktree-safety check itself — 5 `git` subprocess calls per `event`
+# invocation) and reloads the *entire* monthly seen-keys file on every
+# single `event` invocation. Measured at ~75ms/event in this repo. That
+# is fine for the phase-boundary event volumes `ocw` / `pr-review-loop`
+# produce (tens of events per run), but a real transcript has tens of
+# thousands of messages (DOC-2608021229 §2.2 measured 39,888 distinct
+# `message.id`s in one month) — looping this CLI once per message would
+# take on the order of an hour and re-read an ever-growing seen-keys
+# file on every iteration (effectively O(n^2)). `ingest` does NOT shell
+# out to `ocw-meter event` per message; see `bulk_write_events` below,
+# which resolves Herdr/run/pr context once and keeps the seen-key set
+# (and the storage lock) for the whole batch.
+#
+# On top of that: a duplicate idempotency_key triggers last-write-wins
+# (round-2), which rewrites the *entire* day's events file via
+# `_replace_line_by_idempotency_key`. DOC-2608021229 §2.2 measured 59.4% of
+# real assistant lines as message.id duplicates — meaning a naive
+# per-message ingest loop would trigger this full-file rewrite for the
+# majority of its calls, each one O(file size). This is the single
+# biggest reason `ingest` needs its own batch path: resolve all
+# duplicates for one message.id in memory before doing a single write
+# per calendar-day file, rather than writing-then-rewriting through this
+# CLI's per-event primitives.
+import contextlib
+import errno
+import fcntl
+import json
+import math
+import os
+import pathlib
+import re
+import select
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+import uuid
+from datetime import datetime, timezone
+
+SCHEMA_VERSION = 1
+# Bumped whenever `ingest`'s transcript-line -> usage.message extraction
+# logic changes shape (plan §8.1 `parser_version`). Stored events keep
+# whatever version produced them; never rewritten retroactively.
+INGEST_PARSER_VERSION = 1
+
+ENVELOPE_FIELDS = (
+    "schema_version", "event_id", "idempotency_key", "event_type", "ts",
+    "ts_local_offset", "source", "parser_version", "completeness", "run_id",
+    "repo", "worktree", "branch", "head_sha", "workspace_id", "pane_id",
+    "role", "session_id", "provider", "model", "phase", "round",
+    "pr_number", "pr_url",
+)
+INT_FIELDS = ("schema_version", "round", "pr_number")
+REQUIRED_FIELDS = ("event_id", "event_type", "idempotency_key", "schema_version", "ts")
+
+# Payload fields (not part of the fixed envelope) that plan §8.4/§8.5
+# define as numbers. Without coercing these, every one of them would be
+# stored as a string forever — harmless to look at, but plan §8.4's cost
+# formula does arithmetic on them and would TypeError the moment
+# anything actually reads these fields (round-3 review). `used_pct`
+# fields may legitimately be non-integer percentages, so these try int
+# first, then float — see `to_number`.
+#
+# Kept in sync with plan §8.4 (usage.message) and §8.5 (quota.sample) by
+# going through each table top-to-bottom (round-4 review, after
+# `cost_estimate_usd` and `is_sidechain` were missed the first pass):
+#   §8.4 numeric: input_tokens, cache_creation_input_tokens,
+#     cache_read_input_tokens, output_tokens, reasoning_tokens,
+#     cost_estimate_usd
+#   §8.4 boolean: is_sidechain -> BOOL_PAYLOAD_FIELDS below
+#   §8.4 string/no-coercion: message_id, effort, stop_reason,
+#     price_table_version, price_effective_date, cost_basis, currency
+#   §8.5 numeric: five_hour_used_pct, five_hour_resets_at,
+#     seven_day_used_pct, seven_day_resets_at, context_used_pct
+#   §8.5 string/no-coercion: window_id, plan_source, raw_ref
+#   session_cost_usd: NOT in plan §8.5's original table — added per
+#     DOC-2608021229 §8 (孫4 instruction 5): statusLine's own `cost.
+#     total_cost_usd` (self-reported by Claude Code, 66/66 samples in
+#     DOC-2608021229 §2.1) is recorded alongside the rate_limits fields, kept
+#     in its own column, never summed with ocw-meter's own
+#     cost_estimate_usd (different data source, different trust level).
+#   other numeric payload fields (review.round/phase.end/block.end):
+#     findings_count, duration_ms, wait_ms
+NUMERIC_PAYLOAD_FIELDS = frozenset({
+    "findings_count", "duration_ms", "wait_ms",
+    "input_tokens", "output_tokens", "cache_read_input_tokens",
+    "cache_creation_input_tokens", "reasoning_tokens", "cost_estimate_usd",
+    "five_hour_used_pct", "seven_day_used_pct", "context_used_pct",
+    "five_hour_resets_at", "seven_day_resets_at", "session_cost_usd",
+})
+BOOL_PAYLOAD_FIELDS = frozenset({"is_sidechain"})
+_TRUE_STRINGS = frozenset({"true", "1", "yes"})
+_FALSE_STRINGS = frozenset({"false", "0", "no"})
+
+COMPLETENESS_ENUM = ("complete", "partial", "unknown")
+SOURCE_ENUM = ("ocw", "pr-review-loop", "transcript", "statusline", "unknown")
+
+# Per-event-type required payload fields, plan §8.2/§8.3. Only the event
+# types this phase's prompt lists as in-scope get enforced; an
+# `event_type` NOT in this table is treated as forward-compatible (no
+# payload check) rather than rejected outright — new event types must be
+# addable without every historical `ocw-meter` binary starting to
+# quarantine them (plan §9.1 "未知フィールドは保持する" extended to
+# unknown *types*, not just unknown fields).
+#
+# usage.message / quota.sample get their schema defined here per the
+# 孫1 prompt §2 even though nothing in this phase produces them yet
+# (that's 孫3/孫4) — see plan §8.4/§8.5.
+# Required sets are deliberately conservative (round-2 review): a field
+# only belongs here if the plan's own 孫2/孫3/孫4 embedding examples show
+# it being set on *every* occurrence of that event type. `phase.end`'s
+# `outcome`/`duration_ms` and `block.end`'s `wait_ms` were removed —
+# 孫2's actual embedding only sets `outcome` on the final `done`
+# phase.end, and block.* is explicitly "best-effort" (plan §8.2).
+# `quota.sample` keeps only `plan_source`: everything else about a
+# quota sample is legitimately absent (DeepSeek sessions have no
+# rate_limits at all — DOC-2608021229 §2.1 — and even Anthropic sessions saw
+# `context_used_pct` null in 7/66 samples) and T10 requires recording
+# that absence as null, not treating it as corruption.
+EVENT_PAYLOAD_REQUIRED = {
+    "run.start": ("base_ref", "command"),
+    "run.end": ("outcome",),
+    "phase.start": ("phase",),
+    "phase.end": ("phase",),
+    "pr.bind": ("pr_number",),
+    "review.round": ("round", "verdict", "findings_count"),
+    "human.intervention": ("reason",),
+    "block.start": ("cause",),
+    "block.end": ("cause",),
+    "meter.error": ("stage",),
+    "usage.message": (
+        "message_id", "input_tokens", "cache_read_input_tokens",
+        "cache_creation_input_tokens", "output_tokens", "cost_basis",
+    ),
+    "quota.sample": ("plan_source",),
+}
+
+EVENT_ENUM_FIELDS = {
+    "phase.end": {"outcome": ("success", "failure", "blocked")},
+    "review.round": {"verdict": ("approved", "changes_requested", "ambiguous")},
+    "block.start": {"cause": ("rate_limit", "api_error", "unknown")},
+    "block.end": {"cause": ("rate_limit", "api_error", "unknown")},
+}
+
+# Secret-shaped values must never survive into stored events (plan §9.2 /
+# T17). `redact_value` covers structured field values keyed by name;
+# `redact_text` covers free-form text (exception messages) where there is
+# no field name to key off, so only the pattern-based half applies there.
+#
+# SECRET_KEY_RE requires "token"/"secret"/etc. to be a whole underscore-
+# delimited segment of the field name, not merely a substring — a naive
+# substring match redacts `input_tokens` / `output_tokens` /
+# `cache_read_input_tokens` / `cache_creation_input_tokens` /
+# `reasoning_tokens` (round-2 review, most severe finding: this project
+# exists to measure exactly those numbers). TOKEN_COUNT_FIELD_NAMES is a
+# belt-and-suspenders explicit allow-list on top of that, since relying
+# solely on "tokens" (plural) not matching a boundary-anchored "token"
+# pattern is a coincidence worth not depending on alone.
+TOKEN_COUNT_FIELD_NAMES = frozenset({
+    "input_tokens", "output_tokens", "cache_read_input_tokens",
+    "cache_creation_input_tokens", "reasoning_tokens",
+})
+SECRET_KEY_RE = re.compile(
+    r"(?:^|[-_])(api[-_]?key|token|secret|password|authorization)(?:$|[-_])",
+    re.IGNORECASE,
+)
+# Each secret-shaped pattern requires a non-alphanumeric boundary before
+# it (negative lookbehind) — without this, `sk-` matches mid-word inside
+# ordinary strings like "task-force" or "risk-assessment" (round-2
+# review), which is a real hazard since `worktree`/`branch` are captured
+# automatically from `git` and `ocw` names branches `ai/<slug>`.
+SECRET_VALUE_RE = re.compile(
+    r"Authorization:\s*.*"
+    r"|Bearer\s+\S+"
+    r"|(?<![A-Za-z0-9])sk-[A-Za-z0-9_-]+"
+    r"|(?<![A-Za-z0-9])gh[pousr]_[A-Za-z0-9]+"
+    r"|(?<![A-Za-z0-9])github_pat_[A-Za-z0-9_]+",
+    re.IGNORECASE,
+)
+
+
+class MeterTimeout(Exception):
+    pass
+
+
+# ── small helpers ──────────────────────────────────────────────────────
+
+def iso_utc(dt):
+    return dt.strftime("%Y-%m-%dT%H:%M:%S.") + f"{dt.microsecond // 1000:03d}Z"
+
+
+def parse_ts(value):
+    """Always returns a timezone-AWARE datetime (or None). `ts` is
+    normally always `Z`-suffixed (`iso_utc` never produces anything
+    else), but `event`'s `--ts` override lets a caller store an
+    offset-less value (plan §8.1 lists `ts` as a plain overridable
+    envelope field, and nothing in `hard_line_errors` rejects an
+    offset-less-but-otherwise-valid ISO 8601 string). PR #27 review
+    round 3 finding "新規1": comparing such a naive datetime against an
+    aware one (as `ingest`'s run_id staleness check — round 2 finding
+    "新規1" — does) raises TypeError and takes down the whole `ingest`
+    run with no recovery path (`validate` doesn't reject offset-less
+    `ts` either). A naive value is treated as UTC, matching every other
+    `ts` in this schema and `month_of`'s existing (and, before this fix,
+    silently wrong for naive input) `.astimezone(timezone.utc)` call."""
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt
+
+
+def local_offset_str():
+    offset = datetime.now().astimezone().utcoffset()
+    if offset is None:
+        return "+00:00"
+    total_minutes = int(offset.total_seconds() // 60)
+    sign = "+" if total_minutes >= 0 else "-"
+    total_minutes = abs(total_minutes)
+    return f"{sign}{total_minutes // 60:02d}:{total_minutes % 60:02d}"
+
+
+def redact_value(key, value):
+    if not isinstance(value, str):
+        return value
+    if key and key not in TOKEN_COUNT_FIELD_NAMES and SECRET_KEY_RE.search(key):
+        return "[REDACTED]"
+    if SECRET_VALUE_RE.search(value):
+        return SECRET_VALUE_RE.sub("[REDACTED]", value)
+    return value
+
+
+def redact_text(text):
+    """Pattern-only redaction for free-form strings (error/warning
+    messages) that may echo caller-supplied CLI values but have no field
+    name to key `redact_value`'s key-name check off of (plan §10.1: never
+    log the content of input data, not even in the meter's own errors)."""
+    if not isinstance(text, str):
+        return text
+    return SECRET_VALUE_RE.sub("[REDACTED]", text)
+
+
+def redact_json_deep(value, key=None):
+    """Recursive counterpart to `redact_value` for arbitrary nested JSON
+    (a full statusLine object, plan §9.3's opt-in raw snapshot storage)
+    rather than a single flat field. Applies the exact same key-name and
+    value-pattern rules, just walked through dicts/lists instead of
+    assumed to be one level deep."""
+    if isinstance(value, dict):
+        return {k: redact_json_deep(v, k) for k, v in value.items()}
+    if isinstance(value, list):
+        return [redact_json_deep(v, key) for v in value]
+    if isinstance(value, str):
+        return redact_value(key, value)
+    return value
+
+
+def _git(args, cwd=None):
+    try:
+        result = subprocess.run(
+            ["git", *args],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+    except Exception:
+        return None
+    if result.returncode != 0:
+        return None
+    value = result.stdout.strip()
+    return value or None
+
+
+def git_worktree_root():
+    return _git(["rev-parse", "--show-toplevel"])
+
+
+def git_branch():
+    branch = _git(["rev-parse", "--abbrev-ref", "HEAD"])
+    return None if branch == "HEAD" else branch
+
+
+def git_head_sha():
+    return _git(["rev-parse", "HEAD"])
+
+
+def git_repo_slug(cwd=None):
+    url = _git(["remote", "get-url", "origin"], cwd=cwd)
+    if not url:
+        return None
+    m = re.search(r"[:/]([^/:]+)/([^/]+?)(?:\.git)?$", url)
+    return f"{m.group(1)}/{m.group(2)}" if m else None
+
+
+def in_git_worktree(path):
+    p = pathlib.Path(path)
+    try:
+        p = p.resolve()
+    except OSError:
+        pass
+    check_dir = p
+    while not check_dir.exists():
+        parent = check_dir.parent
+        if parent == check_dir:
+            return False
+        check_dir = parent
+    return _git(["rev-parse", "--is-inside-work-tree"], cwd=str(check_dir)) == "true"
+
+
+# ── storage layout ─────────────────────────────────────────────────────
+
+class Paths:
+    def __init__(self, root):
+        self.root = pathlib.Path(root)
+        self.events_dir = self.root / "events"
+        self.state_dir = self.root / "state"
+        self.seen_keys_dir = self.state_dir / "seen-keys"
+        self.quarantine_dir = self.root / "quarantine"
+        # opt-in only (plan §9.3) — deliberately NOT created by
+        # ensure_storage() below, unlike every other directory here.
+        self.raw_dir = self.root / "raw"
+        self.lock_file = self.state_dir / ".lock"
+        # Deliberately NOT under events_dir: `_replace_line_by_
+        # idempotency_key` only ever rewrites files under events_dir, so
+        # keeping meter.error's diagnostics in a separate file lets
+        # `emit_meter_error` append lock-free with zero risk of losing
+        # data to that rewrite's inode swap (round-4 review — sharing
+        # the main lock made the write_event_lock_timeout diagnostic
+        # self-defeating: it would need the very lock it's reporting as
+        # unavailable).
+        self.meter_errors_file = self.state_dir / "meter-errors.jsonl"
+
+
+def storage_root():
+    return os.environ.get("OCW_METER_HOME") or str(pathlib.Path.home() / ".local" / "state" / "ocw-meter")
+
+
+def default_storage_root():
+    home = os.environ.get("HOME")
+    return str(pathlib.Path(home) / ".local" / "state" / "ocw-meter") if home else None
+
+
+def ensure_dir(path, mode=0o700):
+    path.mkdir(parents=True, exist_ok=True)
+    try:
+        os.chmod(path, mode)
+    except OSError:
+        pass
+
+
+def ensure_storage(root):
+    paths = Paths(root)
+    for d in (paths.root, paths.events_dir, paths.state_dir, paths.seen_keys_dir, paths.quarantine_dir):
+        ensure_dir(d, 0o700)
+    return paths
+
+
+@contextlib.contextmanager
+def acquire_lock(lock_path, timeout=0.1, poll=0.005):
+    ensure_dir(lock_path.parent, 0o700)
+    fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o600)
+    start = time.monotonic()
+    acquired = False
+    try:
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                acquired = True
+                break
+            except OSError as exc:
+                if exc.errno not in (errno.EAGAIN, errno.EACCES):
+                    raise
+                if time.monotonic() - start >= timeout:
+                    break
+                time.sleep(poll)
+        yield acquired
+    finally:
+        if acquired:
+            with contextlib.suppress(OSError):
+                fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
+
+
+def append_line(path, line, mode=0o600):
+    fd = os.open(str(path), os.O_CREAT | os.O_WRONLY | os.O_APPEND, mode)
+    try:
+        os.write(fd, (line + "\n").encode("utf-8"))
+    finally:
+        os.close(fd)
+
+
+def _replace_line_by_idempotency_key(events_file, key, new_line):
+    """Atomically replace the first stored line whose idempotency_key
+    matches `key`. Returns False (no-op) if no such line is found in
+    THIS file — same-key resends land in the same day's file in the
+    overwhelming common case, so this deliberately does not search
+    across files.
+
+    Preserves whether the file ended with a trailing newline. A file
+    lacking one has a truncated final line — the only signal
+    `validate_file` has for "process crashed mid-write" (T05). Naively
+    rejoining lines with "\\n" after every line, including the last,
+    would silently "heal" that truncation the next time any *other*
+    key happens to get replaced, destroying the crash evidence
+    (round-3 review)."""
+    if not events_file.exists():
+        return False
+    text = events_file.read_text(encoding="utf-8")
+    if not text:
+        return False
+    trailing_newline = text.endswith("\n")
+    lines = text.split("\n")
+    if trailing_newline:
+        lines = lines[:-1]
+
+    replaced = False
+    out = []
+    for line in lines:
+        if not replaced:
+            try:
+                obj = json.loads(line)
+            except json.JSONDecodeError:
+                obj = None
+            if isinstance(obj, dict) and obj.get("idempotency_key") == key:
+                out.append(new_line)
+                replaced = True
+                continue
+        out.append(line)
+    if not replaced:
+        return False
+
+    content = "\n".join(out) + ("\n" if trailing_newline else "")
+
+    tmp_fd, tmp_path = tempfile.mkstemp(dir=str(events_file.parent), prefix=".tmp-", suffix=".jsonl")
+    try:
+        with os.fdopen(tmp_fd, "w", encoding="utf-8") as fh:
+            fh.write(content)
+        os.chmod(tmp_path, 0o600)
+        os.replace(tmp_path, events_file)
+    except Exception:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp_path)
+        raise
+    return True
+
+
+def write_event(paths, event):
+    """Single flock-guarded check-then-append: dedup via idempotency_key,
+    one write() per file (plan §10.3 concurrent-writer requirement).
+
+    Last-write-wins on a duplicate idempotency_key (round-2 review): a
+    resend under the same key is either a corrected resubmission (a
+    quarantined event freed its key — see cmd_validate) or, for an event
+    like `usage.message`, a later content-block line carrying more
+    complete data than an earlier one for the same `message.id` (plan
+    §5.3) — either way the newer payload is the one worth keeping.
+
+    NOTE: this is the one exception to "events/*.jsonl is append-only"
+    (plan §9.1/§10.3). A duplicate key triggers a full read + atomic
+    rewrite of that day's file (see `_replace_line_by_idempotency_key`)
+    instead of a plain append. This is still crash-safe (mkstemp +
+    os.replace). `emit_meter_error` never touches events/*.jsonl at all
+    (it has its own `state/meter-errors.jsonl` — round-4 review), so
+    there is no longer a lock-free-append-vs-rewrite race to worry
+    about here."""
+    dt = parse_ts(event["ts"]) or datetime.now(timezone.utc)
+    events_file = paths.events_dir / f"{dt.strftime('%Y-%m-%d')}.jsonl"
+    seen_file = paths.seen_keys_dir / f"{dt.strftime('%Y-%m')}.txt"
+
+    with acquire_lock(paths.lock_file, timeout=0.1) as acquired:
+        if not acquired:
+            raise MeterTimeout("could not acquire storage lock within 100ms")
+
+        seen = set()
+        if seen_file.exists():
+            with open(seen_file, "r", encoding="utf-8") as fh:
+                seen = {line.rstrip("\n") for line in fh if line.strip()}
+
+        key = event["idempotency_key"]
+        new_line = json.dumps(event, ensure_ascii=False, sort_keys=True, allow_nan=False)
+
+        if key in seen:
+            if _replace_line_by_idempotency_key(events_file, key, new_line):
+                return "replaced"
+            return "duplicate"  # original line lives in a different day's file
+
+        ensure_dir(paths.events_dir, 0o700)
+        ensure_dir(paths.seen_keys_dir, 0o700)
+        append_line(events_file, new_line)
+        append_line(seen_file, key)
+        return "written"
+
+
+# ── envelope construction ──────────────────────────────────────────────
+
+def to_number(value):
+    """Best-effort int-then-float coercion. Returns (converted, True) on
+    success or (original_value, False) on failure.
+
+    Rejects non-finite floats (nan/inf): those aren't valid JSON literals
+    (Python's `json` module accepts them as a non-standard extension,
+    but `jq` and most other languages' parsers do not — round-4 review),
+    so a non-finite result is treated the same as any other coercion
+    failure: left as-is and flagged, which downgrades completeness to
+    "partial" rather than silently writing JSON nothing else can read.
+
+    An already-numeric `value` (bool excluded) is handled BEFORE the
+    int()-then-float() string-parsing fallback below: found while
+    implementing 孫4's `snapshot-quota`, which is this file's first
+    caller to hand build_envelope() an already-typed python float
+    directly (every other caller's overrides arrive as CLI-flag
+    strings). `int(4.56)` silently SUCCEEDS (truncating to `4`) rather
+    than raising — Python's `int()` truncates floats instead of
+    rejecting them the way `int("4.56")` correctly does for strings —
+    so a real float like a statusLine session cost of $4.56 was being
+    silently mangled into $4 with no completeness downgrade to show for
+    it. The int()-first order below is still correct and necessary for
+    genuine strings (CLI flags): `int("37")` must produce a clean int
+    37, not float 37.0, and `int("4.56")` raising is exactly what makes
+    that fall through to float() correctly for a decimal STRING."""
+    if isinstance(value, bool):
+        pass  # bool is an int subclass; fall through to the normal string-shaped path rather than special-casing it (no known caller passes one here, and there's nothing more "correct" to do with it).
+    elif isinstance(value, int):
+        return value, True
+    elif isinstance(value, float):
+        return (value, True) if math.isfinite(value) else (value, False)
+    try:
+        return int(value), True
+    except (TypeError, ValueError):
+        pass
+    try:
+        converted = float(value)
+    except (TypeError, ValueError):
+        return value, False
+    if not math.isfinite(converted):
+        return value, False
+    return converted, True
+
+
+def to_bool(value):
+    """Best-effort bool coercion for CLI string values. Returns
+    (converted, True) on success or (original_value, False) on failure."""
+    if isinstance(value, str) and value.strip().lower() in _TRUE_STRINGS:
+        return True, True
+    if isinstance(value, str) and value.strip().lower() in _FALSE_STRINGS:
+        return False, True
+    return value, False
+
+
+def normalize_value(key, value, failures):
+    """Applied to every caller-supplied override, both fixed envelope
+    fields and extra/payload fields alike (round-3 review — the extras
+    loop previously bypassed coercion entirely, so payload numbers like
+    input_tokens/findings_count stayed strings forever).
+
+    An empty string becomes JSON null: this is how a caller (a future
+    `ingest`/`snapshot-quota`) records "I checked and this is genuinely
+    unavailable" (plan §8.5 / DOC-2608021229 §2.1), as distinct from never
+    mentioning the field at all — CLI flags can't carry a real `null`,
+    so "" is the closest a string-only interface gets."""
+    if value == "":
+        return None
+    if key in INT_FIELDS:
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            # Left as the original (wrong-typed) value; the caller
+            # downgrades completeness to "partial" for this (see
+            # build_envelope) so the mistake is visible immediately, not
+            # just whenever someone next happens to run `validate`.
+            failures.append(key)
+            return value
+    if key in NUMERIC_PAYLOAD_FIELDS:
+        converted, ok = to_number(value)
+        if not ok:
+            failures.append(key)
+            return value
+        return converted
+    if key in BOOL_PAYLOAD_FIELDS:
+        converted, ok = to_bool(value)
+        if not ok:
+            failures.append(key)
+            return value
+        return converted
+    return value
+
+
+def parse_flags(args, mapping=None):
+    """Parse a flat "--flag value" arg list. With no mapping, the flag
+    name itself (dashes -> underscores) becomes the field name — this is
+    what makes `event <type> --any-field value` forward-extensible."""
+    result = {}
+    i = 0
+    while i < len(args):
+        token = args[i]
+        if not token.startswith("--"):
+            raise ValueError(f"expected a --flag, got: {token!r}")
+        if i + 1 >= len(args):
+            raise ValueError(f"flag {token} is missing a value")
+        value = args[i + 1]
+        if mapping is not None:
+            key = mapping.get(token)
+            if key is None:
+                raise ValueError(f"unknown flag: {token}")
+        else:
+            key = token[2:].replace("-", "_")
+        result[key] = value
+        i += 2
+    return result
+
+
+def build_envelope(event_type, overrides):
+    if not event_type or not isinstance(event_type, str):
+        raise ValueError("event_type must be a non-empty string")
+
+    now = datetime.now(timezone.utc)
+    event_id = overrides.get("event_id") or str(uuid.uuid4())
+
+    defaults = {
+        "schema_version": SCHEMA_VERSION,
+        "event_id": event_id,
+        "idempotency_key": f"auto:{event_id}",
+        "event_type": event_type,
+        "ts": iso_utc(now),
+        "ts_local_offset": local_offset_str(),
+        # plan §8.1: role/source are typed as plain `string`, not
+        # `string | null` — "unknown" is the documented sentinel for
+        # "could not be resolved", not the absence of the field.
+        "source": "unknown",
+        "parser_version": None,
+        "completeness": "complete",
+        "run_id": os.environ.get("OCW_RUN_ID"),
+        "repo": git_repo_slug(),
+        "worktree": git_worktree_root(),
+        "branch": git_branch(),
+        "head_sha": git_head_sha(),
+        "workspace_id": os.environ.get("HERDR_WORKSPACE_ID"),
+        "pane_id": os.environ.get("HERDR_PANE_ID"),
+        "role": os.environ.get("OCW_ROLE") or "unknown",
+        "session_id": None,
+        "provider": None,
+        "model": None,
+        "phase": None,
+        "round": None,
+        "pr_number": None,
+        "pr_url": None,
+    }
+
+    coercion_failures = []
+    event = {}
+    for field in ENVELOPE_FIELDS:
+        event[field] = normalize_value(field, overrides[field], coercion_failures) if field in overrides else defaults[field]
+
+    # Unknown flags become extra top-level fields (e.g. run.start's
+    # base_ref) — forward compatible, never silently dropped. Also
+    # normalized (empty string -> null, known numeric payload fields ->
+    # int/float) so `usage.message`/`quota.sample`/etc. store real
+    # numbers, not strings (round-3 review).
+    for key, value in overrides.items():
+        if key not in ENVELOPE_FIELDS:
+            event[key] = normalize_value(key, value, coercion_failures)
+
+    if coercion_failures and "completeness" not in overrides:
+        # A caller passed a non-integer for round/pr_number/schema_version.
+        # `validate` will still quarantine it, but don't wait for someone
+        # to run `validate` to find out — flag it the moment it happens.
+        event["completeness"] = "partial"
+
+    for key in list(event.keys()):
+        event[key] = redact_value(key, event[key])
+
+    if not event.get("idempotency_key"):
+        event["idempotency_key"] = f"auto:{event_id}"
+
+    return event
+
+
+def emit_meter_error(root, stage, exc):
+    """Best-effort self-diagnostic (plan §8.2/§10.2 `meter.error`). Never
+    raises. Never takes the main storage lock, and does NOT write into
+    events/*.jsonl — it appends to its own `state/meter-errors.jsonl`
+    instead (see `Paths.meter_errors_file`). Round-3 shared the main
+    lock to avoid a race with `_replace_line_by_idempotency_key`, but
+    that made the `write_event_lock_timeout` diagnostic self-defeating:
+    it needs the very lock it exists to report as unavailable, so it
+    would almost never actually record anything (round-4 review). A
+    dedicated file sidesteps the race a different way: nothing else
+    ever rewrites this file, so a lock-free O_APPEND write here is safe
+    regardless of what's happening to events/*.jsonl.
+
+    If `root` itself is the problem (points inside a Git worktree), fall
+    back to the default storage root instead of writing into the very
+    path being refused — otherwise a misconfigured OCW_METER_HOME would
+    leave literally no trace anywhere that anything was ever wrong. When
+    that happens, this prints a one-line stderr warning naming the
+    fallback location, since a user who explicitly set OCW_METER_HOME
+    would otherwise have no way to know their diagnostics are landing
+    somewhere else entirely (round-2 review).
+
+    idempotency_key is stable per (stage, day), not `auto:<uuid4>`, so a
+    persistent misconfiguration caps out at one line per stage per day
+    instead of growing without bound (round-2 review). The substring
+    check below is a best-effort, non-atomic dedup; it is not race-proof
+    against concurrent writers, which is an acceptable trade-off for a
+    diagnostic record."""
+    try:
+        target_root = root
+        fell_back = False
+        if in_git_worktree(target_root):
+            target_root = default_storage_root()
+            if target_root is None or in_git_worktree(target_root):
+                return
+            fell_back = True
+
+        paths = Paths(target_root)
+        # Round-5 review: `ensure_dir` only chmods the leaf directory it's
+        # given, so passing state_dir alone left the storage ROOT at
+        # umask-default 755 whenever this ran before `ensure_storage` had
+        # a chance to (e.g. this exact fallback path, or any failure
+        # this fires from on a brand-new root). Plan §9.1/§9.3 require
+        # 700 on every directory, root included.
+        ensure_dir(paths.root, 0o700)
+        ensure_dir(paths.state_dir, 0o700)
+        now = datetime.now(timezone.utc)
+        idempotency_key = f"meter-error:{stage}:{now.strftime('%Y-%m-%d')}"
+
+        if paths.meter_errors_file.exists():
+            try:
+                if idempotency_key in paths.meter_errors_file.read_text(encoding="utf-8"):
+                    return
+            except OSError:
+                pass
+
+        event = build_envelope("meter.error", {
+            "completeness": "unknown",
+            "idempotency_key": idempotency_key,
+            "stage": stage,
+            "error_type": type(exc).__name__ if exc is not None else None,
+        })
+        append_line(paths.meter_errors_file, json.dumps(event, ensure_ascii=False, sort_keys=True, allow_nan=False))
+
+        if fell_back:
+            print(
+                f"warning: OCW_METER_HOME is misconfigured; recorded a meter.error "
+                f"diagnostic at the default storage root instead ({paths.root})",
+                file=sys.stderr,
+            )
+    except Exception:
+        pass
+
+
+def record(event_type, overrides):
+    root = storage_root()
+    if in_git_worktree(root):
+        print(
+            f"warning: OCW_METER_HOME ({root}) resolves inside a Git worktree; "
+            "refusing to write there (no event recorded)",
+            file=sys.stderr,
+        )
+        emit_meter_error(root, "storage_home_inside_git_worktree", None)
+        return 0
+
+    paths = ensure_storage(root)
+    event = build_envelope(event_type, overrides)
+    try:
+        write_event(paths, event)
+    except MeterTimeout as exc:
+        print(f"warning: {exc}", file=sys.stderr)
+        emit_meter_error(root, "write_event_lock_timeout", exc)
+        return 0
+    return 0
+
+
+# ── subcommands: event / bind-pr (fail-open) ───────────────────────────
+
+def cmd_event(args):
+    if not args or args[0].startswith("--"):
+        print("error: event requires an <event_type> argument", file=sys.stderr)
+        return 0
+    event_type, rest = args[0], args[1:]
+    overrides = parse_flags(rest)
+    return record(event_type, overrides)
+
+
+def cmd_bind_pr(args):
+    parsed = parse_flags(args, {"--run": "run_id", "--pr": "pr_number", "--url": "pr_url"})
+    run_id = parsed.get("run_id")
+    pr_number_raw = parsed.get("pr_number")
+    if not run_id or pr_number_raw is None:
+        print("error: bind-pr requires --run <run_id> and --pr <n>", file=sys.stderr)
+        return 0
+    try:
+        pr_number = int(pr_number_raw)
+    except ValueError:
+        print(f"error: --pr must be an integer, got: {redact_text(repr(pr_number_raw))}", file=sys.stderr)
+        return 0
+
+    overrides = {
+        "run_id": run_id,
+        "pr_number": pr_number,
+        "pr_url": parsed.get("pr_url"),
+        "idempotency_key": f"bind:{run_id}:{pr_number}",
+    }
+    return record("pr.bind", overrides)
+
+
+# ── validate / report (fail-loud) ───────────────────────────────────────
+
+def hard_line_errors(obj):
+    """Errors that mean the line is corrupt or unusable — these are what
+    `validate` quarantines (removes from the events file). Deliberately
+    does NOT include per-event-type payload shape (see
+    `payload_shape_issues`): a semantically-incomplete-but-well-formed
+    event is not corruption, and quarantining it would delete a record
+    that plan §10.2 explicitly says to keep (as `completeness: partial`)."""
+    if not isinstance(obj, dict):
+        return ["not a JSON object"]
+    errors = []
+    for field in REQUIRED_FIELDS:
+        if obj.get(field) in (None, ""):
+            errors.append(f"missing required field: {field}")
+    if "schema_version" in obj and obj["schema_version"] is not None and not isinstance(obj["schema_version"], int):
+        errors.append("schema_version must be an int")
+    if obj.get("ts") and parse_ts(obj["ts"]) is None:
+        errors.append("ts is not a valid RFC3339 timestamp")
+    for field in ("round", "pr_number"):
+        value = obj.get(field)
+        if value is not None and not isinstance(value, int):
+            errors.append(f"{field} must be an int or null")
+
+    # Same treatment as round/pr_number, not payload_shape_issues: a
+    # *present* value of the wrong type is a corruption signal (data
+    # written by something that didn't go through this CLI's coercion),
+    # not an absence — so it's hard/quarantine-worthy regardless of
+    # completeness, matching the existing round/pr_number precedent
+    # (round-3 review).
+    for field in NUMERIC_PAYLOAD_FIELDS:
+        value = obj.get(field)
+        if value is not None and not isinstance(value, (int, float)):
+            errors.append(f"{field} must be a number or null, got: {value!r}")
+        elif isinstance(value, float) and not math.isfinite(value):
+            # Defense in depth: our own write path never produces these
+            # (`to_number` rejects non-finite results), but a foreign
+            # producer writing straight to the JSONL could still inject
+            # a `NaN`/`Infinity` literal that Python's `json.loads`
+            # happens to accept even though it isn't valid JSON.
+            errors.append(f"{field} must be a finite number, got: {value!r}")
+
+    for field in BOOL_PAYLOAD_FIELDS:
+        value = obj.get(field)
+        if value is not None and not isinstance(value, bool):
+            errors.append(f"{field} must be a bool or null, got: {value!r}")
+
+    completeness = obj.get("completeness")
+    if completeness is not None and completeness not in COMPLETENESS_ENUM:
+        errors.append(f"completeness must be one of {COMPLETENESS_ENUM}, got: {completeness!r}")
+
+    source = obj.get("source")
+    if source is not None and source not in SOURCE_ENUM:
+        errors.append(f"source must be one of {SOURCE_ENUM}, got: {source!r}")
+
+    # role is deliberately NOT checked against a closed enum: plan §8.1
+    # notes it may grow ("将来 controller 等を追加可"), so a strict
+    # allow-list here would just make future roles look like corruption.
+
+    return errors
+
+
+def payload_shape_issues(obj):
+    """Advisory-only, per-event-type payload checks (plan §8.2/§8.3).
+    Only evaluated when the writer itself claimed `completeness ==
+    "complete"` — an event already marked partial/unknown has already
+    told us it's incomplete, so there's nothing more to flag (round-2
+    review: applying this to best-effort/partial events just quarantined
+    data plan §10.2 says to keep).
+
+    Round-2 review: a required field being explicitly present with a
+    null/empty value (the caller tried and confirmed it's unavailable)
+    is NOT the same as the field never appearing at all (the caller
+    never even attempted it) — only the latter counts as "missing".
+
+    Round-4 review: that distinction is about MISSING vs ABSENT-BUT-
+    ACKNOWLEDGED, not about "null is fine." A *required* field that is
+    present-but-null (e.g. an unset shell variable passed through as
+    `--phase ""`) still isn't usable data — `completeness: "complete"`
+    would be a lie either way, so both cases downgrade to "partial"."""
+    if obj.get("completeness") != "complete":
+        return []
+    issues = []
+    event_type = obj.get("event_type")
+    for field in EVENT_PAYLOAD_REQUIRED.get(event_type, ()):
+        if field not in obj:
+            issues.append(f"missing required payload field for {event_type}: {field}")
+        elif obj[field] is None:
+            issues.append(f"required payload field for {event_type} is null: {field}")
+    for field, allowed in EVENT_ENUM_FIELDS.get(event_type, {}).items():
+        value = obj.get(field)
+        if value is not None and value not in allowed:
+            issues.append(f"{field} must be one of {allowed} for {event_type}, got: {value!r}")
+    return issues
+
+
+def validate_file(path, quarantine_dir):
+    """Returns (counts, quarantined_entries). quarantined_entries carries
+    the parsed object (when JSON parsing succeeded) alongside the raw
+    line and reason, so the caller can also free up any idempotency_key
+    that would otherwise block a corrected resend forever (see the
+    seen-keys cleanup in cmd_validate).
+
+    counts adds "downgraded": events kept in place but rewritten with
+    completeness downgraded to "partial" because they had a payload
+    shape issue (missing/invalid per-event-type field) that is advisory,
+    not corruption — see `payload_shape_issues`."""
+    path = pathlib.Path(path)
+    if not path.exists():
+        return {"total": 0, "valid": 0, "quarantined": 0, "downgraded": 0}, []
+
+    raw = path.read_bytes()
+    raw_lines = raw.split(b"\n")
+    trailing_incomplete = bool(raw_lines and raw_lines[-1] != b"")
+    if raw_lines and raw_lines[-1] == b"":
+        raw_lines = raw_lines[:-1]
+
+    good, bad = [], []  # good: raw line text to keep; bad: dict(raw_line, reason, obj)
+    downgraded = 0
+    for idx, raw_bytes in enumerate(raw_lines):
+        if not raw_bytes.strip():
+            continue
+        is_last = trailing_incomplete and idx == len(raw_lines) - 1
+        try:
+            raw_line = raw_bytes.decode("utf-8")
+        except UnicodeDecodeError:
+            # Strict decode, not errors="replace": silently substituting
+            # U+FFFD and writing that back would permanently corrupt an
+            # otherwise-good line the next time this runs.
+            bad.append({"raw_line": raw_bytes.decode("utf-8", errors="replace"), "reason": "invalid UTF-8 encoding", "obj": None})
+            continue
+        try:
+            obj = json.loads(raw_line)
+        except json.JSONDecodeError:
+            reason = "truncated/malformed JSON (possible process crash)" if is_last else "malformed JSON"
+            bad.append({"raw_line": raw_line, "reason": reason, "obj": None})
+            continue
+
+        errors = hard_line_errors(obj)
+        if errors:
+            bad.append({"raw_line": raw_line, "reason": "; ".join(errors), "obj": obj})
+            continue
+
+        issues = payload_shape_issues(obj)
+        if issues:
+            obj = dict(obj)
+            obj["completeness"] = "partial"
+            good.append(json.dumps(obj, ensure_ascii=False, sort_keys=True, allow_nan=False))
+            downgraded += 1
+        else:
+            good.append(raw_line)
+
+    if bad:
+        date_str = path.stem
+        qpath = pathlib.Path(quarantine_dir) / f"{date_str}.jsonl"
+        ensure_dir(qpath.parent, 0o700)
+        with open(qpath, "a", encoding="utf-8") as fh:
+            for entry in bad:
+                record_ = {
+                    "quarantined_at": iso_utc(datetime.now(timezone.utc)),
+                    "reason": entry["reason"],
+                    "source_file": path.name,
+                    "raw_line": entry["raw_line"],
+                }
+                fh.write(json.dumps(record_, ensure_ascii=False) + "\n")
+        with contextlib.suppress(OSError):
+            os.chmod(qpath, 0o600)
+
+    if bad or downgraded:
+        tmp_fd, tmp_path = tempfile.mkstemp(dir=str(path.parent), prefix=".tmp-", suffix=".jsonl")
+        try:
+            with os.fdopen(tmp_fd, "w", encoding="utf-8") as fh:
+                for raw_line in good:
+                    fh.write(raw_line + "\n")
+            os.chmod(tmp_path, 0o600)
+            os.replace(tmp_path, path)
+        except Exception:
+            with contextlib.suppress(OSError):
+                os.unlink(tmp_path)
+            raise
+
+    return {"total": len(good) + len(bad), "valid": len(good), "quarantined": len(bad), "downgraded": downgraded}, bad
+
+
+def month_of(obj, fallback_date_str):
+    ts = obj.get("ts") if obj else None
+    dt = parse_ts(ts) if ts else None
+    if dt is not None:
+        return dt.astimezone(timezone.utc).strftime("%Y-%m")
+    return fallback_date_str[:7]  # "YYYY-MM-DD"[:7] -> "YYYY-MM"
+
+
+def remove_keys_from_seen_file(path, keys_to_remove):
+    if not keys_to_remove or not path.exists():
+        return
+    remaining = [line for line in path.read_text(encoding="utf-8").splitlines() if line.strip() and line not in keys_to_remove]
+    tmp_fd, tmp_path = tempfile.mkstemp(dir=str(path.parent), prefix=".tmp-", suffix=".txt")
+    try:
+        with os.fdopen(tmp_fd, "w", encoding="utf-8") as fh:
+            for line in remaining:
+                fh.write(line + "\n")
+        os.chmod(tmp_path, 0o600)
+        os.replace(tmp_path, path)
+    except Exception:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp_path)
+        raise
+
+
+def cmd_validate(args):
+    parsed = parse_flags(args, {"--file": "file"}) if args else {}
+
+    root = storage_root()
+    if in_git_worktree(root):
+        print(f"error: OCW_METER_HOME ({root}) resolves inside a Git worktree; refusing to operate", file=sys.stderr)
+        return 1
+    paths = ensure_storage(root)
+
+    if parsed.get("file"):
+        candidate = pathlib.Path(parsed["file"]).resolve()
+        events_dir_resolved = paths.events_dir.resolve()
+        if candidate != events_dir_resolved and events_dir_resolved not in candidate.parents:
+            print(
+                f"error: --file must be inside the events directory ({paths.events_dir}); "
+                f"refusing to touch: {candidate}",
+                file=sys.stderr,
+            )
+            return 1
+        targets = [candidate]
+    else:
+        targets = sorted(paths.events_dir.glob("*.jsonl"))
+
+    with acquire_lock(paths.lock_file, timeout=2.0) as acquired:
+        if not acquired:
+            print("error: could not acquire storage lock within 2s", file=sys.stderr)
+            return 1
+        totals = {"total": 0, "valid": 0, "quarantined": 0, "downgraded": 0}
+        keys_to_remove_by_month = {}
+        for target in targets:
+            result, quarantined_entries = validate_file(target, paths.quarantine_dir)
+            for k in totals:
+                totals[k] += result[k]
+            for entry in quarantined_entries:
+                obj = entry["obj"]
+                key = obj.get("idempotency_key") if obj else None
+                if key:
+                    month = month_of(obj, target.stem)
+                    keys_to_remove_by_month.setdefault(month, set()).add(key)
+        for month, keys in keys_to_remove_by_month.items():
+            remove_keys_from_seen_file(paths.seen_keys_dir / f"{month}.txt", keys)
+
+    print(f"files checked:     {len(targets)}")
+    print(f"lines total:       {totals['total']}")
+    print(f"lines valid:       {totals['valid']}")
+    print(f"lines quarantined: {totals['quarantined']}")
+    print(f"lines downgraded to partial (payload shape only, kept): {totals['downgraded']}")
+    return 0
+
+
+def iter_stored_events(paths):
+    """Yield (event_or_None, raw_line, error_or_None) for every stored
+    line. Malformed lines are reported here, not moved — moving them is
+    `validate`'s job, so `report` stays read-only.
+
+    Uses `hard_line_errors` only, not `payload_shape_issues`: a payload
+    shape issue is advisory (see `payload_shape_issues`'s docstring), so
+    an event with one is still a valid, countable event here — its
+    `completeness` field (as currently stored) is what tells the truth,
+    not exclusion from this report entirely."""
+    for target in sorted(paths.events_dir.glob("*.jsonl")):
+        try:
+            text = target.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        for raw_line in text.split("\n"):
+            if not raw_line.strip():
+                continue
+            try:
+                obj = json.loads(raw_line)
+            except json.JSONDecodeError:
+                yield None, raw_line, "malformed JSON"
+                continue
+            errors = hard_line_errors(obj)
+            yield obj, raw_line, ("; ".join(errors) if errors else None)
+
+
+INGEST_QUARANTINE_FILENAME = "ingest-transcript.jsonl"
+
+
+def count_quarantine_lines(paths):
+    """Counts quarantined EVENTS this meter itself wrote (`validate`'s
+    quarantine — corrupt/malformed `usage.message` etc. lines). PR #27
+    review round 1 finding 10: this used to glob every *.jsonl under
+    quarantine/, which also swept up ingest's own
+    `ingest-transcript.jsonl` (malformed SOURCE transcript lines) into
+    the same number — two categorically different things (our own
+    output being corrupt vs. someone else's input being corrupt) that
+    `report`'s single "quarantined: N lines" reads as one. See
+    `count_ingest_transcript_quarantine_lines` for the other half."""
+    total = 0
+    for target in sorted(paths.quarantine_dir.glob("*.jsonl")):
+        if target.name == INGEST_QUARANTINE_FILENAME:
+            continue
+        try:
+            with open(target, encoding="utf-8") as fh:
+                total += sum(1 for line in fh if line.strip())
+        except OSError:
+            continue
+    return total
+
+
+def count_ingest_transcript_quarantine_lines(paths):
+    target = paths.quarantine_dir / INGEST_QUARANTINE_FILENAME
+    if not target.exists():
+        return 0
+    try:
+        with open(target, encoding="utf-8") as fh:
+            return sum(1 for line in fh if line.strip())
+    except OSError:
+        return 0
+
+
+def count_meter_errors(paths):
+    if not paths.meter_errors_file.exists():
+        return 0
+    try:
+        with open(paths.meter_errors_file, encoding="utf-8") as fh:
+            return sum(1 for line in fh if line.strip())
+    except OSError:
+        return 0
+
+
+def normalize_month_arg(month):
+    """Shared by `report --reconcile` and `report --month` (孫5 §1): if
+    `month` is None, defaults to the current UTC month. Otherwise
+    validates YYYY-MM with a real month (01-12) — plan §10.1 requires
+    `report` to fail loud rather than silently aggregating a garbage
+    filter's zero (or, worse, a whole year's worth of) matches under a
+    label that looks like one specific month. Returns (month, error);
+    exactly one is None."""
+    if month is None:
+        return datetime.now(timezone.utc).strftime("%Y-%m"), None
+    if not re.match(r"^\d{4}-(0[1-9]|1[0-2])$", month):
+        return None, f"error: --month must be YYYY-MM with a valid month (01-12), got: {month!r}"
+    return month, None
+
+
+def usage_cost_footer(usage_events):
+    """The cost/coverage/price_table portion of the required per-plan-
+    §10.4 footer, shared by every `report` view (孫5 §1: "coverage 併記が
+    全出力経路で漏れていないか" is the reviewer's top concern for this
+    phase — factored into one function specifically so no new view can
+    forget a piece of it)."""
+    cost_sum, has_cost = 0.0, False
+    price_versions, cost_bases = set(), set()
+    for e in usage_events:
+        cost = e.get("cost_estimate_usd")
+        if isinstance(cost, (int, float)):
+            cost_sum += cost
+            has_cost = True
+        if e.get("price_table_version"):
+            price_versions.add(e["price_table_version"])
+        if e.get("cost_basis"):
+            cost_bases.add(e["cost_basis"])
+    if usage_events:
+        coverage = (
+            f"{len(usage_events)} usage.message event(s); run "
+            "'ocw-meter report --reconcile' for model別 coverage against provider totals"
+        )
+        price_table_summary = ", ".join(sorted(price_versions)) if price_versions else "(none applied)"
+        cost_basis_summary = ", ".join(sorted(cost_bases)) if cost_bases else "(none)"
+        cost_estimate_summary = f"${cost_sum:.2f} (estimated — not an invoice)" if has_cost else "null"
+    else:
+        coverage = "no usage.message events yet — run 'ocw-meter ingest'"
+        price_table_summary = "not applicable (no cost data ingested yet)"
+        cost_basis_summary = "not applicable (no cost data ingested yet)"
+        cost_estimate_summary = "null"
+    return {
+        "coverage": coverage,
+        "price_table": price_table_summary,
+        "cost_basis": cost_basis_summary,
+        "cost_estimate_usd": cost_estimate_summary,
+    }
+
+
+def completeness_footer(paths, scoped_events, malformed):
+    """The completeness/quarantine portion of the plan §10.4 footer —
+    see `usage_cost_footer` above for why this is factored out."""
+    completeness_counts = {"complete": 0, "partial": 0, "unknown": 0}
+    for e in scoped_events:
+        c = e.get("completeness")
+        completeness_counts[c if c in completeness_counts else "unknown"] += 1
+    return {
+        "completeness": completeness_counts,
+        "quarantined_lines": count_quarantine_lines(paths),
+        "transcript_lines_quarantined": count_ingest_transcript_quarantine_lines(paths),
+        "meter_error_diagnostics": count_meter_errors(paths),
+        "malformed_unvalidated_lines": malformed,
+    }
+
+
+def print_footer_text(footer_completeness, footer_cost, total):
+    def pct(n):
+        return (100.0 * n / total) if total else 0.0
+
+    cc = footer_completeness["completeness"]
+    print(
+        "completeness: "
+        f"complete {pct(cc['complete']):.1f}% / "
+        f"partial {pct(cc['partial']):.1f}% / "
+        f"unknown {pct(cc['unknown']):.1f}%"
+    )
+    print(f"quarantined:   {footer_completeness['quarantined_lines']} lines (events this meter wrote)")
+    print(f"transcript lines quarantined (ingest source data): {footer_completeness['transcript_lines_quarantined']} lines")
+    print(f"meter.error diagnostics (state/meter-errors.jsonl): {footer_completeness['meter_error_diagnostics']} lines")
+    print(f"malformed (not yet quarantined; run 'ocw-meter validate'): {footer_completeness['malformed_unvalidated_lines']} lines")
+    print(f"coverage:      {footer_cost['coverage']}")
+    print(f"price_table:   {footer_cost['price_table']}")
+    print(f"cost_basis:    {footer_cost['cost_basis']}")
+    print(f"cost_estimate: {footer_cost['cost_estimate_usd']}")
+
+
+def events_for_pr(valid_events, pr_number, repo):
+    """PR帰属ロジック（plan §7.4）: an event belongs to `pr_number` if it
+    says so directly, OR its run_id was bound to that PR number via a
+    `pr.bind` event. Shared by cmd_report's default --pr view and the
+    new --phase/--model/--role/--window/--month(process efficiency)
+    views (孫5) so every view resolves "this PR's events" identically.
+
+    Round-1 review finding 1 (most severe): `~/.local/state/ocw-meter/`
+    is ONE shared store across every repo this machine's `ocw-meter` is
+    ever pointed at (plan §9.1 doesn't scope storage by repo), but
+    `pr_number` is only unique WITHIN a repo — a direct `pr_number`
+    match with no `repo` check let PR #32 in a completely different
+    repo contaminate `report --pr 32` run from this repo (measured:
+    100% of the wrongly-reported cash cost and 99.9% of the wrongly-
+    reported duration came from another repo's same-numbered PR).
+    `repo` is filtered on the DIRECT `pr_number` match only — a `run_id`
+    match does NOT need it, since `run_id` (an ocw-generated ULID-style
+    value) is already effectively unique across repos on its own; adding
+    a `repo` filter there would just be redundant, not more correct.
+    An event with `repo: null` (e.g. `ingest` couldn't resolve a repo
+    slug for that message's `cwd` — the same class of gap as the
+    `run_id` resolution issue documented in DOC-2608021229-c §2.3) is
+    EXCLUDED from the direct match rather than assumed to belong to the
+    caller's own repo — guessing it in would reopen exactly the
+    cross-repo contamination this fix closes."""
+    bound_run_ids = {
+        e.get("run_id")
+        for e in valid_events
+        if e.get("event_type") == "pr.bind" and e.get("pr_number") == pr_number
+        and e.get("run_id") and e.get("repo") == repo
+    }
+    return [
+        e for e in valid_events
+        if (e.get("pr_number") == pr_number and e.get("repo") == repo) or e.get("run_id") in bound_run_ids
+    ]
+
+
+def pr_review_summary(pr_events):
+    """孫5 §1 --pr: review round list / human intervention count / final
+    result / cash+capacity cost split / 5h枠消費 for one PR's own
+    (already resolved via `events_for_pr`) event set. Reads ONLY the
+    events already attributed to this PR — no additional time-range
+    guessing beyond what plan §7.4's PR-attribution priority already
+    resolved."""
+    review_rounds = []
+    for e in pr_events:
+        if e.get("event_type") == "review.round":
+            review_rounds.append({
+                "round": e.get("round"),
+                "verdict": e.get("verdict"),
+                "findings_count": e.get("findings_count"),
+                "reviewed_head_sha": e.get("reviewed_head_sha"),
+                "ts": e.get("ts"),
+            })
+    review_rounds.sort(key=lambda r: (r["round"] is None, r["round"]))
+
+    human_events = [e for e in pr_events if e.get("event_type") == "human.intervention"]
+    human_reasons = [e.get("reason") for e in human_events if e.get("reason")]
+
+    done_ends = sorted(
+        (e for e in pr_events if e.get("event_type") == "phase.end" and e.get("phase") == "done"),
+        key=lambda e: e.get("ts") or "",
+    )
+    final_result = done_ends[-1].get("outcome") if done_ends else None
+
+    timestamps = [ts for ts in (parse_ts(e.get("ts")) for e in pr_events) if ts is not None]
+    total_span_seconds = (max(timestamps) - min(timestamps)).total_seconds() if timestamps else None
+
+    # Round-1 review finding 3: 計画書 孫5プロンプト §1 の`--pr`表は
+    # 「承認までの所要時間」を要求している。全イベントのスパン
+    # （`total_span_seconds`。マージ後のquota.sample等も含みうる）
+    # とは意味が異なるため分離する。「承認」は最後（最新ts）の
+    # verdict=="approved" review.roundとする — 承認取り消し後の
+    # 再承認がある場合、直近の承認だけが「実際に到達した承認」。
+    approved_rounds = [r for r in review_rounds if r["verdict"] == "approved" and r.get("ts")]
+    duration_seconds = None
+    if approved_rounds and timestamps:
+        approval_ts = max(parse_ts(r["ts"]) for r in approved_rounds if parse_ts(r["ts"]) is not None)
+        if approval_ts is not None:
+            duration_seconds = (approval_ts - min(timestamps)).total_seconds()
+    for r in review_rounds:
+        del r["ts"]  # internal-only; not part of the plan §8.2 review.round payload
+
+    cash_cost, has_cash_cost = 0.0, False
+    capacity_message_count = 0
+    for e in pr_events:
+        if e.get("event_type") != "usage.message":
+            continue
+        if e.get("cost_basis") == "subscription":
+            capacity_message_count += 1
+            continue
+        cost = e.get("cost_estimate_usd")
+        if isinstance(cost, (int, float)):
+            cash_cost += cost
+            has_cash_cost = True
+
+    # Round-1 review finding 4: 計画書が`--pr`に要求する「5h枠消費」。
+    # `report_by_window`と同じ元データ（quota.sample）から、このPRに
+    # 帰属したサンプルのみでmax used_pctを出す。
+    five_hour_vals = [
+        e["five_hour_used_pct"] for e in pr_events
+        if e.get("event_type") == "quota.sample" and isinstance(e.get("five_hour_used_pct"), (int, float))
+    ]
+    seven_day_vals = [
+        e["seven_day_used_pct"] for e in pr_events
+        if e.get("event_type") == "quota.sample" and isinstance(e.get("seven_day_used_pct"), (int, float))
+    ]
+
+    return {
+        "duration_seconds": duration_seconds,
+        "total_span_seconds": total_span_seconds,
+        "review_rounds": review_rounds,
+        "review_round_count": len(review_rounds),
+        "human_intervention_count": len(human_events),
+        "human_intervention_reasons": human_reasons,
+        "final_result": final_result or "unknown",
+        "five_hour_used_pct_max": max(five_hour_vals) if five_hour_vals else None,
+        "seven_day_used_pct_max": max(seven_day_vals) if seven_day_vals else None,
+        "cash_cost_usd": cash_cost if has_cash_cost else None,
+        "capacity_message_count": capacity_message_count,
+    }
+
+
+def default_token_bucket():
+    return {
+        "messages": 0, "input_tokens": 0, "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0, "output_tokens": 0,
+        "cost_estimate_usd": 0.0, "has_cost": False,
+    }
+
+
+def accumulate_token_bucket(bucket, e):
+    bucket["messages"] += 1
+    for field in ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens", "output_tokens"):
+        v = e.get(field)
+        if isinstance(v, (int, float)):
+            bucket[field] += v
+    cost = e.get("cost_estimate_usd")
+    if isinstance(cost, (int, float)):
+        bucket["cost_estimate_usd"] += cost
+        bucket["has_cost"] = True
+
+
+def finalize_token_bucket(bucket):
+    out = dict(bucket)
+    out["cost_estimate_usd"] = bucket["cost_estimate_usd"] if bucket["has_cost"] else None
+    del out["has_cost"]
+    return out
+
+
+def report_by_model(usage_events):
+    """孫5 §1 --model: token/cost totals grouped by (provider, model),
+    scoped to whatever `filtered` the caller already resolved (the
+    whole store, or one --pr's events)."""
+    buckets = {}
+    for e in usage_events:
+        key = (e.get("provider") or "(unknown)", e.get("model") or "(unknown)")
+        accumulate_token_bucket(buckets.setdefault(key, default_token_bucket()), e)
+    out = {}
+    for (provider, model), bucket in buckets.items():
+        row = finalize_token_bucket(bucket)
+        row["provider"] = provider
+        row["model"] = model
+        out[f"{provider}/{model}"] = row
+    return out
+
+
+def report_by_role(scoped_events):
+    """孫5 §1 --role: usage.message token/cost totals AND total event
+    count, grouped by envelope `role` (commander/implementer/reviewer/
+    unknown — plan §7.4 priority 1: `OCW_ROLE`, falling back to Herdr
+    pane-label resolution at ingest time)."""
+    roles = {}
+    for e in scoped_events:
+        role = e.get("role") or "unknown"
+        row = roles.setdefault(role, {"total_events": 0, **default_token_bucket()})
+        row["total_events"] += 1
+        if e.get("event_type") == "usage.message":
+            accumulate_token_bucket(row, e)
+    out = {}
+    for role, row in roles.items():
+        total_events = row.pop("total_events")
+        finalized = finalize_token_bucket(row)
+        finalized["total_events"] = total_events
+        out[role] = finalized
+    return out
+
+
+def build_phase_windows(scoped_events):
+    """Pairs `phase.start`/`phase.end` events by (run_id, phase, round)
+    into time windows (孫5 §1 --phase). Plan §8.3's phase enum also
+    lists `implement` and `verdict`, but as of 孫2's actual pr-review-
+    loop embedding neither ever gets a phase.start/phase.end pair
+    anywhere in this repo — `implement` happens before pr-review-loop
+    is invoked at all, and `verdict` is only ever captured as a
+    `review.round` event, not a phase boundary (see
+    docs/reference/DOC-2608021229-c_...). Those two names simply never appear
+    in the returned windows; that is expected, not a bug here. A
+    `phase.end` with no matching `phase.start` (or vice versa, at the
+    end of the scanned range) is dropped rather than guessed at."""
+    starts = {}
+    windows = []
+    ordered = sorted(
+        (e for e in scoped_events if e.get("event_type") in ("phase.start", "phase.end")),
+        key=lambda e: e.get("ts") or "",
+    )
+    for e in ordered:
+        key = (e.get("run_id"), e.get("phase"), e.get("round"))
+        if e.get("event_type") == "phase.start":
+            starts[key] = e
+            continue
+        start_e = starts.pop(key, None)
+        if start_e is None:
+            continue
+        start_ts, end_ts = parse_ts(start_e.get("ts")), parse_ts(e.get("ts"))
+        if start_ts is None or end_ts is None:
+            continue
+        windows.append({
+            "run_id": e.get("run_id"), "phase": e.get("phase"), "round": e.get("round"),
+            "start_ts": start_ts, "end_ts": end_ts, "outcome": e.get("outcome"),
+        })
+    return windows
+
+
+def assign_usage_to_phase_windows(usage_events, windows):
+    """Best-effort time-range correlation, NOT a stored field:
+    `usage.message` events (from transcript ingest, plan §8.4) never
+    carry `phase` — ingest has no way to know which pr-review-loop
+    phase a given transcript line belongs to, since the two are
+    independent data sources with no shared key. A usage.message is
+    attributed to the one phase window sharing its `run_id` whose
+    [start_ts, end_ts] contains its own timestamp; on overlap, the
+    first match found wins. Messages matching no window (null run_id,
+    a run predating any phase instrumentation, `implement` work done
+    before pr-review-loop starts, etc.) are bucketed under
+    `(unassigned)` rather than guessed into the nearest phase."""
+    by_run = {}
+    for w in windows:
+        by_run.setdefault(w["run_id"], []).append(w)
+
+    buckets = {}
+    for e in usage_events:
+        run_id = e.get("run_id")
+        ts = parse_ts(e.get("ts"))
+        phase = None
+        if run_id is not None and ts is not None:
+            for w in by_run.get(run_id, ()):
+                if w["start_ts"] <= ts <= w["end_ts"]:
+                    phase = w["phase"]
+                    break
+        key = phase or "(unassigned)"
+        accumulate_token_bucket(buckets.setdefault(key, default_token_bucket()), e)
+    return buckets
+
+
+def report_by_phase(scoped_events, usage_events):
+    windows = build_phase_windows(scoped_events)
+    durations = {}
+    for w in windows:
+        key = w["phase"] or "(unassigned)"
+        d = durations.setdefault(key, {"window_count": 0, "total_duration_seconds": 0.0})
+        d["window_count"] += 1
+        d["total_duration_seconds"] += (w["end_ts"] - w["start_ts"]).total_seconds()
+    tokens = assign_usage_to_phase_windows(usage_events, windows)
+
+    out = {}
+    for key in set(durations) | set(tokens):
+        row = finalize_token_bucket(tokens.get(key, default_token_bucket()))
+        row["window_count"] = durations.get(key, {}).get("window_count", 0)
+        row["total_duration_seconds"] = durations.get(key, {}).get("total_duration_seconds")
+        out[key] = row
+    return out
+
+
+def report_by_window(valid_events, repo=None):
+    """孫5 §1 --window: `quota.sample` events grouped by `window_id`
+    (plan §8.5 — the 5-hour reset boundary's identifier). `pr_number`
+    on a quota.sample comes straight from the caller-supplied field
+    when present, but DOC-2608021229 §2.1 observed statusLine's own `pr` key
+    populated in 0/66 real samples — so `prs_overlapping` ALSO includes
+    PRs found via the same best-effort time-range overlap
+    `pr_five_hour_window_completion` uses, kept in a separate key so a
+    reader can tell direct linkage from inferred overlap apart.
+
+    `repo` scopes `pr_ranges` so that `report --window` run from one
+    repo does not pollute the window's PR list with identically-numbered
+    PRs from a different repo in the shared ocw-meter store."""
+    windows = {}
+    for e in valid_events:
+        if e.get("event_type") != "quota.sample":
+            continue
+        wid = e.get("window_id")
+        if wid is None:
+            continue
+        w = windows.setdefault(wid, {
+            "samples": 0, "five_hour_used_pct_max": None, "seven_day_used_pct_max": None,
+            "first_ts": None, "last_ts": None, "prs_direct": set(),
+        })
+        w["samples"] += 1
+        for pct_field, out_field in (("five_hour_used_pct", "five_hour_used_pct_max"), ("seven_day_used_pct", "seven_day_used_pct_max")):
+            pct = e.get(pct_field)
+            if isinstance(pct, (int, float)):
+                w[out_field] = pct if w[out_field] is None else max(w[out_field], pct)
+        ts = e.get("ts")
+        if isinstance(ts, str):
+            if w["first_ts"] is None or ts < w["first_ts"]:
+                w["first_ts"] = ts
+            if w["last_ts"] is None or ts > w["last_ts"]:
+                w["last_ts"] = ts
+        if e.get("pr_number") is not None:
+            if repo is None or e.get("repo") == repo:
+                w["prs_direct"].add(e["pr_number"])
+
+    pr_ranges = {}
+    for e in valid_events:
+        pr = e.get("pr_number")
+        ts = parse_ts(e.get("ts"))
+        if pr is None or ts is None:
+            continue
+        if repo is not None and e.get("repo") != repo:
+            continue
+        lo, hi = pr_ranges.get(pr, (ts, ts))
+        pr_ranges[pr] = (min(lo, ts), max(hi, ts))
+
+    out = {}
+    for wid, w in windows.items():
+        window_start, window_end = parse_ts(w["first_ts"]), parse_ts(w["last_ts"])
+        prs_overlap = sorted(
+            pr for pr, (lo, hi) in pr_ranges.items()
+            if window_start is not None and window_end is not None and lo <= window_end and hi >= window_start
+        )
+        out[wid] = {
+            "window_id": wid,
+            "samples": w["samples"],
+            "five_hour_used_pct_max": w["five_hour_used_pct_max"],
+            "seven_day_used_pct_max": w["seven_day_used_pct_max"],
+            "first_sample_ts": w["first_ts"],
+            "last_sample_ts": w["last_ts"],
+            "prs_direct_link": sorted(w["prs_direct"]),
+            "prs_time_overlap": prs_overlap,
+            "blocked_seconds": None,
+            "blocked_note": "block.start/block.end are schema-defined but not emitted by any caller yet (計画書16章) — always null here",
+        }
+    return out
+
+
+def find_approved_pr_numbers_in_month(valid_events, month, repo):
+    """Round-1 review finding 1 (extended to --month): the `run_id` ->
+    `pr_number` map used to resolve a `review.round`'s PR must itself be
+    repo-scoped, or a `review.round` from repo A could resolve to repo
+    B's identically-numbered PR via a `pr.bind` collision — the exact
+    cross-repo contamination `events_for_pr` was fixed for, one level
+    up.
+
+    Round-2 review finding 11: the store is shared across every repo
+    ocw-meter is ever pointed at (same premise as finding 1), and a
+    `review.round` event CAN carry its own direct `pr_number` — the
+    previous version of this docstring claimed that was "inherently
+    repo-scoped" because "it was written by THIS repo's pr-review-loop
+    run", but that reasoning only holds for a single-repo store. It does
+    NOT hold here: a different repo's `pr-review-loop` run writes to the
+    exact same shared file with its own direct `pr_number`, so an
+    UNSCOPED direct match on `e.get("pr_number")` is just as vulnerable
+    to cross-repo collision as `events_for_pr`'s was. Both the
+    `review.round` event itself AND its direct `pr_number` fallback must
+    be repo-checked."""
+    run_to_pr = {
+        e.get("run_id"): e.get("pr_number")
+        for e in valid_events
+        if e.get("event_type") == "pr.bind" and e.get("run_id") and e.get("pr_number") is not None
+        and e.get("repo") == repo
+    }
+    approved = set()
+    for e in valid_events:
+        if e.get("event_type") != "review.round" or e.get("verdict") != "approved" or e.get("repo") != repo:
+            continue
+        ts = e.get("ts")
+        if not isinstance(ts, str) or not ts.startswith(month):
+            continue
+        pr = e.get("pr_number") or run_to_pr.get(e.get("run_id"))
+        if pr is not None:
+            approved.add(pr)
+    return approved
+
+
+def report_month_process_efficiency(valid_events, month, repo):
+    """孫5 §1 --month: process efficiency for PRs *approved* within this
+    UTC month (identified by a `review.round` with verdict "approved"
+    whose own timestamp falls in the month) — a PR's full event set
+    (which may itself span a month boundary) is used for its own
+    per-PR numbers, matching how `report --pr` already resolves one
+    PR's events. `repo` scopes both "which PRs count as approved" and
+    "which events belong to each one" to the invoking repo (round-1
+    review finding 1)."""
+    per_pr = []
+    for pr in sorted(find_approved_pr_numbers_in_month(valid_events, month, repo)):
+        pr_events = events_for_pr(valid_events, pr, repo)
+        detail = pr_review_summary(pr_events)
+        completion, _ = pr_five_hour_window_completion(pr_events, valid_events)
+        per_pr.append({"pr_number": pr, "five_hour_window_completion": completion, **detail})
+
+    def avg(key):
+        vals = [p[key] for p in per_pr if isinstance(p.get(key), (int, float))]
+        return (sum(vals) / len(vals)) if vals else None
+
+    return {
+        "approved_pr_count": len(per_pr),
+        "avg_cash_cost_usd": avg("cash_cost_usd"),
+        "avg_review_round_count": avg("review_round_count"),
+        "avg_human_intervention_count": avg("human_intervention_count"),
+        "avg_duration_seconds": avg("duration_seconds"),
+        "five_hour_window_completion_breakdown": {
+            v: sum(1 for p in per_pr if p["five_hour_window_completion"] == v)
+            for v in ("yes", "no", "unknown")
+        },
+        "per_pr": per_pr,
+    }
+
+
+def report_month_cash_and_capacity(valid_events, month):
+    """孫5 §1 --month: cash cost (metered API — currently only DeepSeek,
+    `cost_basis: "estimated"`) and capacity (Claude subscription quota
+    consumption) are reported as SEPARATE sections, never summed —
+    plan §16 / 孫5プロンプト §1 "Cash cost と Capacity cost を混ぜない"
+    is a hard requirement, not a style preference: a flat-rate
+    subscription has no per-message dollar figure to add to the
+    metered total."""
+    usage_month = [
+        e for e in valid_events
+        if e.get("event_type") == "usage.message" and isinstance(e.get("ts"), str) and e["ts"].startswith(month)
+    ]
+    cash_cost, has_cash = 0.0, False
+    capacity_message_count = 0
+    for e in usage_month:
+        if e.get("cost_basis") == "subscription":
+            capacity_message_count += 1
+            continue
+        cost = e.get("cost_estimate_usd")
+        if isinstance(cost, (int, float)):
+            cash_cost += cost
+            has_cash = True
+
+    quota_month = [
+        e for e in valid_events
+        if e.get("event_type") == "quota.sample" and isinstance(e.get("ts"), str) and e["ts"].startswith(month)
+    ]
+    five_hour_vals = [e["five_hour_used_pct"] for e in quota_month if isinstance(e.get("five_hour_used_pct"), (int, float))]
+    seven_day_vals = [e["seven_day_used_pct"] for e in quota_month if isinstance(e.get("seven_day_used_pct"), (int, float))]
+    distinct_windows = {e["window_id"] for e in quota_month if e.get("window_id")}
+
+    return {
+        "usage_message_count": len(usage_month),
+        "cash_cost_usd": cash_cost if has_cash else None,
+        "capacity_message_count": capacity_message_count,
+        "quota_sample_count": len(quota_month),
+        "five_hour_used_pct_max": max(five_hour_vals) if five_hour_vals else None,
+        "seven_day_used_pct_max": max(seven_day_vals) if seven_day_vals else None,
+        "distinct_five_hour_windows": len(distinct_windows),
+    }
+
+
+def _report_reconcile(paths, month, provider_totals, as_json):
+    """`ocw-meter report --reconcile` (孫3 §3): model別のtranscript由来
+    トークン合計・推定費用を出し、`--provider-total model=tokens` で
+    人間が渡した管理画面値との coverage 比率を計算する。plan §5.10 /
+    DOC-2608021229 §2.2 の既知ギャップを毎回 `known_gaps` として併記する
+    （「全部取れている」と読める出力を出さない）。"""
+    totals_by_model = {}
+    malformed = 0
+    month_completeness = {"complete": 0, "partial": 0, "unknown": 0}
+    for obj, _raw, error in iter_stored_events(paths):
+        if error:
+            malformed += 1
+            continue
+        if obj.get("event_type") != "usage.message":
+            continue
+        ts = obj.get("ts")
+        if not isinstance(ts, str) or not ts.startswith(month):
+            continue
+        c = obj.get("completeness")
+        month_completeness[c if c in month_completeness else "unknown"] += 1
+        model = obj.get("model") or "(unknown)"
+        bucket = totals_by_model.setdefault(model, {
+            "messages": 0, "input_tokens": 0, "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 0, "output_tokens": 0,
+            "cost_estimate_usd": 0.0, "has_cost": False, "cost_basis_seen": set(),
+            "price_versions_seen": set(),
+        })
+        bucket["messages"] += 1
+        for field in ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens", "output_tokens"):
+            value = obj.get(field)
+            if isinstance(value, (int, float)):
+                bucket[field] += value
+        cost = obj.get("cost_estimate_usd")
+        if isinstance(cost, (int, float)):
+            bucket["cost_estimate_usd"] += cost
+            bucket["has_cost"] = True
+        basis = obj.get("cost_basis")
+        if basis:
+            bucket["cost_basis_seen"].add(basis)
+        price_version = obj.get("price_table_version")
+        if price_version:
+            bucket["price_versions_seen"].add(price_version)
+
+    models_out = {}
+    for model, bucket in totals_by_model.items():
+        transcript_total_tokens = (
+            bucket["input_tokens"] + bucket["cache_read_input_tokens"]
+            + bucket["cache_creation_input_tokens"] + bucket["output_tokens"]
+        )
+        provider_total = provider_totals.get(model)
+        coverage_ratio = (transcript_total_tokens / provider_total) if provider_total else None
+        models_out[model] = {
+            "messages": bucket["messages"],
+            "input_tokens": bucket["input_tokens"],
+            "cache_read_input_tokens": bucket["cache_read_input_tokens"],
+            "cache_creation_input_tokens": bucket["cache_creation_input_tokens"],
+            "output_tokens": bucket["output_tokens"],
+            "transcript_total_tokens": transcript_total_tokens,
+            "provider_total_tokens": provider_total,
+            "coverage_ratio": coverage_ratio,
+            "cost_estimate_usd": bucket["cost_estimate_usd"] if bucket["has_cost"] else None,
+            "cost_basis": sorted(bucket["cost_basis_seen"]) or None,
+        }
+
+    # PR #27 review round 1 finding 5: a model with a --provider-total
+    # but ZERO transcript messages (the exact "0% covered" case plan
+    # §5.10 / DOC-2608021229 §2.2 documents for deepseek-v4-flash) was silently
+    # absent from the whole report instead of showing as its own
+    # coverage_ratio: 0.0 row — the one case this --reconcile flag most
+    # needs to surface was the one case it couldn't.
+    for model, provider_total in provider_totals.items():
+        if model not in models_out:
+            models_out[model] = {
+                "messages": 0, "input_tokens": 0, "cache_read_input_tokens": 0,
+                "cache_creation_input_tokens": 0, "output_tokens": 0,
+                "transcript_total_tokens": 0, "provider_total_tokens": provider_total,
+                "coverage_ratio": 0.0 if provider_total else None,
+                "cost_estimate_usd": None, "cost_basis": None,
+            }
+
+    total_messages = sum(m["messages"] for m in models_out.values())
+    price_versions_all = set()
+    for bucket in totals_by_model.values():
+        price_versions_all |= bucket["price_versions_seen"]
+    coverage_text = (
+        f"{total_messages} usage.message event(s) for {month}; per-model coverage_ratio requires "
+        "--provider-total <model>=<tokens>"
+        if total_messages else f"no usage.message events for {month} — run 'ocw-meter ingest' first"
+    )
+
+    summary = {
+        "month": month,
+        "cost_basis": "estimated — not an invoice",
+        "coverage": coverage_text,
+        "price_table": ", ".join(sorted(price_versions_all)) if price_versions_all else "(none applied)",
+        "completeness": month_completeness,
+        "quarantined_lines": count_quarantine_lines(paths),
+        "transcript_lines_quarantined": count_ingest_transcript_quarantine_lines(paths),
+        "meter_error_diagnostics": count_meter_errors(paths),
+        "malformed_unvalidated_lines": malformed,
+        "known_gaps": (
+            "deepseek-v4-flash はtranscriptに一切記録されない（実測カバー率0%、計画書5.10）。"
+            "deepseek-v4-pro のtranscriptカバー率は実測で約89%（DOC-2608021229 §2.2）。"
+            "coverage_ratio は --provider-total を渡したmodelにのみ算出される。claude-* は "
+            "定額契約のため cost_estimate_usd は常にnull（cost_basis: subscription）。"
+            "月の区切りはUTC固定。provider管理画面の集計タイムゾーン（例: DeepSeek管理画面は"
+            "北京時間 UTC+8）と異なる場合、月初・月末で最大±8時間分のずれが突合結果に生じうる"
+            "（計画書17章 R8）"
+        ),
+        "models": models_out,
+    }
+
+    if as_json:
+        print(json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True))
+        return 0
+
+    print(f"month:         {summary['month']}")
+    print(f"cost_basis:    {summary['cost_basis']}")
+    if not models_out:
+        print("models:        (no usage.message events for this month — run 'ocw-meter ingest' first)")
+    for model, m in sorted(models_out.items()):
+        print(f"  {model}:")
+        print(f"    messages:             {m['messages']}")
+        print(f"    input_tokens (miss):  {m['input_tokens']}")
+        print(f"    cache_read (hit):     {m['cache_read_input_tokens']}")
+        print(f"    cache_creation:       {m['cache_creation_input_tokens']}")
+        print(f"    output_tokens:        {m['output_tokens']}")
+        cost_str = f"${m['cost_estimate_usd']:.2f}" if m["cost_estimate_usd"] is not None else "null"
+        print(f"    cost_estimate_usd:    {cost_str}")
+        if m["provider_total_tokens"] is not None:
+            print(f"    provider_total:       {m['provider_total_tokens']}")
+            print(f"    coverage:             {m['coverage_ratio'] * 100:.1f}%")
+        else:
+            print("    provider_total:       (not supplied — pass --provider-total <model>=<tokens>)")
+            print("    coverage:             unknown")
+    print_footer_text(
+        {
+            "completeness": month_completeness,
+            "quarantined_lines": summary["quarantined_lines"],
+            "transcript_lines_quarantined": summary["transcript_lines_quarantined"],
+            "meter_error_diagnostics": summary["meter_error_diagnostics"],
+            "malformed_unvalidated_lines": malformed,
+        },
+        {
+            "coverage": coverage_text,
+            "price_table": summary["price_table"],
+            "cost_basis": summary["cost_basis"],
+            "cost_estimate_usd": (
+                f"${sum(m['cost_estimate_usd'] or 0 for m in models_out.values()):.2f} (estimated — not an invoice)"
+                if any(m["cost_estimate_usd"] is not None for m in models_out.values()) else "null"
+            ),
+        },
+        total_messages,
+    )
+    print(f"known_gaps:    {summary['known_gaps']}")
+    return 0
+
+
+def pr_five_hour_window_completion(pr_events, all_events):
+    """孫4プロンプト §2 / plan §8.5: "report側に「PRが同一5時間窓で完走
+    できたか」を判定するロジックを入れる(PRの最初と最後のイベント時刻が
+    同一window_idに収まるか)". `quota.sample` events are only rarely
+    tagged with the PR's own pr_number themselves (DOC-2608021229 §2.1: the
+    statusLine JSON's own `pr` key was not observed in ANY of 66 real
+    samples), so this looks at ALL stored quota.sample events whose
+    timestamp falls within the PR's own event time range instead of
+    relying on quota.sample's pr_number being set.
+
+    A sample whose window_id is null (rate_limits absent entirely — a
+    DeepSeek/claude-ds session per DOC-2608021229 §2.1 — or stale/anomalous,
+    see record_quota_sample) is excluded: plan §8.5 says a stale
+    resets_at must not "start a new window", so it must not count as
+    evidence for or against same-window completion either.
+
+    Returns (verdict, window_ids_seen) where verdict is "yes" (every
+    in-range sample shares one window_id), "no" (more than one seen —
+    the PR's work crossed a 5-hour reset), or "unknown" (no in-range
+    quota.sample data at all — plan §7.4: 不明なら推測しない, not
+    "assume yes")."""
+    pr_timestamps = [ts for ts in (parse_ts(e.get("ts")) for e in pr_events) if ts is not None]
+    if not pr_timestamps:
+        return "unknown", []
+    start, end = min(pr_timestamps), max(pr_timestamps)
+
+    window_ids = set()
+    for e in all_events:
+        if e.get("event_type") != "quota.sample":
+            continue
+        window_id = e.get("window_id")
+        if window_id is None:
+            continue
+        ts = parse_ts(e.get("ts"))
+        if ts is None or not (start <= ts <= end):
+            continue
+        window_ids.add(window_id)
+
+    distinct = sorted(window_ids)
+    if not distinct:
+        return "unknown", distinct
+    return ("yes" if len(distinct) == 1 else "no"), distinct
+
+
+def _print_grouped_report(title, group_label, groups, as_json, storage_root_str, footer_completeness, footer_cost, total, extra_top=None):
+    """Shared text/JSON printer for the --model/--role/--phase/--window
+    grouped views (孫5 §1): each is "a dict of rows keyed by group name"
+    plus the mandatory plan §10.4 footer, so one function renders all of
+    them instead of four near-identical print blocks."""
+    summary = {"storage_root": storage_root_str, group_label: groups, **(extra_top or {}), **footer_completeness, **footer_cost}
+    if as_json:
+        print(json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True))
+        return 0
+    print(f"storage root:  {storage_root_str}")
+    # Round-1 review finding 8: text mode used to print the raw JSON key
+    # ("filter_pr=32"), while the default (non-grouped) --pr view prints
+    # "pr=32" for the exact same concept — same data, two different
+    # labels depending on which flag combo you happened to use.
+    TEXT_LABEL = {"filter_pr": "pr"}
+    for key, value in (extra_top or {}).items():
+        print(f"filter:        {TEXT_LABEL.get(key, key)}={value}")
+    print(f"{title}:")
+    if not groups:
+        print("  (no data)")
+    for key, row in sorted(groups.items(), key=lambda kv: str(kv[0])):
+        print(f"  {key}:")
+        for field, value in row.items():
+            if field in ("provider", "model"):
+                continue
+            if field == "cost_estimate_usd":
+                value = f"${value:.4f}" if isinstance(value, (int, float)) else "null"
+            print(f"    {field}: {value}")
+    print_footer_text(footer_completeness, footer_cost, total)
+    return 0
+
+
+def cmd_report(args):
+    filter_pr = None
+    as_json = False
+    reconcile = False
+    month = None
+    month_flag_present = False
+    view = None
+    explicit_repo = None
+    provider_totals = {}
+    i = 0
+    while i < len(args):
+        token = args[i]
+        if token == "--pr":
+            if i + 1 >= len(args):
+                print("error: --pr requires a value", file=sys.stderr)
+                return 1
+            try:
+                filter_pr = int(args[i + 1])
+            except ValueError:
+                print(f"error: --pr expects an integer PR number, got '{args[i + 1]}'", file=sys.stderr)
+                return 1
+            i += 2
+        elif token == "--repo":
+            if i + 1 >= len(args):
+                print("error: --repo requires a value (<owner>/<name>)", file=sys.stderr)
+                return 1
+            explicit_repo = args[i + 1]
+            # Round-3 review finding 14a: an unvalidated `--repo dotfiles`
+            # (missing the "owner/" part — a plausible typo) silently
+            # matched zero events and returned exit 0 — the exact
+            # "garbage filter, plausible-looking zero result" failure
+            # mode `normalize_month_arg`'s strict `01-12` check exists to
+            # prevent for `--month`. `owner/name`, both sides non-empty,
+            # no extra `/`.
+            if not re.match(r"^[^/\s]+/[^/\s]+$", explicit_repo):
+                print(f"error: --repo must be <owner>/<name>, got: {explicit_repo!r}", file=sys.stderr)
+                return 1
+            i += 2
+        elif token == "--json":
+            as_json = True
+            i += 1
+        elif token == "--reconcile":
+            reconcile = True
+            i += 1
+        elif token in ("--phase", "--model", "--role", "--window"):
+            if view is not None and view != token[2:]:
+                print(f"error: --{view} cannot be combined with {token} (pick one grouped view)", file=sys.stderr)
+                return 1
+            view = token[2:]
+            i += 1
+        elif token == "--month":
+            month_flag_present = True
+            if i + 1 < len(args) and re.match(r"^\d{4}-\d{2}$", args[i + 1]):
+                month = args[i + 1]
+                i += 2
+            else:
+                i += 1
+        elif token == "--provider-total":
+            if i + 1 >= len(args):
+                print("error: --provider-total requires a value (<model>=<tokens>)", file=sys.stderr)
+                return 1
+            raw = args[i + 1]
+            model_name, sep, tokens_str = raw.partition("=")
+            if not sep:
+                print(f"error: --provider-total must be <model>=<tokens>, got: {raw!r}", file=sys.stderr)
+                return 1
+            try:
+                provider_totals[model_name] = int(tokens_str)
+            except ValueError:
+                print(f"error: --provider-total tokens must be an integer, got: {raw!r}", file=sys.stderr)
+                return 1
+            i += 2
+        else:
+            print(f"error: unknown report flag: {token}", file=sys.stderr)
+            return 1
+
+    if reconcile and view is not None:
+        print(f"error: --reconcile cannot be combined with --{view}", file=sys.stderr)
+        return 1
+    if month_flag_present and not reconcile and view is not None:
+        print(f"error: --month cannot be combined with --{view} (it can be combined with --reconcile, or used standalone)", file=sys.stderr)
+        return 1
+    # Round-1 review finding 2: --month/--reconcile used to accept --pr
+    # silently and then ignore it entirely (ALL of the store's events
+    # for that month, not that PR's) — the exact "garbage-but-
+    # plausible-looking output" failure mode `report`'s fail-loud half
+    # (plan §10.1) exists to prevent. Neither view has a defined
+    # "one PR's slice of the monthly store" semantic (report --pr N
+    # already answers "one PR's own numbers"), so this is rejected
+    # outright rather than silently implemented as a filter.
+    if filter_pr is not None and (reconcile or month_flag_present):
+        flag = "--reconcile" if reconcile else "--month"
+        print(f"error: --pr cannot be combined with {flag} (use 'report --pr <n>' for one PR's own numbers)", file=sys.stderr)
+        return 1
+    # Round-3 review finding 14b: `--repo` is only ever consulted on the
+    # two code paths that call `events_for_pr` (a `--pr` filter, or
+    # standalone `--month`'s process_efficiency) — every other
+    # combination (bare `report`, `--model`/`--role`/`--phase`/`--window`
+    # with no `--pr`, `--reconcile`) silently accepted and then ignored
+    # it, the same "flag parsed but never consulted" failure mode
+    # finding 2 fixed for `--pr`+`--month`.
+    repo_is_used = filter_pr is not None or (month_flag_present and view is None and not reconcile) or view == "window"
+    if explicit_repo is not None and not repo_is_used:
+        print("error: --repo has no effect without --pr, --window, or standalone --month — it only scopes PR attribution", file=sys.stderr)
+        return 1
+
+    root = storage_root()
+    if in_git_worktree(root):
+        print(f"error: OCW_METER_HOME ({root}) resolves inside a Git worktree; refusing to operate", file=sys.stderr)
+        return 1
+    paths = ensure_storage(root)
+
+    if reconcile:
+        month, err = normalize_month_arg(month)
+        if err:
+            print(err, file=sys.stderr)
+            return 1
+        return _report_reconcile(paths, month, provider_totals, as_json)
+
+    # Round-2 review finding 10 (regression introduced by round-1's own
+    # fix for finding 1): `events_for_pr`'s repo scoping only works if a
+    # repo is actually resolved. `report` is a read-only command that
+    # can be run from ANYWHERE (unlike `event`, which is only ever
+    # called from inside a worktree by `ocw`/`pr-review-loop`) — running
+    # it from outside any git repo makes `git_repo_slug()` return None,
+    # and `e.get("repo") == None` then matches every repo:null event
+    # (exactly the class of event `events_for_pr`'s docstring promises
+    # to EXCLUDE), while every `pr.bind`/legitimate event WITH a repo
+    # set gets rejected. Measured: this flips finding 1's fix from
+    # "correct data + contamination" to "contamination only, zero
+    # correct events" when run from outside a git repo. Since resolving
+    # "which repo" is required for --pr and for --month's
+    # process_efficiency (both call `events_for_pr`), fail loud instead
+    # of silently scoping to the wrong (or no) repo. `--repo
+    # <owner>/<name>` is the escape hatch for a case where this needs to
+    # run from outside the target repo's own worktree.
+    repo = explicit_repo or git_repo_slug()
+    needs_repo = filter_pr is not None or (month_flag_present and view is None) or view == "window"
+    if needs_repo and not repo:
+        print(
+            "error: could not resolve a repo for PR-scoped reporting (not inside a git repo with an "
+            "'origin' remote, and --repo <owner>/<name> was not given). --pr, --window, and --month all need this "
+            "to avoid scoping to another repo's same-numbered PR in the shared ocw-meter store.",
+            file=sys.stderr,
+        )
+        return 1
+
+    valid_events, malformed = [], 0
+    for obj, _raw, error in iter_stored_events(paths):
+        if error:
+            malformed += 1
+        else:
+            valid_events.append(obj)
+
+    if month_flag_present and view is None:
+        # 孫5 §1 --month (standalone, i.e. NOT --reconcile): cash cost /
+        # capacity cost / process efficiency, kept separate (plan §16).
+        month, err = normalize_month_arg(month)
+        if err:
+            print(err, file=sys.stderr)
+            return 1
+        return _report_month_standalone(paths, valid_events, malformed, month, repo, as_json)
+
+    if filter_pr is not None:
+        filtered = events_for_pr(valid_events, filter_pr, repo)
+    else:
+        filtered = valid_events
+
+    usage_events = [e for e in filtered if e.get("event_type") == "usage.message"]
+
+    if view is not None:
+        footer_completeness = completeness_footer(paths, filtered, malformed)
+        footer_cost = usage_cost_footer(usage_events)
+        extra_top = {"filter_pr": filter_pr, "repo": repo} if filter_pr is not None else ({"repo": repo} if view == "window" and repo else {})
+        if view == "model":
+            groups = report_by_model(usage_events)
+        elif view == "role":
+            groups = report_by_role(filtered)
+        elif view == "phase":
+            groups = report_by_phase(filtered, usage_events)
+        elif view == "window":
+            groups = report_by_window(valid_events if filter_pr is None else filtered, repo)
+        return _print_grouped_report(
+            f"by {view}", f"by_{view}", groups, as_json, str(paths.root),
+            footer_completeness, footer_cost, len(filtered), extra_top,
+        )
+
+    five_hour_window_completion, five_hour_window_ids_seen = (
+        pr_five_hour_window_completion(filtered, valid_events) if filter_pr is not None else (None, [])
+    )
+
+    by_type = {}
+    for e in filtered:
+        by_type[e.get("event_type")] = by_type.get(e.get("event_type"), 0) + 1
+
+    total = len(filtered)
+    footer_completeness = completeness_footer(paths, filtered, malformed)
+    footer_cost = usage_cost_footer(usage_events)
+
+    summary = {
+        "storage_root": str(paths.root),
+        "filter_pr": filter_pr,
+        "total_events": total,
+        "by_event_type": by_type,
+        **footer_completeness,
+        **footer_cost,
+    }
+    if filter_pr is not None:
+        # Round-2 review finding 10: which repo `--pr` scoped to must be
+        # visible in the output, not just silently correct/incorrect.
+        summary["repo"] = repo
+        # plan §8.5 / 孫4プロンプト §2: same-5-hour-window completion.
+        # Only meaningful with a PR filter — it's a per-PR judgment.
+        summary["five_hour_window_completion"] = five_hour_window_completion
+        summary["five_hour_window_ids_seen"] = five_hour_window_ids_seen
+        # 孫5 §1: round/human-intervention/final-result/cash+capacity
+        # cost detail for this one PR.
+        summary["pr_detail"] = pr_review_summary(filtered)
+
+    if as_json:
+        print(json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True))
+    else:
+        print(f"storage root:  {summary['storage_root']}")
+        if filter_pr is not None:
+            print(f"filter:        pr={filter_pr} (repo={repo})")
+        print(f"total events:  {total}")
+        for event_type, count in sorted(by_type.items(), key=lambda kv: (kv[0] or "")):
+            print(f"  {event_type or '(none)'}: {count}")
+
+        print_footer_text(footer_completeness, footer_cost, total)
+        if filter_pr is not None:
+            ids_str = ", ".join(five_hour_window_ids_seen) if five_hour_window_ids_seen else "(none)"
+            print(f"five_hour_window_completion: {five_hour_window_completion} (window_ids seen: {ids_str})")
+            detail = summary["pr_detail"]
+            print(f"duration_seconds (承認まで。未承認ならnull): {detail['duration_seconds']}")
+            print(f"total_span_seconds (このPRの全イベントの時刻スパン): {detail['total_span_seconds']}")
+            print(f"review_round_count: {detail['review_round_count']}")
+            for r in detail["review_rounds"]:
+                print(f"  round {r['round']}: verdict={r['verdict']} findings={r['findings_count']}")
+            print(f"human_intervention_count: {detail['human_intervention_count']}")
+            print(f"final_result: {detail['final_result']}")
+            print(f"five_hour_used_pct_max: {detail['five_hour_used_pct_max']}")
+            print(f"seven_day_used_pct_max: {detail['seven_day_used_pct_max']}")
+            cash_str = f"${detail['cash_cost_usd']:.4f}" if isinstance(detail["cash_cost_usd"], (int, float)) else "null"
+            print(f"cash_cost_usd: {cash_str}")
+            print(f"capacity_message_count (claude subscription, no dollar figure): {detail['capacity_message_count']}")
+
+    return 0
+
+
+def _report_month_standalone(paths, valid_events, malformed, month, repo, as_json):
+    """`ocw-meter report --month [YYYY-MM]` (孫5 §1, NOT --reconcile):
+    cash cost / capacity cost / process efficiency for one UTC month,
+    always kept in separate top-level keys — see
+    `report_month_cash_and_capacity`'s docstring for why they are never
+    summed. Quality guardrail has no collected data in this phase (plan
+    §16), so that key is always the literal string below, never
+    fabricated from something else. `repo` (resolved by the caller,
+    never None — round-2 review finding 10) scopes `process_efficiency`
+    (the only part of this view that calls `events_for_pr`); cash/
+    capacity are store-wide by design and don't need it."""
+    month_events = [e for e in valid_events if isinstance(e.get("ts"), str) and e["ts"].startswith(month)]
+    footer_completeness = completeness_footer(paths, month_events, malformed)
+    usage_month = [e for e in month_events if e.get("event_type") == "usage.message"]
+    footer_cost = usage_cost_footer(usage_month)
+
+    summary = {
+        "month": month,
+        "repo": repo,
+        "cash_cost": report_month_cash_and_capacity(valid_events, month),
+        "process_efficiency": report_month_process_efficiency(valid_events, month, repo),
+        "quality_guardrail": "未計測 — 第一段階では収集項目が無い（計画書16章）。この行は 'report --month' の出力にのみ現れる（他の report ビューには quality_guardrail キー自体が無い）",
+        **footer_completeness,
+        **footer_cost,
+    }
+    # cash_cost/capacity are both inside report_month_cash_and_capacity's
+    # dict already; split them into their own top-level keys so a reader
+    # (and this report's own --json consumer) never has to guess which
+    # sub-fields are "cash" vs "capacity".
+    cash_and_capacity = summary.pop("cash_cost")
+    summary["cash_cost"] = {
+        "usage_message_count": cash_and_capacity["usage_message_count"],
+        "cash_cost_usd": cash_and_capacity["cash_cost_usd"],
+    }
+    summary["capacity"] = {
+        "capacity_message_count": cash_and_capacity["capacity_message_count"],
+        "quota_sample_count": cash_and_capacity["quota_sample_count"],
+        "five_hour_used_pct_max": cash_and_capacity["five_hour_used_pct_max"],
+        "seven_day_used_pct_max": cash_and_capacity["seven_day_used_pct_max"],
+        "distinct_five_hour_windows": cash_and_capacity["distinct_five_hour_windows"],
+    }
+
+    if as_json:
+        print(json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True))
+        return 0
+
+    print(f"month:         {summary['month']}")
+    print(f"repo (process_efficiency scope): {summary['repo']}")
+    print("cash cost (metered API — currently DeepSeek only):")
+    cash_str = f"${summary['cash_cost']['cash_cost_usd']:.2f}" if isinstance(summary["cash_cost"]["cash_cost_usd"], (int, float)) else "null"
+    print(f"  usage.message count: {summary['cash_cost']['usage_message_count']}")
+    print(f"  cash_cost_usd:       {cash_str} (estimated — not an invoice)")
+    print("capacity cost (Claude subscription quota — never summed with cash cost):")
+    for field, value in summary["capacity"].items():
+        print(f"  {field}: {value}")
+    pe = summary["process_efficiency"]
+    print(f"process efficiency (approved PRs in {month}):")
+    print(f"  approved_pr_count: {pe['approved_pr_count']}")
+    print(f"  avg_cash_cost_usd: {pe['avg_cash_cost_usd']}")
+    print(f"  avg_review_round_count: {pe['avg_review_round_count']}")
+    print(f"  avg_human_intervention_count: {pe['avg_human_intervention_count']}")
+    print(f"  avg_duration_seconds: {pe['avg_duration_seconds']}")
+    print(f"  five_hour_window_completion_breakdown: {pe['five_hour_window_completion_breakdown']}")
+    print(f"quality_guardrail: {summary['quality_guardrail']}")
+    print_footer_text(footer_completeness, footer_cost, len(month_events))
+    return 0
+
+
+# ── ingest: DeepSeek/Claude transcript -> usage.message (孫3) ──────────
+#
+# `ingest` is deliberately NOT built on top of `record`/`write_event`
+# (see the PERFORMANCE NOTE at the top of this file): it resolves git-
+# equivalent context (Herdr role map, local run/pr index, price tables)
+# ONCE per invocation, then writes every usage.message event for the
+# whole batch through `bulk_write_events`, which does at most one
+# read+rewrite per calendar-day events file instead of one per
+# duplicate message.id (DOC-2608021229 §2.2 measured 59.4% of real assistant
+# lines as message.id duplicates).
+
+def claude_projects_dir():
+    env = os.environ.get("OCW_METER_CLAUDE_PROJECTS_DIR")
+    if env:
+        return pathlib.Path(env)
+    home = os.environ.get("HOME")
+    return pathlib.Path(home) / ".claude" / "projects" if home else None
+
+
+def price_table_dir():
+    env = os.environ.get("OCW_METER_PRICE_DIR")
+    if env:
+        return pathlib.Path(env)
+    script_dir = os.environ.get("OCW_METER_SCRIPT_DIR")
+    return pathlib.Path(script_dir) / "prices" if script_dir else None
+
+
+def normalize_model_name(model):
+    """`deepseek-v4-pro[1m]` -> `deepseek-v4-pro` (plan §8.4). Transcripts
+    already store the name without the context-window suffix as of the
+    plan's own probes, but this strips it defensively in case that ever
+    changes upstream."""
+    if not isinstance(model, str) or not model:
+        return model
+    return re.sub(r"\[[^\]]*\]$", "", model)
+
+
+def infer_provider(model):
+    if not isinstance(model, str) or not model:
+        return None
+    if model.startswith("claude-"):
+        return "anthropic"
+    if model.startswith("deepseek-"):
+        return "deepseek"
+    return "unknown"
+
+
+# ── price tables ────────────────────────────────────────────────────
+
+def load_price_tables(price_dir):
+    """Loads every *.json under price_dir, sorted by effective_date
+    ascending. A malformed individual price file is skipped, not fatal
+    (plan §5.5: versioned data files, not code — a bad one shouldn't
+    take down `ingest`)."""
+    tables = []
+    if price_dir is None or not price_dir.is_dir():
+        return tables
+    for path in sorted(price_dir.glob("*.json")):
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(data, dict):
+            continue
+        if not all(k in data for k in ("price_table_version", "effective_date", "models")):
+            continue
+        tables.append(data)
+    tables.sort(key=lambda t: t.get("effective_date") or "")
+    return tables
+
+
+def select_price_table(tables, at_date_str):
+    """Picks the table with the latest effective_date <= at_date_str
+    (plan §5.5). Falls back to the earliest available table if every
+    table's effective_date is in the future relative to at_date_str —
+    a conservative choice, never a crash, and this situation shouldn't
+    arise in practice since price files are only added once effective."""
+    applicable = [t for t in tables if (t.get("effective_date") or "") <= at_date_str]
+    if applicable:
+        return applicable[-1]
+    return tables[0] if tables else None
+
+
+def compute_cost(model, usage_fields, price_table):
+    """plan §8.4 cost formula, with the 孫3-prompt override that
+    Anthropic (`claude-*`) usage is never converted from a subscription
+    into a per-token estimate (cost_basis: "subscription",
+    cost_estimate_usd: null — a flat-rate plan has no meaningful
+    per-message price). Returns (cost_estimate_usd, price_table_version,
+    price_effective_date, cost_basis). Never raises."""
+    provider = infer_provider(model)
+    if provider == "anthropic":
+        return None, None, None, "subscription"
+
+    if price_table is None:
+        return None, None, None, "estimated"
+
+    prices = price_table.get("models", {}).get(model)
+    if not isinstance(prices, dict):
+        # Includes deepseek-v4-flash (plan §5.10: 0% transcript coverage,
+        # so this branch is mostly theoretical today) and any future/
+        # unrecognized model name — never guess a price.
+        return None, price_table.get("price_table_version"), price_table.get("effective_date"), "estimated"
+
+    values = (
+        usage_fields.get("cache_read_input_tokens"),
+        usage_fields.get("input_tokens"),
+        usage_fields.get("cache_creation_input_tokens"),
+        usage_fields.get("output_tokens"),
+    )
+    if any(not isinstance(v, (int, float)) for v in values):
+        return None, price_table.get("price_table_version"), price_table.get("effective_date"), "estimated"
+
+    cache_read, input_tokens, cache_creation, output_tokens = values
+    try:
+        cost = (
+            cache_read * prices["cache_hit_in"]
+            + (input_tokens + cache_creation) * prices["cache_miss_in"]
+            + output_tokens * prices["out"]
+        ) / 1_000_000
+    except (KeyError, TypeError):
+        return None, price_table.get("price_table_version"), price_table.get("effective_date"), "estimated"
+
+    return cost, price_table.get("price_table_version"), price_table.get("effective_date"), "estimated"
+
+
+# ── ingest cursor (incremental, idempotent transcript reading) ────────
+
+def load_ingest_cursor(paths):
+    path = paths.state_dir / "ingest-cursor.json"
+    if not path.exists():
+        return {"files": {}}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {"files": {}}
+    if not isinstance(data, dict) or not isinstance(data.get("files"), dict):
+        return {"files": {}}
+    return data
+
+
+def save_ingest_cursor(paths, cursor):
+    path = paths.state_dir / "ingest-cursor.json"
+    ensure_dir(paths.state_dir, 0o700)
+    tmp_fd, tmp_path = tempfile.mkstemp(dir=str(paths.state_dir), prefix=".tmp-", suffix=".json")
+    try:
+        with os.fdopen(tmp_fd, "w", encoding="utf-8") as fh:
+            json.dump(cursor, fh, ensure_ascii=False, sort_keys=True)
+        os.chmod(tmp_path, 0o600)
+        os.replace(tmp_path, path)
+    except Exception:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp_path)
+        raise
+
+
+def load_session_pr_links(paths):
+    """PR #27 review round 1 finding 2: `pr_link_map` was previously
+    built fresh from only THIS run's newly-read transcript lines, so a
+    session's `pr-link` line — read once, on whichever ingest run
+    happens to see it first — was forgotten on every subsequent
+    incremental run (the cursor has already moved past it), silently
+    dropping PR attribution for that session's later messages forever.
+    Persisting session_id -> pr_info here, alongside the cursor, fixes
+    that: once seen, a session's PR binding is never lost. Not gated by
+    --since like the cursor is (see save_ingest_cursor's caller) — a
+    pr-link discovery isn't the kind of "did we lose data" hazard the
+    --since/cursor interaction is; recording it is always safe."""
+    path = paths.state_dir / "session-pr-links.json"
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    # PR #27 review round 2 finding "新規3": `load_ingest_cursor` treats
+    # a malformed file/entry as "start fresh", never raising — this
+    # state file (written only by this meter itself, but still worth
+    # being defensive about, e.g. a future format change leaving old
+    # entries around) previously validated only the top-level container,
+    # so a single malformed VALUE crashed `ingest` entirely with an
+    # unhelpful AttributeError deep inside `build_usage_event`. Drop
+    # individual bad entries instead of failing the whole run over them.
+    return {
+        session_id: value
+        for session_id, value in data.items()
+        if isinstance(value, dict) and isinstance(value.get("pr_number"), int)
+    }
+
+
+def save_session_pr_links(paths, mapping):
+    path = paths.state_dir / "session-pr-links.json"
+    ensure_dir(paths.state_dir, 0o700)
+    tmp_fd, tmp_path = tempfile.mkstemp(dir=str(paths.state_dir), prefix=".tmp-", suffix=".json")
+    try:
+        with os.fdopen(tmp_fd, "w", encoding="utf-8") as fh:
+            json.dump(mapping, fh, ensure_ascii=False, sort_keys=True)
+        os.chmod(tmp_path, 0o600)
+        os.replace(tmp_path, path)
+    except Exception:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp_path)
+        raise
+
+
+def read_new_lines(file_path, prev_entry):
+    """Incrementally reads the bytes appended to `file_path` since
+    `prev_entry` (plan §1: "(ファイルパス, inode, size, mtime, offset)
+    を保存し増分読み取り"). Re-reads from byte 0 when the inode changed
+    or the file shrank (rotation/truncation) — duplicates this produces
+    are absorbed downstream by message.id dedup, per plan §1.
+
+    Only bytes up to the last b"\\n" are returned as complete lines; any
+    trailing partial line (no newline yet — the writer may still be
+    mid-write) is left unconsumed so the offset does NOT advance past
+    it, and it gets picked up whole on a later run. Returns None if the
+    file vanished between glob and stat (best-effort, not fatal)."""
+    try:
+        st = os.stat(file_path)
+    except OSError:
+        return None
+    stat_info = {"inode": st.st_ino, "size": st.st_size, "mtime": st.st_mtime}
+
+    if prev_entry is None:
+        start_offset = 0
+    elif prev_entry.get("inode") != stat_info["inode"] or st.st_size < prev_entry.get("size", 0):
+        start_offset = 0
+    else:
+        start_offset = min(prev_entry.get("offset", 0), st.st_size)
+
+    try:
+        with open(file_path, "rb") as fh:
+            fh.seek(start_offset)
+            chunk = fh.read()
+    except OSError:
+        return None
+
+    last_nl = chunk.rfind(b"\n")
+    complete = chunk[: last_nl + 1] if last_nl != -1 else b""
+    new_offset = start_offset + len(complete)
+    lines = [line for line in complete.split(b"\n") if line.strip()]
+    return {"lines": lines, "new_offset": new_offset, "stat": stat_info}
+
+
+def quarantine_ingest_line(paths, source_file, reason, byte_length):
+    """Quarantines a broken/unparsable SOURCE transcript line. Unlike
+    `validate`'s quarantine (which stores our own already-content-free
+    events verbatim), this deliberately never stores the raw bytes: a
+    line that failed to parse as JSON might contain a garbled fragment
+    of prompt/response content from a partial write, and plan §1
+    requires that `message.content` never appears in anything this tool
+    persists — so only a byte length and reason are kept, not the line
+    itself."""
+    qpath = paths.quarantine_dir / INGEST_QUARANTINE_FILENAME
+    ensure_dir(qpath.parent, 0o700)
+    record_ = {
+        "quarantined_at": iso_utc(datetime.now(timezone.utc)),
+        "source_file": str(source_file),
+        "reason": reason,
+        "line_byte_length": byte_length,
+    }
+    with open(qpath, "a", encoding="utf-8") as fh:
+        fh.write(json.dumps(record_, ensure_ascii=False) + "\n")
+    with contextlib.suppress(OSError):
+        os.chmod(qpath, 0o600)
+
+
+def quarantine_this_run(paths, since_dt, source_file, reason, byte_length):
+    """Wraps `quarantine_ingest_line` with the same --since read-only
+    rule the cursor follows (PR #27 review round 2 finding "新規2"): a
+    --since run re-reads the same unconsumed byte range every time
+    (since it never advances the persisted cursor — round 1 finding 1),
+    so unconditionally quarantining would append a duplicate record for
+    the SAME broken line on every single --since invocation, silently
+    inflating `report`'s transcript-quarantine count in proportion to
+    how many times --since happened to be run rather than how much
+    source data is actually broken. `quarantined_count` (this run's
+    stdout summary) still reflects what was found, just not persisted
+    twice — the eventual --since-less run permanently records it once."""
+    if since_dt is None:
+        quarantine_ingest_line(paths, source_file, reason, byte_length)
+
+
+# ── transcript line extraction ─────────────────────────────────────────
+
+def extract_assistant_candidate(obj):
+    """Pulls out ONLY the fields plan §1 whitelists from a `type:
+    "assistant"` transcript line: id/model/usage/stop_reason (under
+    `message`) plus timestamp/sessionId/gitBranch/cwd/isSidechain/effort
+    at the top level. `message.content` is never read here or anywhere
+    else in `ingest`. Returns None if there's no `message.id` — without
+    one there is no idempotency key, and plan §5.3 requires message.id-
+    based dedup above everything else, so an id-less assistant line
+    cannot be safely recorded at all (it goes to quarantine instead)."""
+    if not isinstance(obj, dict) or obj.get("type") != "assistant":
+        return None
+    message = obj.get("message")
+    if not isinstance(message, dict):
+        return None
+    message_id = message.get("id")
+    if not message_id:
+        return None
+    usage = message.get("usage") if isinstance(message.get("usage"), dict) else {}
+    return {
+        "message_id": message_id,
+        "model": message.get("model"),
+        "usage": usage,
+        "stop_reason": message.get("stop_reason"),
+        "timestamp": obj.get("timestamp"),
+        "session_id": obj.get("sessionId"),
+        "git_branch": obj.get("gitBranch"),
+        "cwd": obj.get("cwd"),
+        "is_sidechain": obj.get("isSidechain"),
+        "effort": obj.get("effort"),
+    }
+
+
+def extract_pr_link(obj):
+    if not isinstance(obj, dict) or obj.get("type") != "pr-link":
+        return None
+    session_id = obj.get("sessionId")
+    pr_number = obj.get("prNumber")
+    if not session_id or not isinstance(pr_number, int):
+        return None
+    return session_id, {"pr_number": pr_number, "pr_url": obj.get("prUrl")}
+
+
+# ── role attribution via Herdr (plan §7.4 item 2 / §5.7) ───────────────
+
+def _herdr(args, timeout=5):
+    try:
+        result = subprocess.run(["herdr", *args], capture_output=True, text=True, timeout=timeout)
+    except Exception:
+        return None
+    if result.returncode != 0:
+        return None
+    return result.stdout
+
+
+def _collect_dicts_with_key(value, key_name, out):
+    if isinstance(value, dict):
+        if key_name in value:
+            out.append(value)
+        for child in value.values():
+            _collect_dicts_with_key(child, key_name, out)
+    elif isinstance(value, list):
+        for item in value:
+            _collect_dicts_with_key(item, key_name, out)
+
+
+def resolve_herdr_role_map():
+    """Best-effort session_id -> {role, workspace_id, pane_id} map.
+    Returns {} (never raises) if Herdr isn't installed, its server isn't
+    running, or any call/parse fails — role stays "unknown" downstream
+    rather than being guessed (plan §7.4: "不明なら role: unknown。捏造
+    しない"). `herdr pane list`'s exact JSON nesting isn't guaranteed by
+    this codebase's own contract with it (see `bin/ocw`'s
+    `json_workspace_ids`/`json_has_pane_cwd`, which use the same
+    recurse-and-collect approach for the same reason), so this walks the
+    structure looking for dicts carrying the keys it needs instead of
+    assuming a fixed shape."""
+    role_map = {}
+    if shutil.which("herdr") is None:
+        return role_map
+    if _herdr(["status", "server"]) is None:
+        return role_map
+
+    workspace_out = _herdr(["workspace", "list"])
+    if workspace_out is None:
+        return role_map
+    try:
+        workspace_data = json.loads(workspace_out)
+    except json.JSONDecodeError:
+        return role_map
+    workspace_dicts = []
+    _collect_dicts_with_key(workspace_data, "workspace_id", workspace_dicts)
+    workspace_ids = sorted({d.get("workspace_id") for d in workspace_dicts if d.get("workspace_id")})
+
+    for workspace_id in workspace_ids:
+        pane_out = _herdr(["pane", "list", "--workspace", str(workspace_id)])
+        if pane_out is None:
+            continue
+        try:
+            pane_data = json.loads(pane_out)
+        except json.JSONDecodeError:
+            continue
+        pane_dicts = []
+        _collect_dicts_with_key(pane_data, "agent_session", pane_dicts)
+        for pane in pane_dicts:
+            session = pane.get("agent_session")
+            session_id = session.get("value") if isinstance(session, dict) else None
+            label = pane.get("label")
+            if session_id and label:
+                role_map[session_id] = {
+                    "role": label,
+                    "workspace_id": pane.get("workspace_id") or workspace_id,
+                    "pane_id": pane.get("pane_id"),
+                }
+    return role_map
+
+
+# ── run_id / PR attribution from this meter's own local event store ────
+
+def load_local_pr_binds_and_run_starts(paths):
+    """Single pass over every stored event, building two lookup tables
+    `ingest` needs: the pr.bind table (plan §7.4 PR resolution once a
+    run_id is known) and run_id -> run.start ts (PR #27 review round 2
+    finding "新規1", see resolve_run_id_via_ocw_run_id_file's caller).
+    Tolerates malformed lines by skipping them — this is advisory
+    context-building, not `validate`, so a corrupt line here just means
+    less context, not an error."""
+    binds, run_starts = {}, {}
+    for target in sorted(paths.events_dir.glob("*.jsonl")):
+        try:
+            text = target.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        for line in text.split("\n"):
+            if not line.strip():
+                continue
+            try:
+                obj = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            event_type = obj.get("event_type")
+            run_id = obj.get("run_id")
+            if event_type == "pr.bind" and run_id:
+                pr_number = obj.get("pr_number")
+                if isinstance(pr_number, int):
+                    binds[run_id] = {"pr_number": pr_number, "pr_url": obj.get("pr_url")}
+            elif event_type == "run.start" and run_id:
+                ts = parse_ts(obj.get("ts"))
+                if ts is not None:
+                    run_starts[run_id] = ts
+    return binds, run_starts
+
+
+def resolve_run_id_via_ocw_run_id_file(cwd, cache):
+    """Resolves run_id by reading `<worktree's git-dir>/ocw-run-id`
+    directly from the transcript message's OWN `cwd` — mirroring
+    exactly what `bin/ocw` itself does: it writes the run_id there right
+    after `git worktree add` (`worktree_git_dir="$(git -C "$worktree_dir"
+    rev-parse --absolute-git-dir)"`, then `printf ... >"${worktree_git_dir}/
+    ocw-run-id"`) and reads it back the same way in `ocw rm`.
+
+    PR #27 review round 1 finding 3: matching against locally stored
+    `run.start` events by (worktree, time range) does NOT work, because
+    `bin/ocw` never passes `--worktree` to `ocw-meter event run.start` —
+    it defaults to `git_worktree_root()` at the point `ocw` itself was
+    invoked, i.e. the ORIGIN worktree, not the newly created one that
+    transcript messages' `cwd` actually points at. That mismatch caused
+    both false negatives (real work always resolving to null) and false
+    positives (misattributing implementer/reviewer messages to whatever
+    run happened to be starting in the origin worktree at that moment).
+    Reading the git-dir file is authoritative for the EXACT worktree a
+    message came from.
+
+    Returns None once the worktree has been removed (git prunes its
+    metadata dir, including this file, on `ocw rm`/`git worktree
+    remove`) — that is correct, not a bug (plan §7.4: 不明なら null。
+    推測しない), not every historical message can still be traced back.
+
+    PR #27 review round 2 finding "新規1": this file answers "which
+    run_id does THIS PATH currently belong to", not "which run_id was
+    active when this specific message was generated". `ocw rm <name>`
+    followed by `ocw new <name>` reuses the same worktree path for a
+    brand new run, so a message generated under the OLD incarnation
+    (never ingested before that happened) would otherwise get
+    silently re-attributed to the NEW run_id. The caller
+    (`build_usage_event`) cross-checks the returned run_id's own
+    `run.start` timestamp against the message's timestamp and discards
+    the match (falls back to null) if the message predates that
+    run.start — see `run_starts` there."""
+    if cwd is None:
+        return None
+    if cwd in cache:
+        return cache[cwd]
+    run_id = None
+    git_dir = _git(["rev-parse", "--absolute-git-dir"], cwd=cwd)
+    if git_dir:
+        try:
+            run_id = (pathlib.Path(git_dir) / "ocw-run-id").read_text(encoding="utf-8").strip() or None
+        except OSError:
+            run_id = None
+    cache[cwd] = run_id
+    return run_id
+
+
+def repo_slug_for_cwd(cwd, cache):
+    """`repo` (plan §8.1: `owner/name`) resolved from the transcript
+    message's own `cwd`, cached per distinct cwd for the whole `ingest`
+    run — PR #27 review round 1 finding 9: this field was hardcoded to
+    null, making per-repository cost breakdowns impossible even though
+    `ocw`/`claude-ds` are routinely used across multiple repos on one
+    machine. `cwd` is already in the plan §1 field whitelist (it's read
+    for `worktree` too), so resolving `repo` from it costs one `git`
+    call per distinct worktree directory, not per message."""
+    if cwd is None:
+        return None
+    if cwd not in cache:
+        cache[cwd] = git_repo_slug(cwd=cwd)
+    return cache[cwd]
+
+
+def gh_pr_for_branch(branch):
+    """Fallback PR resolution (plan §7.4 item 3: gitBranch -> `gh pr
+    list --head`). Off by default and never invoked by tests (T:
+    "外部APIを叩かないこと") — opt in with OCW_METER_INGEST_USE_GH=1.
+    Failure of any kind (no `gh`, not authenticated, no PR found,
+    network error) is silent and just leaves pr_number null; `ingest`
+    must keep working with zero network access available."""
+    if os.environ.get("OCW_METER_INGEST_USE_GH", "0") not in ("1", "true", "yes"):
+        return None
+    if not branch or shutil.which("gh") is None:
+        return None
+    try:
+        result = subprocess.run(
+            ["gh", "pr", "list", "--head", branch, "--json", "number,url", "--limit", "1"],
+            capture_output=True, text=True, timeout=10,
+        )
+    except Exception:
+        return None
+    if result.returncode != 0:
+        return None
+    try:
+        data = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        return None
+    if isinstance(data, list) and data:
+        number = data[0].get("number")
+        if isinstance(number, int):
+            return {"pr_number": number, "pr_url": data[0].get("url")}
+    return None
+
+
+# ── assembling usage.message events ─────────────────────────────────────
+
+def build_usage_event(candidate, price_tables, today_str, role_map, binds, run_starts, pr_link_map, gh_cache, run_id_cache, repo_cache):
+    usage = candidate["usage"] or {}
+    input_tokens = usage.get("input_tokens")
+    cache_read = usage.get("cache_read_input_tokens")
+    cache_creation = usage.get("cache_creation_input_tokens")
+    output_tokens = usage.get("output_tokens")
+
+    model = normalize_model_name(candidate["model"])
+    provider = infer_provider(model)
+    ts_dt = parse_ts(candidate["timestamp"])
+    # PR #27 review round 1 finding 4 (plan §17 R5): the price table must
+    # be chosen by the MESSAGE's own date, not the date `ingest` happens
+    # to run on — otherwise a price table added later (e.g. once peak/
+    # off-peak pricing starts) gets applied retroactively to messages
+    # that predate its effective_date the very first time they're ever
+    # ingested (this is NOT the "recalculate stored events" case plan
+    # §5.5 forbids; it's picking the WRONG table on first write).
+    price_date_str = ts_dt.strftime("%Y-%m-%d") if ts_dt is not None else today_str
+    price_table = select_price_table(price_tables, price_date_str)
+    cost_estimate, price_version, price_effective, cost_basis = compute_cost(
+        model,
+        {
+            "input_tokens": input_tokens,
+            "cache_read_input_tokens": cache_read,
+            "cache_creation_input_tokens": cache_creation,
+            "output_tokens": output_tokens,
+        },
+        price_table,
+    )
+
+    session_id = candidate["session_id"]
+    role_info = role_map.get(session_id) if session_id else None
+
+    worktree = candidate["cwd"]
+    run_id = resolve_run_id_via_ocw_run_id_file(worktree, run_id_cache)
+    # PR #27 review round 2 finding "新規1": the ocw-run-id file answers
+    # "which run_id does THIS PATH belong to NOW", not "...when this
+    # message was generated". `ocw rm <name>` + `ocw new <name>` reuses
+    # the worktree path for a brand new run — a message from the OLD
+    # incarnation would otherwise silently re-attribute to the new
+    # run_id. If we know that run_id's own run.start ts and the message
+    # predates it, the match is from a stale path reuse: discard it
+    # (null, not guessed). Unknown run.start ts (e.g. from before this
+    # meter started recording, or a different machine) gives the match
+    # the benefit of the doubt rather than nulling everything out.
+    if run_id is not None and ts_dt is not None:
+        run_start_ts = run_starts.get(run_id)
+        if run_start_ts is not None and ts_dt < run_start_ts:
+            run_id = None
+
+    pr_info = binds.get(run_id) if run_id else None
+    if pr_info is None:
+        pr_info = pr_link_map.get(session_id) if session_id else None
+    if pr_info is None:
+        branch = candidate["git_branch"]
+        if branch not in gh_cache:
+            gh_cache[branch] = gh_pr_for_branch(branch)
+        pr_info = gh_cache[branch]
+
+    numeric_present = all(isinstance(v, (int, float)) for v in (input_tokens, cache_read, cache_creation, output_tokens))
+    if not usage:
+        completeness = "unknown"
+    elif numeric_present:
+        completeness = "complete"
+    else:
+        completeness = "partial"
+    # 孫3プロンプト §2: "価格表に無いモデルは cost_estimate_usd: null /
+    # completeness: unknown" — a model this meter can't price (missing
+    # price file entry, e.g. deepseek-v4-flash today per plan §5.10) is
+    # its own kind of incompleteness, distinct from missing usage
+    # fields. Deliberately does NOT apply to cost_basis == "subscription"
+    # (Anthropic models): there cost_estimate_usd is null ON PURPOSE,
+    # not because pricing is unknown.
+    if cost_basis == "estimated" and cost_estimate is None and completeness == "complete":
+        completeness = "unknown"
+
+    event = {
+        "schema_version": SCHEMA_VERSION,
+        "event_id": str(uuid.uuid4()),
+        "idempotency_key": f"msg:{candidate['message_id']}",
+        "event_type": "usage.message",
+        "ts": candidate["timestamp"] or iso_utc(datetime.now(timezone.utc)),
+        "ts_local_offset": local_offset_str(),
+        "source": "transcript",
+        "parser_version": INGEST_PARSER_VERSION,
+        "completeness": completeness,
+        "run_id": run_id,
+        "repo": repo_slug_for_cwd(worktree, repo_cache),
+        "worktree": worktree,
+        "branch": candidate["git_branch"],
+        "head_sha": None,
+        "workspace_id": (role_info or {}).get("workspace_id"),
+        "pane_id": (role_info or {}).get("pane_id"),
+        "role": (role_info or {}).get("role") or "unknown",
+        "session_id": session_id,
+        "provider": provider,
+        "model": model,
+        "phase": None,
+        "round": None,
+        "pr_number": (pr_info or {}).get("pr_number"),
+        "pr_url": (pr_info or {}).get("pr_url"),
+        "message_id": candidate["message_id"],
+        "input_tokens": input_tokens if isinstance(input_tokens, (int, float)) else None,
+        "cache_read_input_tokens": cache_read if isinstance(cache_read, (int, float)) else None,
+        "cache_creation_input_tokens": cache_creation if isinstance(cache_creation, (int, float)) else None,
+        "output_tokens": output_tokens if isinstance(output_tokens, (int, float)) else None,
+        "reasoning_tokens": None,  # U5 / P2 未確定（孫0 P2待ち）— 推測しない
+        "is_sidechain": candidate["is_sidechain"] if isinstance(candidate["is_sidechain"], bool) else None,
+        "effort": candidate["effort"],
+        "stop_reason": candidate["stop_reason"],
+        "cost_estimate_usd": cost_estimate,
+        "price_table_version": price_version,
+        "price_effective_date": price_effective,
+        "cost_basis": cost_basis,
+        "currency": "USD" if cost_basis != "subscription" else None,
+    }
+    for key in list(event.keys()):
+        event[key] = redact_value(key, event[key])
+    return event
+
+
+# ── bulk write path (see PERFORMANCE NOTE at top of file) ──────────────
+
+def bulk_write_events(paths, events):
+    """Writes many usage.message events efficiently: at most one read +
+    atomic rewrite per calendar-day events file for this whole batch,
+    instead of routing each event through `write_event` (which would
+    trigger `_replace_line_by_idempotency_key`'s full-file rewrite once
+    per duplicate — DOC-2608021229 §2.2 measured 59.4% of real assistant lines
+    as duplicates). Holds the storage lock for the whole batch, matching
+    plan §10.3's concurrent-writer requirement. Returns {"written": n,
+    "replaced": n}."""
+    by_day = {}
+    for event in events:
+        dt = parse_ts(event["ts"]) or datetime.now(timezone.utc)
+        by_day.setdefault(dt.strftime("%Y-%m-%d"), []).append(event)
+
+    counts = {"written": 0, "replaced": 0}
+    with acquire_lock(paths.lock_file, timeout=30.0) as acquired:
+        if not acquired:
+            raise MeterTimeout("could not acquire storage lock within 30s")
+
+        for day, day_events in by_day.items():
+            events_file = paths.events_dir / f"{day}.jsonl"
+            month = day[:7]
+            seen_file = paths.seen_keys_dir / f"{month}.txt"
+
+            seen = set()
+            if seen_file.exists():
+                with open(seen_file, "r", encoding="utf-8") as fh:
+                    seen = {line.rstrip("\n") for line in fh if line.strip()}
+
+            existing_lines = []
+            trailing_newline = True
+            if events_file.exists():
+                text = events_file.read_text(encoding="utf-8")
+                if text:
+                    trailing_newline = text.endswith("\n")
+                    existing_lines = text.split("\n")
+                    if trailing_newline:
+                        existing_lines = existing_lines[:-1]
+
+            existing_by_key = {}
+            for idx, line in enumerate(existing_lines):
+                if not line.strip():
+                    continue
+                try:
+                    obj = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                key = obj.get("idempotency_key")
+                if key:
+                    existing_by_key[key] = idx
+
+            new_seen_keys = []
+            file_changed = False
+            for event in day_events:
+                key = event["idempotency_key"]
+                new_line = json.dumps(event, ensure_ascii=False, sort_keys=True, allow_nan=False)
+                if key in existing_by_key:
+                    existing_lines[existing_by_key[key]] = new_line
+                    counts["replaced"] += 1
+                    file_changed = True
+                elif key in seen:
+                    # Stored under this key in a DIFFERENT day's file —
+                    # mirrors write_event's own "duplicate" fallback
+                    # (see its docstring) rather than assuming this
+                    # cannot happen for a ts-derived day bucket.
+                    counts["replaced"] += 1
+                else:
+                    existing_lines.append(new_line)
+                    new_seen_keys.append(key)
+                    seen.add(key)
+                    counts["written"] += 1
+                    file_changed = True
+
+            if file_changed:
+                # PR #27 review round 1 finding 7: this used to append a
+                # trailing "\n" unconditionally, which silently "healed"
+                # a crash-truncated final line (round-3 review on
+                # `_replace_line_by_idempotency_key` explicitly commits
+                # to NOT doing that — `validate_file`'s only signal for
+                # "process crashed mid-write" (T05) is a missing trailing
+                # newline on the file's last line).
+                #
+                # A pure replacement touches no new content, so it must
+                # preserve the file's original terminal state exactly,
+                # same as `_replace_line_by_idempotency_key`. Appending
+                # brand-new lines is different: if the old tail was
+                # untermined, gluing new JSON directly onto it byte-for-
+                # byte (no separator) would corrupt BOTH the old garbage
+                # AND the new, otherwise-valid event — so a terminator is
+                # unavoidably inserted there. That means the "possible
+                # crash" classification for the OLD line is lost the
+                # moment anything is appended after it (it's no longer
+                # the file's last line) — an inherent tradeoff, not
+                # silent: recorded as a meter.error diagnostic below.
+                appended_new_lines = bool(new_seen_keys)
+                if appended_new_lines and not trailing_newline:
+                    with contextlib.suppress(Exception):
+                        emit_meter_error(str(paths.root), "ingest_appended_after_truncated_day_file", None)
+                newline_at_end = True if appended_new_lines else trailing_newline
+                content = "\n".join(existing_lines) + ("\n" if (existing_lines and newline_at_end) else "")
+                ensure_dir(paths.events_dir, 0o700)
+                tmp_fd, tmp_path = tempfile.mkstemp(dir=str(paths.events_dir), prefix=".tmp-", suffix=".jsonl")
+                try:
+                    with os.fdopen(tmp_fd, "w", encoding="utf-8") as fh:
+                        fh.write(content)
+                    os.chmod(tmp_path, 0o600)
+                    os.replace(tmp_path, events_file)
+                except Exception:
+                    with contextlib.suppress(OSError):
+                        os.unlink(tmp_path)
+                    raise
+
+            if new_seen_keys:
+                ensure_dir(paths.seen_keys_dir, 0o700)
+                with open(seen_file, "a", encoding="utf-8") as fh:
+                    for key in new_seen_keys:
+                        fh.write(key + "\n")
+                with contextlib.suppress(OSError):
+                    os.chmod(seen_file, 0o600)
+
+    return counts
+
+
+# ── subcommand: ingest ──────────────────────────────────────────────────
+
+def cmd_ingest(args):
+    parsed = parse_flags(args, {"--since": "since"}) if args else {}
+    since_str = parsed.get("since")
+    since_dt = None
+    if since_str:
+        since_dt = parse_ts(since_str)
+        if since_dt is None:
+            print(f"error: --since is not a valid RFC3339 timestamp: {since_str!r}", file=sys.stderr)
+            return 1
+
+    root = storage_root()
+    if in_git_worktree(root):
+        print(f"error: OCW_METER_HOME ({root}) resolves inside a Git worktree; refusing to operate", file=sys.stderr)
+        return 1
+    paths = ensure_storage(root)
+
+    projects_dir = claude_projects_dir()
+    if projects_dir is None:
+        print(
+            "error: could not determine the Claude projects directory "
+            "(HOME is not set; set OCW_METER_CLAUDE_PROJECTS_DIR explicitly)",
+            file=sys.stderr,
+        )
+        return 1
+
+    transcript_files = sorted(projects_dir.glob("*/*.jsonl")) if projects_dir.is_dir() else []
+
+    cursor = load_ingest_cursor(paths)
+    cursor_files = cursor["files"]
+    new_cursor_files = dict(cursor_files)
+
+    candidates = {}
+    # Starts from what earlier runs have already discovered (see
+    # load_session_pr_links) instead of empty — PR #27 review round 1
+    # finding 2.
+    pr_link_map = load_session_pr_links(paths)
+    quarantined_count = 0
+    files_scanned = 0
+    files_with_new_data = 0
+
+    for file_path in transcript_files:
+        files_scanned += 1
+        key = str(file_path)
+        result = read_new_lines(file_path, cursor_files.get(key))
+        if result is None:
+            continue
+        if result["lines"]:
+            files_with_new_data += 1
+
+        for raw_line in result["lines"]:
+            try:
+                text_line = raw_line.decode("utf-8")
+            except UnicodeDecodeError:
+                quarantine_this_run(paths, since_dt, file_path, "invalid UTF-8 encoding", len(raw_line))
+                quarantined_count += 1
+                continue
+            try:
+                obj = json.loads(text_line)
+            except json.JSONDecodeError:
+                quarantine_this_run(paths, since_dt, file_path, "malformed JSON", len(raw_line))
+                quarantined_count += 1
+                continue
+            if not isinstance(obj, dict):
+                continue
+
+            obj_type = obj.get("type")
+            if obj_type == "assistant":
+                candidate = extract_assistant_candidate(obj)
+                if candidate is None:
+                    quarantine_this_run(paths, since_dt, file_path, "assistant line missing message.id", len(raw_line))
+                    quarantined_count += 1
+                    continue
+                if since_dt is not None:
+                    line_ts = parse_ts(candidate["timestamp"])
+                    if line_ts is not None and line_ts < since_dt:
+                        continue
+                # Last occurrence in document order wins (plan §5.3: a
+                # response is re-appended per content block, and the
+                # LAST line for a given message.id carries the complete
+                # usage/stop_reason — see
+                # tests/fixtures/transcript_duplicate_message_id.jsonl).
+                candidates[candidate["message_id"]] = candidate
+            elif obj_type == "pr-link":
+                extracted = extract_pr_link(obj)
+                if extracted is not None:
+                    session_id, pr_info = extracted
+                    pr_link_map[session_id] = pr_info
+
+        new_cursor_files[key] = {
+            "inode": result["stat"]["inode"],
+            "size": result["stat"]["size"],
+            "mtime": result["stat"]["mtime"],
+            "offset": result["new_offset"],
+        }
+
+    role_map = resolve_herdr_role_map()
+    binds, run_starts = load_local_pr_binds_and_run_starts(paths)
+    price_tables = load_price_tables(price_table_dir())
+    today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    gh_cache, run_id_cache, repo_cache = {}, {}, {}
+
+    events = [
+        build_usage_event(candidate, price_tables, today_str, role_map, binds, run_starts, pr_link_map, gh_cache, run_id_cache, repo_cache)
+        for candidate in candidates.values()
+    ]
+
+    write_counts = bulk_write_events(paths, events) if events else {"written": 0, "replaced": 0}
+
+    # pr-link discoveries are always persisted (see load_session_pr_links)
+    # — unlike the cursor below, this is never gated on --since, since
+    # forgetting a discovered PR binding is never desirable.
+    save_session_pr_links(paths, pr_link_map)
+
+    # Cursor is persisted AFTER the write succeeds: if this process is
+    # interrupted between reading and writing, the next run re-reads the
+    # same bytes from the same starting offset. That's safe (not wasted)
+    # because message.id-keyed writes are idempotent either way — this
+    # is what makes `ingest` produce identical results no matter how
+    # many times, or where, it is interrupted and re-run.
+    #
+    # EXCEPT when --since was used: PR #27 review round 1 finding 1 — a
+    # naive advance here would permanently mark the filtered-out (older
+    # than --since) bytes as "already read", so a LATER unrestricted
+    # `ingest` run would never see them again (the offset already moved
+    # past them). Treating a --since run as read-only with respect to
+    # the persisted cursor means it never loses data: the next run
+    # (restricted or not) simply re-reads the same unconsumed range from
+    # wherever the last UNRESTRICTED run left off.
+    if since_dt is None:
+        save_ingest_cursor(paths, {"files": new_cursor_files})
+
+    print(f"transcript files scanned:            {files_scanned}")
+    print(f"transcript files with new data:      {files_with_new_data}")
+    print(f"distinct message.id in this run:     {len(candidates)}")
+    print(f"usage.message written (new):         {write_counts['written']}")
+    print(f"usage.message replaced (re-run/dup):  {write_counts['replaced']}")
+    if since_dt is None:
+        print(f"transcript lines quarantined:         {quarantined_count}")
+    else:
+        # PR #27 review round 3 finding "新規2": under --since,
+        # quarantine writes are skipped (round 2 finding "新規2"), so
+        # printing this under the same "quarantined:" label as a normal
+        # run — even with the cursor note appended separately — read as
+        # "this many were recorded" when zero were. Label matches what
+        # actually happened: detected while reading, nothing persisted.
+        print(f"transcript lines with parse errors (detected, NOT persisted — see note below): {quarantined_count}")
+    if since_dt is not None:
+        # PR #27 review round 4 finding "新規1": this string is printed
+        # to the user's terminal — it must read on its own, not
+        # reference an internal PR review round number nobody running
+        # `ingest` has any context for.
+        print(
+            "note: --since was set; this run is read-only — the incremental cursor was NOT "
+            "advanced and no quarantine records were written"
+        )
+    return 0
+
+
+# ── subcommand: snapshot-quota (statusLine → quota.sample, 孫4) ────────
+#
+# Invoked BY Claude Code itself as the `statusLine` command, once per
+# redraw (DOC-2608021229 §2.1 measured up to 54 calls/hour in a single
+# session). This is the one subcommand whose stdout IS the product —
+# every other subcommand's stdout is either silent-on-success (event/
+# bind-pr) or a report a human reads on demand. A crash here doesn't
+# just fail to record data, it visibly breaks every Claude Code
+# session's status bar. Everything below is written around that single
+# constraint: cmd_snapshot_quota() below always returns a display
+# string and never raises past its own boundary (see its docstring).
+
+QUOTA_STATE_FILENAME = "quota-last-sample.json"
+# round-1 review finding 3: this lives in the machine's DEFAULT storage
+# root (never the possibly-misconfigured `OCW_METER_HOME`), because it
+# exists specifically to survive being called while that configured
+# root is refused (a git-worktree path) — see record_quota_sample.
+QUOTA_WORKTREE_REFUSAL_FILENAME = "quota-worktree-refusal.json"
+# round-1 review finding 2: throttling keys on session_id so concurrent
+# panes each keep their OWN session_cost_usd/context_used_pct instead of
+# starving each other under one global 60s gate. A statusLine payload
+# with no (or a non-string) session_id falls back to this shared key —
+# still better than recording nothing, and matches every other
+# "unknown -> shared/degraded, not silently dropped" fallback in this
+# file rather than inventing a fake per-call unique key.
+QUOTA_SESSION_FALLBACK_KEY = "__no_session__"
+# round-1 review finding 2: without pruning, `sessions` in
+# quota-last-sample.json would grow by one entry per DISTINCT session_id
+# ever seen on this machine, forever. 24h comfortably outlives any
+# single work session (Claude 5-hour windows are the longest-lived
+# thing this file otherwise tracks) while still bounding growth.
+QUOTA_SESSION_STATE_MAX_AGE_SECONDS = 24 * 60 * 60
+DEFAULT_QUOTA_INTERVAL_SECONDS = 60.0
+# Bumped whenever this subcommand's statusLine-JSON -> quota.sample
+# extraction logic changes shape (plan §8.1 `parser_version`, mirroring
+# INGEST_PARSER_VERSION's role for `ingest`).
+STATUSLINE_PARSER_VERSION = 1
+
+
+def quota_interval_seconds():
+    raw = os.environ.get("OCW_METER_QUOTA_INTERVAL")
+    if raw is None or raw == "":
+        return DEFAULT_QUOTA_INTERVAL_SECONDS
+    try:
+        value = float(raw)
+    except ValueError:
+        return DEFAULT_QUOTA_INTERVAL_SECONDS
+    # A negative interval would disable throttling by accident (every
+    # elapsed-time check trivially passes) — fall back instead of
+    # honoring it, matching to_number's "never silently do something
+    # nobody asked for" stance elsewhere in this file.
+    return value if value >= 0 else DEFAULT_QUOTA_INTERVAL_SECONDS
+
+
+def raw_capture_enabled():
+    return os.environ.get("OCW_METER_RAW", "0").strip().lower() in _TRUE_STRINGS
+
+
+STDIN_READ_TIMEOUT_SECONDS = 2.0
+
+
+def read_stdin_statusline_json(max_bytes=2_000_000, timeout_seconds=STDIN_READ_TIMEOUT_SECONDS):
+    """Reads up to max_bytes from stdin (defends against a pathologically
+    large payload exhausting memory — nothing documented about the
+    statusLine JSON schema bounds its size) within an overall wall-clock
+    budget (defends against the caller keeping the pipe open without
+    writing/closing it — a plain `sys.stdin.buffer.read()` blocks until
+    EOF with NO time bound, so a hung/misbehaving caller — or a human
+    running this command interactively at a real TTY, since Claude Code
+    itself always pipes and closes — would hang the status bar forever;
+    found via review: `(sleep 20) | ocw-meter snapshot-quota` blocked for
+    the full 20s). Returns the parsed dict, or None for anything that
+    isn't cleanly parseable as one — empty stdin, a TTY with nothing
+    piped, a read timeout, non-UTF-8 bytes, malformed JSON, valid JSON
+    that isn't an object. None is a fully supported input: every caller
+    of this treats it the same as "no usable data", never an error.
+
+    Uses `select.select()` + `os.read()` on the raw fd rather than
+    `sys.stdin.buffer.read()`: the latter has no way to bound how long a
+    single call blocks, and this needs to bound the WHOLE read (looping
+    while there is still budget left), not just one syscall."""
+    try:
+        stdin = sys.stdin
+        if stdin is None or stdin.closed or stdin.isatty():
+            return None
+        fd = stdin.fileno()
+    except Exception:
+        return None
+
+    chunks = []
+    total = 0
+    deadline = time.monotonic() + timeout_seconds
+    try:
+        while total <= max_bytes:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            ready, _, _ = select.select([fd], [], [], remaining)
+            if not ready:
+                break  # timed out waiting for more data than we already have
+            chunk = os.read(fd, 65536)
+            if not chunk:
+                break  # EOF — the normal, expected end of a real statusLine invocation
+            chunks.append(chunk)
+            total += len(chunk)
+    except Exception:
+        return None
+
+    raw = b"".join(chunks)
+    if len(raw) > max_bytes:
+        raw = raw[:max_bytes]
+    try:
+        text = raw.decode("utf-8", errors="replace").strip()
+    except Exception:
+        return None
+    if not text:
+        return None
+    try:
+        obj = json.loads(text)
+    except json.JSONDecodeError:
+        return None
+    return obj if isinstance(obj, dict) else None
+
+
+def _get(obj, *keys):
+    """Nested dict lookup that returns None the moment anything along
+    the path isn't a dict — plan §8.5 / DOC-2608021229 §2.1's "未知キーが増え
+    ても落ちない。既知キーが消えても落ちない" applies to every level of
+    the statusLine JSON, not just the top one (T11)."""
+    cur = obj
+    for k in keys:
+        if not isinstance(cur, dict):
+            return None
+        cur = cur.get(k)
+    return cur
+
+
+def _as_number(value):
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
+    return value
+
+
+def _as_int(value):
+    n = _as_number(value)
+    return int(n) if n is not None else None
+
+
+def resolve_context_used_pct(obj):
+    """DOC-2608021229 §2.1 / 孫4プロンプト §1: `context_window.used_percentage`
+    was non-null in 59/66 real samples but null in the rest — null-safe
+    by design, not an error case. Falls back to
+    total_input_tokens/context_window_size (the two fields DOC-2608021229
+    found "常に取得可能") when the direct percentage is unavailable."""
+    used = _as_number(_get(obj, "context_window", "used_percentage"))
+    if used is not None:
+        return used
+    total_input = _as_number(_get(obj, "context_window", "total_input_tokens"))
+    window_size = _as_number(_get(obj, "context_window", "context_window_size"))
+    if total_input is not None and window_size:
+        return (total_input / window_size) * 100.0
+    return None
+
+
+def _fmt_pct(value):
+    n = _as_number(value)
+    return f"{n:.0f}" if n is not None else None
+
+
+def format_quota_display(obj):
+    """Builds the minimal statusLine text (DOC-2608021229 §8 instruction 7:
+    "5h:37% 7d:12% ctx:24%" 程度に。`context_window.used_percentage` が
+    nullの場合は `ctx` を非表示にする) — omits whatever wasn't obtainable
+    rather than showing a placeholder. Never raises: `_get`/`_as_number`
+    degrade to None at every step, so a totally unparseable `obj`
+    (including None itself) just produces an empty string, which is
+    exactly what cmd_snapshot_quota falls back to on any earlier
+    failure anyway.
+
+    Deliberately uses the RAW `context_window.used_percentage` here, not
+    `resolve_context_used_pct()`'s fallback-computed value: DOC-2608021229 §8-3
+    (the RECORDED `context_used_pct` field) and §8-7 (the DISPLAYED
+    string) are two separate instructions with two different answers for
+    the null case — record the fallback estimate, but hide `ctx` from
+    the status bar rather than show a number the instruction explicitly
+    says to omit (round-1 review: these were conflated, showing a
+    fallback-derived `ctx:25%` even when the instruction called for no
+    `ctx` segment at all)."""
+    parts = []
+    five_hour_pct = _as_number(_get(obj, "rate_limits", "five_hour", "used_percentage"))
+    if five_hour_pct is not None:
+        parts.append(f"5h:{_fmt_pct(five_hour_pct)}%")
+    seven_day_pct = _as_number(_get(obj, "rate_limits", "seven_day", "used_percentage"))
+    if seven_day_pct is not None:
+        parts.append(f"7d:{_fmt_pct(seven_day_pct)}%")
+    raw_context_pct = _as_number(_get(obj, "context_window", "used_percentage"))
+    if raw_context_pct is not None:
+        parts.append(f"ctx:{_fmt_pct(raw_context_pct)}%")
+    return " ".join(parts)
+
+
+def resolve_quota_git_context(cwd):
+    """Resolves repo/worktree/branch/head_sha from the statusLine JSON's
+    OWN `cwd` field, not this process's own working directory — mirrors
+    `resolve_run_id_via_ocw_run_id_file`'s reasoning for `ingest`
+    (trust the data's own stated location over ambient process state).
+    Only fills in what git actually resolves; missing pieces are left
+    for build_envelope's own process-cwd-based defaults to fill via the
+    normal "field not in overrides -> defaults[field]" path."""
+    ctx = {}
+    if not cwd or not isinstance(cwd, str):
+        return ctx
+    repo = git_repo_slug(cwd=cwd)
+    if repo:
+        ctx["repo"] = repo
+    worktree = _git(["rev-parse", "--show-toplevel"], cwd=cwd)
+    if worktree:
+        ctx["worktree"] = worktree
+    branch = _git(["rev-parse", "--abbrev-ref", "HEAD"], cwd=cwd)
+    if branch and branch != "HEAD":
+        ctx["branch"] = branch
+    head_sha = _git(["rev-parse", "HEAD"], cwd=cwd)
+    if head_sha:
+        ctx["head_sha"] = head_sha
+    return ctx
+
+
+def load_json_state_file(paths, filename):
+    """Generic small-JSON-file read used by both quota-last-sample.json
+    (per-`OCW_METER_HOME` root) and quota-worktree-refusal.json (always
+    the DEFAULT root — see QUOTA_WORKTREE_REFUSAL_FILENAME). Never
+    raises: a missing/corrupt file is treated as "no state yet", the
+    same as everywhere else this file reads its own small state
+    sidecars (load_ingest_cursor, load_session_pr_links, ...)."""
+    path = paths.state_dir / filename
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def save_json_state_file(paths, filename, state):
+    path = paths.state_dir / filename
+    ensure_dir(paths.state_dir, 0o700)
+    tmp_fd, tmp_path = tempfile.mkstemp(dir=str(paths.state_dir), prefix=".tmp-", suffix=".json")
+    try:
+        with os.fdopen(tmp_fd, "w", encoding="utf-8") as fh:
+            json.dump(state, fh, ensure_ascii=False, sort_keys=True)
+        os.chmod(tmp_path, 0o600)
+        os.replace(tmp_path, path)
+    except Exception:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp_path)
+        raise
+
+
+def load_quota_state(paths):
+    return load_json_state_file(paths, QUOTA_STATE_FILENAME)
+
+
+def save_quota_state(paths, state):
+    save_json_state_file(paths, QUOTA_STATE_FILENAME, state)
+
+
+def load_worktree_refusal_state(paths):
+    return load_json_state_file(paths, QUOTA_WORKTREE_REFUSAL_FILENAME)
+
+
+def save_worktree_refusal_state(paths, state):
+    save_json_state_file(paths, QUOTA_WORKTREE_REFUSAL_FILENAME, state)
+
+
+def prune_stale_sessions(sessions, now):
+    """Drops session-throttle entries whose last sample is older than
+    QUOTA_SESSION_STATE_MAX_AGE_SECONDS (round-1 review finding 2: keeps
+    `sessions` in quota-last-sample.json from growing without bound as
+    new session_ids appear over the machine's lifetime). Tolerates
+    malformed entries (drops them) rather than raising — this state
+    file is only ever written by this meter itself, but a future format
+    change or hand-edit shouldn't be able to take `snapshot-quota`
+    down over it."""
+    pruned = {}
+    for session_id, entry in sessions.items():
+        if not isinstance(entry, dict):
+            continue
+        ts = parse_ts(entry.get("last_sample_ts"))
+        if ts is not None and (now - ts).total_seconds() <= QUOTA_SESSION_STATE_MAX_AGE_SECONDS:
+            pruned[session_id] = entry
+    return pruned
+
+
+def save_raw_quota_snapshot(paths, obj, now):
+    """plan §9.3: opt-in only (OCW_METER_RAW=1), redacted before it ever
+    touches disk, mode 700/600. Returns the absolute path written, for
+    the event's own `raw_ref` field."""
+    ensure_dir(paths.raw_dir, 0o700)
+    day_dir = paths.raw_dir / now.strftime("%Y-%m-%d")
+    ensure_dir(day_dir, 0o700)
+    target = day_dir / f"quota-{now.strftime('%H%M%S')}-{uuid.uuid4().hex[:8]}.json"
+    redacted = redact_json_deep(obj)
+    tmp_fd, tmp_path = tempfile.mkstemp(dir=str(day_dir), prefix=".tmp-", suffix=".json")
+    try:
+        with os.fdopen(tmp_fd, "w", encoding="utf-8") as fh:
+            json.dump(redacted, fh, ensure_ascii=False, indent=2, sort_keys=True)
+        os.chmod(tmp_path, 0o600)
+        os.replace(tmp_path, target)
+    except Exception:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp_path)
+        raise
+    return str(target)
+
+
+def resolve_five_hour_window(five_hour_resets_at, now):
+    """Returns (stale, window_id) for a `five_hour.resets_at` epoch-
+    second value already known to be an int (or None -> (False, None),
+    i.e. nothing to evaluate).
+
+    round-1 review finding 1: `datetime.fromtimestamp()` raises
+    ValueError/OverflowError/OSError for an out-of-range timestamp
+    (confirmed: a `resets_at` in milliseconds instead of seconds — a
+    plausible upstream format change, exactly what plan's "UI出力形式
+    変更で落ちない" requirement anticipates — produces "year 58552 is
+    out of range"). That exception used to propagate out of
+    record_quota_sample() uncaught, meaning it was swallowed by
+    cmd_snapshot_quota()'s outer try/except and NO event was written at
+    all — the display string kept working (masking the failure from the
+    screen) while quota collection silently stopped. An unconvertible
+    value is treated exactly like a stale one: not adopted as a window
+    identifier, but the sample is still recorded (partial, not
+    dropped) — plan §7.4 "不明なら null。捏造しない", not "不明なら
+    諦める"."""
+    if five_hour_resets_at is None:
+        return False, None
+    try:
+        resets_dt = datetime.fromtimestamp(five_hour_resets_at, tz=timezone.utc)
+    except (ValueError, OverflowError, OSError):
+        return True, None
+    if resets_dt <= now:
+        return True, None
+    return False, str(five_hour_resets_at)
+
+
+def record_quota_sample(obj):
+    """The actual storage side-effect of `snapshot-quota` (plan §8.5).
+    Deliberately does NOT go through `record()`: that helper re-resolves
+    storage_root()/in_git_worktree()/ensure_storage() from scratch, and
+    this function already needs to do those itself (to read the
+    throttle state cheaply BEFORE paying for a git subprocess call —
+    see the ordering below), so calling through `record()` on top would
+    mean doing the worktree-safety git call twice per actual write.
+
+    Raises on genuinely unexpected failures; the caller
+    (cmd_snapshot_quota) is the one that turns any exception here into
+    "warn to stderr, still print a display string, exit 0" — this
+    function itself only handles the EXPECTED not-fully-available cases
+    (missing rate_limits, stale window, throttled) by returning early,
+    matching plan §7.4's "不明なら null。捏造しない"."""
+    if not isinstance(obj, dict):
+        return  # nothing usable to record — not an error (see caller)
+
+    root = storage_root()
+    if not root:
+        return
+
+    now = datetime.now(timezone.utc)
+    interval = quota_interval_seconds()
+
+    # round-1 review finding 2: throttling keys on session_id (falling
+    # back to a shared key when the payload has none) so that N
+    # concurrent panes (this repo's own standard Herdr commander/
+    # implementer/reviewer setup) each keep recording their OWN
+    # session_cost_usd/context_used_pct, instead of the first pane to
+    # call in any given interval silently starving every other pane's
+    # data for that whole window. The account-wide rate_limits fields
+    # stay in a SEPARATE top-level slot of the same state file (see
+    # save_quota_state below) — those are correctly shared across every
+    # session already (DOC-2608021229: `rate_limits` reflects the whole
+    # Claude.ai account, not a single session), so per-session
+    # throttling only applies to "have I sampled THIS session recently",
+    # not to the window/anomaly bookkeeping.
+    session_id_hint = obj.get("session_id")
+    session_key = session_id_hint if isinstance(session_id_hint, str) and session_id_hint else QUOTA_SESSION_FALLBACK_KEY
+
+    # Cheap, I/O-light throttle check FIRST (plan §1 / DOC-2608021229 §8-2: up
+    # to 54 calls/hour measured, so the common case must stay light —
+    # no git subprocess calls, no mkdir/chmod, no lock). Paths(root) is
+    # pure path-string construction, not I/O; reading a small state file
+    # that may not even exist yet is safe regardless of whether `root`
+    # turns out to be misconfigured (checked next, only once we know
+    # we're actually about to write).
+    paths = Paths(root)
+    prev_state = load_quota_state(paths)
+    prev_sessions = prev_state.get("sessions")
+    prev_sessions = prev_sessions if isinstance(prev_sessions, dict) else {}
+    session_entry = prev_sessions.get(session_key)
+    last_ts = parse_ts(session_entry.get("last_sample_ts")) if isinstance(session_entry, dict) else None
+    if last_ts is not None and (now - last_ts).total_seconds() < interval:
+        return  # throttled: display string was already computed independently by the caller
+
+    # round-1 review finding 3: `root` being refused below means NOTHING
+    # can ever be persisted under it — so the per-session throttle check
+    # just above NEVER finds a previous sample for a permanently
+    # misconfigured OCW_METER_HOME, and would re-run the (subprocess-
+    # backed) in_git_worktree() check on every single high-frequency
+    # statusLine call forever. Since state can't live under the refused
+    # root, this suppression cache lives at the machine's DEFAULT root
+    # instead (same fallback target emit_meter_error already uses for
+    # the same underlying reason), keyed by the configured (bad) root's
+    # own path string so multiple distinct misconfigurations don't
+    # clobber each other.
+    # round-2 review finding 3: `default_storage_root()` just builds a
+    # path string ("$HOME/.local/state/ocw-meter") — it does NOT check
+    # whether that path itself happens to sit inside a git worktree
+    # (e.g. $HOME pointed at a checkout, as this very repository's own
+    # dotfiles use case can produce). Writing the suppression cache
+    # there unconditionally would violate this file's own "never write
+    # under a git worktree" rule for exactly the state file that exists
+    # to STOP unwanted writes — confirmed: it left an untracked
+    # quota-worktree-refusal.json inside a test repo. `emit_meter_error`
+    # already re-checks its own default-root fallback the same way; this
+    # matches that precedent. If the default root itself is inside a
+    # worktree, there is nowhere left to cache the refusal — `root`
+    # simply gets re-checked every call in that (rare, doubly-
+    # misconfigured) case, same as before this suppression existed.
+    default_root = default_storage_root()
+    refusal_paths = (
+        Paths(default_root)
+        if (default_root and default_root != root and not in_git_worktree(default_root))
+        else None
+    )
+    if refusal_paths is not None:
+        refusal_state = load_worktree_refusal_state(refusal_paths)
+        last_refused_at = refusal_state.get(root)
+        last_refused_at = parse_ts(last_refused_at) if isinstance(last_refused_at, str) else None
+        if last_refused_at is not None and (now - last_refused_at).total_seconds() < interval:
+            return  # still within the suppression window from a previous refusal
+
+    if in_git_worktree(root):
+        print(
+            f"warning: OCW_METER_HOME ({root}) resolves inside a Git worktree; "
+            "refusing to write there (no quota.sample recorded)",
+            file=sys.stderr,
+        )
+        emit_meter_error(root, "storage_home_inside_git_worktree", None)
+        if refusal_paths is not None:
+            with contextlib.suppress(Exception):
+                updated = {}
+                for bad_root, checked_at in load_worktree_refusal_state(refusal_paths).items():
+                    checked_ts = parse_ts(checked_at) if isinstance(checked_at, str) else None
+                    if checked_ts is not None and (now - checked_ts).total_seconds() <= QUOTA_SESSION_STATE_MAX_AGE_SECONDS:
+                        updated[bad_root] = checked_at
+                updated[root] = iso_utc(now)
+                save_worktree_refusal_state(refusal_paths, updated)
+        return
+
+    paths = ensure_storage(root)
+
+    rate_limits = obj.get("rate_limits")
+    has_rate_limits = isinstance(rate_limits, dict) and bool(rate_limits)
+    five_hour = rate_limits.get("five_hour") if has_rate_limits else None
+    seven_day = rate_limits.get("seven_day") if has_rate_limits else None
+
+    five_hour_used_pct = _as_number(_get(five_hour, "used_percentage")) if isinstance(five_hour, dict) else None
+    five_hour_resets_at = _as_int(_get(five_hour, "resets_at")) if isinstance(five_hour, dict) else None
+    seven_day_used_pct = _as_number(_get(seven_day, "used_percentage")) if isinstance(seven_day, dict) else None
+    seven_day_resets_at = _as_int(_get(seven_day, "resets_at")) if isinstance(seven_day, dict) else None
+
+    # DOC-2608021229 §2.1 observed stale (already-past) resets_at in 3/8 real
+    # samples, and an out-of-range value must be tolerated the same way
+    # (round-1 review finding 1) — see resolve_five_hour_window.
+    stale, window_id = resolve_five_hour_window(five_hour_resets_at, now)
+
+    # plan §8.5: "同一window_id内でused_percentageが減少したら異常"。Only
+    # meaningful to compare against the immediately preceding sample if
+    # it reported the SAME window_id — a different window_id means the
+    # 5-hour quota legitimately reset in between.
+    anomaly = (
+        window_id is not None
+        and prev_state.get("five_hour_window_id") == window_id
+        and isinstance(prev_state.get("five_hour_used_pct"), (int, float))
+        and five_hour_used_pct is not None
+        and five_hour_used_pct < prev_state["five_hour_used_pct"]
+    )
+
+    if not has_rate_limits:
+        # DOC-2608021229 §2.1: every DeepSeek/claude-ds session (58/58 samples).
+        # Not a failure — a documented, expected shape.
+        completeness = "unknown"
+    elif five_hour_used_pct is None and five_hour_resets_at is None and seven_day_used_pct is None and seven_day_resets_at is None:
+        completeness = "unknown"
+    elif five_hour_used_pct is None or five_hour_resets_at is None:
+        completeness = "partial"
+    else:
+        completeness = "complete"
+    if stale or anomaly:
+        completeness = "partial"
+        if anomaly:
+            print(
+                "warning: ocw-meter snapshot-quota: five_hour_used_pct decreased within the "
+                "same window_id (possible clock skew or upstream data anomaly) — marking partial",
+                file=sys.stderr,
+            )
+
+    context_used_pct = resolve_context_used_pct(obj)
+    # DOC-2608021229 §8 (孫4 instruction 5): self-reported by Claude Code itself,
+    # present in 66/66 samples across both Anthropic and DeepSeek
+    # sessions — kept as its OWN column, never combined with ocw-meter's
+    # own cost_estimate_usd (different data source, different trust
+    # level; plan explicitly warns against conflating the two).
+    session_cost_usd = _as_number(_get(obj, "cost", "total_cost_usd"))
+
+    session_id = obj.get("session_id")
+    session_id = session_id if isinstance(session_id, str) and session_id else None
+
+    model_id = _get(obj, "model", "id")
+    model_id = model_id if isinstance(model_id, str) and model_id else None
+    model_normalized = normalize_model_name(model_id) if model_id else None
+    provider = infer_provider(model_normalized) if model_normalized else ("anthropic" if has_rate_limits else None)
+
+    pr_number = _as_int(_get(obj, "pr", "number"))
+    pr_url = _get(obj, "pr", "url")
+    pr_url = pr_url if isinstance(pr_url, str) and pr_url else None
+
+    json_cwd = obj.get("cwd")
+    json_cwd = json_cwd if isinstance(json_cwd, str) and json_cwd else None
+    git_ctx = resolve_quota_git_context(json_cwd)
+
+    raw_ref = None
+    if raw_capture_enabled():
+        try:
+            raw_ref = save_raw_quota_snapshot(paths, obj, now)
+        except Exception:
+            raw_ref = None  # best-effort; never fail the whole sample over this
+
+    overrides = {
+        "completeness": completeness,
+        "source": "statusline",
+        "parser_version": STATUSLINE_PARSER_VERSION,
+        "session_id": session_id,
+        "provider": provider,
+        "model": model_normalized,
+        "pr_number": pr_number,
+        "pr_url": pr_url,
+        "five_hour_used_pct": five_hour_used_pct,
+        "five_hour_resets_at": five_hour_resets_at,
+        "seven_day_used_pct": seven_day_used_pct,
+        "seven_day_resets_at": seven_day_resets_at,
+        "window_id": window_id,
+        "context_used_pct": context_used_pct,
+        "session_cost_usd": session_cost_usd,
+        "plan_source": "statusline",
+        "raw_ref": raw_ref,
+        # round-1 review finding 4 (孫4プロンプト §1's field list explicitly
+        # names `cwd`): `json_cwd` was already extracted to resolve
+        # git_ctx below, but never made it into the event itself — the
+        # statusLine-reported working directory was silently dropped.
+        # Not part of ENVELOPE_FIELDS, so it lands as a top-level extra
+        # field via build_envelope's forward-compatible extras loop.
+        "cwd": json_cwd,
+    }
+    overrides.update(git_ctx)
+
+    event = build_envelope("quota.sample", overrides)
+    try:
+        write_event(paths, event)
+    except MeterTimeout as exc:
+        print(f"warning: {exc}", file=sys.stderr)
+        emit_meter_error(root, "write_event_lock_timeout", exc)
+        return
+
+    try:
+        # round-1 review finding 2: `sessions` holds ONLY the per-session
+        # throttle timestamp; `five_hour_window_id`/`five_hour_used_pct`
+        # stay top-level/global (account-wide, shared correctly across
+        # every session — see the session_key comment above). Pruned on
+        # every write so a machine that has seen many distinct
+        # session_ids over time doesn't grow this file without bound.
+        #
+        # round-2 review finding 1: a sample with NO window info of its
+        # own (this sample's `window_id` is None — either a rate_limits-
+        # less DeepSeek/claude-ds session, DOC-2608021229 §2.1's 58/58, or a
+        # stale/out-of-range resets_at) must NOT blank out the global
+        # window state a PREVIOUS Anthropic sample left behind. It used
+        # to overwrite unconditionally, so a single claude-ds sample
+        # landing between two Anthropic samples silently defeated plan
+        # §8.5's "同一window_id内でused_percentageが減少したら異常" check
+        # — and per-session throttling (this same round-1 fix) made that
+        # interleaving near-guaranteed in this repo's own standard Herdr
+        # setup (an Anthropic pane + a claude-ds pane both sampling every
+        # ~60s). Only replace the global slot when THIS sample actually
+        # carries fresh window info; otherwise carry the previous value
+        # forward untouched.
+        new_global_window_id = window_id if window_id is not None else prev_state.get("five_hour_window_id")
+        new_global_used_pct = five_hour_used_pct if window_id is not None else prev_state.get("five_hour_used_pct")
+        new_sessions = prune_stale_sessions(prev_sessions, now)
+        new_sessions[session_key] = {"last_sample_ts": iso_utc(now)}
+        save_quota_state(paths, {
+            "five_hour_window_id": new_global_window_id,
+            "five_hour_used_pct": new_global_used_pct,
+            "sessions": new_sessions,
+        })
+    except Exception:
+        pass  # best-effort throttle/anomaly bookkeeping; a failure here
+        # just means the next call re-attempts sooner / can't compare
+        # against this sample for the anomaly check, not data loss.
+
+
+def cmd_snapshot_quota(args):
+    """Always returns 0 and always prints exactly one display line to
+    stdout — the fail-open contract described at the top of this
+    section. Each of the three stages below is independently guarded so
+    that a failure in one (most likely: writing to storage) can never
+    suppress an earlier one that already succeeded (most importantly:
+    the display string itself)."""
+    obj = None
+    try:
+        obj = read_stdin_statusline_json()
+    except Exception:
+        obj = None
+
+    try:
+        display = format_quota_display(obj)
+    except Exception:
+        display = ""
+
+    try:
+        record_quota_sample(obj)
+    except Exception as exc:
+        with contextlib.suppress(Exception):
+            emit_meter_error(storage_root(), "snapshot_quota_unexpected_exception", exc)
+        print(
+            f"warning: ocw-meter snapshot-quota failed unexpectedly: "
+            f"{redact_text(f'{type(exc).__name__}: {exc}')}",
+            file=sys.stderr,
+        )
+
+    print(display)
+    return 0
+
+
+# ── entry point ──────────────────────────────────────────────────────
+
+def main():
+    argv = sys.argv[1:]
+    if not argv:
+        print("error: missing subcommand", file=sys.stderr)
+        return 1
+    cmd, rest = argv[0], argv[1:]
+
+    if cmd in ("event", "bind-pr"):
+        try:
+            return cmd_event(rest) if cmd == "event" else cmd_bind_pr(rest)
+        except Exception as exc:  # belt-and-suspenders: fail-open no matter what
+            # redact_text: `exc` may echo a caller-supplied CLI value
+            # (e.g. parse_flags's "expected a --flag, got: ...") that
+            # never made it through build_envelope's redaction.
+            print(
+                f"warning: ocw-meter {cmd} failed unexpectedly: "
+                f"{redact_text(f'{type(exc).__name__}: {exc}')}",
+                file=sys.stderr,
+            )
+            with contextlib.suppress(Exception):
+                emit_meter_error(storage_root(), f"cmd_{cmd.replace('-', '_')}_unexpected_exception", exc)
+            return 0
+
+    if cmd == "snapshot-quota":
+        try:
+            return cmd_snapshot_quota(rest)
+        except Exception as exc:
+            # Last-resort safety net: cmd_snapshot_quota() already wraps
+            # its own body and always prints a display string (its own
+            # docstring). Reaching here means a bug in that wrapping
+            # itself — theoretically unreachable, but this is the one
+            # subcommand where "theoretically unreachable" isn't good
+            # enough, since a truly empty stdout would blank the user's
+            # status bar with zero explanation.
+            print("")
+            print(
+                f"warning: ocw-meter snapshot-quota failed unexpectedly: "
+                f"{redact_text(f'{type(exc).__name__}: {exc}')}",
+                file=sys.stderr,
+            )
+            with contextlib.suppress(Exception):
+                emit_meter_error(storage_root(), "cmd_snapshot_quota_unexpected_exception", exc)
+            return 0
+
+    if cmd in ("validate", "report", "ingest"):
+        try:
+            if cmd == "validate":
+                return cmd_validate(rest)
+            if cmd == "report":
+                return cmd_report(rest)
+            return cmd_ingest(rest)
+        except Exception as exc:
+            print(f"error: ocw-meter {cmd} failed: {redact_text(f'{type(exc).__name__}: {exc}')}", file=sys.stderr)
+            return 1
+
+    print(f"error: unknown subcommand: {cmd}", file=sys.stderr)
+    return 1
+
+
+sys.exit(main())
+PY
+) "$cmd" "$@"
+py_status=$?
+
+case "$cmd" in
+  event | bind-pr)
+    if [ "$py_status" -ne 0 ]; then
+      warn "'$cmd' exited $py_status internally; fail-open, treating as success"
+    fi
+    exit 0
+    ;;
+  snapshot-quota)
+    if [ "$py_status" -ne 0 ]; then
+      # Belt-and-suspenders: cmd_snapshot_quota() (and main()'s own
+      # wrapper around it) already print a display string and return 0
+      # no matter what happens internally. Reaching a non-zero exit
+      # here means python3 itself died before any of that ran (e.g. a
+      # syntax error introduced by a future edit) — the one failure
+      # mode those inner guards cannot catch. Emit a blank line so the
+      # statusLine command's stdout is never literally empty.
+      warn "'$cmd' exited $py_status internally; fail-open, treating as success"
+      echo ""
+    fi
+    exit 0
+    ;;
+  *)
+    exit "$py_status"
+    ;;
+esac
