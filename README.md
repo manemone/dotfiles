@@ -65,6 +65,24 @@ Options can be combined:
 ./deploy-all.sh --force --only zsh,nvim --no-backup
 ```
 
+## Development Setup
+
+If you're contributing to this repository (not just deploying it), enable the
+pre-commit quality gate (shellcheck, shfmt, DOC-ID checks, a deploy dry-run).
+The only tool this requires is [uv](https://docs.astral.sh/uv/):
+
+```bash
+uv tool install pre-commit
+pre-commit install
+```
+
+From then on, `pre-commit run --all-files` runs the same checks CI runs.
+Deploy-related changes should additionally be verified with
+`tests/deploy_smoke.sh`, which exercises `deploy-all.sh` against a sandboxed
+`$HOME` (never your real one). See
+[docs/design/DOC-2608020715-b_テスト方針.md](docs/design/DOC-2608020715-b_テスト方針.md)
+for details.
+
 ## Directory Structure
 
 ```
