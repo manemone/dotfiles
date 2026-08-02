@@ -37,6 +37,15 @@ echo "Output files: /tmp/ds-probe-nonstreaming.txt, /tmp/ds-probe-streaming.txt"
 echo 'Estimated cost: < $0.01'
 echo ""
 
+# Round-1 review finding 7 + round-3 review finding 16: pass the API key
+# through a temporary header file so it never appears in `ps` output.
+# Placed before BOTH request blocks so the streaming side also uses it;
+# removed on script exit via trap (both requests share the same temp file,
+# so it cannot be deleted before the streaming request completes).
+AUTH_HDR=$(mktemp)
+trap 'rm -f "$AUTH_HDR"' EXIT
+printf 'Authorization: Bearer %s\r\n' "$API_KEY" > "$AUTH_HDR"
+
 # ── Non-streaming ──
 echo "--- Non-streaming request ---"
 NONSTREAM_OUT="/tmp/ds-probe-nonstreaming.txt"
@@ -45,14 +54,6 @@ NONSTREAM_OUT="/tmp/ds-probe-nonstreaming.txt"
   echo "Timestamp: $(date -Iseconds)"
   echo "Model requested: $MODEL"
   echo ""
-
-  # Round-1 review finding 7: pass the API key through a temporary header
-  # file so it never appears in `ps` output. The header file is removed on
-  # script exit (both requests share the same temp file, so it cannot be
-  # deleted before the streaming request completes).
-  AUTH_HDR=$(mktemp)
-  trap 'rm -f "$AUTH_HDR"' EXIT
-  printf 'Authorization: Bearer %s\r\n' "$API_KEY" > "$AUTH_HDR"
 
   # Make request, capture response headers and body separately
   # -D - dumps headers to stdout, --trace-ascii would include body but we avoid that

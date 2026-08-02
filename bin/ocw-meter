@@ -1821,7 +1821,7 @@ def report_by_phase(scoped_events, usage_events):
 
 
 def report_by_window(valid_events, repo=None):
-    """孙5 §1 --window: `quota.sample` events grouped by `window_id`
+    """孫5 §1 --window: `quota.sample` events grouped by `window_id`
     (plan §8.5 — the 5-hour reset boundary's identifier). `pr_number`
     on a quota.sample comes straight from the caller-supplied field
     when present, but ADR-001 §2.1 observed statusLine's own `pr` key

@@ -2340,18 +2340,22 @@ class ReportGroupedViewsTests(OcwMeterTestCase):
     # -- regression: round-1 finding 1 — phase-view key collision --
 
     def test_phase_view_null_phase_window_and_unassigned_tokens_do_not_collide(self):
-        # Round-1 finding 1: when a phase window has `phase: null` (no
-        # matching phase window in build_phase_windows) AND unassigned
-        # tokens exist, both used `phase or "(unassigned)"` as dict key
-        # but inconsistently — the second write silently overwrote the
-        # first. Regression: both must survive with correct metrics.
-        run_meter(["event", "phase.start", "--idempotency-key", "col-s",
-                   "--run-id", "run-colid", "--phase", "review_request",
-                   "--round", "1", "--ts", "2026-08-01T11:00:00.000Z"], self.home)
-        run_meter(["event", "phase.end", "--idempotency-key", "col-e",
-                   "--run-id", "run-colid", "--phase", "review_request",
-                   "--round", "1", "--ts", "2026-08-01T11:10:00.000Z"], self.home)
-        # Usage outside the phase window → becomes (unassigned) in tokens dict
+        # Round-1 finding 1: when a phase window has `phase: null` (a
+        # paired phase.start/phase.end where neither carries --phase →
+        # build_phase_windows assigns phase=None from e.get("phase"))
+        # AND unassigned tokens exist, both use `phase or "(unassigned)"`
+        # as the output key but the intermediate dicts (durations keyed
+        # by raw phase=None, tokens keyed by "(unassigned)") collide when
+        # iterated — the second write silently overwrote the first.
+        # Regression: both duration AND token metrics must survive.
+        # -- Trigger the null-phase window: paired start+end, no --phase --
+        run_meter(["event", "phase.start", "--idempotency-key", "col-pair-s",
+                   "--run-id", "run-colid", "--round", "1",
+                   "--ts", "2026-08-01T11:00:00.000Z"], self.home)
+        run_meter(["event", "phase.end", "--idempotency-key", "col-pair-e",
+                   "--run-id", "run-colid", "--round", "1",
+                   "--ts", "2026-08-01T11:10:00.000Z"], self.home)
+        # -- Usage whose run_id never matches any phase window → (unassigned) --
         run_meter(["event", "usage.message", "--idempotency-key", "col-u1",
                    "--message-id", "col-m1", "--model", "deepseek-v4-pro",
                    "--provider", "deepseek", "--input-tokens", "100",
@@ -2359,28 +2363,30 @@ class ReportGroupedViewsTests(OcwMeterTestCase):
                    "--cost-basis", "estimated", "--run-id", "run-other",
                    "--ts", "2026-08-01T12:00:00.000Z"], self.home)
         data = json.loads(run_meter(["report", "--phase", "--json"], self.home).stdout)
-        # (unassigned) tokens must show up — they must not be overwritten
-        # by a null-phase duration row.
+        # (unassigned) tokens must be present AND have their token counts.
+        # With the bug, the duration row (None→"(unassigned)") overwrites
+        # the token row, leaving messages=0.
         self.assertIn("(unassigned)", data["by_phase"])
         self.assertEqual(data["by_phase"]["(unassigned)"]["messages"], 1)
         self.assertEqual(data["by_phase"]["(unassigned)"]["input_tokens"], 100)
-        # review_request must have its duration too
-        self.assertIn("review_request", data["by_phase"])
-        self.assertEqual(data["by_phase"]["review_request"]["window_count"], 1)
-        self.assertAlmostEqual(data["by_phase"]["review_request"]["total_duration_seconds"], 600.0)
+        # The null-phase window must also contribute its duration metrics
+        # (same output key, not silently dropped).
+        self.assertGreater(data["by_phase"]["(unassigned)"]["window_count"], 0)
+        self.assertIsNotNone(data["by_phase"]["(unassigned)"]["total_duration_seconds"])
 
     # -- regression: round-1 finding 2 + round-2 finding 9 — window repo scoping --
 
     def test_window_view_excludes_prs_from_other_repos_with_explicit_repo_flag(self):
         # prs_direct_link AND prs_time_overlap must both be repo-scoped.
-        # Seed PR 7 in our repo and PR 7 in another repo — only our repo's
-        # PR 7 may appear when --repo is specified.
+        # Use DIFFERENT PR numbers across repos — same number would be
+        # deduplicated by the set() and hide the cross-repo contamination.
         self._seed_full_pr(7, "run-window-repo")
         other_repo = "someone/other-repo"
-        # Same PR number, different repo — quota sample with pr_number=7
+        # Different PR number (99), different repo — same window_id so it
+        # lands in the same window bucket as PR 7 above.
         run_meter(["event", "quota.sample", "--idempotency-key", "win-other-q1",
                    "--plan-source", "statusline", "--window-id", "win-run-window-repo",
-                   "--five-hour-used-pct", "30", "--pr-number", "7",
+                   "--five-hour-used-pct", "30", "--pr-number", "99",
                    "--repo", other_repo,
                    "--ts", "2026-08-01T09:15:00.000Z"], self.home)
         # Also seed a usage.message from the other repo (for prs_time_overlap)
@@ -2388,13 +2394,13 @@ class ReportGroupedViewsTests(OcwMeterTestCase):
                    "--message-id", "win-other-m1", "--model", "deepseek-v4-pro",
                    "--provider", "deepseek", "--input-tokens", "50",
                    "--cache-read-input-tokens", "0", "--output-tokens", "5",
-                   "--cost-basis", "estimated", "--pr-number", "7",
+                   "--cost-basis", "estimated", "--pr-number", "99",
                    "--repo", other_repo,
                    "--ts", "2026-08-01T09:15:00.000Z"], self.home)
         data = json.loads(run_meter(["report", "--window", "--repo", "manemone/dotfiles",
                                       "--json"], self.home).stdout)
         row = data["by_window"]["win-run-window-repo"]
-        # Only our repo's PR 7 must appear in both fields
+        # Only our repo's PR 7 must appear; cross-repo PR 99 must NOT leak in
         self.assertEqual(row["prs_direct_link"], [7])
         self.assertEqual(row["prs_time_overlap"], [7])
         # Without --repo, both repos' PRs would appear (verified by
