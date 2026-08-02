@@ -15,16 +15,21 @@
 
 require_relative "lib/doc_id/tool"
 
-tool = DocId::Tool.new
+def build_tool
+  DocId::Tool.new
+rescue RuntimeError
+  puts "エラー: git リポジトリ内で実行してください"
+  exit 1
+end
 
 case ARGV[0]
 when "check"
-  exit tool.check
+  exit build_tool.check
 when "verify"
-  exit tool.verify
+  exit build_tool.verify
 when "assign"
   if ARGV[1]
-    exit tool.assign(ARGV[1])
+    exit build_tool.assign(ARGV[1])
   else
     puts "使い方: tools/doc-id/doc-id assign <file>"
     exit 1

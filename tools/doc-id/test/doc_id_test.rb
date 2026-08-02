@@ -161,6 +161,29 @@ class DocIdVerifyGitTest < Minitest::Test
   end
 end
 
+class DocIdVerifyRepoRootPathTest < Minitest::Test
+  include DocIdTestHelper
+
+  # excluded_path? はディレクトリ成分単位で判定する必要がある。リポジトリ自体が
+  # test/ の下に置かれているだけで参照検証が丸ごと無効化されてはならない。
+  def test_verify_still_detects_broken_refs_when_repo_root_contains_excluded_segment
+    parent = Dir.mktmpdir "doc-id-verify-parent"
+    repo_root = File.join parent, "test", "myrepo"
+    FileUtils.mkdir_p repo_root
+    Open3.capture2 git_env, "git", "init", chdir: repo_root
+    Open3.capture2 git_env, "git", "config", "user.email", "test@example.com", chdir: repo_root
+    Open3.capture2 git_env, "git", "config", "user.name", "Test", chdir: repo_root
+    File.write File.join(repo_root, "README.md"), "See DOC-9999999999 for details.\n"
+    Open3.capture2 git_env, "git", "add", ".", chdir: repo_root
+    Open3.capture2 git_env, "git", "commit", "-m", "init", chdir: repo_root
+
+    tool = DocId::Tool.new repo_root: repo_root
+    silence_stdout { assert_equal 1, tool.verify }
+  ensure
+    FileUtils.rm_rf parent
+  end
+end
+
 class DocIdAssignTest < Minitest::Test
   include DocIdTestHelper
 
@@ -308,5 +331,40 @@ class DocIdAssignTest < Minitest::Test
     silence_stdout { @tool.assign "docs/design/DOC-DOCID_PLACEHOLDER_計画.md" }
 
     assert_includes File.read(fixture), "DOC-DOCID_PLACEHOLDER_計画"
+  end
+
+  def test_assigns_doc_id_matching_git_commit_date
+    date_env = git_env.merge(
+      "GIT_AUTHOR_DATE" => "2026-01-05T03:04:00+09:00",
+      "GIT_COMMITTER_DATE" => "2026-01-05T03:04:00+09:00"
+    )
+    path = "docs/design/no_prefix.md"
+    File.write File.join(@repo_root, path), "# Test\n"
+    Open3.capture2 date_env, "git", "add", path, chdir: @repo_root
+    Open3.capture2 date_env, "git", "commit", "-m", "add", chdir: @repo_root
+
+    silence_stdout { @tool.assign path }
+
+    renamed = Dir.glob File.join(@docs_dir, "design", "DOC-*_no_prefix.md")
+    assert_equal 1, renamed.size
+    assert_equal "DOC-2601050304_no_prefix.md", File.basename(renamed.first)
+  end
+
+  def test_assigns_suffixes_on_timestamp_collision
+    date_env = git_env.merge(
+      "GIT_AUTHOR_DATE" => "2026-02-10T09:00:00+09:00",
+      "GIT_COMMITTER_DATE" => "2026-02-10T09:00:00+09:00"
+    )
+    %w[first second third].each do |name|
+      path = "docs/design/#{name}.md"
+      File.write File.join(@repo_root, path), "# #{name}\n"
+      Open3.capture2 date_env, "git", "add", path, chdir: @repo_root
+      Open3.capture2 date_env, "git", "commit", "-m", "add #{name}", chdir: @repo_root
+      silence_stdout { @tool.assign path }
+    end
+
+    assert_equal 1, Dir.glob(File.join(@docs_dir, "design", "DOC-2602100900_first.md")).size
+    assert_equal 1, Dir.glob(File.join(@docs_dir, "design", "DOC-2602100900-a_second.md")).size
+    assert_equal 1, Dir.glob(File.join(@docs_dir, "design", "DOC-2602100900-b_third.md")).size
   end
 end

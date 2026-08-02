@@ -102,7 +102,11 @@ module DocId
       git_tracked_files.select { |f| SEARCHABLE_EXTENSIONS.any? { |ext| f.end_with? ext } }
     end
 
-    def excluded_path?(path) = EXCLUDED_DIR_NAMES.any? { |name| path.include? "/#{name}/" }
+    # @repo_root からの相対パスのディレクトリ成分単位で判定する。絶対パス全体に対する
+    # 部分一致だと、リポジトリ自体が test/ 等を含むパスに置かれた場合に誤爆する。
+    def excluded_path?(path)
+      relative_path(path).split("/").any? { |seg| EXCLUDED_DIR_NAMES.include? seg }
+    end
 
     def git_tracked_files
       # Clear git env vars inherited from pre-commit/git-hook context so that
