@@ -58,6 +58,13 @@
 |---|---|---|
 | DOC-DOCID_PLACEHOLDER | [プルリクエストの作法.md](design/DOC-DOCID_PLACEHOLDER_プルリクエストの作法.md) | PR説明文の構成・コメントのプレフィクス・ブランチ構成の規約 |
 | DOC-DOCID_PLACEHOLDER | [コーディング方針.md](design/DOC-DOCID_PLACEHOLDER_コーディング方針.md) | このリポジトリの主要言語のコーディング規約（撒いた後に書き下ろす） |
+
+<!--
+  上記2件は `./tools/doc-id/doc-id assign` で採番後、DOC-ID 列を実際の値に手で更新してください
+  （assign はファイル名とファイル内・他ファイルからの参照は自動更新しますが、この索引表の
+  DOC-ID 列は別途更新が必要です。`doc-id check` / `doc-id verify` はどちらもこの列の値までは
+  検証しません）。design/ に文書を追加した場合も、この表に追記してください。
+-->
 {% if use_adr %}
 ### adr/ — Architecture Decision Records
 

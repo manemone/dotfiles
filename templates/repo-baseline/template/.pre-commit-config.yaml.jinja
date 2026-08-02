@@ -36,8 +36,8 @@ repos:
   - repo: local
     hooks:
       - id: lint
-        name: "lint: {{ lint_cmd }}"
-        entry: {{ lint_cmd }}
+        name: {{ ("lint: " ~ lint_cmd) | tojson }}
+        entry: {{ lint_cmd | tojson }}
         language: system
         pass_filenames: false
 {% endif -%}
@@ -45,8 +45,8 @@ repos:
   - repo: local
     hooks:
       - id: test
-        name: "test: {{ test_cmd }}"
-        entry: {{ test_cmd }}
+        name: {{ ("test: " ~ test_cmd) | tojson }}
+        entry: {{ test_cmd | tojson }}
         language: system
         pass_filenames: false
 {% endif -%}

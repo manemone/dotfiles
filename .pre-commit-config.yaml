@@ -73,3 +73,10 @@ repos:
         language: system
         pass_filenames: false
         files: ^bin/
+
+      - id: doc-id-template-sync
+        name: tools/doc-id と templates/repo-baseline 内の複製が同期しているか
+        entry: diff -r tools/doc-id templates/repo-baseline/template/tools/doc-id
+        language: system
+        pass_filenames: false
+        files: ^(tools/doc-id/|templates/repo-baseline/template/tools/doc-id/)

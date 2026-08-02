@@ -4,8 +4,10 @@ AI エージェント（Claude Code / opencode 等）と協働開発するため
 [copier](https://copier.readthedocs.io/) テンプレートです。
 
 dotfiles（本リポジトリ）・lora-dataset-forge（LDF、社内の別リポジトリ）・master に統合された
-ocw-meter 傘の3例を突き合わせ、汎用的な部分だけを抽出しています。詳細な経緯は
-[../../docs/planning/](../../docs/planning/) 配下の `repo-baseline_計画.md` を参照してください。
+ocw-meter 傘の3例を突き合わせ、汎用的な部分だけを抽出しています。詳細な経緯は、
+dotfiles リポジトリ内の `docs/planning/DOC-2608020558_repo-baseline_計画.md`
+を参照してください（このディレクトリを別リポジトリへ移動した場合、このリンク先は
+存在しなくなります。経緯を知りたい場合のみ、移動元の dotfiles リポジトリを参照してください）。
 
 ## 自己完結
 
@@ -54,6 +56,12 @@ uv tool install pre-commit
 pre-commit install
 pre-commit run --all-files
 ```
+
+`doc-id assign` はファイル名とファイル内・他ファイルからの参照は自動更新しますが、
+`docs/README.md`（および `use_doc_id` 選択時に生成される `docs/design/README.md`）の
+索引表にある **DOC-ID 列の値は更新しません**（`doc-id check` / `doc-id verify` もこの列までは
+検証しないため、放置しても気づけません）。assign 実行後は、採番された実際の DOC-ID を
+この2つの索引表に手で反映してください。
 
 **ここで終わりではありません。** `AGENTS.md` の「概要」「ディレクトリ構成」など、このリポジトリ固有の
 判断が要る部分は空欄・TODO のままです。埋め方の判断ガイドは

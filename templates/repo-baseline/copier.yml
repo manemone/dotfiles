@@ -62,7 +62,17 @@ use_reference:
   default: false
   when: "{{ use_doc_id }}"
 
+# _exclude を指定すると copier の既定除外パターン（copier.yml/copier.yaml/~*/*.py[co]/
+# __pycache__/.git/.DS_Store/.svn）が追加ではなく置換されるため、ここに明示的に引き継ぐ。
 _exclude:
+  - copier.yaml
+  - copier.yml
+  - "~*"
+  - "*.py[co]"
+  - __pycache__
+  - .git
+  - .DS_Store
+  - .svn
   - "{% if not use_ci %}.github{% endif %}"
   - "{% if not use_doc_id %}docs{% endif %}"
   - "{% if not use_doc_id %}tools{% endif %}"

@@ -4,13 +4,12 @@ require "open3"
 require "fileutils"
 
 module DocId
-  # 参照検証の走査対象ディレクトリ名。孫7でテンプレート変数化する際にここだけ差し替える想定
+  # 参照検証の走査対象ディレクトリ名
   DOCS_DIR_NAME = "docs"
   # テストフィクスチャに意図的な壊れ参照が含まれうるため、参照検証・参照更新の対象から除外するディレクトリ名
   EXCLUDED_DIR_NAMES = %w[test tests spec].freeze
-  # 参照を書きうる設定・スクリプトの拡張子。.md は必須。他は dotfiles の実態（deploy.sh 等のシェル
-  # スクリプト、CI/設定ファイル）に合わせて選定した。Ruby は tools/ 配下のツール実装にのみ存在し、
-  # そこに DOC-ID 参照を書かない運用とするため対象外（.rb を含めると verify/assign の対象になる）
+  # DOC-ID 参照を書きうる文書・設定・スクリプトの拡張子。.md は必須。実装コード（.rb 等）には
+  # DOC-ID 参照を書かない運用とするため対象外（含めると verify/assign の対象になってしまう）
   SEARCHABLE_EXTENSIONS = %w[.md .sh .yml .yaml .json].freeze
 
   PATTERN = /\ADOC-(?:\d{6}\d{4}|DOCID_PLACEHOLDER)(?:-[a-z])?_.+\.md\z/
