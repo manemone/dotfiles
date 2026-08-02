@@ -1856,7 +1856,8 @@ def report_by_window(valid_events, repo=None):
             if w["last_ts"] is None or ts > w["last_ts"]:
                 w["last_ts"] = ts
         if e.get("pr_number") is not None:
-            w["prs_direct"].add(e["pr_number"])
+            if repo is None or e.get("repo") == repo:
+                w["prs_direct"].add(e["pr_number"])
 
     pr_ranges = {}
     for e in valid_events:
@@ -2377,11 +2378,11 @@ def cmd_report(args):
     # <owner>/<name>` is the escape hatch for a case where this needs to
     # run from outside the target repo's own worktree.
     repo = explicit_repo or git_repo_slug()
-    needs_repo = filter_pr is not None or (month_flag_present and view is None)
+    needs_repo = filter_pr is not None or (month_flag_present and view is None) or view == "window"
     if needs_repo and not repo:
         print(
             "error: could not resolve a repo for PR-scoped reporting (not inside a git repo with an "
-            "'origin' remote, and --repo <owner>/<name> was not given). --pr and --month both need this "
+            "'origin' remote, and --repo <owner>/<name> was not given). --pr, --window, and --month all need this "
             "to avoid scoping to another repo's same-numbered PR in the shared ocw-meter store.",
             file=sys.stderr,
         )
@@ -2413,7 +2414,7 @@ def cmd_report(args):
     if view is not None:
         footer_completeness = completeness_footer(paths, filtered, malformed)
         footer_cost = usage_cost_footer(usage_events)
-        extra_top = {"filter_pr": filter_pr, "repo": repo} if filter_pr is not None else {}
+        extra_top = {"filter_pr": filter_pr, "repo": repo} if filter_pr is not None else ({"repo": repo} if view == "window" and repo else {})
         if view == "model":
             groups = report_by_model(usage_events)
         elif view == "role":

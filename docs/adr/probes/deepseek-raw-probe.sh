@@ -47,8 +47,9 @@ NONSTREAM_OUT="/tmp/ds-probe-nonstreaming.txt"
   echo ""
 
   # Round-1 review finding 7: pass the API key through a temporary header
-  # file so it never appears in `ps` output. The header file is cleaned up
-  # immediately after the request regardless of success/failure.
+  # file so it never appears in `ps` output. The header file is removed on
+  # script exit (both requests share the same temp file, so it cannot be
+  # deleted before the streaming request completes).
   AUTH_HDR=$(mktemp)
   trap 'rm -f "$AUTH_HDR"' EXIT
   printf 'Authorization: Bearer %s\r\n' "$API_KEY" > "$AUTH_HDR"

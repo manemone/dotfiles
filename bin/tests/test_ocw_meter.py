@@ -2337,6 +2337,83 @@ class ReportGroupedViewsTests(OcwMeterTestCase):
         self.assertEqual(data["by_phase"]["(unassigned)"]["messages"], 1)
         self.assertEqual(data["by_phase"]["fix"]["messages"], 0)
 
+    # -- regression: round-1 finding 1 — phase-view key collision --
+
+    def test_phase_view_null_phase_window_and_unassigned_tokens_do_not_collide(self):
+        # Round-1 finding 1: when a phase window has `phase: null` (no
+        # matching phase window in build_phase_windows) AND unassigned
+        # tokens exist, both used `phase or "(unassigned)"` as dict key
+        # but inconsistently — the second write silently overwrote the
+        # first. Regression: both must survive with correct metrics.
+        run_meter(["event", "phase.start", "--idempotency-key", "col-s",
+                   "--run-id", "run-colid", "--phase", "review_request",
+                   "--round", "1", "--ts", "2026-08-01T11:00:00.000Z"], self.home)
+        run_meter(["event", "phase.end", "--idempotency-key", "col-e",
+                   "--run-id", "run-colid", "--phase", "review_request",
+                   "--round", "1", "--ts", "2026-08-01T11:10:00.000Z"], self.home)
+        # Usage outside the phase window → becomes (unassigned) in tokens dict
+        run_meter(["event", "usage.message", "--idempotency-key", "col-u1",
+                   "--message-id", "col-m1", "--model", "deepseek-v4-pro",
+                   "--provider", "deepseek", "--input-tokens", "100",
+                   "--cache-read-input-tokens", "0", "--output-tokens", "10",
+                   "--cost-basis", "estimated", "--run-id", "run-other",
+                   "--ts", "2026-08-01T12:00:00.000Z"], self.home)
+        data = json.loads(run_meter(["report", "--phase", "--json"], self.home).stdout)
+        # (unassigned) tokens must show up — they must not be overwritten
+        # by a null-phase duration row.
+        self.assertIn("(unassigned)", data["by_phase"])
+        self.assertEqual(data["by_phase"]["(unassigned)"]["messages"], 1)
+        self.assertEqual(data["by_phase"]["(unassigned)"]["input_tokens"], 100)
+        # review_request must have its duration too
+        self.assertIn("review_request", data["by_phase"])
+        self.assertEqual(data["by_phase"]["review_request"]["window_count"], 1)
+        self.assertAlmostEqual(data["by_phase"]["review_request"]["total_duration_seconds"], 600.0)
+
+    # -- regression: round-1 finding 2 + round-2 finding 9 — window repo scoping --
+
+    def test_window_view_excludes_prs_from_other_repos_with_explicit_repo_flag(self):
+        # prs_direct_link AND prs_time_overlap must both be repo-scoped.
+        # Seed PR 7 in our repo and PR 7 in another repo — only our repo's
+        # PR 7 may appear when --repo is specified.
+        self._seed_full_pr(7, "run-window-repo")
+        other_repo = "someone/other-repo"
+        # Same PR number, different repo — quota sample with pr_number=7
+        run_meter(["event", "quota.sample", "--idempotency-key", "win-other-q1",
+                   "--plan-source", "statusline", "--window-id", "win-run-window-repo",
+                   "--five-hour-used-pct", "30", "--pr-number", "7",
+                   "--repo", other_repo,
+                   "--ts", "2026-08-01T09:15:00.000Z"], self.home)
+        # Also seed a usage.message from the other repo (for prs_time_overlap)
+        run_meter(["event", "usage.message", "--idempotency-key", "win-other-u1",
+                   "--message-id", "win-other-m1", "--model", "deepseek-v4-pro",
+                   "--provider", "deepseek", "--input-tokens", "50",
+                   "--cache-read-input-tokens", "0", "--output-tokens", "5",
+                   "--cost-basis", "estimated", "--pr-number", "7",
+                   "--repo", other_repo,
+                   "--ts", "2026-08-01T09:15:00.000Z"], self.home)
+        data = json.loads(run_meter(["report", "--window", "--repo", "manemone/dotfiles",
+                                      "--json"], self.home).stdout)
+        row = data["by_window"]["win-run-window-repo"]
+        # Only our repo's PR 7 must appear in both fields
+        self.assertEqual(row["prs_direct_link"], [7])
+        self.assertEqual(row["prs_time_overlap"], [7])
+        # Without --repo, both repos' PRs would appear (verified by
+        # inspecting the cross-repo quota/usage events above). When
+        # --repo is unspecified and the store has multiple repos, the
+        # direct-link side in particular must not silently include
+        # cross-repo PRs.
+
+    def test_window_view_without_repo_fails_loud_outside_git_repo(self):
+        # Round-2 finding 10: --window also needs repo resolution (just
+        # like --pr) — otherwise the repo-is-None guard silently disables
+        # all scoping and returns cross-contaminated data with exit 0.
+        import pathlib
+        no_git_dir = pathlib.Path(self.tmpdir.name) / "not-a-git-repo-window"
+        no_git_dir.mkdir()
+        result = run_meter(["report", "--window"], self.home, cwd=no_git_dir)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("could not resolve a repo", result.stderr)
+
     # -- --pr combined with a grouped view scopes to that PR --
 
     def test_model_view_combined_with_pr_filter_scopes_to_that_pr(self):

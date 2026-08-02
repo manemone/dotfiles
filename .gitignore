@@ -25,7 +25,6 @@ __pycache__/
 *.pyc
 
 # AI tools
-!/.claude/
 /.claude/*
 !/.claude/pr-review.yml
 
