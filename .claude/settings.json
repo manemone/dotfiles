@@ -1,4 +1,5 @@
 {
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
   "permissions": {
     "allow": [
       "Bash(pre-commit run:*)",
@@ -6,6 +7,7 @@
       "Bash(./tools/doc-id/doc-id verify)",
       "Bash(ruby tools/doc-id/test/doc_id_test.rb)",
       "Bash(./deploy-all.sh --dry-run:*)",
+      "Bash(tests/deploy_smoke.sh)",
       "Bash(shellcheck:*)",
       "Bash(shfmt:*)",
       "Bash(sh -n:*)",
