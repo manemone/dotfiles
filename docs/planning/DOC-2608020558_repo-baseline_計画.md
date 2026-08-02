@@ -170,12 +170,54 @@ BATON の孫C では `language_version: '3.3'` が提案されていたが、`de
 
 ### 判断6: 統合は rebase ではなく **merge** で行う
 
-構造的な衝突を rebase で解消すると、本傘の全コミット（現時点で8本）を master の上に
-1つずつ載せ直す過程で**同じ衝突を最大8回解決させられる**。merge なら1回で済む。
+rebase は本傘の各コミットを master の上へ1つずつ載せ直す。すると
+**実在しなかった中間状態に対して設計判断を強要される**。
 
-よってこの統合に限り、孫5 のブランチ上で `git merge origin/master` を実行し、
-その解決結果を PR として傘へ入れる。以降 master が動いた場合の追従方針も merge に統一する
-（autopilot の手順6を rebase から merge へ変更する）。
+具体的には、孫2 のコミットを replay する時点で「`docs/README.md` を master のものと
+どう統合するか」を決めさせられるが、その時点の正解は最終的な正解ではない。
+孫3 がその後に DOC-ID を移行しているためである。孫3 の replay で再び衝突し、
+先の判断との辻褄合わせが必要になる。**各段階の判断が最終形と整合する保証がない。**
+
+merge なら、両者の**最終状態どうし**を1回だけ突き合わせる。
+「今ある2つの完成品をどう畳むか」という自然な問いに一度だけ答えればよい。
+
+副次的な理由として、rebase は公開済みの傘の履歴を書き換えるため force-push を要する。
+マージ済み PR (#29 / #31 / #34 / #35) が参照するコミットが消え、GitHub 上の PR 履歴が壊れて見える。
+
+以降 master が動いた場合の追従方針も merge に統一する。
+
+#### 判断6-a: **この統合 PR だけは squash ではなくマージコミットで傘へ入れる**
+
+本傘の孫 PR は通常 `gh pr merge --squash` で傘へ入れているが、
+**孫5 の PR にこれを適用してはならない。**
+
+squash は親が1つの新しいコミットを作るため、**master が傘の祖先にならない**。
+内容としては master のファイルが全部入るので一見正しく見えるが、
+最終 PR（base: `master`, head: `ai/repo-baseline`）の diff は
+`merge-base(master, 傘)` から計算されるため、merge-base が PR #33 より前の古い共通祖先のままとなり、
+**ocw-meter の全内容が「この PR で新規追加された」ように表示される**。
+内容は正しいのにレビュー不能な最終 PR ができあがる。
+
+したがって孫5 の PR は `gh pr merge --merge`（マージコミット）で傘へ入れること。
+これにより master が傘の正真正銘の祖先となり、最終 PR の diff は本傘の変更のみになる。
+
+**判定条件**: `gh pr view <N> --json commits` 等でその PR が `origin/master` を
+マージするコミットを含むか、あるいは
+`git merge-base --is-ancestor origin/master <PRのheadRefOid>` が真であれば、
+その PR は master を取り込んでいるので `--merge` を使う。それ以外は従来どおり `--squash`。
+
+#### 判断6-b: 孫5 の PR をレビューする際の注意
+
+孫5 の PR の diff は、GitHub の三点比較の性質上 **master 由来の全ファイルが「追加」として現れる**
+（`bin/ocw-meter` 4243行など）。これらは master で既にレビュー・マージ済みであり、
+**この PR のレビュー対象ではない。**
+
+レビューすべきは以下に限る:
+
+- 3つの衝突ファイル（`README.md` / `bin/ocw` / `docs/README.md`）の解決内容
+- `docs/` フォルダ規約の統合定義
+- DOC-ID の移行結果と、旧 ID 参照の追従漏れ
+- master 由来のテスト（`bin/tests/`）を壊していないこと
 
 ### 判断7: `ADR-NNN` も DOC-ID 名前空間へ統合する
 
@@ -870,9 +912,20 @@ merge 後にどちらの名前で残っているかを必ず確認すること�
 - master 側の実装（`bin/ocw-meter` 本体等）への機能変更。**持ち込むだけで中身は触らない**
 - `docs/adr/probes/deepseek-raw-probe.sh` の中身の変更（shfmt/shellcheck が要求する整形は可）
 
+### PR 作成時の注意（この孫だけ特殊）
+
+PR 説明文の冒頭に、**レビュー対象の範囲を明記すること**。この PR の diff には
+master 由来の全ファイル（`bin/ocw-meter` 4243行など）が「追加」として現れるが、
+それらは master でレビュー・マージ済みであり、この PR のレビュー対象ではない。
+レビューしてほしいのは衝突解決・フォルダ規約の統合・DOC-ID 移行の3点である旨を書くこと。
+
+また、**この PR は squash ではなくマージコミットで傘へ入れる必要がある**
+（理由は計画書の判断6-a）。PR 説明文にその旨を明記すること。
+
 ### 検証
 
 - `./tools/doc-id/doc-id check` が 0（`ADR-001` が残っていないこと）
+- `git merge-base --is-ancestor origin/master HEAD` が真（master を正しく取り込めていること）
 - `./tools/doc-id/doc-id verify` が 0（**旧 ID への参照が1つも残っていないこと**）
 - `ruby tools/doc-id/test/doc_id_test.rb` が全緑
 - `pre-commit run --all-files` が全緑
