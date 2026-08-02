@@ -25,8 +25,8 @@ dotfiles にも同等の基盤を作る。さらに **その汎用部分を copi
 | 2 | `ai/rb-02-docs` | `docs/` 基盤: 索引 README・フォルダ規約・PR の作法・シェルコーディング方針・テスト方針 | ✅ PR #31 マージ済 |
 | 3 | `ai/rb-03-doc-id` | DOC-ID ツール移植（Ruby, 自己完結）＋ 既存 `DOC-001/002` のタイムスタンプ形式への移行 | ✅ PR #34 マージ済 |
 | 4 | `ai/rb-04-quality-gate` | pre-commit framework 導入 + shellcheck/shfmt + デプロイスモークテスト + CI | ✅ PR #35 マージ済 |
-| 5 | `ai/rb-05-docs-merge` | **master（ocw-meter 傘）の `docs/` 体系との統合。** フォルダ規約の和集合化 + master の DOC-001〜005/ADR-001 のタイムスタンプ移行 | 🔄 実装中 |
-| 6 | `ai/rb-06-ai-config` | リポジトリ用 `.claude/settings.json` + `opencode.json` + `.gitignore` 修正 | ⬜ 待機中 |
+| 5 | `ai/rb-05-docs-merge` | **master（ocw-meter 傘）の `docs/` 体系との統合。** フォルダ規約の和集合化 + master の DOC-001〜005/ADR-001 のタイムスタンプ移行 | ✅ PR #36 マージ済（判断6-a に従いマージコミットで統合） |
+| 6 | `ai/rb-06-ai-config` | リポジトリ用 `.claude/settings.json` + `opencode.json` + `.gitignore` 修正 | 🔄 実装中 |
 | 7 | `ai/rb-07-copier-template` | ★ 汎用部分の抽出と copier テンプレート化 + 適用スキル | ⬜ 待機中 |
 
 ## 依存関係と実行順序
