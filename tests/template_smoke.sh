@@ -11,9 +11,10 @@
 #
 # 代表的な回答の組み合わせ（全部盛り / 最小構成）で copier copy を実行し、
 # 生成された .pre-commit-config.yaml を `pre-commit validate-config` に、
-# ci.yml を YAML パースに通す。あわせて AGENTS.md.jinja の Jinja 空白制御
-# ミス（行ゼロの表・見出し直前の空行欠落・Jinja 構文の残骸）と、
-# use_doc_id=false 時に docs/ tools/ .github/ が生成されないことも検証する。
+# ci.yml を YAML パースに通す。あわせて生成された全 .md（AGENTS.md と
+# docs/ 配下の全ファイル）の Jinja 空白制御ミス（行ゼロの表・見出し直前の
+# 空行欠落・空行の二重化・Jinja 構文の残骸）と、use_doc_id=false 時に
+# docs/ tools/ .github/ が生成されないことも検証する。
 #
 # set -e は使わない。1件のアサーション失敗で残りのチェックが埋もれるのを
 # 避け、全チェックを走らせた上で最後にまとめて合否を報告するため
@@ -147,6 +148,12 @@ check_combo() {
     done
   fi
 
+  if [ -f "$sbx/.copier-answers.yml" ]; then
+    pass "$name: .copier-answers.yml が生成されている"
+  else
+    fail "$name: .copier-answers.yml が生成されている"
+  fi
+
   if [ -f "$sbx/.pre-commit-config.yaml" ]; then
     if uvx pre-commit validate-config "$sbx/.pre-commit-config.yaml" >"$log_file" 2>&1; then
       pass ".pre-commit-config.yaml が pre-commit validate-config を通る"
@@ -173,6 +180,16 @@ check_combo() {
 
   if [ -f "$sbx/AGENTS.md" ]; then
     assert_markdown_hygiene "$sbx/AGENTS.md" "AGENTS.md"
+  fi
+
+  # AGENTS.md 以外にも Jinja の空白制御を使う .md.jinja が docs/ 配下にある
+  # （docs/README.md.jinja / docs/design/README.md.jinja / コーディング方針.md.jinja 等）。
+  # 生成された全 *.md を対象にする。
+  if [ -d "$sbx/docs" ]; then
+    local md_file
+    while IFS= read -r md_file; do
+      assert_markdown_hygiene "$md_file" "${md_file#"$sbx"/}"
+    done < <(find "$sbx/docs" -name '*.md' -type f)
   fi
 }
 

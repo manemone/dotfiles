@@ -9,7 +9,9 @@ module DocId
   # テストフィクスチャに意図的な壊れ参照が含まれうるため、参照検証・参照更新の対象から除外するディレクトリ名
   EXCLUDED_DIR_NAMES = %w[test tests spec].freeze
   # DOC-ID 参照を書きうる文書・設定・スクリプトの拡張子。.md は必須。実装コード（.rb 等）には
-  # DOC-ID 参照を書かない運用とするため対象外（含めると verify/assign の対象になってしまう）
+  # DOC-ID 参照を書かない運用とするため対象外（含めると verify/assign の対象になってしまう）。
+  # 拡張子なしの実行ファイル（shebang 付き。bin/ocw 等）はこのリストとは別に、
+  # shebang の有無で判定して対象に含める（scanner.rb の extensionless_shebang_script?）
   SEARCHABLE_EXTENSIONS = %w[.md .sh .yml .yaml .json].freeze
 
   PATTERN = /\ADOC-(?:\d{6}\d{4}|DOCID_PLACEHOLDER)(?:-[a-z])?_.+\.md\z/

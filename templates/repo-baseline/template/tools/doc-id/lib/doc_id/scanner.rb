@@ -99,7 +99,21 @@ module DocId
     def doc_id_exists?(id) = !Dir.glob(File.join(@docs_dir, "**", "#{id}_*")).empty?
 
     def searchable_files
-      git_tracked_files.select { |f| SEARCHABLE_EXTENSIONS.any? { |ext| f.end_with? ext } }
+      git_tracked_files.select { |f| searchable_file? f }
+    end
+
+    def searchable_file?(f)
+      SEARCHABLE_EXTENSIONS.any? { |ext| f.end_with? ext } || extensionless_shebang_script?(f)
+    end
+
+    # 拡張子なしの実行ファイル（bin/ocw 等）は shebang の有無で判定する。
+    # 拡張子を持つファイル（.rb 等、意図的に SEARCHABLE_EXTENSIONS から除外しているもの）は対象にしない。
+    def extensionless_shebang_script?(f)
+      return false unless File.extname(f).empty?
+
+      File.open(f, "rb") { |io| io.read(2) } == "#!"
+    rescue Errno::ENOENT, IOError
+      false
     end
 
     # @repo_root からの相対パスのディレクトリ成分単位で判定する。絶対パス全体に対する

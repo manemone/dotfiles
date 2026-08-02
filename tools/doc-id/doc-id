@@ -10,8 +10,8 @@
 #
 # DOC-ID 命名規則:
 #   フォーマット: DOC-YYMMDDHHMM[_<説明的ファイル名>].md
-#   例: DOC-2607181425_設計方針.md
-#   衝突時: DOC-2607181425-a, DOC-2607181425-b
+#   例: DOC-YYMMDDHHMM_設計方針.md
+#   衝突時: DOC-YYMMDDHHMM-a, DOC-YYMMDDHHMM-b
 
 require_relative "lib/doc_id/tool"
 

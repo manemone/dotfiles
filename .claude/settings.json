@@ -8,6 +8,7 @@
       "Bash(ruby tools/doc-id/test/doc_id_test.rb)",
       "Bash(./deploy-all.sh --dry-run:*)",
       "Bash(tests/deploy_smoke.sh)",
+      "Bash(tests/template_smoke.sh)",
       "Bash(shellcheck:*)",
       "Bash(shfmt:*)",
       "Bash(sh -n:*)",

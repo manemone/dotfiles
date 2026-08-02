@@ -11,11 +11,9 @@
   - 例: 方言・スタイルの使い分け、エラーハンドリングの方針、命名規則、
     破壊的操作の前に必ず確認・退避すること、linter 抑制を AI の判断で追加しないこと
 -->
-
-{% if lint_cmd -%}
+{% if lint_cmd %}
 linter / formatter: `{{ lint_cmd }}`
-{% endif -%}
-{% if test_cmd -%}
+{% endif %}{% if test_cmd %}
 test: `{{ test_cmd }}`
 {% endif %}
 ## linter 抑制を AI の判断で追加しない

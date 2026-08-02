@@ -159,6 +159,22 @@ class DocIdVerifyGitTest < Minitest::Test
     Open3.capture2 git_env, "git", "add", "README.md", chdir: @repo_root
     silence_stdout { @tool.verify }
   end
+
+  def test_detects_broken_refs_in_extensionless_shebang_script
+    script = File.join @repo_root, "bin", "tool"
+    FileUtils.mkdir_p File.dirname(script)
+    File.write script, "#!/bin/sh\n# See #{NONEXISTENT_ID}\n"
+    Open3.capture2 git_env, "git", "add", "bin/tool", chdir: @repo_root
+    silence_stdout { assert_equal 1, @tool.verify }
+  end
+
+  def test_skips_extensionless_files_without_shebang
+    non_script = File.join @repo_root, "bin", "data"
+    FileUtils.mkdir_p File.dirname(non_script)
+    File.write non_script, "See #{NONEXISTENT_ID}\n"
+    Open3.capture2 git_env, "git", "add", "bin/data", chdir: @repo_root
+    silence_stdout { assert_equal 0, @tool.verify }
+  end
 end
 
 class DocIdVerifyRepoRootPathTest < Minitest::Test

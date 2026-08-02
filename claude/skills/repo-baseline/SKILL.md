@@ -38,12 +38,22 @@ copier が対話式に質問してくる。答え方の判断は「4. 質問へ�
 
 ### 既存導入の更新
 
-```bash
-uv tool run copier update
-```
+**現時点では `copier update` は使えない。** `copier update` が3-wayマージを行うには、
+テンプレート側（`_src_path`）自体が git でバージョン管理されたリポジトリのルートである
+必要があるが、`templates/repo-baseline/` は dotfiles リポジトリ内のただのサブディレクトリ
+であり、リポジトリのルートではない。そのため新規導入時に生成される `.copier-answers.yml` に
+`_commit`（テンプレート側のバージョン参照）が記録されず、`copier update` は
+`Cannot update because cannot obtain old template references from .copier-answers.yml.`
+で失敗する（実際に検証済み）。
 
-`.copier-answers.yml`（新規導入時に自動生成される）を元に3-wayマージで更新を取り込む。
-対象リポジトリ側の編集（AGENTS.md の記入内容等）は保たれる。
+これは実装の不備ではなく、計画書の「リポジトリ分割は行わず『いつでも切り出せる状態』に
+留める」という判断（現時点では2〜3例しかなく抽象化が未成熟なため）の直接の帰結である。
+`templates/repo-baseline/` が独立リポジトリとして切り出された時点で、`_src_path` が
+そのリポジトリのルートになり `copier update` が使えるようになる。
+
+それまでの間、上流の更新を取り込みたい場合は、差分を人間に確認してもらいながら
+手動で反映すること（`.copier-answers.yml` には撒いた時点の回答が残っているので、
+どの質問にどう答えたかは参照できる）。
 
 ## 3. 既存ファイルとの衝突
 

@@ -57,11 +57,10 @@ pre-commit install
 pre-commit run --all-files
 ```
 
-`doc-id assign` はファイル名とファイル内・他ファイルからの参照は自動更新しますが、
 `docs/README.md`（および `use_doc_id` 選択時に生成される `docs/design/README.md`）の
-索引表にある **DOC-ID 列の値は更新しません**（`doc-id check` / `doc-id verify` もこの列までは
-検証しないため、放置しても気づけません）。assign 実行後は、採番された実際の DOC-ID を
-この2つの索引表に手で反映してください。
+索引表は DOC-ID 列を持たず、ファイル名へのリンクだけで構成されています（DOC-ID はファイル名から
+自明なため）。`doc-id assign` を実行するとリンク先のファイル名（プレースホルダ）が自動で
+実際の DOC-ID に置き換わるため、索引表を手で更新する必要はありません。
 
 **ここで終わりではありません。** `AGENTS.md` の「概要」「ディレクトリ構成」など、このリポジトリ固有の
 判断が要る部分は空欄・TODO のままです。埋め方の判断ガイドは
@@ -70,12 +69,19 @@ pre-commit run --all-files
 
 ## 使い方: 更新
 
-```bash
-uv tool run copier update
-```
+**現時点では `copier update` は使えません。** `copier update` が3-wayマージを行うには、
+テンプレート側（`_src_path`）自体が git でバージョン管理されたリポジトリのルートである
+必要がありますが、`templates/repo-baseline/` は dotfiles リポジトリ内のサブディレクトリで
+あり、リポジトリのルートではありません。そのため `copier copy` 実行時に生成される
+`.copier-answers.yml` に `_commit`（テンプレート側のバージョン参照）が記録されず、
+`copier update` は `Cannot update because cannot obtain old template references
+from .copier-answers.yml.` で失敗します（実際に検証済みです）。
 
-`copier copy` 実行時に生成される `.copier-answers.yml` を元に、テンプレート側の更新を
-3-way マージで取り込みます。展開先で加えたカスタマイズ（AGENTS.md の記入内容等）は保たれます。
+これは「自己完結」の制約を破っているわけではなく、計画書の「リポジトリ分割は行わず
+『いつでも切り出せる状態』に留める」という判断（現時点では事例が2〜3件しかなく抽象化が
+未成熟なため）の直接の帰結です。`templates/repo-baseline/` が独立リポジトリとして
+切り出された時点で `_src_path` がそのリポジトリのルートになり、`copier update` が
+使えるようになります。それまでの間、上流の更新は差分を確認しながら手動で反映してください。
 
 ## 分業の原則
 
@@ -111,3 +117,9 @@ uv tool run copier update
   生成されないこと（`_exclude` による制御）
 - `use_doc_id=false` かつ `lint_cmd` / `test_cmd` が空欄の場合、`.pre-commit-config.yaml` には
   `pre-commit-hooks` 由来の基本フックのみが残り、有効な YAML であること
+- 展開先に `.copier-answers.yml` が生成されること。ただし `_src_path` がリポジトリの
+  サブディレクトリのため `_commit` が記録されず、`copier update` は現時点で使えないこと
+  （「使い方: 更新」参照）
+- `lint_cmd` / `test_cmd` が空欄のときと、両方に値が入っているときの両方で、生成された
+  `docs/design/*コーディング方針.md` および `docs/README.md` に Jinja の空白制御ミスによる
+  崩れ（二重空行・見出し直前の空行欠落）が無いこと
