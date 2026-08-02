@@ -17,7 +17,7 @@ if [ ! -f "$KEY_FILE" ]; then
   exit 1
 fi
 
-DEEPSEEK_API_KEY="$(tr -d '\r\n' < "$KEY_FILE")"
+DEEPSEEK_API_KEY="$(tr -d '\r\n' <"$KEY_FILE")"
 
 if [ -z "$DEEPSEEK_API_KEY" ]; then
   echo "Error: DeepSeek API key file is empty: $KEY_FILE" >&2

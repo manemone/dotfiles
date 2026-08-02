@@ -22,9 +22,11 @@
   `sh zsh/deploy.sh --dry-run` のように直接引数を渡しても無視され実際に書き換えが起きるため、
   個別スクリプトを dry-run するときは `DRY_RUN=1 sh zsh/deploy.sh` のように環境変数で渡すこと。
 - 指示された範囲外の機能を先回りして実装しない。
-- **linter の抑制ディレクティブ（`# shellcheck disable=...` 等）や linter 設定の除外・閾値緩和を、
-  AI の判断で追加しない。** 違反が設計上不合理だと判断した場合は、抑制せず違反内容・対象ファイル・
-  判断理由を人間に報告する。
+- **shellcheck / shfmt を含む linter の抑制ディレクティブ（`# shellcheck disable=...` 等）や、
+  `.pre-commit-config.yaml` の `exclude` / `exclude_types` 追加・`shfmt` のオプション緩和などの
+  linter 設定の除外・閾値緩和を、AI の判断で追加しない。** 指摘が設計上不合理だと判断した場合は、
+  抑制せず違反内容・対象ファイル・判断理由を人間に報告する。コードの構造を変えて指摘そのものを
+  解消できる場合（例: 動的変数名参照を case 文に置き換える）は、抑制よりそちらを優先する。
 
 ## ディレクトリ構成
 
@@ -84,17 +86,47 @@
 
 ## コミット前の必須ステップ
 
-現時点では以下でよい:
+初回のみ、clone 後に以下を実行して pre-commit フックを有効化する。
 
-- 変更したシェルスクリプトが `sh -n` / `bash -n` で構文エラーにならないこと
-- `deploy-all.sh --dry-run`（個別スクリプトは `DRY_RUN=1 sh <tool>/deploy.sh`）で
-  意図した動作になることを確認すること
-- `docs/` 配下に新規ファイルを追加する場合は、まず `DOC-DOCID_PLACEHOLDER_<説明的ファイル名>.md`
-  という名前で作り、`./tools/doc-id/doc-id assign docs/path/to/new_file.md` で DOC-ID を採番する
-- `./tools/doc-id/doc-id check` と `./tools/doc-id/doc-id verify` が両方 0 で終わること
-  （`ruby tools/doc-id/test/doc_id_test.rb` でツール自体のテストも確認できる）
+```
+uv tool install pre-commit
+pre-commit install
+```
 
-※ 孫4 で pre-commit が導入された時点でこの節は自動化されたフックの説明に更新される。
+以降はコミット時に `.pre-commit-config.yaml` のフックが自動で走る
+（`trailing-whitespace` 等の基本チェック、`shellcheck` / `shfmt`、
+`./tools/doc-id/doc-id check` / `verify`、`tools/doc-id/` 配下の変更時の
+`ruby tools/doc-id/test/doc_id_test.rb`、シェルスクリプト変更時の
+`./deploy-all.sh --dry-run`）。手元でまとめて確認したい場合は次を実行する。
+
+```
+pre-commit run --all-files
+```
+
+pre-commit のフックではデプロイの実動作までは検証しないため、
+デプロイ関連のシェルスクリプトを変更した場合は追加で以下も実行する。
+
+```
+tests/deploy_smoke.sh
+```
+
+`HOME` を一時ディレクトリへ差し替えたサンドボックス上で実際に deploy /
+uninstall を行い、symlink・既存ファイルの退避・冪等性・
+`claude/settings.json` の実ファイル生成を検証する（既定の対象は
+`bin,claude`。デプロイの検証は必ずこのサンドボックス経由で行い、
+人間の実 `$HOME` に対して直接実行しない。詳細は
+[docs/design/DOC-2608020715-b_テスト方針.md](docs/design/DOC-2608020715-b_テスト方針.md)
+を参照）。
+
+**AI はこれらのステップ（pre-commit のフック相当の確認と
+`tests/deploy_smoke.sh`）を省略しない。省略するのは人間が明示的に指示した
+場合に限る。**
+
+shellcheck / shfmt の指摘への対応も「最重要ルール」の linter 抑制禁止に従う。
+
+`docs/` 配下に新規ファイルを追加する場合は、まず `DOC-DOCID_PLACEHOLDER_<説明的ファイル名>.md`
+という名前で作り、`./tools/doc-id/doc-id assign docs/path/to/new_file.md` で DOC-ID を採番する
+（`doc-id check` / `doc-id verify` フックが検証する）。
 
 ## PR 作成時の注意
 
@@ -106,7 +138,11 @@ PR を作る前に
 
 - 新しいツールディレクトリを足すときは `shared/helpers.sh` の `AVAILABLE_TOOLS` に加えて、
   `uninstall.sh` の `KNOWN_LINKS_<tool>`（生成ファイルがあれば `KNOWN_GENERATED_<tool>` も）にも
-  追加する。これを忘れると `uninstall.sh` は該当ツールを静かにスキップし、張った symlink が
+  追加する。**さらに、`uninstall.sh` 内の `_links` / `_generated` / `_skills_src` を求める
+  3つの `case "$_tool" in ... esac` にも、新しいツール名の arm を追加する。** `KNOWN_LINKS_<tool>`
+  変数を定義しただけで case 文に arm を足し忘れると、`_links` が空のまま扱われ「No link list
+  defined」で静かにスキップされる（変数の存在だけでは case 文の arm は自動生成されない）。
+  これを忘れると `uninstall.sh` は該当ツールを静かにスキップし、張った symlink が
   ユーザーの `$HOME` に残り続ける。
 - README は「ルート `README.md`（全体）」と「各ツールの `README.md`（詳細）」の二層構造。
   片方だけ更新しない。
