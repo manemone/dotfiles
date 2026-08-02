@@ -214,6 +214,13 @@ check_combo "最小構成(use_doc_id/use_ci/has_long_running_commands すべて 
   --data use_ci=false \
   --data has_long_running_commands=false
 
+# 全質問をテンプレート既定値のまま（--data を1つも渡さない）で展開する。
+# use_doc_id=true・lint_cmd/test_cmd 空欄という、最も多く踏まれる経路であり、
+# かつ崩れ1・崩れ2（Jinja 空白制御ミスによる二重空行・空行欠落）が実際に
+# 発生していた組み合わせ（PR #39 ラウンド2レビュー参照）。全部盛り/最小構成の
+# どちらの combo にも入っていなかったため、再発防止としてここに追加する。
+check_combo "既定値のみ(--defaults そのまま。use_doc_id/use_ci はテンプレ既定値 true、lint/test/adr/reference は既定値のまま)" ""
+
 log
 if [ "$FAIL" -eq 0 ]; then
   log "[OK] template_smoke: 全チェックに合格しました。"

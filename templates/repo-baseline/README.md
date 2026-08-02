@@ -120,6 +120,8 @@ from .copier-answers.yml.` で失敗します（実際に検証済みです）�
 - 展開先に `.copier-answers.yml` が生成されること。ただし `_src_path` がリポジトリの
   サブディレクトリのため `_commit` が記録されず、`copier update` は現時点で使えないこと
   （「使い方: 更新」参照）
-- `lint_cmd` / `test_cmd` が空欄のときと、両方に値が入っているときの両方で、生成された
-  `docs/design/*コーディング方針.md` および `docs/README.md` に Jinja の空白制御ミスによる
-  崩れ（二重空行・見出し直前の空行欠落）が無いこと
+- `tests/template_smoke.sh` の3つの回答パターン（全部盛り・最小構成・既定値のみ）それぞれで、
+  生成された `docs/` 配下の全 `.md`（`docs/design/*コーディング方針.md` / `docs/README.md` 等）に
+  Jinja の空白制御ミスによる崩れ（二重空行・見出し直前の空行欠落）が無いこと。
+  「既定値のみ」パターン（`use_doc_id=true` かつ `lint_cmd` / `test_cmd` が空欄）は、
+  実際にこの崩れが発生していた組み合わせであり、再発防止のため combo に加えてある

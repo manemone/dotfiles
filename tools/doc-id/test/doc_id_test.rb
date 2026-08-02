@@ -17,6 +17,15 @@ module DocIdTestHelper
     $stdout = orig
   end
 
+  def capture_stdout
+    orig = $stdout
+    $stdout = StringIO.new
+    yield
+    $stdout.string
+  ensure
+    $stdout = orig
+  end
+
   def git_env
     { "GIT_DIR" => nil, "GIT_WORK_TREE" => nil, "GIT_INDEX_FILE" => nil }
   end
@@ -114,6 +123,19 @@ class DocIdVerifyTest < Minitest::Test
     File.write File.join(@docs_dir, "design", TEST_FILE), "# test"
     File.write File.join(@repo_root, "README.md"), "[link](docs/design/\n#{TEST_FILE})"
     silence_stdout { assert_equal 0, @tool.verify }
+  end
+
+  def test_detects_broken_bare_ref_with_filename_suffix
+    File.write File.join(@repo_root, "README.md"),
+               "地の文で #{NONEXISTENT_ID}_存在しない文書.md に触れる。"
+    silence_stdout { assert_equal 1, @tool.verify }
+  end
+
+  def test_does_not_double_report_broken_markdown_link_with_filename_suffix
+    File.write File.join(@repo_root, "README.md"),
+               "[link](docs/design/#{NONEXISTENT_ID}_存在しない文書.md)"
+    output = capture_stdout { @tool.verify }
+    assert_equal 1, output.lines.count { |l| l.start_with? "❌" }
   end
 end
 

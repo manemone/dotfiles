@@ -1,3 +1,7 @@
 # 自動生成されるファイルです。手で編集しないでください。
-# `copier update` はこのファイルを元に3-wayマージで上流の更新を取り込みます。
+# `copier update` を使う際に、このファイルを元に3-wayマージで上流の更新を取り込みます。
+# ただし現時点の repo-baseline テンプレート（配布元: dotfiles リポジトリの
+# templates/repo-baseline/）は、テンプレート側が git リポジトリのルートではないため
+# `copier update` を実行できません（`_commit` が記録されないため）。
+# 上流の更新は、配布元のテンプレートとの差分を確認しながら手動で反映してください。
 {{ _copier_answers|to_nice_yaml -}}

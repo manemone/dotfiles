@@ -89,7 +89,10 @@ module DocId
 
     def check_bare_refs(content, rel, broken)
       each_outside_fence content do |line, num|
-        line.scan(/\b(DOC-\d{6}\d{4}(?:-[a-z])?)\b/).each do |match|
+        # マークダウンリンクの target 部分は check_md_links が別途検証するため、
+        # ここでは除外する（DOC-<10桁>_<ファイル名> 形式のリンク先を二重報告しないため）。
+        scrubbed = line.gsub(/\[[^\]]*\]\([^)]*\)/) { |m| " " * m.length }
+        scrubbed.scan(/\b(DOC-\d{6}\d{4}(?:-[a-z])?)(?=_|\b)/).each do |match|
           id = match[0]
           broken << { file: rel, ref: id, line: num } unless doc_id_exists? id
         end

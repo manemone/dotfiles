@@ -45,7 +45,7 @@ else
 
     命名規則:
       DOC-YYMMDDHHMM_<説明的ファイル名>.md
-      例: DOC-2607181425_設計方針.md
+      例: DOC-YYMMDDHHMM_設計方針.md
 
     プレースホルダ:
       未コミットの計画書は DOC-DOCID_PLACEHOLDER_計画.md のように

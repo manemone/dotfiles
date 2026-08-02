@@ -878,9 +878,13 @@ OCW_REVIEWER_COMMAND='claude --model opus --effort high --permission-mode auto' 
 - **IDが情報を持たない** — 番号から新旧が判別できない
 - **一度参照されると振り直せない**
 
-`~/projects/lora-dataset-forge/main/docs/` が採用している `DOC-YYMMDDHHMM_タイトル.md`
-（例 `DOC-2607191331_傘ブランチ_pipeline-hardening_計画.md`）は構造的に衝突せず、
-ソート順が時系列と一致する。並行作業を前提とする以上こちらが正しい。
+`~/projects/lora-dataset-forge/main/docs/` が採用している `DOC-YYMMDDHHMM_タイトル.md` 形式は
+構造的に衝突せず、ソート順が時系列と一致する。並行作業を前提とする以上こちらが正しい
+（LDF内の実例のファイル名は下記。他リポジトリの DOC-ID のため地の文には書かずコードブロックにする）。
+
+```
+DOC-2607191331_傘ブランチ_pipeline-hardening_計画.md
+```
 
 **ただし本傘の作業中には実施しない。** 理由:
 
