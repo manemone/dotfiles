@@ -12,10 +12,10 @@ dotfiles にも同等の基盤を作る。さらに **その汎用部分を copi
 
 大きく2段階:
 
-1. **孫1〜5**: dotfiles 自身を LDF 相当のレベルまで整備する
+1. **孫1〜6**: dotfiles 自身を LDF 相当のレベルまで整備する
 2. **孫6**: dotfiles と LDF の2例を突き合わせ、汎用部分を copier テンプレートに抽出する
 
-抽象化は2例目からしか妥当に行えないため、孫1〜5 の時点で汎用化を先回りしない。
+抽象化は2例目からしか妥当に行えないため、孫1〜6 の時点で汎用化を先回りしない。
 
 ## 孫ブランチ進捗
 
@@ -25,8 +25,9 @@ dotfiles にも同等の基盤を作る。さらに **その汎用部分を copi
 | 2 | `ai/rb-02-docs` | `docs/` 基盤: 索引 README・フォルダ規約・PR の作法・シェルコーディング方針・テスト方針 | ✅ PR #31 マージ済 |
 | 3 | `ai/rb-03-doc-id` | DOC-ID ツール移植（Ruby, 自己完結）＋ 既存 `DOC-001/002` のタイムスタンプ形式への移行 | ✅ PR #34 マージ済 |
 | 4 | `ai/rb-04-quality-gate` | pre-commit framework 導入 + shellcheck/shfmt + デプロイスモークテスト + CI | ✅ PR #35 マージ済 |
-| 5 | `ai/rb-05-ai-config` | リポジトリ用 `.claude/settings.json` + `opencode.json` + `.gitignore` 修正 | ⏸️ 保留（master との設計衝突により spawn 前で停止） |
-| 6 | `ai/rb-06-copier-template` | ★ 汎用部分の抽出と copier テンプレート化 + 適用スキル | ⬜ 待機中 |
+| 5 | `ai/rb-05-docs-merge` | **master（ocw-meter 傘）の `docs/` 体系との統合。** フォルダ規約の和集合化 + master の DOC-001〜005/ADR-001 のタイムスタンプ移行 | 🔄 実装中 |
+| 6 | `ai/rb-06-ai-config` | リポジトリ用 `.claude/settings.json` + `opencode.json` + `.gitignore` 修正 | ⬜ 待機中 |
+| 7 | `ai/rb-07-copier-template` | ★ 汎用部分の抽出と copier テンプレート化 + 適用スキル | ⬜ 待機中 |
 
 ## 依存関係と実行順序
 
@@ -44,9 +45,12 @@ dotfiles にも同等の基盤を作る。さらに **その汎用部分を copi
 孫4 (品質ゲート)
   ↓ pre-commit に doc-id フックを組み込むため、孫3 が先。
     テスト方針（孫2）に基づいてスモークテストを実装する
-孫5 (AI 設定ファイル)
-  ↓ opencode.json の instructions 配列が docs/ の DOC-ID を参照するため、孫2・孫3 が先
-孫6 (copier テンプレート)  ← 孫1〜5 全マージ後
+孫5 (master の docs/ 体系との統合)   ← 途中で発生。判断5 を参照
+  ↓ master に別傘（ocw-meter）の docs/ 体系が入ったため、
+    先に統合しないと孫6 の参照先も孫7 の抽出対象も確定しない
+孫6 (AI 設定ファイル)
+  ↓ opencode.json の instructions 配列が docs/ の DOC-ID を参照するため、孫5 の確定が先
+孫7 (copier テンプレート)  ← 孫1〜6 全マージ後
 ```
 
 ---
@@ -126,13 +130,76 @@ BATON の孫C では `language_version: '3.3'` が提案されていたが、`de
 
 ### 判断4: `.gitignore` の `/.claude/` を狭める
 
-現状 `.gitignore` に `/.claude/` があり、リポジトリ用の `.claude/settings.json` を
-コミットできない。孫5 でこれを `/.claude/settings.local.json` に狭め、`settings.json`
-のみ追跡する。
+当初 `.gitignore` に `/.claude/` があり、リポジトリ用の `.claude/settings.json` を
+コミットできなかった。**この論点は master 側（ocw-meter 傘）が先に対処済み**で、
+現在 master は `/.claude/*` + `!/.claude/pr-review.yml` の形になっている。
+よって孫6 の作業は「`!/.claude/settings.json` の否定行を1本足す」だけに縮小する。
 
 ---
 
-## 孫6 で撒かれる成果物の依存条件（傘レベルの設計判断）
+## 傘進行中に発生した事象と対応（孫4 マージ後）
+
+### 判断5: master の `docs/` 体系との統合を、独立した孫（孫5）として挟む
+
+孫4 マージ後の rebase で master と衝突した。原因は、並行して走っていた別の傘
+（`ai/llm-cost-observability`、master に PR #33 としてマージ済み）が
+**独立に `docs/` 基盤を構築していた**こと。
+
+衝突は3ファイル（`README.md` / `bin/ocw` / `docs/README.md` の add/add）だが、
+本質はテキスト衝突ではなく**同一サブシステムに対する2つの設計判断の並存**である。
+
+| 論点 | 本傘 | master (PR #33) |
+|---|---|---|
+| `docs/README.md` | 孫2 が新規作成 | 独立に新規作成 |
+| フォルダ規約 | `design/` `planning/` `archive/` | `adr/` `planning/` `reference/` |
+| DOC-ID 形式 | タイムスタンプ（移行済み） | 連番 `DOC-001`〜`DOC-005` + `ADR-001` |
+| `.gitignore` の `/.claude/` | 孫6 で対処予定だった | 対処済み |
+
+**重要**: master 側は連番方式を是としているわけではない。master の
+`docs/planning/DOC-003_...` 第16章「傘マージ後の残タスク T1」に、以下が明記されている。
+
+> **T1. DOC-ID 採番方式をタイムスタンプ式へ移行する**
+> 現行の連番方式は早晩崩壊する。**並行ブランチで衝突する** — 複数の孫が同時に文書を作れば
+> 全員が同じ次番号を取る。（中略）移行は独立したPRで行う。それまでは連番を継続すること。
+
+つまり **本傘の判断1 と master の T1 は同じ結論**であり、対立ではなく単なる時間差である。
+孫5 は master が自ら予定していた T1 を実行するものと位置づける。
+
+したがって**フォルダ規約は master 側を尊重して和集合を取り、DOC-ID 形式は本傘に寄せる**。
+どちらか一方を捨てる形にはしない。
+
+### 判断6: 統合は rebase ではなく **merge** で行う
+
+構造的な衝突を rebase で解消すると、本傘の全コミット（現時点で8本）を master の上に
+1つずつ載せ直す過程で**同じ衝突を最大8回解決させられる**。merge なら1回で済む。
+
+よってこの統合に限り、孫5 のブランチ上で `git merge origin/master` を実行し、
+その解決結果を PR として傘へ入れる。以降 master が動いた場合の追従方針も merge に統一する
+（autopilot の手順6を rebase から merge へ変更する）。
+
+### 判断7: `ADR-NNN` も DOC-ID 名前空間へ統合する
+
+master は `docs/adr/ADR-001_....md` という別名前空間を持つ。`tools/doc-id/doc-id check` は
+`docs/` 配下の全 `.md`（`README.md` を除く）に `DOC-YYMMDDHHMM` 形式を要求するため、
+このままでは命名規則違反として検出される。
+
+対応案は3つあった:
+
+| 案 | 内容 | 判定 |
+|---|---|---|
+| a | doc-id に `ADR-` 名前空間を第一級で追加 | ❌ ツールが複雑化し、孫7 のテンプレートに「撒き先が ADR を使うか」という質問が増える |
+| b | `adr/` を doc-id の検査対象から除外 | ❌ ADR だけ切れ参照検出が効かなくなる |
+| c | **ADR もファイル名は DOC-ID 形式に統一し、ADR であることは `adr/` フォルダと文書内の見出しで表現する** | ✅ 採用 |
+
+採用理由: ツールの規則を1本に保てるため孫7 のテンプレート化が単純になる。ADR の「連番であること」
+自体の情報価値は薄く（順序は作成日時で保たれる）、衝突リスクは ADR にも等しく存在する。
+**`adr/` フォルダの意味論（実測に基づく確定した技術的決定・原則変更しない）は維持する。**
+
+※ この判断は可逆である。ADR の連番を残したいという意向があれば案 a に切り替えてよい。
+
+---
+
+## 孫7 で撒かれる成果物の依存条件（傘レベルの設計判断）
 
 「撒き先の環境に何を要求してよいか」は傘レベルの決定であり、孫の実装判断に委ねない。
 
@@ -288,7 +355,7 @@ Claude 固有の機能名・書式に閉じない。
 - `claude/CLAUDE.md`（配布物）を触ること。別物
 - `docs/` の新規文書作成（孫2 の担当）
 - pre-commit / linter / CI の設定（孫4 の担当）
-- `.claude/` `opencode.json`（孫5 の担当）
+- `.claude/` `opencode.json`（孫6 の担当）
 
 ### 検証
 
@@ -469,7 +536,7 @@ Directory Structure の `docs/` の内訳を実態に合わせる（現在 `plan
 
 いずれも Ruby stdlib（`open3` / `fileutils` / `tmpdir`）しか使っていない。
 
-### 配置（重要: 孫6 でそのままテンプレートへ移す）
+### 配置（重要: 孫7 でそのままテンプレートへ移す）
 
 ```
 tools/doc-id/
@@ -546,7 +613,7 @@ tools/doc-id/
 
 - pre-commit への組み込み（孫4 の担当）。この孫では手動実行できるところまで
 - CI 設定（孫4 の担当）
-- テンプレート化（孫6 の担当）。**今は dotfiles の中で動くものを作る。
+- テンプレート化（孫7 の担当）。**今は dotfiles の中で動くものを作る。
   ただし上記「汎用化」の観点は今のうちに潰しておく**
 
 ### 検証
@@ -591,7 +658,7 @@ tools/doc-id/
 
 `repo: local` を使う理由: フック配布元になるにはリポジトリルートに
 `.pre-commit-hooks.yaml` が必要で、現時点では独立リポジトリ化しない（計画書の確定事項）。
-孫6 のテンプレートでも当面 `repo: local` のままにする。
+孫7 のテンプレートでも当面 `repo: local` のままにする。
 
 **Ruby フックの設定**:
 ```yaml
@@ -689,6 +756,136 @@ tests/deploy_smoke.sh
 ## 孫5用プロンプト:
 
 ````
+## タスク: master（ocw-meter 傘）の docs/ 体系を本傘に統合する
+
+計画書 docs/planning/DOC-2608020558_repo-baseline_計画.md の
+「判断1」「判断5」「判断6」「判断7」「全孫共通の注意」を**必ず全部読んでから**着手すること。
+この孫は他の孫と性質が違う。新機能を作るのではなく、**2つの独立した設計を1つに畳む**作業である。
+
+### 背景
+
+並行して走っていた別の傘（`ai/llm-cost-observability`、master に PR #33 でマージ済み）が、
+本傘とは独立に `docs/` 基盤を構築していた。両者は互換性のない設計判断を含む。
+詳細と方針は計画書の「判断5」に表でまとめてあるので必ず読むこと。
+
+**master 側は連番方式を是としているわけではない。** master 自身の計画書
+`docs/planning/DOC-003_ai-llm-cost-observability_計画.md` 第16章「傘マージ後の残タスク T1」に
+「連番は並行ブランチで衝突するのでタイムスタンプ式へ移行する。移行は独立したPRで行う」と
+明記されている。**この孫はその T1 を実行するものである。** master を否定する作業ではない。
+
+### 手順
+
+#### 1. master を merge する（rebase ではない）
+
+```
+git checkout ai/repo-baseline && git pull --rebase origin ai/repo-baseline
+git checkout -b ai/rb-05-docs-merge
+git fetch origin
+git merge origin/master
+```
+
+**必ず merge を使うこと。rebase は使わない**（理由は計画書の判断6）。
+
+衝突するのは以下の3ファイル（`git merge-tree` で事前確認済み）:
+
+| ファイル | 種別 | 解決方針 |
+|---|---|---|
+| `docs/README.md` | add/add | 下記 #2 のとおり両者を統合した新しい索引を書く |
+| `README.md` | content | 両者の追記を**両方残す**。master 側は ocw-meter 関連、本傘側は AGENTS.md / docs/ / tools/ / tests/ 関連。片方を捨てない |
+| `bin/ocw` | content | **master 側を採用する。** master は ocw に ocw-meter 連携（+97行）を入れており、本傘側の差分は孫4 の shfmt 整形のみ。master の内容を取った上で、最後に shfmt を再適用して整形だけ揃える |
+
+`shared/helpers.sh` と `bin/deploy.sh` は自動マージされるが、**結果が壊れていないか必ず目視すること**
+（master は helpers.sh に +71行 入れている）。
+
+#### 2. `docs/` のフォルダ規約を和集合にする
+
+両者のフォルダを統合する。**どちらのフォルダも消さない。**
+
+| フォルダ | 出自 | 役割（統合後の定義） |
+|---|---|---|
+| `adr/` | master | 実測・調査に基づいて確定した技術的決定の記録。原則変更しない |
+| `design/` | 本傘 | 実装の指針となる現役の規約・設計文書。変わりうる |
+| `planning/` | 両方 | 傘ブランチ計画書 |
+| `reference/` | master | 運用中に繰り返し引く文書（スキーマ、手順書） |
+| `archive/` | 本傘 | 過去の経緯。現在の判断には使わない（現時点で空なので作らない） |
+
+**`design/` と `reference/` と `adr/` の使い分けを明確に定義して `docs/README.md` に書くこと。**
+master の docs/README.md には `planning/` と `reference/` の使い分けの説明があるので、
+それを土台に `design/` と `adr/` を足した4象限として書き直す。ここがこの孫の主要な設計作業である。
+
+目安（これを丸写しせず、実物を見て自分の言葉で整理すること）:
+- `design/` = **作るときに従う規約**（PRの作法、コーディング方針、テスト方針）
+- `adr/` = **なぜその技術選定にしたかの確定記録**（変更しない）
+- `reference/` = **運用中に繰り返し引く事実**（スキーマ、手順）
+- `planning/` = **傘ごとの計画と経緯**
+
+#### 3. master 側の DOC-ID をタイムスタンプ形式へ移行する
+
+対象は master が持ち込んだ以下（`DOC-001` `DOC-002` は本傘で移行済みなので、
+merge 後にどちらの名前で残っているかを必ず確認すること）:
+
+- `docs/planning/DOC-003_ai-llm-cost-observability_計画.md`
+- `docs/reference/DOC-004_LLM費用観測ベースライン計測手順.md`
+- `docs/reference/DOC-005_ocw-meterイベントスキーマ.md`
+- `docs/adr/ADR-001_llm-cost-observability-collection-method.md` ← **判断7 により DOC-ID 形式へ**
+
+手順:
+- `./tools/doc-id/doc-id assign <file>` を使う。タイムスタンプは `git log --diff-filter=A` から
+  自動取得される。**手で日付を決めない**
+- **`assign` は旧 ID からの参照更新をしない**（プレースホルダ経由でないため）。
+  `git grep -n 'DOC-00[1-5]\|ADR-001'` で参照を洗い出し、**手作業で全部更新する**。
+  master の `docs/README.md` 本文、各文書間の相互参照、`bin/` 配下のコメント等に散っている可能性がある
+- `docs/adr/` に置いた文書には、文書冒頭に「これは ADR（一度確定したら変更しない決定記録）である」旨と、
+  **旧 ID `ADR-001` との対応**を1行残すこと（過去の議論やコミットメッセージから辿れるようにするため）
+
+#### 4. `docs/README.md` を統合して書き直す
+
+- クイックナビ: 両者の行を統合。目的別に引けること
+- フォルダ構成: #2 で定義した4フォルダ（+archive の説明）
+- 全 DOC-ID 索引: **統合後の実際の DOC-ID で**、`adr/` `design/` `planning/` `reference/` の各表を作る
+- 新規ファイル追加時のルール: **採番はタイムスタンプ式であることに書き換える。**
+  master 側にあった「連番を継続すること」という but 書きは、**移行が完了したので削除する**
+  （T1 が実行済みになったため。残すと次の人が混乱する）
+- 検証コマンドの案内（`./tools/doc-id/doc-id check` / `verify`）
+
+#### 5. master 側の「残タスク T1」を完了として記録する
+
+`docs/planning/DOC-003_...`（移行後の新ファイル名）の第16章 T1 の項に、
+**「本傘 `ai/repo-baseline` の孫5 で実施済み」と追記する**。
+計画書は歴史的記録なので T1 の記述自体は消さず、完了マークを足す形にすること。
+
+#### 6. `AGENTS.md` を更新する
+
+- 「ディレクトリ構成」に `docs/` の4フォルダと、master 由来の `bin/ocw-meter` `bin/tests/` `bin/prices/` を反映
+- 「コミット前の必須ステップ」に、master が持ち込んだ `bin/tests/lint.sh` と
+  `python3 -m unittest discover -s bin/tests` が存在することを反映する
+  （`.claude/pr-review.yml` に `lint_cmd` / `test_cmd` として定義されている）。
+  **pre-commit にこれらを組み込むかは判断してよい。組み込む場合は実行時間を確認し、
+  遅すぎるなら CI 側だけにする。判断理由を PR に書くこと**
+
+### やらないこと
+
+- `.claude/settings.json` / `opencode.json` の新規作成（孫6 の担当）
+- テンプレート化（孫7 の担当）
+- master 側の実装（`bin/ocw-meter` 本体等）への機能変更。**持ち込むだけで中身は触らない**
+- `docs/adr/probes/deepseek-raw-probe.sh` の中身の変更（shfmt/shellcheck が要求する整形は可）
+
+### 検証
+
+- `./tools/doc-id/doc-id check` が 0（`ADR-001` が残っていないこと）
+- `./tools/doc-id/doc-id verify` が 0（**旧 ID への参照が1つも残っていないこと**）
+- `ruby tools/doc-id/test/doc_id_test.rb` が全緑
+- `pre-commit run --all-files` が全緑
+- `tests/deploy_smoke.sh` が緑で、実行後に実 HOME が変化していないこと
+- `bin/tests/lint.sh` と `python3 -m unittest discover -s bin/tests` が緑
+  （master 由来のテストを壊していないことの確認。**これを必ずやること**）
+- `docs/` 配下に連番形式（`DOC-00N` / `ADR-00N`）のファイルが1つも残っていないこと
+- `git log --oneline origin/master..HEAD` で、master のコミットを消していないこと
+````
+
+## 孫6用プロンプト:
+
+````
 ## タスク: リポジトリ用の AI 設定ファイルを整える
 
 計画書 docs/planning/DOC-2608020558_repo-baseline_計画.md の
@@ -708,18 +905,24 @@ tests/deploy_smoke.sh
 
 ### 作るもの
 
-#### 1. `.gitignore`（更新）
+#### 1. `.gitignore`（更新 — 作業はごく小さい）
 
-現在 `/.claude/` がまるごと無視されており、リポジトリ用の `.claude/settings.json` を
-追跡できない。以下に狭める:
+**孫5 の master 統合により、この論点はほぼ解決済みである。** 現在の形は:
 
 ```
-# Repository-scoped AI settings: track settings.json, ignore local overrides
-/.claude/settings.local.json
+# AI tools
+/.claude/*
+!/.claude/pr-review.yml
 ```
 
-`/.claude/` を消して上記に置き換える。他の AI ツールがローカル状態を書き込む可能性も
-考慮し、必要なら `/.claude/*.local.json` のような形も検討してよい。判断理由を PR に書くこと。
+`settings.json` を追跡対象にするため、否定行を1本足すだけでよい:
+
+```
+!/.claude/settings.json
+```
+
+**`/.claude/*` の行を書き換えないこと。** master 側の `pr-review.yml` の追跡が壊れる。
+`settings.local.json` は `/.claude/*` により既に無視されるので、明示的な行は不要。
 
 #### 2. `.claude/settings.json`（新規）
 
@@ -732,6 +935,9 @@ tests/deploy_smoke.sh
 - `Bash(./deploy-all.sh --dry-run:*)`
 - `Bash(shellcheck:*)` / `Bash(shfmt:*)`
 - `Bash(sh -n:*)` / `Bash(bash -n:*)`
+- master 由来の検証系: `Bash(bin/tests/lint.sh)` /
+  `Bash(python3 -m unittest discover -s bin/tests:*)`
+  （`.claude/pr-review.yml` に `lint_cmd` / `test_cmd` として定義されているもの）
 - 実際に何が頻出かは、この孫の作業中に権限プロンプトが出たものを見て判断してよい
 
 **入れてはいけないもの**:
@@ -757,7 +963,11 @@ tests/deploy_smoke.sh
 
 - `AGENTS.md` を先頭に置く
 - 孫2 が作った「プルリクエストの作法」「シェルスクリプトコーディング方針」「テスト方針」を
-  実際のファイルパスで列挙する。パスは `git ls-files docs/` で確認すること
+  実際のファイルパスで列挙する。パスは `git ls-files docs/` で確認すること。
+  **孫5 の統合で DOC-ID が変わっている可能性があるので、必ず実物を見ること**
+- master 由来の `reference/` の文書（ocw-meter イベントスキーマ等）を入れるかは判断してよい。
+  instructions は起動時に毎回読まれるため、**入れすぎるとコンテキストを圧迫する。**
+  「毎回読ませる価値があるか」で選ぶこと。判断理由を PR に書くこと
 - **ここに書くパスは実在すること。** 存在しないパスを書くと opencode が起動時に失敗する
 
 #### 4. `AGENTS.md`（更新）
@@ -784,21 +994,42 @@ Directory Structure に `.claude/` と `opencode.json` を追加。
 - `pre-commit run --all-files` が全緑（`check-json` を通ること）
 ````
 
-## 孫6用プロンプト:
+## 孫7用プロンプト:
 
 ````
 ## タスク: ★ 汎用部分を copier テンプレートとして抽出する
 
-**このスコープの本丸。** 孫1〜5 で dotfiles に作ったものと LDF の2例を突き合わせ、
+**このスコープの本丸。** 孫1〜6 で dotfiles に作ったものと LDF を突き合わせ、
 汎用部分を copier テンプレートに抽出する。
 
 計画書 docs/planning/DOC-2608020558_repo-baseline_計画.md を**全文**読んでから着手すること。
 特に以下は必読:
 - 「確定事項」と「検討して却下した案」
-- 「孫6 で撒かれる成果物の依存条件」— **撒き先の環境に何を要求してよいかは傘レベルで
+- 「孫7 で撒かれる成果物の依存条件」— **撒き先の環境に何を要求してよいかは傘レベルで
   決定済み。実装判断で変えないこと**
+- 「判断5」「判断7」— docs/ のフォルダ規約が4つ（adr/design/planning/reference）に
+  増えた経緯と、ADR を DOC-ID 名前空間に統合した理由
 
-参考実装（2例目として突き合わせる）: /home/manemone/projects/lora-dataset-forge/main/
+### この孫だけの追加事情: サンプルが3例になった
+
+当初の想定は「dotfiles と LDF の2例から抽出する」だったが、傘の進行中に
+**master に別傘（ocw-meter）の docs/ 体系が入り、孫5 でそれを統合した**。
+結果として、独立に設計された `docs/` 体系のサンプルが3つ揃っている:
+
+| 出自 | フォルダ規約 | 特徴 |
+|---|---|---|
+| LDF | `design/` `training/` `planning/` `archive/` | `training/` はドメイン固有 |
+| 本傘（孫2） | `design/` `planning/` `archive/` | LDF から `training/` を落とした形 |
+| ocw-meter 傘（master） | `adr/` `planning/` `reference/` | `adr/` と `reference/` を独自に導入 |
+
+**3例に共通するのは `planning/` だけである。** この事実を抽象化の根拠に使うこと。
+テンプレートが撒くべきフォルダと、撒き先ごとに選ばせるべきフォルダを、
+この3例から判断して copier の質問に落とすこと（例: `planning/` は常に撒き、
+`design/` `adr/` `reference/` `archive/` は質問で選ばせる、など）。
+**どう切ったかと、その根拠に3例のどこを使ったかを PR に明記すること。**
+
+参考実装（突き合わせる外部の1例）: /home/manemone/projects/lora-dataset-forge/main/
+残り2例はこのリポジトリ内にある（本傘の成果と、孫5 で統合した master の ocw-meter 由来分）。
 
 ### 想定構成（詳細は設計してよい）
 
@@ -812,8 +1043,8 @@ templates/repo-baseline/
 │   ├── .pre-commit-config.yaml.jinja
 │   ├── .github/workflows/ci.yml.jinja
 │   ├── docs/README.md.jinja
-│   ├── docs/design/README.md.jinja
-│   ├── docs/design/DOC-2608020715_プルリクエストの作法.md
+│   ├── docs/<規約フォルダ>/README.md.jinja
+│   ├── docs/<規約フォルダ>/DOC-DOCID_PLACEHOLDER_プルリクエストの作法.md
 │   └── tools/doc-id/          # 孫3 の成果をそのまま
 └── README.md                  # 使い方
 
@@ -827,7 +1058,7 @@ claude/skills/repo-baseline/SKILL.md   # 適用手順と判断ガイド（AI が
   **スキルを読んだ AI が埋める**
 - 狙いは **AI に毎回ゼロから考えさせるのをやめて、穴埋めに格下げする**こと
 
-### 汎用/固有の切り分け（出発点。孫1〜5 の実物と突き合わせて更新すること）
+### 汎用/固有の切り分け（出発点。孫1〜6 の実物と突き合わせて更新すること）
 
 | 資産 | 判定 | 備考 |
 |---|---|---|
@@ -835,7 +1066,8 @@ claude/skills/repo-baseline/SKILL.md   # 適用手順と判断ガイド（AI が
 | 無断 merge/pull/push --force/gh pr merge 禁止ルール | 完全汎用 | 文面そのまま |
 | PR の作法（説明文構成 + 🤖💬 等のプレフィクス） | 完全汎用 | 文面ほぼそのまま |
 | DOC-ID 運用（採番・索引 README・切れ参照検証） | 完全汎用 | ツール実体ごと撒く |
-| `docs/` フォルダ規約（design/planning/archive） | 完全汎用 | LDF の `training/` は固有 |
+| `docs/` フォルダ規約 | **要再検討** | 3例で規約が割れた（上の表参照）。共通は `planning/` のみ。何を常に撒き何を質問にするかを判断すること |
+| `adr/` `reference/` という語彙 | 汎用候補 | master 由来。ADR は業界共通語彙なので撒く価値が高い。ただし必須にはしない |
 | pre-commit の枠組み | 汎用 | 「lint → doc-id → test」の骨格が汎用。コマンドは固有 → 質問で受け取る |
 | `opencode.json` の instructions 配列 | 汎用 | AI 不問対応の一部 |
 | linter 抑制を AI が勝手に足すな、のルール | 汎用 | linter 名を質問で受け取り一般化する |
@@ -918,8 +1150,8 @@ claude/skills/repo-baseline/SKILL.md   # 適用手順と判断ガイド（AI が
    - LDF を実際に書き換える必要はない（このリポジトリのスコープ外）
 
 3. **dotfiles 自身との突き合わせ**
-   - dotfiles の現状（孫1〜5 の成果）とテンプレート展開結果の差分も同様に説明できること
-   - 差分が「dotfiles 固有」で説明できない場合、それは孫1〜5 側の記述が
+   - dotfiles の現状（孫1〜6 の成果）とテンプレート展開結果の差分も同様に説明できること
+   - 差分が「dotfiles 固有」で説明できない場合、それは孫1〜6 側の記述が
      汎用なのにテンプレートに入っていないということ。テンプレートに取り込む
 
 4. `pre-commit run --all-files` が dotfiles 側でも全緑
