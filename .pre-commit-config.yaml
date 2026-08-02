@@ -9,21 +9,35 @@ repos:
       - id: check-yaml
       - id: check-json
 
-  - repo: https://github.com/koalaman/shellcheck-precommit
-    rev: v0.11.0
+  - repo: https://github.com/shellcheck-py/shellcheck-py
+    rev: v0.11.0.1
     hooks:
       - id: shellcheck
         args: ["-x"]
         # zsh/.zshrc is zsh, not POSIX sh/bash/dash/ksh — shellcheck has no
         # zsh dialect support and only produces false positives on it
         # (SC2148 "shell is unknown" plus misparsed zsh-only syntax).
-        exclude: ^zsh/\.zshrc$
+        # exclude_types (not a path exclude) so newly added zsh files
+        # (.zshenv, .zprofile, ...) are covered automatically.
+        exclude_types: [zsh]
 
   - repo: https://github.com/scop/pre-commit-shfmt
     rev: v3.13.1-1
     hooks:
       - id: shfmt
-        args: ["-i", "2", "-ci"]
+        # -d (diff-and-fail), not the manifest's default --write: shfmt
+        # should report non-compliant formatting, not silently rewrite
+        # files during a hook run.
+        args: ["-i", "2", "-ci", "-d"]
+        # zsh/.zshrc: shfmt parses zsh files as bash/POSIX and actively
+        # corrupts zsh-only syntax — e.g. it rewrites
+        # $+functions[history-substring-search-up] to
+        # $+functions[history - substring - search - up], turning a
+        # parameter subscript into a broken arithmetic expression.
+        # Verified with `shfmt -i 2 -ci -d zsh/.zshrc`. Excluded for the
+        # same reason as the shellcheck hook above (unsupported dialect),
+        # here with the added risk of shfmt actively breaking the file.
+        exclude_types: [csh, tcsh, zsh]
 
   - repo: local
     hooks:
