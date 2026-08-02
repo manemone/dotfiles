@@ -89,8 +89,12 @@ module DocId
 
     def check_bare_refs(content, rel, broken)
       each_outside_fence content do |line, num|
-        # マークダウンリンクの target 部分は check_md_links が別途検証するため、
-        # ここでは除外する（DOC-<10桁>_<ファイル名> 形式のリンク先を二重報告しないため）。
+        # マークダウンリンク [text](target) は行ごと空白に潰す。target 側は
+        # check_md_links がパス解決で別途検証するため、ここで拾うと二重報告になる。
+        # text 側にしか DOC-ID を書かない参照（例: [DOC-xxx を参照](別のパス)）は
+        # 結果としてどちらのチェックにも掛からないが、このリポジトリでは text と
+        # target の両方に同じ ID を書くのが通例（該当12行、text のみは0行）のため、
+        # 二重報告を避ける側を優先している。
         scrubbed = line.gsub(/\[[^\]]*\]\([^)]*\)/) { |m| " " * m.length }
         scrubbed.scan(/\b(DOC-\d{6}\d{4}(?:-[a-z])?)(?=_|\b)/).each do |match|
           id = match[0]
