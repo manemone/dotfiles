@@ -1,0 +1,52 @@
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-merge-conflict
+      - id: check-added-large-files
+      - id: check-yaml
+      - id: check-json
+{% if use_doc_id %}
+  # フック配布元になるにはリポジトリルートに .pre-commit-hooks.yaml が必要なため、
+  # 独立リポジトリ化するまでは repo: local を使う。
+  - repo: local
+    hooks:
+      - id: doc-id-check
+        name: doc-id check (命名規則違反の検出)
+        entry: ./tools/doc-id/doc-id check
+        language: ruby
+        pass_filenames: false
+
+      - id: doc-id-verify
+        name: doc-id verify (切れ参照の検出)
+        entry: ./tools/doc-id/doc-id verify
+        language: ruby
+        pass_filenames: false
+
+      - id: doc-id-test
+        name: doc-id test (minitest)
+        entry: ruby tools/doc-id/test/doc_id_test.rb
+        language: ruby
+        pass_filenames: false
+        files: ^tools/doc-id/
+{% endif -%}
+{% if lint_cmd %}
+  - repo: local
+    hooks:
+      - id: lint
+        name: "lint: {{ lint_cmd }}"
+        entry: {{ lint_cmd }}
+        language: system
+        pass_filenames: false
+{% endif -%}
+{% if test_cmd %}
+  - repo: local
+    hooks:
+      - id: test
+        name: "test: {{ test_cmd }}"
+        entry: {{ test_cmd }}
+        language: system
+        pass_filenames: false
+{% endif -%}

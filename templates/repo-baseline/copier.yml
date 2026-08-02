@@ -1,0 +1,68 @@
+_min_copier_version: "9.0.0"
+_subdirectory: template
+
+# ここで生成されるのは骨組みだけです。AGENTS.md の「概要」「ディレクトリ構成」
+# 「コミット前の必須ステップ」のリポジトリ固有部分などは、撒いた後に
+# claude/skills/repo-baseline/SKILL.md の手順に従って AI が埋めます
+# （決定論的に配れるものは copier、判断が要るものは AI という分業）。
+
+default_branch:
+  type: str
+  help: 本番ブランチの名前（プルリクエストの作法のブランチ構成節に埋め込みます）
+  default: master
+
+lint_cmd:
+  type: str
+  help: >-
+    lint を実行するコマンド（例: rubocop, npm run lint）。
+    pre-commit の local フックと AGENTS.md に埋め込みます。空欄なら lint フックを生成しません
+  default: ""
+
+test_cmd:
+  type: str
+  help: >-
+    test を実行するコマンド（例: bundle exec rspec, npm test）。
+    pre-commit の local フックと AGENTS.md に埋め込みます。空欄なら test フックを生成しません。
+    実行に数十秒以上かかる場合は、pre-commit の local フックから外して CI 専用にすることを
+    検討してください（判断は撒いた後に行います）
+  default: ""
+
+use_doc_id:
+  type: bool
+  help: >-
+    DOC-ID 運用（docs/ の索引・命名規則・切れ参照検証と、それを動かす tools/doc-id、
+    pre-commit の doc-id-check/verify フック）一式を導入しますか
+  default: true
+
+use_ci:
+  type: bool
+  help: GitHub Actions の CI ワークフロー（pre-commit run --all-files）を生成しますか
+  default: true
+
+has_long_running_commands:
+  type: bool
+  help: >-
+    学習・大量データ処理など、完了までに人間の応答時間を超えてかかるコマンドを
+    このリポジトリで扱いますか（AGENTS.md にバックグラウンド実行 + ポーリングの規約節を追加します）
+  default: false
+
+use_adr:
+  type: bool
+  help: >-
+    adr/ フォルダ（実測・調査に基づいて確定した技術決定を記録する Architecture Decision Record。
+    一度確定したら原則変更しない）の説明を docs/README.md に含めますか
+  default: false
+  when: "{{ use_doc_id }}"
+
+use_reference:
+  type: bool
+  help: >-
+    reference/ フォルダ（運用中に繰り返し引く事実の記録。スキーマや手順書など、
+    書いた人の行動を変えない調べ物用の文書）の説明を docs/README.md に含めますか
+  default: false
+  when: "{{ use_doc_id }}"
+
+_exclude:
+  - "{% if not use_ci %}.github{% endif %}"
+  - "{% if not use_doc_id %}docs{% endif %}"
+  - "{% if not use_doc_id %}tools{% endif %}"
