@@ -9,9 +9,9 @@
 | 目的 | 最初に読むべきファイル | 備考 |
 |---|---|---|
 | このリポジトリのルールを知る | [../AGENTS.md](../AGENTS.md) | 最重要ルール・ディレクトリ構成・デプロイの仕組みなど |
-| PR を出す前に読む | [design/DOC-DOCID_PLACEHOLDER_プルリクエストの作法.md](design/DOC-DOCID_PLACEHOLDER_プルリクエストの作法.md) | 説明文の構成・コメントのプレフィクス・ブランチ構成 |
-| シェルを書く前に読む | [design/DOC-DOCID_PLACEHOLDER_シェルスクリプトコーディング方針.md](design/DOC-DOCID_PLACEHOLDER_シェルスクリプトコーディング方針.md) | POSIX sh / bash の使い分け、bashism の回避 |
-| デプロイを検証する | [design/DOC-DOCID_PLACEHOLDER_テスト方針.md](design/DOC-DOCID_PLACEHOLDER_テスト方針.md) | 実 HOME を汚さずに検証する4層の方法 |
+| PR を出す前に読む | [design/DOC-2608020715_プルリクエストの作法.md](design/DOC-2608020715_プルリクエストの作法.md) | 説明文の構成・コメントのプレフィクス・ブランチ構成 |
+| シェルを書く前に読む | [design/DOC-2608020715-a_シェルスクリプトコーディング方針.md](design/DOC-2608020715-a_シェルスクリプトコーディング方針.md) | POSIX sh / bash の使い分け、bashism の回避 |
+| デプロイを検証する | [design/DOC-2608020715-b_テスト方針.md](design/DOC-2608020715-b_テスト方針.md) | 実 HOME を汚さずに検証する4層の方法 |
 | 傘ブランチの計画を確認する | [planning/](planning/) 配下の各計画書 | 進行中・完了した傘ブランチの計画書 |
 
 ## フォルダ構成
@@ -39,16 +39,16 @@
 
 | DOC-ID | ファイル | 概要 |
 |---|---|---|
-| DOC-DOCID_PLACEHOLDER | [プルリクエストの作法.md](design/DOC-DOCID_PLACEHOLDER_プルリクエストの作法.md) | PR説明文の構成・コメントのプレフィクス・ブランチ構成の規約 |
-| DOC-DOCID_PLACEHOLDER | [シェルスクリプトコーディング方針.md](design/DOC-DOCID_PLACEHOLDER_シェルスクリプトコーディング方針.md) | POSIX sh / bash の使い分け・bashism・エラーハンドリングの規約 |
-| DOC-DOCID_PLACEHOLDER | [テスト方針.md](design/DOC-DOCID_PLACEHOLDER_テスト方針.md) | 実 HOME を汚さずにデプロイを検証する方法の定義 |
+| DOC-2608020715 | [プルリクエストの作法.md](design/DOC-2608020715_プルリクエストの作法.md) | PR説明文の構成・コメントのプレフィクス・ブランチ構成の規約 |
+| DOC-2608020715-a | [シェルスクリプトコーディング方針.md](design/DOC-2608020715-a_シェルスクリプトコーディング方針.md) | POSIX sh / bash の使い分け・bashism・エラーハンドリングの規約 |
+| DOC-2608020715-b | [テスト方針.md](design/DOC-2608020715-b_テスト方針.md) | 実 HOME を汚さずにデプロイを検証する方法の定義 |
 
 ### planning/ — ロードマップ・計画
 
 | DOC-ID | ファイル | 概要 |
 |---|---|---|
-| DOC-001 | [ai-housekeeping_計画.md](planning/DOC-001_ai-housekeeping_計画.md) | dotfiles リニューアル計画（旧連番形式。タイムスタンプ形式への移行待ち） |
-| DOC-002 | [ai-dotfiles-add-tools_計画.md](planning/DOC-002_ai-dotfiles-add-tools_計画.md) | 自作ツールの dotfiles への移行計画（旧連番形式。タイムスタンプ形式への移行待ち） |
+| DOC-2607281430 | [ai-housekeeping_計画.md](planning/DOC-2607281430_ai-housekeeping_計画.md) | dotfiles リニューアル計画 |
+| DOC-2607291400 | [ai-dotfiles-add-tools_計画.md](planning/DOC-2607291400_ai-dotfiles-add-tools_計画.md) | 自作ツールの dotfiles への移行計画 |
 | DOC-2608020558 | [repo-baseline_計画.md](planning/DOC-2608020558_repo-baseline_計画.md) | AI エージェント支援基盤の整備と汎用テンプレート化の傘ブランチ計画書 |
 
 ## 新規ファイル追加時のルール
@@ -56,12 +56,13 @@
 `docs/` 配下に新しい `.md` ファイルを追加する際は、以下の3ステップを必ず実行してください。
 いずれかを省略すると索引から漏れ、発見不能なファイルが生まれます。
 
-> **注意**: `tools/doc-id` は現時点で未実装です（別タスクで導入予定）。導入されるまでは
-> ステップ1を実行せず、ファイル名を `DOC-DOCID_PLACEHOLDER_<説明的ファイル名>.md` のまま追加してください。
-> `tools/doc-id` 導入時に既存のプレースホルダをまとめて採番します。
+> **注意**: `tools/doc-id` の導入前に作成したファイルは、暫定的にファイル名を
+> `DOC-DOCID_PLACEHOLDER_<説明的ファイル名>.md` としています。コミット前に必ず
+> `./tools/doc-id/doc-id assign` で実際の DOC-ID を採番してください。
 
-1. **DOC-ID の割り当て**: `tools/doc-id assign docs/path/to/new_file.md` を実行する
-   （未導入の間は前述のとおりプレースホルダのままでよい）
+1. **DOC-ID の割り当て**: `./tools/doc-id/doc-id assign docs/path/to/new_file.md` を実行する
+   （`DOC-DOCID_PLACEHOLDER_<説明的ファイル名>.md` という名前で作成しておけば、
+   このコマンドが実際のタイムスタンプへ置換し、リポジトリ内の参照も更新する）
 2. **全 DOC-ID 索引への追記**: このファイル（`docs/README.md`）の該当フォルダの表に、
    DOC-ID・ファイル名・1行説明を追記する
 3. **フォルダ README への追記**: ファイルを追加したフォルダに `README.md` が存在する場合は、
@@ -83,11 +84,11 @@ DOC-YYMMDDHHMM_<説明的ファイル名>.md
 
 ### 検証コマンド
 
-`tools/doc-id` の導入後は以下のコマンドで検証できます（現時点では未導入のため実行できません）。
+以下のコマンドで検証できます。
 
 ```bash
-tools/doc-id check    # 命名規則違反を検出
-tools/doc-id verify   # 全 DOC-ID 参照先の実在確認
+./tools/doc-id/doc-id check    # 命名規則違反を検出
+./tools/doc-id/doc-id verify   # 全 DOC-ID 参照先の実在確認
 ```
 
 > **注意**: `README.md` は `doc-id check` の対象外です。DOC-ID の割り当ては不要です。

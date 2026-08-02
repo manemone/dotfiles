@@ -352,7 +352,7 @@ Claude 固有の機能名・書式に閉じない。
 
 design/ フォルダの文書一覧（DOC-ID / ファイル / 概要 の表）。
 
-#### 3. `docs/design/DOC-DOCID_PLACEHOLDER_プルリクエストの作法.md`（新規）
+#### 3. `docs/design/DOC-2608020715_プルリクエストの作法.md`（新規）
 
 LDF 版をベースにするが、以下を dotfiles 用に書き換える:
 
@@ -370,7 +370,7 @@ LDF 版をベースにするが、以下を dotfiles 用に書き換える:
 - **傘ブランチの運用手順そのものは書かない。** umbrella-orchestrator スキルの領分であり、
   二重管理になる。「運用は umbrella-orchestrator スキルに従う」と一行参照するに留める
 
-#### 4. `docs/design/DOC-DOCID_PLACEHOLDER_シェルスクリプトコーディング方針.md`（新規）
+#### 4. `docs/design/DOC-2608020715-a_シェルスクリプトコーディング方針.md`（新規）
 
 LDF の「コーディング方針」の**構造**（機械的に検出できることは linter に委ね、
 ここでは linter が判定できない思想を書く）を借りて、シェルスクリプト版を書き下ろす。
@@ -402,7 +402,7 @@ Ruby の内容は一切持ち込まない。以下を含めること:
 - **linter 抑制を AI の判断で追加しない**（`# shellcheck disable=` / 設定の除外・閾値緩和）。
   違反が設計上不合理なら、抑制せず人間に報告する
 
-#### 5. `docs/design/DOC-DOCID_PLACEHOLDER_テスト方針.md`（新規）
+#### 5. `docs/design/DOC-2608020715-b_テスト方針.md`（新規）
 
 **この孫で最も設計判断が要る文書。** 「実 HOME を汚さずにデプロイを検証する方法」を設計すること。
 
@@ -813,7 +813,7 @@ templates/repo-baseline/
 │   ├── .github/workflows/ci.yml.jinja
 │   ├── docs/README.md.jinja
 │   ├── docs/design/README.md.jinja
-│   ├── docs/design/DOC-DOCID_PLACEHOLDER_プルリクエストの作法.md
+│   ├── docs/design/DOC-2608020715_プルリクエストの作法.md
 │   └── tools/doc-id/          # 孫3 の成果をそのまま
 └── README.md                  # 使い方
 

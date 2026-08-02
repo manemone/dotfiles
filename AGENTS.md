@@ -78,7 +78,7 @@
 ## コードの書き方
 
 シェルスクリプトを書く・直すときは
-[docs/design/DOC-DOCID_PLACEHOLDER_シェルスクリプトコーディング方針.md](docs/design/DOC-DOCID_PLACEHOLDER_シェルスクリプトコーディング方針.md)
+[docs/design/DOC-2608020715-a_シェルスクリプトコーディング方針.md](docs/design/DOC-2608020715-a_シェルスクリプトコーディング方針.md)
 を参照すること。POSIX sh / bash の使い分け、bashism の回避、エラーハンドリングの既存方針などを定めている。
 
 ## コミット前の必須ステップ
@@ -88,16 +88,17 @@
 - 変更したシェルスクリプトが `sh -n` / `bash -n` で構文エラーにならないこと
 - `deploy-all.sh --dry-run`（個別スクリプトは `DRY_RUN=1 sh <tool>/deploy.sh`）で
   意図した動作になることを確認すること
-- `docs/` 配下に新規ファイルを追加する場合は
-  `DOC-DOCID_PLACEHOLDER_<説明的ファイル名>.md` という名前で作る。
-  `tools/doc-id assign` での採番は、そのツールが導入され次第行う（現時点では未実装。詳細は `docs/README.md` を参照）
+- `docs/` 配下に新規ファイルを追加する場合は、まず `DOC-DOCID_PLACEHOLDER_<説明的ファイル名>.md`
+  という名前で作り、`./tools/doc-id/doc-id assign docs/path/to/new_file.md` で DOC-ID を採番する
+- `./tools/doc-id/doc-id check` と `./tools/doc-id/doc-id verify` が両方 0 で終わること
+  （`ruby tools/doc-id/test/doc_id_test.rb` でツール自体のテストも確認できる）
 
-※ 孫4 で pre-commit が導入された時点でこの節は実際のコマンドに更新される。
+※ 孫4 で pre-commit が導入された時点でこの節は自動化されたフックの説明に更新される。
 
 ## PR 作成時の注意
 
 PR を作る前に
-[docs/design/DOC-DOCID_PLACEHOLDER_プルリクエストの作法.md](docs/design/DOC-DOCID_PLACEHOLDER_プルリクエストの作法.md)
+[docs/design/DOC-2608020715_プルリクエストの作法.md](docs/design/DOC-2608020715_プルリクエストの作法.md)
 を読むこと。
 
 ## 実装時の注意
@@ -113,7 +114,7 @@ PR を作る前に
   相対パスへのリンクを併記してもよいが、DOC-ID の明示は省略しない。DOC-ID は不変なので、
   ファイルが移動・リネームされても文書を一意に特定できる。
   - **移行措置**: 対象の文書がまだ `DOC-DOCID_PLACEHOLDER` のまま採番されていない間は、
-    DOC-ID を書きようがないため説明的名称のみで言及してよい。`tools/doc-id assign` で採番する際は、
+    DOC-ID を書きようがないため説明的名称のみで言及してよい。`./tools/doc-id/doc-id assign` で採番する際は、
     ファイル名だけでなくリポジトリ内の地の文の言及（`git grep` で説明的ファイル名を検索して見つかる
     箇所）にも DOC-ID を追記すること。採番ツールによるプレースホルダ文字列の自動置換は
     ファイル名・リンク先パスのみが対象で、地の文中の言及までは拾わない。
