@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -uo pipefail
 
-# NOTE on exit-code policy (docs/planning/DOC-003_..._計画.md §10.1):
+# NOTE on exit-code policy (docs/planning/DOC-2608021229-a_..._計画.md §10.1):
 #   `event` / `bind-pr` must ALWAYS exit 0 (fail-open: observation must
 #   never break the production flow that calls it).
 #   `validate` / `report` must fail loud (non-zero) on unexpected errors,
@@ -12,7 +12,10 @@ set -uo pipefail
 # missing or the embedded script crashes outright.
 
 warn() { echo "warning: $*" >&2; }
-die() { echo "error: $*" >&2; exit 1; }
+die() {
+  echo "error: $*" >&2
+  exit 1
+}
 
 usage() {
   cat <<'USAGE'
@@ -91,7 +94,7 @@ subcommands:
     Grouped breakdowns (孫5), each combinable with `--pr <n>` to scope
     to one PR: `--phase` (token/cost/duration per pr-review-loop phase,
     best-effort time-correlated with usage.message — see
-    docs/reference/DOC-005_...), `--model` (token/cost per
+    docs/reference/DOC-2608021229-c_...), `--model` (token/cost per
     provider+model), `--role` (event count + token/cost per
     commander/implementer/reviewer/unknown), `--window` (quota.sample
     grouped by 5-hour window_id, with directly-linked and time-overlap-
@@ -114,7 +117,7 @@ subcommands:
     resolved automatically from `git remote get-url origin` in the
     current working directory. --repo overrides that (required when
     running from outside any git repo, e.g. after the PR's worktree has
-    already been `ocw rm`'d — see docs/reference/DOC-004_...§2.1).
+    already been `ocw rm`'d — see docs/reference/DOC-2608021229-b_...§2.1).
     Must be exactly one `/` with non-empty owner and name on both
     sides; a malformed value is rejected rather than silently matching
     zero events. Passing --repo without --pr or standalone --month is
@@ -138,11 +141,11 @@ subcommands:
     command (claude/settings.json: {"statusLine": {"type": "command",
     "command": "ocw-meter snapshot-quota"}}). Reads one statusLine JSON
     object from stdin, appends one `quota.sample` event (rate_limits /
-    context usage / session cost — plan §8.5, ADR-001 §2.1/§8), and
+    context usage / session cost — plan §8.5, DOC-2608021229 §2.1/§8), and
     ALWAYS prints a short display string to stdout (e.g. "5h:37% 7d:12%
     ctx:24%") and exits 0 — no matter what: empty stdin, malformed
     JSON, a missing `rate_limits` (every DeepSeek/claude-ds session —
-    ADR-001 §2.1), python3 itself being unavailable, or an unexpected
+    DOC-2608021229 §2.1), python3 itself being unavailable, or an unexpected
     exception. A broken statusLine command would blank out or corrupt
     every Claude Code session's status bar, so this is fail-open even
     more strictly than `event`/`bind-pr`: those are silent on success
@@ -152,14 +155,14 @@ subcommands:
     own internal try/except).
 
     Self-throttled: a real statusLine command is invoked on every
-    redraw (ADR-001 §2.1 measured up to 54 calls/hour in one session),
+    redraw (DOC-2608021229 §2.1 measured up to 54 calls/hour in one session),
     so a `quota.sample` event is only actually recorded once per
     OCW_METER_QUOTA_INTERVAL seconds (default 60) — tracked in
     state/quota-last-sample.json. Calls inside that window still print
     a fresh display string (cheap, pure JSON parsing) but skip the
     storage write entirely (no lock, no mkdir), so throttled calls stay
     fast. `rate_limits.five_hour.resets_at` is used as `window_id`
-    ONLY when it is still in the future relative to "now" — ADR-001
+    ONLY when it is still in the future relative to "now" — DOC-2608021229
     §2.1 observed stale (already-past) `resets_at` values in 3/8
     samples, and plan §8.5 forbids treating a stale value as a new
     window's identifier. A `used_percentage` that goes DOWN between two
@@ -239,7 +242,8 @@ export OCW_METER_RAW="${OCW_METER_RAW:-0}"
 # Lets `ingest` find bin/prices/*.json relative to this file regardless
 # of the caller's cwd, without hardcoding a path (OCW_METER_PRICE_DIR
 # still overrides this for tests/customization).
-export OCW_METER_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+OCW_METER_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+export OCW_METER_SCRIPT_DIR
 
 cmd="${1:-}"
 if [ -z "$cmd" ]; then
@@ -310,7 +314,8 @@ fi
 # FILE to read its program from instead of stdin, so fd 0 is never
 # touched here and passes through to the embedded script exactly as
 # the caller of `ocw-meter snapshot-quota` provided it.
-python3 <(cat <<'PY'
+python3 <(
+  cat <<'PY'
 # PERFORMANCE NOTE (why `ingest`, below, has its own write path instead
 # of calling `record`/`write_event` once per message): this CLI resolves
 # git metadata (repo slug, worktree root, branch, HEAD SHA, plus the
@@ -319,7 +324,7 @@ python3 <(cat <<'PY'
 # single `event` invocation. Measured at ~75ms/event in this repo. That
 # is fine for the phase-boundary event volumes `ocw` / `pr-review-loop`
 # produce (tens of events per run), but a real transcript has tens of
-# thousands of messages (ADR-001 §2.2 measured 39,888 distinct
+# thousands of messages (DOC-2608021229 §2.2 measured 39,888 distinct
 # `message.id`s in one month) — looping this CLI once per message would
 # take on the order of an hour and re-read an ever-growing seen-keys
 # file on every iteration (effectively O(n^2)). `ingest` does NOT shell
@@ -329,7 +334,7 @@ python3 <(cat <<'PY'
 #
 # On top of that: a duplicate idempotency_key triggers last-write-wins
 # (round-2), which rewrites the *entire* day's events file via
-# `_replace_line_by_idempotency_key`. ADR-001 §2.2 measured 59.4% of
+# `_replace_line_by_idempotency_key`. DOC-2608021229 §2.2 measured 59.4% of
 # real assistant lines as message.id duplicates — meaning a naive
 # per-message ingest loop would trigger this full-file rewrite for the
 # majority of its calls, each one O(file size). This is the single
@@ -391,9 +396,9 @@ REQUIRED_FIELDS = ("event_id", "event_type", "idempotency_key", "schema_version"
 #     seven_day_used_pct, seven_day_resets_at, context_used_pct
 #   §8.5 string/no-coercion: window_id, plan_source, raw_ref
 #   session_cost_usd: NOT in plan §8.5's original table — added per
-#     ADR-001 §8 (孫4 instruction 5): statusLine's own `cost.
+#     DOC-2608021229 §8 (孫4 instruction 5): statusLine's own `cost.
 #     total_cost_usd` (self-reported by Claude Code, 66/66 samples in
-#     ADR-001 §2.1) is recorded alongside the rate_limits fields, kept
+#     DOC-2608021229 §2.1) is recorded alongside the rate_limits fields, kept
 #     in its own column, never summed with ocw-meter's own
 #     cost_estimate_usd (different data source, different trust level).
 #   other numeric payload fields (review.round/phase.end/block.end):
@@ -431,7 +436,7 @@ SOURCE_ENUM = ("ocw", "pr-review-loop", "transcript", "statusline", "unknown")
 # phase.end, and block.* is explicitly "best-effort" (plan §8.2).
 # `quota.sample` keeps only `plan_source`: everything else about a
 # quota sample is legitimately absent (DeepSeek sessions have no
-# rate_limits at all — ADR-001 §2.1 — and even Anthropic sessions saw
+# rate_limits at all — DOC-2608021229 §2.1 — and even Anthropic sessions saw
 # `context_used_pct` null in 7/66 samples) and T10 requires recording
 # that absence as null, not treating it as corruption.
 EVENT_PAYLOAD_REQUIRED = {
@@ -875,7 +880,7 @@ def normalize_value(key, value, failures):
 
     An empty string becomes JSON null: this is how a caller (a future
     `ingest`/`snapshot-quota`) records "I checked and this is genuinely
-    unavailable" (plan §8.5 / ADR-001 §2.1), as distinct from never
+    unavailable" (plan §8.5 / DOC-2608021229 §2.1), as distinct from never
     mentioning the field at all — CLI flags can't carry a real `null`,
     so "" is the closest a string-only interface gets."""
     if value == "":
@@ -1567,7 +1572,7 @@ def events_for_pr(valid_events, pr_number, repo):
     a `repo` filter there would just be redundant, not more correct.
     An event with `repo: null` (e.g. `ingest` couldn't resolve a repo
     slug for that message's `cwd` — the same class of gap as the
-    `run_id` resolution issue documented in DOC-005 §2.3) is
+    `run_id` resolution issue documented in DOC-2608021229-c §2.3) is
     EXCLUDED from the direct match rather than assumed to belong to the
     caller's own repo — guessing it in would reopen exactly the
     cross-repo contamination this fix closes."""
@@ -1742,7 +1747,7 @@ def build_phase_windows(scoped_events):
     anywhere in this repo — `implement` happens before pr-review-loop
     is invoked at all, and `verdict` is only ever captured as a
     `review.round` event, not a phase boundary (see
-    docs/reference/DOC-005_...). Those two names simply never appear
+    docs/reference/DOC-2608021229-c_...). Those two names simply never appear
     in the returned windows; that is expected, not a bug here. A
     `phase.end` with no matching `phase.start` (or vice versa, at the
     end of the scanned range) is dropped rather than guessed at."""
@@ -1824,7 +1829,7 @@ def report_by_window(valid_events, repo=None):
     """孫5 §1 --window: `quota.sample` events grouped by `window_id`
     (plan §8.5 — the 5-hour reset boundary's identifier). `pr_number`
     on a quota.sample comes straight from the caller-supplied field
-    when present, but ADR-001 §2.1 observed statusLine's own `pr` key
+    when present, but DOC-2608021229 §2.1 observed statusLine's own `pr` key
     populated in 0/66 real samples — so `prs_overlapping` ALSO includes
     PRs found via the same best-effort time-range overlap
     `pr_five_hour_window_completion` uses, kept in a separate key so a
@@ -2011,7 +2016,7 @@ def _report_reconcile(paths, month, provider_totals, as_json):
     """`ocw-meter report --reconcile` (孫3 §3): model別のtranscript由来
     トークン合計・推定費用を出し、`--provider-total model=tokens` で
     人間が渡した管理画面値との coverage 比率を計算する。plan §5.10 /
-    ADR-001 §2.2 の既知ギャップを毎回 `known_gaps` として併記する
+    DOC-2608021229 §2.2 の既知ギャップを毎回 `known_gaps` として併記する
     （「全部取れている」と読める出力を出さない）。"""
     totals_by_model = {}
     malformed = 0
@@ -2073,7 +2078,7 @@ def _report_reconcile(paths, month, provider_totals, as_json):
 
     # PR #27 review round 1 finding 5: a model with a --provider-total
     # but ZERO transcript messages (the exact "0% covered" case plan
-    # §5.10 / ADR-001 §2.2 documents for deepseek-v4-flash) was silently
+    # §5.10 / DOC-2608021229 §2.2 documents for deepseek-v4-flash) was silently
     # absent from the whole report instead of showing as its own
     # coverage_ratio: 0.0 row — the one case this --reconcile flag most
     # needs to surface was the one case it couldn't.
@@ -2109,7 +2114,7 @@ def _report_reconcile(paths, month, provider_totals, as_json):
         "malformed_unvalidated_lines": malformed,
         "known_gaps": (
             "deepseek-v4-flash はtranscriptに一切記録されない（実測カバー率0%、計画書5.10）。"
-            "deepseek-v4-pro のtranscriptカバー率は実測で約89%（ADR-001 §2.2）。"
+            "deepseek-v4-pro のtranscriptカバー率は実測で約89%（DOC-2608021229 §2.2）。"
             "coverage_ratio は --provider-total を渡したmodelにのみ算出される。claude-* は "
             "定額契約のため cost_estimate_usd は常にnull（cost_basis: subscription）。"
             "月の区切りはUTC固定。provider管理画面の集計タイムゾーン（例: DeepSeek管理画面は"
@@ -2169,14 +2174,14 @@ def pr_five_hour_window_completion(pr_events, all_events):
     """孫4プロンプト §2 / plan §8.5: "report側に「PRが同一5時間窓で完走
     できたか」を判定するロジックを入れる(PRの最初と最後のイベント時刻が
     同一window_idに収まるか)". `quota.sample` events are only rarely
-    tagged with the PR's own pr_number themselves (ADR-001 §2.1: the
+    tagged with the PR's own pr_number themselves (DOC-2608021229 §2.1: the
     statusLine JSON's own `pr` key was not observed in ANY of 66 real
     samples), so this looks at ALL stored quota.sample events whose
     timestamp falls within the PR's own event time range instead of
     relying on quota.sample's pr_number being set.
 
     A sample whose window_id is null (rate_limits absent entirely — a
-    DeepSeek/claude-ds session per ADR-001 §2.1 — or stale/anomalous,
+    DeepSeek/claude-ds session per DOC-2608021229 §2.1 — or stale/anomalous,
     see record_quota_sample) is excluded: plan §8.5 says a stale
     resets_at must not "start a new window", so it must not count as
     evidence for or against same-window completion either.
@@ -2567,7 +2572,7 @@ def _report_month_standalone(paths, valid_events, malformed, month, repo, as_jso
 # ONCE per invocation, then writes every usage.message event for the
 # whole batch through `bulk_write_events`, which does at most one
 # read+rewrite per calendar-day events file instead of one per
-# duplicate message.id (ADR-001 §2.2 measured 59.4% of real assistant
+# duplicate message.id (DOC-2608021229 §2.2 measured 59.4% of real assistant
 # lines as message.id duplicates).
 
 def claude_projects_dir():
@@ -3226,7 +3231,7 @@ def bulk_write_events(paths, events):
     atomic rewrite per calendar-day events file for this whole batch,
     instead of routing each event through `write_event` (which would
     trigger `_replace_line_by_idempotency_key`'s full-file rewrite once
-    per duplicate — ADR-001 §2.2 measured 59.4% of real assistant lines
+    per duplicate — DOC-2608021229 §2.2 measured 59.4% of real assistant lines
     as duplicates). Holds the storage lock for the whole batch, matching
     plan §10.3's concurrent-writer requirement. Returns {"written": n,
     "replaced": n}."""
@@ -3507,7 +3512,7 @@ def cmd_ingest(args):
 # ── subcommand: snapshot-quota (statusLine → quota.sample, 孫4) ────────
 #
 # Invoked BY Claude Code itself as the `statusLine` command, once per
-# redraw (ADR-001 §2.1 measured up to 54 calls/hour in a single
+# redraw (DOC-2608021229 §2.1 measured up to 54 calls/hour in a single
 # session). This is the one subcommand whose stdout IS the product —
 # every other subcommand's stdout is either silent-on-success (event/
 # bind-pr) or a report a human reads on demand. A crash here doesn't
@@ -3630,7 +3635,7 @@ def read_stdin_statusline_json(max_bytes=2_000_000, timeout_seconds=STDIN_READ_T
 
 def _get(obj, *keys):
     """Nested dict lookup that returns None the moment anything along
-    the path isn't a dict — plan §8.5 / ADR-001 §2.1's "未知キーが増え
+    the path isn't a dict — plan §8.5 / DOC-2608021229 §2.1's "未知キーが増え
     ても落ちない。既知キーが消えても落ちない" applies to every level of
     the statusLine JSON, not just the top one (T11)."""
     cur = obj
@@ -3655,10 +3660,10 @@ def _as_int(value):
 
 
 def resolve_context_used_pct(obj):
-    """ADR-001 §2.1 / 孫4プロンプト §1: `context_window.used_percentage`
+    """DOC-2608021229 §2.1 / 孫4プロンプト §1: `context_window.used_percentage`
     was non-null in 59/66 real samples but null in the rest — null-safe
     by design, not an error case. Falls back to
-    total_input_tokens/context_window_size (the two fields ADR-001
+    total_input_tokens/context_window_size (the two fields DOC-2608021229
     found "常に取得可能") when the direct percentage is unavailable."""
     used = _as_number(_get(obj, "context_window", "used_percentage"))
     if used is not None:
@@ -3676,7 +3681,7 @@ def _fmt_pct(value):
 
 
 def format_quota_display(obj):
-    """Builds the minimal statusLine text (ADR-001 §8 instruction 7:
+    """Builds the minimal statusLine text (DOC-2608021229 §8 instruction 7:
     "5h:37% 7d:12% ctx:24%" 程度に。`context_window.used_percentage` が
     nullの場合は `ctx` を非表示にする) — omits whatever wasn't obtainable
     rather than showing a placeholder. Never raises: `_get`/`_as_number`
@@ -3686,7 +3691,7 @@ def format_quota_display(obj):
     failure anyway.
 
     Deliberately uses the RAW `context_window.used_percentage` here, not
-    `resolve_context_used_pct()`'s fallback-computed value: ADR-001 §8-3
+    `resolve_context_used_pct()`'s fallback-computed value: DOC-2608021229 §8-3
     (the RECORDED `context_used_pct` field) and §8-7 (the DISPLAYED
     string) are two separate instructions with two different answers for
     the null case — record the fallback estimate, but hide `ctx` from
@@ -3886,14 +3891,14 @@ def record_quota_sample(obj):
     # data for that whole window. The account-wide rate_limits fields
     # stay in a SEPARATE top-level slot of the same state file (see
     # save_quota_state below) — those are correctly shared across every
-    # session already (ADR-001: `rate_limits` reflects the whole
+    # session already (DOC-2608021229: `rate_limits` reflects the whole
     # Claude.ai account, not a single session), so per-session
     # throttling only applies to "have I sampled THIS session recently",
     # not to the window/anomaly bookkeeping.
     session_id_hint = obj.get("session_id")
     session_key = session_id_hint if isinstance(session_id_hint, str) and session_id_hint else QUOTA_SESSION_FALLBACK_KEY
 
-    # Cheap, I/O-light throttle check FIRST (plan §1 / ADR-001 §8-2: up
+    # Cheap, I/O-light throttle check FIRST (plan §1 / DOC-2608021229 §8-2: up
     # to 54 calls/hour measured, so the common case must stay light —
     # no git subprocess calls, no mkdir/chmod, no lock). Paths(root) is
     # pure path-string construction, not I/O; reading a small state file
@@ -3977,7 +3982,7 @@ def record_quota_sample(obj):
     seven_day_used_pct = _as_number(_get(seven_day, "used_percentage")) if isinstance(seven_day, dict) else None
     seven_day_resets_at = _as_int(_get(seven_day, "resets_at")) if isinstance(seven_day, dict) else None
 
-    # ADR-001 §2.1 observed stale (already-past) resets_at in 3/8 real
+    # DOC-2608021229 §2.1 observed stale (already-past) resets_at in 3/8 real
     # samples, and an out-of-range value must be tolerated the same way
     # (round-1 review finding 1) — see resolve_five_hour_window.
     stale, window_id = resolve_five_hour_window(five_hour_resets_at, now)
@@ -3995,7 +4000,7 @@ def record_quota_sample(obj):
     )
 
     if not has_rate_limits:
-        # ADR-001 §2.1: every DeepSeek/claude-ds session (58/58 samples).
+        # DOC-2608021229 §2.1: every DeepSeek/claude-ds session (58/58 samples).
         # Not a failure — a documented, expected shape.
         completeness = "unknown"
     elif five_hour_used_pct is None and five_hour_resets_at is None and seven_day_used_pct is None and seven_day_resets_at is None:
@@ -4014,7 +4019,7 @@ def record_quota_sample(obj):
             )
 
     context_used_pct = resolve_context_used_pct(obj)
-    # ADR-001 §8 (孫4 instruction 5): self-reported by Claude Code itself,
+    # DOC-2608021229 §8 (孫4 instruction 5): self-reported by Claude Code itself,
     # present in 66/66 samples across both Anthropic and DeepSeek
     # sessions — kept as its OWN column, never combined with ocw-meter's
     # own cost_estimate_usd (different data source, different trust
@@ -4090,7 +4095,7 @@ def record_quota_sample(obj):
         #
         # round-2 review finding 1: a sample with NO window info of its
         # own (this sample's `window_id` is None — either a rate_limits-
-        # less DeepSeek/claude-ds session, ADR-001 §2.1's 58/58, or a
+        # less DeepSeek/claude-ds session, DOC-2608021229 §2.1's 58/58, or a
         # stale/out-of-range resets_at) must NOT blank out the global
         # window state a PREVIOUS Anthropic sample left behind. It used
         # to overwrite unconditionally, so a single claude-ds sample

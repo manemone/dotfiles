@@ -8,7 +8,7 @@ Claude Code の設定ファイル群。`~/.claude/` にデプロイして使う�
 |---|---|---|
 | `CLAUDE.md` | Claude Code の個人指示（プロジェクト横断で適用されるグローバル指示） | symlink |
 | `settings.json` | Claude Code の汎用設定（モデル、権限ポリシー、テーマ等）。マシン固有設定は**含まない** | 生成（マージ） |
-| `skills/` | Claude Code スキル（`pr-review-loop`, `umbrella-orchestrator`） | スキルごとに個別 symlink |
+| `skills/` | Claude Code スキル（`pr-review-loop`, `umbrella-orchestrator`, `repo-baseline`） | スキルごとに個別 symlink |
 | `settings.machine.json.example` | マシン固有設定のテンプレート。コピーして使う | （手動コピー） |
 
 ## 1. Requirements
@@ -82,8 +82,9 @@ Claude Code のカスタムスキル。`claude/skills/` 配下の各スキルデ
 |---|---|
 | `pr-review-loop` | PRレビューサイクルを自動化。Herdr の reviewer エージェントと連携し、レビュー→修正→再レビューを承認まで繰り返す |
 | `umbrella-orchestrator` | 傘ブランチの孫ライフサイクル管理。計画書の読み取り、孫ブランチの spawn、マージ検出と検証、計画書更新を自動化 |
+| `repo-baseline` | `templates/repo-baseline/` copier テンプレートを既存リポジトリへ適用する手順と判断ガイド |
 
-`pr-review-loop` は各Phaseの境界で `ocw-meter event`（工程計測。`docs/planning/DOC-003_ai-llm-cost-observability_計画.md` 参照）を呼び出す。
+`pr-review-loop` は各Phaseの境界で `ocw-meter event`（工程計測。`docs/planning/DOC-2608021229-a_ai-llm-cost-observability_計画.md` 参照）を呼び出す。
 すべて `command -v ocw-meter >/dev/null && ... || true` 形式の fail-open 呼び出しで、
 レビュー規約・判定基準・停止条件には一切変更が無く、`ocw-meter` が存在しない環境でもスキルは完全に動作する。
 
@@ -132,8 +133,8 @@ mkdir -p claude/skills/new-skill
 
 `ocw-meter snapshot-quota`（`bin/README.md` §3.3 参照）を `statusLine` コマンドとして配線し、
 Claude Code のステータスバーに 5時間枠 / 週間枠 / コンテキスト使用率を表示する。
-詳細設計は `docs/planning/DOC-003_ai-llm-cost-observability_計画.md` 第5.6章・第8.5章、
-`docs/adr/ADR-001_llm-cost-observability-collection-method.md` §2.1・§8 を参照。
+詳細設計は `docs/planning/DOC-2608021229-a_ai-llm-cost-observability_計画.md` 第5.6章・第8.5章、
+`docs/adr/DOC-2608021229_llm-cost-observability-collection-method.md` §2.1・§8 を参照。
 
 **表示内容**（例）:
 
@@ -156,7 +157,7 @@ stdout に返し exit 0 する（statusLine が壊れて画面が崩れる事態
 サンプリングは既定60秒に1回（`OCW_METER_QUOTA_INTERVAL` で変更可）に自制されており、
 statusLine が描画のたびに呼ばれても書き込みが肥大しない。
 
-**取得できない項目（実測に基づく既知の制約。詳細は ADR-001 §2.1 参照）:**
+**取得できない項目（実測に基づく既知の制約。詳細は DOC-2608021229 §2.1 参照）:**
 
 - `claude-ds`（DeepSeek）セッションでは `rate_limits` が原理的に来ない
   （Claude.ai サブスクリプションの利用枠であり、DeepSeek API 経由のセッションには適用されない）。
@@ -164,7 +165,7 @@ statusLine が描画のたびに呼ばれても書き込みが肥大しない。
 - 5時間枠に到達して待機した際の挙動は**未観測**（その状況が発生した際のログをまだ収集できていない）。
   `blocked` の検出は best-effort であり、`ocw-meter` は明示的な待機時間を計測しない
 - `rate_limits.five_hour.resets_at` が過去時刻（stale値）を返すケースが実測されている
-  （ADR-001 §2.1: 8サンプル中3件）。stale と判定された場合は `window_id` を `null` にして
+  （DOC-2608021229 §2.1: 8サンプル中3件）。stale と判定された場合は `window_id` を `null` にして
   `completeness: "partial"` で記録する（推測で新しい窓を開始しない）
 
 **⚠️ 重大な注意 — `~/.claude/settings.json` の `hooks` 消失リスク（計画書17章 R3）:**
@@ -172,7 +173,7 @@ statusLine が描画のたびに呼ばれても書き込みが肥大しない。
 `~/.claude/settings.json` は **Herdr（`SessionStart` hook）と `claude/deploy.sh` の両方が書き込む
 競合地帯**である。`claude/deploy.sh` は `claude/settings.machine.json` が存在しない、または
 存在しても `hooks` を含まない場合、Herdr が実行時に書き足した `hooks` ごと上書きしてしまう
-（実機検証中に実際にこの事故が発生している — 詳細は ADR-001 Appendix A 参照）。
+（実機検証中に実際にこの事故が発生している — 詳細は DOC-2608021229 Appendix A 参照）。
 
 **`statusLine` を配線した本設定を deploy する前に、必ず以下を確認・実施すること:**
 

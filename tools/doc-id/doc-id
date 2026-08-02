@@ -1,0 +1,57 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# doc-id — DOC-YYMMDDHHMM 安定識別子の検証・管理ツール
+#
+# サブコマンド:
+#   check    - 命名規則違反を検出（終了コード: 違反あり=1）
+#   verify   - 全 DOC-XXX 参照の実在確認
+#   assign   - 新規ファイルに DOC-ID を割り当て
+#
+# DOC-ID 命名規則:
+#   フォーマット: DOC-YYMMDDHHMM[_<説明的ファイル名>].md
+#   例: DOC-YYMMDDHHMM_設計方針.md
+#   衝突時: DOC-YYMMDDHHMM-a, DOC-YYMMDDHHMM-b
+
+require_relative "lib/doc_id/tool"
+
+def build_tool
+  DocId::Tool.new
+rescue RuntimeError
+  puts "エラー: git リポジトリ内で実行してください"
+  exit 1
+end
+
+case ARGV[0]
+when "check"
+  exit build_tool.check
+when "verify"
+  exit build_tool.verify
+when "assign"
+  if ARGV[1]
+    exit build_tool.assign(ARGV[1])
+  else
+    puts "使い方: tools/doc-id/doc-id assign <file>"
+    exit 1
+  end
+else
+  puts <<~USAGE
+    doc-id — DOC-YYMMDDHHMM 安定識別子の検証・管理ツール
+
+    使い方:
+      tools/doc-id/doc-id check           命名規則違反を検出
+      tools/doc-id/doc-id verify          切れ参照を検出
+      tools/doc-id/doc-id assign <file>   新規ファイルにDOC-IDを割り当て
+
+    命名規則:
+      DOC-YYMMDDHHMM_<説明的ファイル名>.md
+      例: DOC-YYMMDDHHMM_設計方針.md
+
+    プレースホルダ:
+      未コミットの計画書は DOC-DOCID_PLACEHOLDER_計画.md のように
+      予約リテラル DOCID_PLACEHOLDER で作成できます。
+      assign 実行時に実際のタイムスタンプへ自動置換され、
+      リポジトリ全体の DOC-ID 参照も更新されます。
+  USAGE
+  exit 0
+end

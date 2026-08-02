@@ -133,12 +133,12 @@ API キーは `DEEPSEEK_API_KEY_FILE` 環境変数で指定可能（デフォル
 ### 3.3 ocw-meter — LLM費用・Claude利用枠の観測基盤
 
 `ocw` / `claude-ds` / `pr-review-loop` の**本番経路には一切割り込まない**、事後読み取り専用の観測ツール。
-設計の経緯・意思決定の背景は `docs/planning/DOC-003_ai-llm-cost-observability_計画.md`（計画書。
+設計の経緯・意思決定の背景は `docs/planning/DOC-2608021229-a_ai-llm-cost-observability_計画.md`（計画書。
 傘の完了とともに歴史的記録になる）を参照。**イベントスキーマ（全フィールド・全event_type・
 idempotency_keyの生成規則・費用計算式・schema_versionの変更ルール）の一次情報源は計画書ではなく
-[`docs/reference/DOC-005_ocw-meterイベントスキーマ.md`](../docs/reference/DOC-005_ocw-meterイベントスキーマ.md)。**
+[`docs/reference/DOC-2608021229-c_ocw-meterイベントスキーマ.md`](../docs/reference/DOC-2608021229-c_ocw-meterイベントスキーマ.md)。**
 運用手順（ベースライン計測）は
-[`docs/reference/DOC-004_LLM費用観測ベースライン計測手順.md`](../docs/reference/DOC-004_LLM費用観測ベースライン計測手順.md)を参照。
+[`docs/reference/DOC-2608021229-b_LLM費用観測ベースライン計測手順.md`](../docs/reference/DOC-2608021229-b_LLM費用観測ベースライン計測手順.md)を参照。
 
 **観測は fail-open。`ocw-meter` が無くても、PATH から消えても、書き込みに失敗しても、
 本スキル・`ocw` は完全に動作し続ける。** 呼び出し側は必ず次の形で呼ぶ:
@@ -207,16 +207,16 @@ PR番号はリポジトリ**内**でしか一意でない。`--pr`とstandalone�
 （黙って別リポジトリの同番号PRにスコープする、または全イベントを取りこぼす、のどちらの誤動作も避けるため）。
 そのようなときは`--repo <owner>/<name>`で明示指定する（`<owner>/<name>`の形式、両側非空でなければ拒否される）。
 
-典型的にこれが必要になるのは、**PRのworktreeを`ocw rm`した後**（`docs/reference/DOC-004_...`§2.1の
+典型的にこれが必要になるのは、**PRのworktreeを`ocw rm`した後**（`docs/reference/DOC-2608021229-b_...`§2.1の
 手順どおりworktree削除前にingestしていれば通常は発生しない）に、別の場所から`report --pr <N>`を
 取り直す場合。`--repo`は`--pr`または（`--reconcile`を伴わない）standaloneの`--month`と組み合わせない限り
 一切参照されないフィールドのため、それ以外の組み合わせ（`--repo`単体、`--model`と`--repo`のみ等）で
 渡すとエラーになる（値を受理して黙って無視する、という状態を避けるため）。
 
-**`ingest` の要点（`docs/planning/DOC-003_..._計画.md` 孫3プロンプト / ADR-001 §8 準拠）:**
+**`ingest` の要点（`docs/planning/DOC-2608021229-a_..._計画.md` 孫3プロンプト / DOC-2608021229 §8 準拠）:**
 
 - **`message.id` で重複排除する。** 1レスポンスがcontent blockごとに複数行へ分割追記されるため
-  （実測: assistant行の59.4%がmessage.id重複、ADR-001 §2.2）、素朴に合計すると2倍以上の過大計上になる。
+  （実測: assistant行の59.4%がmessage.id重複、DOC-2608021229 §2.2）、素朴に合計すると2倍以上の過大計上になる。
   同一message.idの行が複数あれば**ドキュメント順で最後の行**（usage/stop_reasonが最も完全）を採用する
 - **冪等**。`state/ingest-cursor.json` に transcriptファイルごとの (inode, size, mtime, offset) を保持し、
   差分だけ読む。カーソルは書き込み成功後にのみ保存されるため、途中で中断しても再実行で結果が変わらない。
@@ -242,7 +242,7 @@ PR番号はリポジトリ**内**でしか一意でない。`--pr`とstandalone�
 - `report --reconcile` の月境界は**UTC固定**。DeepSeek管理画面（北京時間 UTC+8想定）等、provider側の
   集計タイムゾーンと異なる場合、月初・月末で最大±8時間分のずれが突合結果に生じうる（計画書17章 R8）
 
-**`snapshot-quota` の要点（詳細設計: `docs/planning/DOC-003_..._計画.md` §8.5 / ADR-001 §2.1・§8）:**
+**`snapshot-quota` の要点（詳細設計: `docs/planning/DOC-2608021229-a_..._計画.md` §8.5 / DOC-2608021229 §2.1・§8）:**
 
 - `claude/settings.json` の `statusLine` から `ocw-meter snapshot-quota` として呼ばれる想定
   （`claude/README.md` §3.4 参照）。stdinのstatusLine JSONから `quota.sample` イベントを1行appendし、
@@ -250,16 +250,16 @@ PR番号はリポジトリ**内**でしか一意でない。`--pr`とstandalone�
 - **例外が起きても必ずstdoutに表示文字列を出しexit 0する。** 空入力・不正JSON・巨大入力・
   `rate_limits`欠落のいずれでも壊れない
 - **サンプリング間隔を自制する**（既定60秒、`OCW_METER_QUOTA_INTERVAL`で変更可）。statusLineは
-  描画のたびに呼ばれるため（実測 最大54回/時間、ADR-001 §2.1）、間隔内の呼び出しは
+  描画のたびに呼ばれるため（実測 最大54回/時間、DOC-2608021229 §2.1）、間隔内の呼び出しは
   `state/quota-last-sample.json` を見て書き込みをスキップし、表示文字列の計算のみ行う
 - `rate_limits`（5時間枠・週間枠）が無いセッション（`claude-ds`＝DeepSeek経由は原理的に常にこれ）は
   `five_hour_used_pct`等を`null`、`completeness: "unknown"`として記録する。**推測で埋めない**
-- `rate_limits.five_hour.resets_at` が既に過去の時刻（stale値。ADR-001 §2.1で実測: 8サンプル中3件）の
+- `rate_limits.five_hour.resets_at` が既に過去の時刻（stale値。DOC-2608021229 §2.1で実測: 8サンプル中3件）の
   場合、`window_id`を`null`にして`completeness: "partial"`で記録する（stale値を新しい窓のIDとして
   採用しない）。同一`window_id`内で`used_percentage`が前回より減少した場合も`partial`にしstderrへ警告する
 - `context_window.used_percentage`が`null`の場合、**記録するイベントの`context_used_pct`フィールドのみ**
-  `total_input_tokens / context_window_size`からフォールバック計算する（ADR-001実測: 66サンプル中7件がnull）。
-  **statusLineの表示文字列にはこのフォールバック値を使わない**（ADR-001 §8-7: 生の`used_percentage`が
+  `total_input_tokens / context_window_size`からフォールバック計算する（DOC-2608021229実測: 66サンプル中7件がnull）。
+  **statusLineの表示文字列にはこのフォールバック値を使わない**（DOC-2608021229 §8-7: 生の`used_percentage`が
   `null`の場合、フォールバック計算できても`ctx`セグメント自体を表示しない）
 - statusLineの`cost.total_cost_usd`（Claude Code自己申告のセッション累積コスト）を`session_cost_usd`
   として記録する。`usage.message`の`cost_estimate_usd`（ocw-meter自身の推定値）とは**別カラム**であり、
@@ -296,7 +296,7 @@ PR番号はリポジトリ**内**でしか一意でない。`--pr`とstandalone�
 まで書き込まれうる。Herdr の commander/implementer/reviewer 3ペイン構成で1日10時間稼働した場合、
 理論上限は 60件/時 × 10時間 × 3セッション × 365日 ≈ **65.7万件/年（約650MB/年）**で、
 既存の全履歴（39,805件、`usage.message`等これまでの累計実績）を1年で一桁上回りうる規模になる
-（実際の呼び出し頻度は ADR-001 §2.1実測で最大54回/時であり、スロットルが常に上限まで
+（実際の呼び出し頻度は DOC-2608021229 §2.1実測で最大54回/時であり、スロットルが常に上限まで
 効くとは限らないため、これは理論上限であって実測の目安ではない）。
 
 現時点では自動的なローテーション・削除の仕組みは無い（`OCW_METER_RAW=1`時の`raw/`ディレクトリを除き、
@@ -353,7 +353,7 @@ GitHub token形式（`ghp_...` 等 / `github_pat_...`）に一致する値、キ
 `api_key` / `token` / `secret` / `password` / `authorization` に一致するものは保存前に `[REDACTED]` へ置換される。
 この置換は保存物だけでなく、meterが出す例外・警告メッセージにも適用される。
 
-**既知の限界（カバレッジは「全部取れている」ものではない — 計画書5.10 / ADR-001 §2.2 実測）**:
+**既知の限界（カバレッジは「全部取れている」ものではない — 計画書5.10 / DOC-2608021229 §2.2 実測）**:
 - **`deepseek-v4-flash` はtranscriptに一切記録されない（実測カバー率 0%）。** タイトル生成・要約等の
   背景ユーティリティ呼び出しやサブエージェント（`CLAUDE_CODE_SUBAGENT_MODEL=deepseek-v4-flash`）分は
   `~/.claude/projects/*.jsonl` に現れないため、`ingest` では原理的に取得できない
@@ -379,9 +379,9 @@ GitHub token形式（`ghp_...` 等 / `github_pat_...`）に一致する値、キ
   読む方式であり、`ocw rm`はそのファイルをworktreeごと削除する。一度`run_id`無しで書き込まれた
   `usage.message`は、後から同じtranscriptを再ingestしても直らない（他のフィールドと同じ
   「過去は再計算しない」不変条件のため）。`ocw-meter report --phase`（工程別トークン内訳。
-  `run_id`でphase.start/endの時間窓と対応付ける — `docs/reference/DOC-005_...`§2.3参照）を
+  `run_id`でphase.start/endの時間窓と対応付ける — `docs/reference/DOC-2608021229-c_...`§2.3参照）を
   意味のある形で使うには、**PRの作業中〜マージ直後、worktreeを消す前に`ocw-meter ingest`を
-  実行する運用が必須**（`docs/reference/DOC-004_...`§2の計測手順に反映済み）。`--model`/`--role`/
+  実行する運用が必須**（`docs/reference/DOC-2608021229-b_...`§2の計測手順に反映済み）。`--model`/`--role`/
   `--pr`はこの制約の影響を受けない（`run_id`ではなく`model`/`role`/`pr_number`を直接見るため）
 
 ## 4. Customization

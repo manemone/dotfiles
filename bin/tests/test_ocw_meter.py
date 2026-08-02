@@ -6,7 +6,7 @@ skin + embedded python3), matching bin/ocw's style. Every test points
 OCW_METER_HOME at a throwaway tempdir outside this repo, so nothing here
 touches real state or the repo itself.
 
-No network access. No secrets. See docs/planning/DOC-003_..._計画.md §13
+No network access. No secrets. See docs/planning/DOC-2608021229-a_..._計画.md §13
 for the numbered test-case list (T01, T02, ...) this file implements.
 
 Coverage of §13.2 across 孫1 + 孫3 + 孫4 (this file):
@@ -34,7 +34,7 @@ Coverage of §13.2 across 孫1 + 孫3 + 孫4 (this file):
 IngestTests below drives the real `ocw-meter ingest` subprocess against
 synthetic transcript fixtures under a tempdir (OCW_METER_CLAUDE_PROJECTS_DIR),
 not the developer's real ~/.claude/projects — nothing here reads real
-transcripts. See docs/planning/DOC-003_..._計画.md's 孫3プロンプト for the
+transcripts. See docs/planning/DOC-2608021229-a_..._計画.md's 孫3プロンプト for the
 completion criteria this maps to (idempotency, message.id dedup,
 message.content non-exposure, cost formula, price-table versioning).
 """
@@ -795,7 +795,7 @@ class EventSchemaValidationTests(OcwMeterTestCase):
     def test_explicit_null_payload_field_is_not_treated_as_missing(self):
         # Round-2 review: an explicitly-recorded empty/null value (the
         # caller tried and confirmed the field is unavailable, e.g. a
-        # DeepSeek session with no rate_limits — ADR-001 §2.1) must NOT
+        # DeepSeek session with no rate_limits — DOC-2608021229 §2.1) must NOT
         # be treated the same as the field never appearing at all.
         events, quarantined = self._write_and_validate(
             "quota.sample",
@@ -1015,7 +1015,7 @@ class TranscriptFixtureDedupTests(OcwMeterTestCase):
         # T04: a single Claude Code response gets re-appended to the
         # transcript once per content block (plan §5.3) — message.id is
         # the only stable dedup key. This fixture is a redacted,
-        # shape-accurate sample of exactly that situation (ADR-001 §2.2
+        # shape-accurate sample of exactly that situation (DOC-2608021229 §2.2
         # measured 59.4% of real assistant lines as such duplicates,
         # e.g. 179 raw lines -> 57 distinct message.id). The real
         # `ingest` step (孫3) will read lines like these from
@@ -1084,7 +1084,7 @@ class IngestTests(OcwMeterTestCase):
     def test_ingest_dedupes_content_block_split_lines_via_real_fixture(self):
         # T04/T12, driven through the actual `ingest` scan path (not the
         # `event` primitive directly, unlike TranscriptFixtureDedupTests
-        # above) — this is the fixture ADR-001 §2.2's 59.4%-duplicate
+        # above) — this is the fixture DOC-2608021229 §2.2's 59.4%-duplicate
         # measurement is based on, reused as-is per the 孫3 prompt's "実
         # transcript由来の縮小fixture" test requirement.
         fixture = REPO_ROOT / "bin" / "tests" / "fixtures" / "transcript_duplicate_message_id.jsonl"
@@ -1324,7 +1324,7 @@ class IngestTests(OcwMeterTestCase):
 
     def test_ingest_deepseek_cost_matches_plan_formula(self):
         # Uses the real bin/prices/deepseek-2026-08-01.json and the exact
-        # July totals from plan §1 / ADR-001 §2.2 — this is the $46.78
+        # July totals from plan §1 / DOC-2608021229 §2.2 — this is the $46.78
         # figure the 孫3 prompt's completion criteria checks against.
         write_transcript(self.projects_dir, "proj", "sess-cost", [
             assistant_line(
@@ -1824,7 +1824,7 @@ class ReportReconcileTests(OcwMeterTestCase):
 
     def test_reconcile_provider_total_for_model_absent_from_transcript_still_shown(self):
         # PR #27 review round 1 finding 5: this is the exact "0%
-        # coverage" case (plan §5.10 / ADR-001 §2.2, deepseek-v4-flash)
+        # coverage" case (plan §5.10 / DOC-2608021229 §2.2, deepseek-v4-flash)
         # the whole flag exists to surface — it must not be the one case
         # that silently disappears from the report.
         self._seed_deepseek_message()  # only deepseek-v4-pro exists in transcript
@@ -1904,8 +1904,8 @@ CLAUDE_STATUSLINE_SAMPLE = {
 
 
 class SnapshotQuotaBasicsTests(OcwMeterTestCase):
-    """孫4: `ocw-meter snapshot-quota`. See docs/planning/DOC-003_..._
-    計画.md §8.5 / 孫4プロンプト and ADR-001 §2.1/§8."""
+    """孫4: `ocw-meter snapshot-quota`. See docs/planning/DOC-2608021229-a_..._
+    計画.md §8.5 / 孫4プロンプト and DOC-2608021229 §2.1/§8."""
 
     def test_empty_stdin_prints_blank_and_exits_zero(self):
         result = run_snapshot_quota("", self.home)
@@ -1961,7 +1961,7 @@ class SnapshotQuotaBasicsTests(OcwMeterTestCase):
         self.assertIsNone(event["raw_ref"])
 
     def test_deepseek_session_missing_rate_limits_is_completeness_unknown(self):
-        # T10 (quota half) / ADR-001 §2.1: every claude-ds session (58/58
+        # T10 (quota half) / DOC-2608021229 §2.1: every claude-ds session (58/58
         # real samples) — a documented, expected shape, not an error.
         obj = {
             "session_id": "ds-session",
@@ -1983,9 +1983,9 @@ class SnapshotQuotaBasicsTests(OcwMeterTestCase):
         self.assertEqual(event["session_cost_usd"], 0.02)
 
     def test_context_used_pct_falls_back_to_token_ratio_when_null(self):
-        # ADR-001 §2.1: used_percentage was null in 7/66 real samples;
+        # DOC-2608021229 §2.1: used_percentage was null in 7/66 real samples;
         # total_input_tokens/context_window_size were "常に取得可能".
-        # ADR-001 §8 instruction 7 draws a line between the RECORDED
+        # DOC-2608021229 §8 instruction 7 draws a line between the RECORDED
         # value (fallback estimate is fine) and the DISPLAYED string
         # (hide `ctx` entirely when the raw used_percentage is null,
         # rather than show a number the instruction says to omit —
@@ -2031,7 +2031,7 @@ class SnapshotQuotaBasicsTests(OcwMeterTestCase):
         # T11 "known key disappears" half: a future statusLine schema
         # version could drop rate_limits/context_window/cost entirely
         # without warning (they are all documented as optional/absent
-        # in some session types already — ADR-001 §2.1).
+        # in some session types already — DOC-2608021229 §2.1).
         result = run_snapshot_quota(json.dumps({"session_id": "x"}), self.home)
         self.assertEqual(result.returncode, 0)
         self.assertEqual(result.stdout.strip(), "")
@@ -2094,11 +2094,11 @@ class SnapshotQuotaThrottleTests(OcwMeterTestCase):
 
 
 class SnapshotQuotaWindowTests(OcwMeterTestCase):
-    """T09: 5-hour window reset/staleness handling (plan §8.5, ADR-001
+    """T09: 5-hour window reset/staleness handling (plan §8.5, DOC-2608021229
     §2.1/§8 instruction 4)."""
 
     def test_stale_resets_at_is_marked_partial_with_null_window_id(self):
-        # ADR-001 §2.1: 3/8 real samples had an already-past resets_at.
+        # DOC-2608021229 §2.1: 3/8 real samples had an already-past resets_at.
         obj = {"rate_limits": {"five_hour": {"used_percentage": 50, "resets_at": 1}}}
         result = run_snapshot_quota(json.dumps(obj), self.home)
         self.assertEqual(result.returncode, 0)
@@ -2221,7 +2221,7 @@ class ReportFiveHourWindowCompletionTests(OcwMeterTestCase):
 # ── 孫5: grouped report views (--phase/--model/--role/--window/--month) ──
 
 class ReportGroupedViewsTests(OcwMeterTestCase):
-    """docs/planning/DOC-003_..._計画.md 孫5プロンプト §1."""
+    """docs/planning/DOC-2608021229-a_..._計画.md 孫5プロンプト §1."""
 
     def _seed_full_pr(self, pr_number, run_id):
         run_meter(["event", "run.start", "--idempotency-key", f"{run_id}-start",
@@ -2452,7 +2452,7 @@ class ReportGroupedViewsTests(OcwMeterTestCase):
 
     def test_pr_filter_excludes_repo_null_events_from_direct_pr_number_match(self):
         # An event with repo:null (e.g. `ingest` couldn't resolve a repo
-        # slug for that message's cwd — DOC-005 §2.4/§4's documented
+        # slug for that message's cwd — DOC-2608021229-c §2.4/§4's documented
         # run_id-resolution gap has the same root cause) must not be
         # guessed into belonging to the caller's own repo; that would
         # silently reopen the exact cross-repo contamination class this
@@ -2788,7 +2788,7 @@ class SnapshotQuotaRoundOneReviewTests(OcwMeterTestCase):
     def test_global_window_anomaly_detection_still_works_across_sessions(self):
         # The five_hour_window_id/five_hour_used_pct anomaly check must
         # stay account-wide (global), not per-session — rate_limits
-        # reflects the whole Claude.ai account (ADR-001), so a decrease
+        # reflects the whole Claude.ai account (DOC-2608021229), so a decrease
         # reported by session B right after session A must still be
         # caught even though the two are throttled independently now.
         far_future = 99999999999
@@ -2936,7 +2936,7 @@ class SnapshotQuotaRoundTwoReviewTests(OcwMeterTestCase):
         # five_hour_window_id/five_hour_used_pct slot used to be
         # overwritten unconditionally on every write, including by a
         # sample that has NO window info of its own (any claude-ds/
-        # DeepSeek sample — ADR-001 §2.1's 58/58). One such sample
+        # DeepSeek sample — DOC-2608021229 §2.1's 58/58). One such sample
         # landing between two Anthropic samples silently defeated plan
         # §8.5's "同一window_id内でused_percentageが減少したら異常" check
         # — and round-1's OWN per-session-throttle fix made this near-

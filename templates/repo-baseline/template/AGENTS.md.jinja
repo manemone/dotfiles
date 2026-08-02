@@ -1,0 +1,143 @@
+# AGENTS.md
+
+<!--
+  このファイルは repo-baseline テンプレートが生成した骨組みです。
+  「TODO」の付いた節は、このリポジトリの実態に合わせて人間または AI が書き埋める前提です。
+  埋め方の判断ガイドは claude/skills/repo-baseline/SKILL.md（配布先の ~/.claude/skills/ 配下）を参照してください。
+-->
+
+## 概要
+
+<!-- TODO: このリポジトリが何であるか、何を作っているかを1〜3文で書く -->
+
+## 最重要ルール
+
+- **人間の明示的指示がない限り、`git merge` / `git pull` / `git reset --hard` /
+  `git push --force` / `gh pr merge` を実行しない。例外はない。**
+  すべての不可逆操作の前にこのルールを照合すること。
+- 指示された範囲外の機能を先回りして実装しない。
+- **linter / formatter の抑制ディレクティブや、設定ファイルの除外・閾値緩和を、AI の判断で
+  追加しない。** 指摘が設計上不合理だと判断した場合は、抑制せず違反内容・対象ファイル・
+  判断理由を人間に報告する。コードの構造を変えて指摘そのものを解消できる場合は、抑制より
+  そちらを優先する。
+<!-- TODO: このリポジトリ固有の破壊的操作（本番環境への反映、外部サービスへの書き込み等）が
+     あれば、ここに追記する -->
+
+## ディレクトリ構成
+
+<!-- TODO: 主要ディレクトリの役割を表にする。以下はこのテンプレートが生成したものの参考 -->
+{%- if use_doc_id or use_ci %}
+
+| ディレクトリ | 役割 |
+|---|---|
+{%- if use_doc_id %}
+| `docs/` | 設計文書・計画書。詳細は [docs/README.md](docs/README.md) を参照 |
+| `tools/doc-id/` | DOC-ID（`docs/` 配下の文書に付与する不変識別子）の割当・検証ツール |
+{%- endif %}
+{%- if use_ci %}
+| `.github/workflows/` | CI（`pre-commit run --all-files` 相当） |
+{%- endif %}
+{%- endif %}
+
+## AI 支援ツールの設定
+
+ルールの本体は常に `AGENTS.md`（このファイル）に書く。各 AI 製品向けの設定ファイルは、
+ルールを書き写さず `AGENTS.md` を指すことに徹する。新しい AI 製品を使い始めるときも同様に、
+その製品の設定ファイルから `AGENTS.md` を参照する形にする。
+
+| AI 製品 | 設定ファイル | 中身 |
+|---|---|---|
+| Claude Code | `CLAUDE.md` | `@AGENTS.md` の1行のみ |
+| opencode | `opencode.json` | `instructions` に `AGENTS.md`{% if use_doc_id %} と `docs/design/` 配下の規約文書パスを列挙{% else %} を列挙{% endif %} |
+{%- if use_doc_id %}
+
+## コードの書き方
+
+このリポジトリのコーディング規約は
+[docs/design/](docs/design/) 配下の文書を参照すること。
+<!-- TODO: docs/design/DOC-DOCID_PLACEHOLDER_コーディング方針.md の中身をこのリポジトリの
+     主要言語に合わせて書き下ろし、doc-id assign で採番したら、この節からのリンクを更新する -->
+{%- endif %}
+{%- if has_long_running_commands %}
+
+## 長時間コマンドの扱い
+
+完了までに人間の応答時間を超えてかかるコマンド（学習・大量データ処理等）は、
+**絶対にフォアグラウンドで同期待ちしない。** 必ず AI のバックグラウンド実行機能を使う。
+
+### 普遍インターフェース（AI 不問）
+
+全 AI が共通で使える状態確認手段を用意する。
+<!-- TODO: このリポジトリでの実際のコマンド・ファイルパスに置き換える -->
+
+| インターフェース | 場所 | 内容 |
+|---|---|---|
+| `<状態確認コマンド>` | CLI | 実行中/完了/失敗の状態 |
+| `<PIDファイル等>` | ファイル | 実行中プロセスの有無 |
+| `<ログファイル>` | ファイル | パラメータ・経過時間・結果 |
+
+### パターン
+
+1. **バックグラウンド実行で開始**（Claude Code なら Bash の `run_in_background: true`、
+   他 AI は各製品のバックグラウンド実行機能）
+2. **状態ポーリング（軽量）**: サブプロセスを起動しない軽量な確認手段を使う。
+   **短い間隔でのポーリングを繰り返さない。** 処理の想定時間から妥当な間隔を判断する
+3. **完了検知と通知**: 完了を検知したら人間に通知する
+4. **エラー検知**: 失敗を検知したら原因（stderr 等）を人間に報告する
+{%- endif %}
+
+## コミット前の必須ステップ
+
+初回のみ、clone 後に以下を実行して pre-commit フックを有効化する。
+
+```
+uv tool install pre-commit
+pre-commit install
+```
+
+以降はコミット時に `.pre-commit-config.yaml` のフックが自動で走る。
+手元でまとめて確認したい場合は次を実行する。
+
+```
+pre-commit run --all-files
+```
+{%- if lint_cmd or test_cmd %}
+
+`pre-commit run --all-files` には以下も含まれる。
+{%- if lint_cmd %}
+- lint: `{{ lint_cmd }}`
+{%- endif %}
+{%- if test_cmd %}
+- test: `{{ test_cmd }}`
+{%- endif %}
+{%- endif %}
+{%- if use_doc_id %}
+
+`docs/` 配下に新規ファイルを追加する場合は、まず `DOC-DOCID_PLACEHOLDER_<説明的ファイル名>.md`
+という名前で作り、`./tools/doc-id/doc-id assign docs/path/to/new_file.md` で DOC-ID を採番する
+（`doc-id check` / `doc-id verify` フックが検証する）。
+{%- endif %}
+
+**AI はこれらのステップを省略しない。省略するのは人間が明示的に指示した場合に限る。**
+
+## PR 作成時の注意
+
+{% if use_doc_id -%}
+PR を作る前に
+[docs/design/DOC-DOCID_PLACEHOLDER_プルリクエストの作法.md](docs/design/DOC-DOCID_PLACEHOLDER_プルリクエストの作法.md)
+を読むこと。
+{%- else -%}
+<!-- TODO: PR 説明文の構成やコメント規約があれば書く -->
+{%- endif %}
+
+## 実装時の注意
+
+<!-- TODO: 新しいディレクトリ・モジュールを足すときに追従すべき箇所（設定ファイルの一覧登録等）
+     があれば書く -->
+{%- if use_doc_id %}
+- `docs/` の文書に地の文で言及するときは、説明的ファイル名だけで呼ばず、その文書の DOC-ID を
+  明示する。ただし対象の文書がまだ `DOC-DOCID_PLACEHOLDER` のまま採番されていない間は、
+  DOC-ID を書きようがないため説明的名称のみで言及してよい。
+{%- endif %}
+- README は「ルート `README.md`（全体）」と「各モジュールの `README.md`（詳細）」のように
+  二層構造にする場合、片方だけ更新しない。

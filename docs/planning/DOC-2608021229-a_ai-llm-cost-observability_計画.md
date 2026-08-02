@@ -864,6 +864,13 @@ OCW_REVIEWER_COMMAND='claude --model opus --effort high --permission-mode auto' 
 
 **T1. DOC-ID 採番方式をタイムスタンプ式へ移行する**
 
+> **✅ 完了**: 本傘 `ai/repo-baseline` の孫5（`ai/rb-05-docs-merge`）で実施済み。
+> `DOC-001` → `DOC-2607281430`、`DOC-002` → `DOC-2607291400`、`DOC-003` → `DOC-2608021229-a`（本文書）、
+> `ADR-001` → `DOC-2608021229` に移行した。現役の参照（本文・リンク・他ファイルからの参照）は
+> すべて追従済み。ただし本文書中の孫0〜孫6用プロンプト（コードフェンス内、本項および§17以降）は
+> 当時実際に送った文面をそのまま歴史的記録として残す方針のため、旧ID（`DOC-00N` / `ADR-00N`）を
+> 意図的に置換していない。以下（本項の残り）も同様に移行前に書かれた記述であり、歴史的記録として残す。
+
 現行の連番方式（`DOC-001` / `DOC-002` / `DOC-003`）は早晩崩壊する。
 
 - **並行ブランチで衝突する** — 複数の孫が同時に文書を作れば全員が同じ次番号を取る。
@@ -871,9 +878,13 @@ OCW_REVIEWER_COMMAND='claude --model opus --effort high --permission-mode auto' 
 - **IDが情報を持たない** — 番号から新旧が判別できない
 - **一度参照されると振り直せない**
 
-`~/projects/lora-dataset-forge/main/docs/` が採用している `DOC-YYMMDDHHMM_タイトル.md`
-（例 `DOC-2607191331_傘ブランチ_pipeline-hardening_計画.md`）は構造的に衝突せず、
-ソート順が時系列と一致する。並行作業を前提とする以上こちらが正しい。
+`~/projects/lora-dataset-forge/main/docs/` が採用している `DOC-YYMMDDHHMM_タイトル.md` 形式は
+構造的に衝突せず、ソート順が時系列と一致する。並行作業を前提とする以上こちらが正しい
+（LDF内の実例のファイル名は下記。他リポジトリの DOC-ID のため地の文には書かずコードブロックにする）。
+
+```
+DOC-2607191331_傘ブランチ_pipeline-hardening_計画.md
+```
 
 **ただし本傘の作業中には実施しない。** 理由:
 

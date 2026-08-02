@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Full original invocation, captured before any arg-shifting below, for the
-# run.start `--command` payload (docs/planning/DOC-003_..._計画.md §8.4-adjacent
+# run.start `--command` payload (docs/planning/DOC-2608021229-a_..._計画.md §8.4-adjacent
 # 孫2 prompt). Display-only string; never re-executed.
 ORIGINAL_INVOCATION="ocw $*"
 
@@ -12,7 +12,7 @@ COMMANDER_COMMAND="${OCW_COMMANDER_COMMAND:-claude}"
 IMPLEMENTER_COMMAND="${OCW_IMPLEMENTER_COMMAND:-claude}"
 REVIEWER_COMMAND="${OCW_REVIEWER_COMMAND:-claude}"
 
-# Observability (docs/planning/DOC-003_..._計画.md §7.4, 孫2 prompt). Always
+# Observability (docs/planning/DOC-2608021229-a_..._計画.md §7.4, 孫2 prompt). Always
 # fail-open: ocw-meter being entirely absent from PATH, or failing internally,
 # must never affect ocw's own exit code or output beyond the `run:` line.
 ocw_meter_event() {
@@ -136,7 +136,6 @@ if not walk(data):
 PY
 }
 
-
 herdr_server_running() {
   command -v herdr >/dev/null 2>&1 &&
     herdr status server >/dev/null 2>&1
@@ -205,12 +204,12 @@ setup_herdr_workspace() {
   HERDR_SETUP_REVIEWER_PANE_ID=""
 
   open_json="$(
-  herdr workspace create \
-    --cwd "$worktree_dir" \
-    --label "$workspace_label" \
-    --env "OCW_ROLE=commander" \
-    --env "OCW_RUN_ID=${run_id}" \
-    --no-focus
+    herdr workspace create \
+      --cwd "$worktree_dir" \
+      --label "$workspace_label" \
+      --env "OCW_ROLE=commander" \
+      --env "OCW_RUN_ID=${run_id}" \
+      --no-focus
   )" || return 1
 
   HERDR_SETUP_WORKSPACE_ID="$(
@@ -352,24 +351,21 @@ rollback_created_worktree() {
   set +e
 
   if [ -n "$HERDR_SETUP_WORKSPACE_ID" ] &&
-    herdr_server_running
-  then
+    herdr_server_running; then
     herdr workspace close \
       "$HERDR_SETUP_WORKSPACE_ID" \
       >/dev/null 2>&1
   fi
 
   if git -C "$repo_root" worktree list --porcelain |
-    grep -Fqx "worktree ${worktree_dir}"
-  then
+    grep -Fqx "worktree ${worktree_dir}"; then
     git -C "$repo_root" \
       worktree remove --force "$worktree_dir" \
       >/dev/null 2>&1
   fi
 
   if git -C "$repo_root" \
-    show-ref --verify --quiet "refs/heads/${branch}"
-  then
+    show-ref --verify --quiet "refs/heads/${branch}"; then
     git -C "$repo_root" \
       branch -D "$branch" \
       >/dev/null 2>&1
@@ -420,8 +416,7 @@ create_worktree() {
   echo "herdr:       ${USE_HERDR}"
 
   if git -C "$repo_root" \
-    show-ref --verify --quiet "refs/heads/${branch}"
-  then
+    show-ref --verify --quiet "refs/heads/${branch}"; then
     die "branch already exists: ${branch}"
   fi
 
@@ -627,8 +622,7 @@ close_herdr_workspaces_for_checkout() {
 
     if json_has_pane_cwd \
       "$pane_json" \
-      "$worktree_dir"
-    then
+      "$worktree_dir"; then
       echo "closing Herdr workspace: ${workspace_id}"
 
       herdr workspace close \
@@ -643,8 +637,7 @@ remove_worktree() {
   local force="false"
 
   if [ "${1:-}" = "-f" ] ||
-    [ "${1:-}" = "--force" ]
-  then
+    [ "${1:-}" = "--force" ]; then
     force="true"
     shift
   fi
@@ -702,8 +695,7 @@ remove_worktree() {
     fi
 
     if ! git -C "$repo_root" \
-      merge-base --is-ancestor "$branch" HEAD
-    then
+      merge-base --is-ancestor "$branch" HEAD; then
       die "branch is not merged into the current main checkout: ${branch}"
     fi
   fi
@@ -742,8 +734,7 @@ remove_worktree() {
 }
 
 while [ "${1:-}" = "-H" ] ||
-  [ "${1:-}" = "--herdr" ]
-do
+  [ "${1:-}" = "--herdr" ]; do
   USE_HERDR=true
   shift
 done
@@ -770,8 +761,7 @@ case "$cmd" in
     shift
 
     while [ "${1:-}" = "-H" ] ||
-      [ "${1:-}" = "--herdr" ]
-    do
+      [ "${1:-}" = "--herdr" ]; do
       USE_HERDR=true
       shift
     done

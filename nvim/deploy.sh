@@ -1,6 +1,10 @@
 #!/bin/sh
 
-SCRIPT_DIR=$(cd "$(dirname "$0")"; pwd)
+SCRIPT_DIR=$(
+  cd "$(dirname "$0")" || exit 1
+  pwd
+)
+# shellcheck source=SCRIPTDIR/../shared/helpers.sh
 . "$SCRIPT_DIR/../shared/helpers.sh"
 
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/nvim"
@@ -17,9 +21,9 @@ FAIL=0
 
 log_info "Checking prerequisites..."
 
-ensure_command git      "Install git via your package manager"       || exit 1
-ensure_command curl     "Install curl via your package manager"      || exit 1
-ensure_command nvim     "Install NeoVim 0.10+: https://neovim.io"   || exit 1
+ensure_command git "Install git via your package manager" || exit 1
+ensure_command curl "Install curl via your package manager" || exit 1
+ensure_command nvim "Install NeoVim 0.10+: https://neovim.io" || exit 1
 
 # Warn for optional but recommended tools
 if ! command -v rg >/dev/null 2>&1; then
@@ -59,9 +63,9 @@ fi
 
 # ── Symlink config files ─────────────────────────────────────────────────
 
-symlink_backup "$SCRIPT_DIR/init.lua"            "$CONFIG_DIR/init.lua"            || FAIL=1
-symlink_backup "$SCRIPT_DIR/lua"                 "$CONFIG_DIR/lua"                  || FAIL=1
-symlink_backup "$SCRIPT_DIR/lazy-lock.json"      "$CONFIG_DIR/lazy-lock.json"       || FAIL=1
+symlink_backup "$SCRIPT_DIR/init.lua" "$CONFIG_DIR/init.lua" || FAIL=1
+symlink_backup "$SCRIPT_DIR/lua" "$CONFIG_DIR/lua" || FAIL=1
+symlink_backup "$SCRIPT_DIR/lazy-lock.json" "$CONFIG_DIR/lazy-lock.json" || FAIL=1
 
 # ── Clean up old dein.vim symlinks ──────────────────────────────────────
 
@@ -135,7 +139,7 @@ else
         log_ok "pynvim installed via mise Python at $_python3"
       else
         log_warn "Failed to install pynvim via mise Python. Falling back to system pip."
-        _python3=""  # clear to trigger system pip fallback
+        _python3="" # clear to trigger system pip fallback
       fi
     fi
   fi

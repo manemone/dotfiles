@@ -1,8 +1,8 @@
-# DOC-005: ocw-meter イベントスキーマ
+# DOC-2608021229-c: ocw-meter イベントスキーマ
 
 `ocw-meter`（`bin/ocw-meter`）が `~/.local/state/ocw-meter/events/YYYY-MM-DD.jsonl` に書く
 全イベントの恒久リファレンス。**このファイルがスキーマの一次情報源。**
-`docs/planning/DOC-003_ai-llm-cost-observability_計画.md`（計画書）第8章にも同内容の初期設計があるが、
+`docs/planning/DOC-2608021229-a_ai-llm-cost-observability_計画.md`（計画書）第8章にも同内容の初期設計があるが、
 計画書は傘ブランチ完了後は歴史的記録（意思決定の経緯を追う副次的な参照）になる。
 保存済みイベントは `schema_version: 1` を持ったまま何年も残り続けるため、
 「今すぐこのフィールドが何を意味するか」を調べるときは常にこの文書を読むこと。
@@ -110,7 +110,7 @@ phase.start/phase.endとして発火されない**:
 > **⚠️ 孫5で実データ検証して判明した重大な制約（実測）**: このマシンの実ストア
 > （`~/.local/state/ocw-meter/events/`、44,425件の`usage.message`）を集計すると、**`run_id`が
 > 設定されている`usage.message`は0件**だった。`report --phase`のトークン内訳は、この時点の実データでは
-> **全件が`(unassigned)`になる**（実行結果は`docs/reference/DOC-004_LLM費用観測ベースライン計測手順.md`
+> **全件が`(unassigned)`になる**（実行結果は`docs/reference/DOC-2608021229-b_LLM費用観測ベースライン計測手順.md`
 > §2.2参照）。原因は`ingest`の`run_id`解決ロジック
 > （`resolve_run_id_via_ocw_run_id_file`）が「そのメッセージの`cwd`（＝worktreeパス）の
 > `<git-dir>/ocw-run-id`ファイルを**ingest実行時点**で読む」方式であること: `ocw rm`はworktreeごと
@@ -118,7 +118,7 @@ phase.start/phase.endとして発火されない**:
 > そのworktreeで生成された全メッセージのrun_idが永久に`null`のまま保存される**（§4の
 > 「過去は再計算しない」不変条件により、後から`ingest`し直しても直らない）。
 > `report --phase`を意味のある形で使うには、**PRの作業中〜マージ直後、worktreeを`ocw rm`する前に
-> `ocw-meter ingest`を実行する運用**が必須（`docs/reference/DOC-004_...`§2で手順化）。
+> `ocw-meter ingest`を実行する運用**が必須（`docs/reference/DOC-2608021229-b_...`§2で手順化）。
 
 ### 2.4 `usage.message` のペイロードフィールド（共通エンベロープに加えて）
 
@@ -376,7 +376,7 @@ cost = ( cache_read_input_tokens               * price.cache_hit_in
 
 ## 8. 関連文書
 
-- 設計の経緯・意思決定の背景: `docs/planning/DOC-003_ai-llm-cost-observability_計画.md`
-- feasibility probeの実測結果: `docs/adr/ADR-001_llm-cost-observability-collection-method.md`
-- 運用手順: `docs/reference/DOC-004_LLM費用観測ベースライン計測手順.md`
+- 設計の経緯・意思決定の背景: `docs/planning/DOC-2608021229-a_ai-llm-cost-observability_計画.md`
+- feasibility probeの実測結果: `docs/adr/DOC-2608021229_llm-cost-observability-collection-method.md`
+- 運用手順: `docs/reference/DOC-2608021229-b_LLM費用観測ベースライン計測手順.md`
 - CLIの使い方全般: `bin/README.md` §3.3

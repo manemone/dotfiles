@@ -10,7 +10,11 @@
 
 set -u
 
-SCRIPT_DIR=$(cd "$(dirname "$0")"; pwd)
+SCRIPT_DIR=$(
+  cd "$(dirname "$0")" || exit 1
+  pwd
+)
+# shellcheck source=SCRIPTDIR/shared/helpers.sh
 . "$SCRIPT_DIR/shared/helpers.sh"
 
 # ── Defaults ──────────────────────────────────────────────────────────
@@ -22,28 +26,33 @@ ONLY_TOOLS=""
 # ── Known symlinks per tool (dst only) ────────────────────────────────
 # Each tool entry lists one symlink destination per line.
 # Use printf so the trailing-newline line-continuation works portably.
-KNOWN_LINKS_zsh=$(printf '%s\n' \
-  "$HOME/.zshrc" \
-  "$HOME/.zsh_plugins.txt" \
+KNOWN_LINKS_zsh=$(
+  printf '%s\n' \
+    "$HOME/.zshrc" \
+    "$HOME/.zsh_plugins.txt"
 )
 
-KNOWN_LINKS_nvim=$(printf '%s\n' \
-  "${XDG_CONFIG_HOME:-$HOME/.config}/nvim/init.lua" \
-  "${XDG_CONFIG_HOME:-$HOME/.config}/nvim/lua" \
-  "${XDG_CONFIG_HOME:-$HOME/.config}/nvim/lazy-lock.json" \
+KNOWN_LINKS_nvim=$(
+  printf '%s\n' \
+    "${XDG_CONFIG_HOME:-$HOME/.config}/nvim/init.lua" \
+    "${XDG_CONFIG_HOME:-$HOME/.config}/nvim/lua" \
+    "${XDG_CONFIG_HOME:-$HOME/.config}/nvim/lazy-lock.json"
 )
 
-KNOWN_LINKS_tmux=$(printf '%s\n' \
-  "$HOME/.tmux.conf" \
+KNOWN_LINKS_tmux=$(
+  printf '%s\n' \
+    "$HOME/.tmux.conf"
 )
 
-KNOWN_LINKS_bin=$(printf '%s\n' \
-  "$HOME/bin/ocw" \
-  "$HOME/bin/claude-ds" \
+KNOWN_LINKS_bin=$(
+  printf '%s\n' \
+    "$HOME/bin/ocw" \
+    "$HOME/bin/claude-ds"
 )
 
-KNOWN_LINKS_claude=$(printf '%s\n' \
-  "$HOME/.claude/CLAUDE.md" \
+KNOWN_LINKS_claude=$(
+  printf '%s\n' \
+    "$HOME/.claude/CLAUDE.md"
 )
 
 # Skills are symlinked individually by deploy.sh (auto-detected from
@@ -53,8 +62,9 @@ KNOWN_SKILLS_SRC_claude="$SCRIPT_DIR/claude/skills"
 
 # settings.json is a generated file (not a symlink) — handled separately.
 # symlink_restore would skip it because it's a real file.
-KNOWN_GENERATED_claude=$(printf '%s\n' \
-  "$HOME/.claude/settings.json" \
+KNOWN_GENERATED_claude=$(
+  printf '%s\n' \
+    "$HOME/.claude/settings.json"
 )
 
 # ── Usage ─────────────────────────────────────────────────────────────
@@ -78,18 +88,25 @@ EOF
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --dry-run)    DRY_RUN=1 ;;
-    --force)      FORCE=1 ;;
+    --dry-run) DRY_RUN=1 ;;
+    --force) FORCE=1 ;;
     --only)
       if [ $# -lt 2 ]; then
         log_error "--only requires a comma-separated list of tools."
         exit 1
       fi
-      ONLY_TOOLS="$2"; shift ;;
-    --help|-h)    usage; exit 0 ;;
+      ONLY_TOOLS="$2"
+      shift
+      ;;
+    --help | -h)
+      usage
+      exit 0
+      ;;
     *)
       log_error "Unknown option: $1"
-      usage >&2; exit 1 ;;
+      usage >&2
+      exit 1
+      ;;
   esac
   shift
 done
@@ -122,8 +139,11 @@ if [ "$FORCE" -eq 0 ] && [ "$DRY_RUN" -eq 0 ]; then
     exit 1
   }
   case "$_answer" in
-    [Yy]|[Yy][Ee][Ss]) ;;
-    *) log_warn "Aborted."; exit 0 ;;
+    [Yy] | [Yy][Ee][Ss]) ;;
+    *)
+      log_warn "Aborted."
+      exit 0
+      ;;
   esac
   printf '\n'
 fi
@@ -137,17 +157,22 @@ for _tool in $TOOLS; do
   log_hr
   log_info "Uninstalling: $_tool"
 
-  # Get the list of known links for this tool.
-  # Guard: $_tool is validated by resolve_tools() above but we
-  # double-check it contains only alphanumeric characters before
-  # using it in a dynamic variable name to prevent injection.
+  # Get the list of known links for this tool. A case statement (rather
+  # than eval-based indirection through a "KNOWN_LINKS_$_tool" variable
+  # name) keeps each KNOWN_LINKS_* / KNOWN_GENERATED_* variable directly
+  # referenced, so shellcheck can see the use and avoids eval entirely.
+  _links=""
   case "$_tool" in
-    *[!a-zA-Z0-9_]*) log_error "Invalid tool name: '$_tool'"; continue ;;
+    zsh) _links="$KNOWN_LINKS_zsh" ;;
+    nvim) _links="$KNOWN_LINKS_nvim" ;;
+    tmux) _links="$KNOWN_LINKS_tmux" ;;
+    bin) _links="$KNOWN_LINKS_bin" ;;
+    claude) _links="$KNOWN_LINKS_claude" ;;
   esac
-  _links_var="KNOWN_LINKS_$_tool"
-  eval "_links=\${$_links_var:-}"
-  _gen_var="KNOWN_GENERATED_$_tool"
-  eval "_generated=\${$_gen_var:-}"
+  _generated=""
+  case "$_tool" in
+    claude) _generated="$KNOWN_GENERATED_claude" ;;
+  esac
 
   if [ -z "$_links" ] && [ -z "$_generated" ]; then
     log_warn "No link list defined for '$_tool'. Skipping."
@@ -161,7 +186,7 @@ for _tool in $TOOLS; do
 '
     for _dst in $_links; do
       IFS="$_OLDIFS"
-      [ -z "$_dst" ] && continue  # skip blank lines
+      [ -z "$_dst" ] && continue # skip blank lines
       symlink_restore "$_dst" || OVERALL_OK=1
       IFS='
 '
@@ -170,8 +195,10 @@ for _tool in $TOOLS; do
   IFS="$_OLDIFS"
 
   # --- claude skills: walk ~/.claude/skills/ for repo-owned symlinks ---
-  _skills_var="KNOWN_SKILLS_SRC_$_tool"
-  eval "_skills_src=\${$_skills_var:-}"
+  _skills_src=""
+  case "$_tool" in
+    claude) _skills_src="$KNOWN_SKILLS_SRC_claude" ;;
+  esac
 
   if [ -n "$_skills_src" ] && [ -d "$HOME/.claude/skills" ]; then
     for _skill_link in "$HOME/.claude/skills"/*; do
@@ -236,13 +263,15 @@ for _tool in $TOOLS; do
         if [ "${DRY_RUN:-0}" -eq 1 ]; then
           printf '[DRY-RUN] mv %s %s (safety backup)\n' "$_dst" "$_safety_path"
         else
-          mv "$_dst" "$_safety_path" && log_info "Safety backup: $_dst → $_safety_path" || {
+          if mv "$_dst" "$_safety_path"; then
+            log_info "Safety backup: $_dst → $_safety_path"
+          else
             log_error "Failed to back up: $_dst"
             OVERALL_OK=1
             IFS='
 '
             continue
-          }
+          fi
         fi
       fi
 

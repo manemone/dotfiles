@@ -1,6 +1,6 @@
 """Tests for bin/ocw's ocw-meter instrumentation.
 
-孫2 (docs/planning/DOC-003_ai-llm-cost-observability_計画.md §11/孫2 prompt):
+孫2 (docs/planning/DOC-2608021229-a_ai-llm-cost-observability_計画.md §11/孫2 prompt):
 ocw now issues a run_id per worktree, persists it under the worktree's
 private git metadata dir, and emits run.start/run.end via ocw-meter
 (fail-open). This file is black-box (subprocess, matching

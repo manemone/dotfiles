@@ -65,10 +65,36 @@ Options can be combined:
 ./deploy-all.sh --force --only zsh,nvim --no-backup
 ```
 
+## Development Setup
+
+If you're contributing to this repository (not just deploying it), enable the
+pre-commit quality gate (shellcheck, shfmt, DOC-ID checks, a deploy dry-run).
+The only tool this requires is [uv](https://docs.astral.sh/uv/):
+
+```bash
+uv tool install pre-commit
+pre-commit install
+```
+
+From then on, `pre-commit run --all-files` runs most of the checks CI runs.
+Deploy-related changes should additionally be verified with
+`tests/deploy_smoke.sh`, which exercises `deploy-all.sh` against a sandboxed
+`$HOME` (never your real one). See
+[docs/design/DOC-2608020715-b_テスト方針.md](docs/design/DOC-2608020715-b_テスト方針.md)
+for details. `bin/` changes should additionally be verified with
+`python3 -m unittest discover -s bin/tests -v`; this is not part of
+`pre-commit` (193 tests, ~40s) but runs on every PR via the `bin-tests` CI job.
+
 ## Directory Structure
 
 ```
 ~/.dotfiles/
+├── AGENTS.md                  # Rules for AI agents developing this repo
+├── CLAUDE.md                  # Entry point for Claude Code (imports AGENTS.md)
+├── opencode.json              # Entry point for opencode (points to AGENTS.md + docs/design/)
+├── .claude/
+│   ├── pr-review.yml          # PR review workflow config (lint_cmd / test_cmd)
+│   └── settings.json          # Permissions for AI agents in this repo (not the deployed claude/)
 ├── deploy-all.sh              # Unified deployment orchestrator
 ├── uninstall.sh               # Clean removal of known symlinks, restores backups where available
 ├── Brewfile                   # macOS Homebrew packages (zsh, tmux, git, curl)
@@ -76,17 +102,24 @@ Options can be combined:
 ├── .mise.toml                 # Runtime versions (python, node, ruby, rust, neovim, ripgrep, fd, lazygit)
 ├── .gitignore                 # Git ignore rules
 ├── LICENSE                    # MIT License
-├── docs/                      # Documentation (see docs/README.md for the full index)
-│   ├── README.md              # Index: quick-nav + full DOC-ID list. Only file allowed directly under docs/
-│   ├── adr/                   # Accepted architecture decision records
+├── docs/                      # Design docs, ADRs, coding/PR conventions, umbrella-branch plans
+│   ├── README.md              # Index: quick nav, DOC-ID registry, folder rules
+│   ├── design/                # Active design docs (PR conventions, shell coding policy, test policy)
+│   ├── adr/                   # Accepted architecture decision records (do not change once accepted)
 │   ├── planning/              # Umbrella-branch plans and roadmaps (historical once merged)
 │   └── reference/             # Operational references kept current (schemas, runbooks)
+├── tools/                     # Repo-internal dev tools, not deployed to $HOME (unlike bin/)
+│   └── doc-id/                # DOC-ID assign/check/verify CLI (Ruby stdlib only)
+├── templates/                 # Copier templates distributed to OTHER repositories (independent of dotfiles itself)
+│   └── repo-baseline/         # AGENTS.md/CLAUDE.md/opencode.json/pre-commit/DOC-ID/CI baseline; self-contained
 ├── shared/
 │   └── helpers.sh             # Shared shell functions (logging, symlinks, platform detection)
 ├── bin/
 │   ├── ocw                    # Git worktree manager with Herdr integration
 │   ├── claude-ds              # Claude Code via DeepSeek API wrapper
 │   ├── ocw-meter              # LLM cost / Claude quota observability (read-only, fail-open)
+│   ├── tests/                 # Python unit tests for ocw-meter etc. (bin/tests/lint.sh + unittest suite)
+│   ├── prices/                # Price tables used for cost calculation
 │   ├── deploy.sh              # bin deployment script
 │   └── README.md
 ├── claude/

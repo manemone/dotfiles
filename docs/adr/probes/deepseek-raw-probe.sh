@@ -19,7 +19,7 @@ if [ ! -f "$API_KEY_FILE" ]; then
   echo "Set DEEPSEEK_API_KEY_FILE or create ~/.config/deepseek/api_key"
   exit 1
 fi
-API_KEY=$(tr -d '\r\n' < "$API_KEY_FILE")
+API_KEY=$(tr -d '\r\n' <"$API_KEY_FILE")
 if [ -z "$API_KEY" ]; then
   echo "ERROR: API key is empty. Check $API_KEY_FILE"
   exit 1
@@ -34,7 +34,7 @@ BODY='{"model":"'"$MODEL"'","max_tokens":16,"messages":[{"role":"user","content"
 echo "=== DeepSeek Raw Request Probe ==="
 echo "Model: $MODEL"
 echo "Output files: /tmp/ds-probe-nonstreaming.txt, /tmp/ds-probe-streaming.txt"
-echo 'Estimated cost: < $0.01'
+echo "Estimated cost: < \$0.01"
 echo ""
 
 # Round-1 review finding 7 + round-3 review finding 16: pass the API key
@@ -44,7 +44,7 @@ echo ""
 # so it cannot be deleted before the streaming request completes).
 AUTH_HDR=$(mktemp)
 trap 'rm -f "$AUTH_HDR"' EXIT
-printf 'Authorization: Bearer %s\r\n' "$API_KEY" > "$AUTH_HDR"
+printf 'Authorization: Bearer %s\r\n' "$API_KEY" >"$AUTH_HDR"
 
 # ── Non-streaming ──
 echo "--- Non-streaming request ---"
@@ -98,7 +98,7 @@ except Exception as e:
 
   echo ""
   echo "--- Probe complete ---"
-} > "$NONSTREAM_OUT" 2>&1
+} >"$NONSTREAM_OUT" 2>&1
 
 echo "Non-streaming result: $NONSTREAM_OUT"
 
@@ -165,7 +165,7 @@ for line in sys.stdin:
 
   echo ""
   echo "--- Probe complete ---"
-} > "$STREAM_OUT" 2>&1
+} >"$STREAM_OUT" 2>&1
 
 echo "Streaming result: $STREAM_OUT"
 echo ""
