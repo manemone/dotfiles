@@ -91,6 +91,10 @@ for details. `bin/` changes should additionally be verified with
 ~/.dotfiles/
 ├── AGENTS.md                  # Rules for AI agents developing this repo
 ├── CLAUDE.md                  # Entry point for Claude Code (imports AGENTS.md)
+├── opencode.json              # Entry point for opencode (points to AGENTS.md + docs/design/)
+├── .claude/
+│   ├── pr-review.yml          # PR review workflow config (lint_cmd / test_cmd)
+│   └── settings.json          # Permissions for AI agents in this repo (not the deployed claude/)
 ├── deploy-all.sh              # Unified deployment orchestrator
 ├── uninstall.sh               # Clean removal of known symlinks, restores backups where available
 ├── Brewfile                   # macOS Homebrew packages (zsh, tmux, git, curl)

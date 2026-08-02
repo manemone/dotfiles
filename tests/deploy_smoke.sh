@@ -128,7 +128,7 @@ has_tool() {
 
 # list_repo_skills
 # claude/skills/ 配下の実ディレクトリ名を列挙する（1行1件）。ハードコード
-# すると、孫6で claude/skills/repo-baseline/ 等が増えたときにテストが
+# すると、孫7で claude/skills/repo-baseline/ 等が増えたときにテストが
 # それを検証しないまま緑になり続けるため、claude/deploy.sh 自身と同じ
 # 「ディレクトリを見て自動検出する」入力からテストの期待値を導く。
 list_repo_skills() {

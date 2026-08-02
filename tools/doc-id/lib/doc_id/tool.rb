@@ -4,7 +4,7 @@ require "open3"
 require "fileutils"
 
 module DocId
-  # 参照検証の走査対象ディレクトリ名。孫6でテンプレート変数化する際にここだけ差し替える想定
+  # 参照検証の走査対象ディレクトリ名。孫7でテンプレート変数化する際にここだけ差し替える想定
   DOCS_DIR_NAME = "docs"
   # テストフィクスチャに意図的な壊れ参照が含まれうるため、参照検証・参照更新の対象から除外するディレクトリ名
   EXCLUDED_DIR_NAMES = %w[test tests spec].freeze
