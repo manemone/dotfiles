@@ -88,14 +88,21 @@ KNOWN_GENERATED_claude=$(
 # artifact cleanup's cross-tool scan both need it, and duplicating this
 # case statement is exactly the kind of drift that let ocw-meter go
 # unlisted from KNOWN_LINKS_bin in the first place. A forgotten arm here
-# now surfaces as "No link list defined for '<tool>'. Skipping." whenever
-# <tool> is in $TOOLS, since the main loop below already checks for an
-# empty _links. But a tool NOT in $TOOLS is only ever passed to this
-# function by the cleanup's cross-tool scan, which has no such warning
-# path — a forgotten arm for an out-of-scope tool is still missed
-# silently there (the tool is treated as having no links, so a live
-# symlink into a soon-to-be-deleted generation goes undetected). A
-# function (not eval-based indirection through a "KNOWN_LINKS_$tool"
+# surfaces as "No link list defined for '<tool>'. Skipping." ONLY when
+# <tool> is in $TOOLS AND has no KNOWN_GENERATED_* entry either — the
+# main loop below only warns when both _links and _generated come back
+# empty (uninstall.sh:211). claude is the one tool where this doesn't
+# save you: it has KNOWN_GENERATED_claude (~/.claude/settings.json), so a
+# forgotten claude arm here still leaves _generated non-empty, the warning
+# never fires, and ~/.claude/CLAUDE.md quietly stops being touched while
+# the generation it points into gets deleted out from under it. A tool
+# NOT in $TOOLS is missed silently regardless of KNOWN_GENERATED_*: it's
+# only ever passed to this function by the cleanup's cross-tool scan,
+# which has no warning path at all (the tool is treated as having no
+# links, so a live symlink into a soon-to-be-deleted generation goes
+# undetected).
+#
+# A function (not eval-based indirection through a "KNOWN_LINKS_$tool"
 # name) keeps each KNOWN_LINKS_* variable directly referenced, so a
 # static analysis tool can still see the use.
 links_for_tool() {
