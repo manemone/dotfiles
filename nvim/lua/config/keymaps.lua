@@ -2,15 +2,17 @@
 -- Leader: <Space>
 
 local map = vim.keymap.set
-local opts = { noremap = true, silent = true }
 
 -- ── Leader-key shortcuts ──────────────────────────────────────────────
 
 -- File operations
 map("n", "<Leader>w", "<Cmd>write<CR>", { desc = "Save buffer" })
 
--- Rename the current file in place (:saveas to the new name, delete the old
--- one). Ported from the pre-lazy.nvim init.vim's RenameCurrentFile().
+-- Rename the current file in place. Ported from the pre-lazy.nvim init.vim's
+-- RenameCurrentFile(), but using a filesystem rename instead of :saveas +
+-- delete() — the latter deletes the file it just wrote if the new name
+-- resolves to the same file (e.g. a case-only change on a case-insensitive
+-- filesystem, or "./foo" while editing "foo").
 -- <Leader>n, not to be confused with <Leader>rn (LSP rename) in lsp.lua.
 local function rename_current_file()
   local old_name = vim.fn.expand("%")
@@ -18,8 +20,39 @@ local function rename_current_file()
   if new_name == "" or new_name == old_name then
     return
   end
-  vim.cmd.saveas(new_name)
-  vim.fn.delete(old_name)
+
+  if old_name == "" or vim.fn.filereadable(old_name) == 0 then
+    -- Unnamed or not-yet-written buffer: nothing on disk to rename away
+    -- from, just give the buffer a name and save it. magic disabled so a
+    -- literal "%" or "#" in new_name isn't expanded into the current or
+    -- alternate filename.
+    local ok, err = pcall(function()
+      vim.cmd({ cmd = "saveas", args = { new_name }, magic = { file = false, bar = false } })
+    end)
+    if not ok then
+      if old_name ~= "" then
+        vim.api.nvim_buf_set_name(0, old_name)
+      end
+      vim.notify("Rename failed: " .. tostring(err), vim.log.levels.ERROR)
+      return
+    end
+    vim.cmd.redraw()
+    return
+  end
+
+  -- Flush pending edits before moving the file, so the rename carries the
+  -- latest content.
+  if vim.bo.modified then
+    vim.cmd.write()
+  end
+
+  if vim.fn.rename(old_name, new_name) ~= 0 then
+    vim.notify("Rename failed: could not rename " .. old_name .. " to " .. new_name, vim.log.levels.ERROR)
+    return
+  end
+
+  vim.api.nvim_buf_set_name(0, new_name)
+  vim.bo.modified = false
   vim.cmd.redraw()
 end
 map("n", "<Leader>n", rename_current_file, { desc = "Rename current file" })

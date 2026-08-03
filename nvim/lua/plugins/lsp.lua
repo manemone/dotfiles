@@ -95,8 +95,10 @@ return {
     -- ── LSP capabilities (advertise blink.cmp's completion support) ───────
     -- require("blink.cmp") triggers lazy.nvim to load the plugin here if it
     -- hasn't been loaded yet (lazy.nvim indexes every plugin's module path
-    -- regardless of its own lazy-load event), so this works even though
-    -- blink.cmp's own event is InsertEnter and lsp.lua's is BufReadPre.
+    -- regardless of its own lazy-load event). blink.cmp's (and, via its
+    -- dependency, LuaSnip's) `event` in their own plugin files is set to
+    -- match this file's BufReadPre/BufNewFile rather than InsertEnter,
+    -- since this require forces that load anyway.
     local capabilities = require("blink.cmp").get_lsp_capabilities()
 
     -- ── mason.nvim ────────────────────────────────────────────────────────
