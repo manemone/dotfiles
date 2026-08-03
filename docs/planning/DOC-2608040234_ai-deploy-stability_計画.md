@@ -29,8 +29,8 @@
 | 孫 | ブランチ | 内容 | 状況 |
 |---|---|---|---|
 | 1 | `ai/ds-01-distribution-layer` | 配布実体レイヤ（世代ディレクトリ + `current` + manifest + GC）と、単純 symlink 系4ツール（`zsh` `nvim` `tmux` `bin`）の切り替え | ✅ PR #41 マージ済 |
-| 2 | `ai/ds-02-claude-sources` | `claude` の例外2箇所（`settings.json` の生成・`skills/` の個別 symlink）を `current` 経由へ追従 | 🔄 実装中 |
-| 3 | `ai/ds-03-uninstall` | `uninstall.sh` の追従（配布実体の後片付け・由来判定の両対応）と `KNOWN_LINKS_bin` の `ocw-meter` 欠落修正 | ⬜ 待機中 |
+| 2 | `ai/ds-02-claude-sources` | `claude` の例外2箇所（`settings.json` の生成・`skills/` の個別 symlink）を `current` 経由へ追従 | ✅ PR #42 マージ済 |
+| 3 | `ai/ds-03-uninstall` | `uninstall.sh` の追従（配布実体の後片付け・由来判定の両対応）と `KNOWN_LINKS_bin` の `ocw-meter` 欠落修正 | 🔄 実装中 |
 | 4 | `ai/ds-04-operations` | 運用コマンド `--status` / `--rollback` / `--dev` / リンク切れ検出 | ⬜ 待機中 |
 | 5 | `ai/ds-05-docs` | 文書の更新（`AGENTS.md` / ルート `README.md` / テスト方針）と運用リファレンスの新規作成 | ⬜ 待機中 |
 | 6 | `ai/ds-06-ocw-meter-prices` | `bin/ocw-meter` が symlink 経由起動で価格表を見失うバグの修正 | ⬜ 待機中 |
