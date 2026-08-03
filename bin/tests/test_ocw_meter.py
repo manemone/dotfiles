@@ -1779,6 +1779,85 @@ class IngestTests(OcwMeterTestCase):
         self.assertFalse(events_file.read_text(encoding="utf-8").endswith("\n"))
 
 
+class SymlinkInvocationTests(OcwMeterTestCase):
+    """ADR DOC-2608040229 §2.6: deploy.sh installs this script as a
+    symlink (e.g. ~/bin/ocw-meter). `dirname` on an unresolved
+    BASH_SOURCE[0] would then point at the SYMLINK's own directory, not
+    where bin/prices/*.json actually lives, so `ingest` would silently
+    find zero price tables (empty price_table_dir -> completeness
+    "unknown" and cost_estimate_usd null, even for a model that IS
+    priced in the real bin/prices/*.json). These tests invoke the
+    script only through a symlink and deliberately do NOT set
+    OCW_METER_PRICE_DIR, so a regression of the BASH_SOURCE[0]
+    resolution shows up as a completeness/cost_estimate_usd mismatch
+    rather than a hard failure."""
+
+    def setUp(self):
+        super().setUp()
+        self.projects_dir = pathlib.Path(self.tmpdir.name) / "claude-projects"
+        self.projects_dir.mkdir(parents=True, exist_ok=True)
+
+    def _run_ingest_via(self, exe_path):
+        env = dict(os.environ)
+        env["OCW_METER_HOME"] = str(self.home)
+        env["OCW_METER_CLAUDE_PROJECTS_DIR"] = str(self.projects_dir)
+        env["OCW_METER_INGEST_USE_GH"] = "0"
+        env.pop("OCW_METER_PRICE_DIR", None)
+        for key in ("OCW_RUN_ID", "OCW_ROLE", "HERDR_WORKSPACE_ID", "HERDR_PANE_ID"):
+            env.pop(key, None)
+        return subprocess.run(
+            [str(exe_path), "ingest"],
+            cwd=str(REPO_ROOT),
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+
+    def test_ingest_resolves_price_dir_through_absolute_symlink(self):
+        link_dir = pathlib.Path(self.tmpdir.name) / "bin-abs"
+        link_dir.mkdir()
+        link_path = link_dir / "ocw-meter"
+        link_path.symlink_to(OCW_METER)
+
+        write_transcript(self.projects_dir, "proj", "sess-symlink-abs", [
+            assistant_line("sess-symlink-abs", "m1", model="deepseek-v4-pro",
+                            input_tokens=1000, cache_read_input_tokens=2000, output_tokens=300),
+        ])
+        result = self._run_ingest_via(link_path)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        event = read_events(self.home)[0]
+        self.assertEqual(event["price_table_version"], "deepseek-2026-08-01")
+        self.assertEqual(event["cost_basis"], "estimated")
+        self.assertEqual(event["completeness"], "complete")
+        self.assertIsNotNone(event["cost_estimate_usd"])
+
+    def test_ingest_resolves_price_dir_through_chained_relative_symlink(self):
+        # Two hops, the first a RELATIVE target, to exercise the
+        # resolution loop walking more than once and resolving a
+        # relative link target against the directory of the link being
+        # read, not the final destination's directory.
+        hop1_dir = pathlib.Path(self.tmpdir.name) / "hop1"
+        hop2_dir = pathlib.Path(self.tmpdir.name) / "hop2"
+        hop1_dir.mkdir()
+        hop2_dir.mkdir()
+        hop1_link = hop1_dir / "ocw-meter"
+        hop1_link.symlink_to(os.path.relpath(OCW_METER, hop1_dir))
+        hop2_link = hop2_dir / "ocw-meter"
+        hop2_link.symlink_to(hop1_link)
+
+        write_transcript(self.projects_dir, "proj", "sess-symlink-chain", [
+            assistant_line("sess-symlink-chain", "m1", model="deepseek-v4-pro",
+                            input_tokens=1000, cache_read_input_tokens=2000, output_tokens=300),
+        ])
+        result = self._run_ingest_via(hop2_link)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        event = read_events(self.home)[0]
+        self.assertEqual(event["price_table_version"], "deepseek-2026-08-01")
+        self.assertEqual(event["completeness"], "complete")
+        self.assertIsNotNone(event["cost_estimate_usd"])
+
+
 class ReportReconcileTests(OcwMeterTestCase):
     def setUp(self):
         super().setUp()
