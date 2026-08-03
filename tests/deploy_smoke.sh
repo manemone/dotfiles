@@ -105,11 +105,26 @@ sandbox_env() {
   )
 }
 
+# EXTRA_ENV
+# run_deploy / run_deploy_from に渡す追加の環境変数。シナリオ関数が呼び出し
+# 前にセットし、呼び出し後に空へ戻す運用とする（例: 世代のGCを検証するため
+# DOTFILES_KEEP_GENERATIONS を上書きするシナリオ）。
+EXTRA_ENV=()
+
+# run_deploy_from <deploy_all.sh のパス> <sbx> [引数...]
+# REPO_ROOT の deploy-all.sh 以外（使い捨てのコピーツリーなど）から
+# サンドボックスへ deploy するためのバリエーション。
+run_deploy_from() {
+  local deploy_all="$1" sbx="$2"
+  shift 2
+  sandbox_env "$sbx"
+  env "${SANDBOX_ENV[@]}" "${EXTRA_ENV[@]}" "$deploy_all" "$@"
+}
+
 run_deploy() {
   local sbx="$1"
   shift
-  sandbox_env "$sbx"
-  env "${SANDBOX_ENV[@]}" "$REPO_ROOT/deploy-all.sh" "$@"
+  run_deploy_from "$REPO_ROOT/deploy-all.sh" "$sbx" "$@"
 }
 
 run_uninstall() {
@@ -124,6 +139,50 @@ has_tool() {
     *",$1,"*) return 0 ;;
     *) return 1 ;;
   esac
+}
+
+# dotfiles_prefix_for <sbx>
+# shared/helpers.sh の dotfiles_prefix() と同じ計算をテスト側で再現する
+# （XDG_DATA_HOME は sandbox_env が $sbx/.local/share に差し替える）。
+dotfiles_prefix_for() {
+  printf '%s/.local/share/dotfiles' "$1"
+}
+
+# current_target_for <sbx>
+# サンドボックス内の current シンボリックリンクの読み取り先を返す。
+current_target_for() {
+  readlink "$(dotfiles_prefix_for "$1")/current" 2>/dev/null
+}
+
+# wait_for_next_second
+# 世代IDは秒精度（<date +%Y%m%dT%H%M%S>-<sha>）なので、意図的に世代を
+# 増やしたい再デプロイの間には最低1秒空ける必要がある。固定の `sleep 1`
+# は「1回目の date 呼び出し直後」ではなく「テストコードがこの行に来た
+# 時点」から数えるため、1回目のdeploy内の処理時間や実行環境の負荷次第
+# では計算上ぎりぎり足りず、まれに同一秒に収まって世代ID衝突を起こす
+# （衝突自体は仕様通り正しく拒否されるが、テストの意図は「増える」側の
+# 検証なので偽陽性の失敗になる）。秒の値が実際に変わるまで待つことで、
+# タイミングに依存せず確実に次の秒へ進める。
+wait_for_next_second() {
+  local start
+  start="$(date +%s)"
+  while [ "$(date +%s)" = "$start" ]; do
+    sleep 0.1
+  done
+}
+
+# copy_repo_snapshot <dest_dir>
+# deploy-all.sh が世代へコピーする対象一式（全ツールディレクトリ + shared/）
+# と deploy-all.sh 自身を dest_dir へコピーする。「ソースツリー消失耐性」
+# 「編集分離」シナリオで、REPO_ROOT とは別の使い捨てツリーから deploy し、
+# そのツリーを消す・書き換えるために使う。
+copy_repo_snapshot() {
+  local dest="$1" name
+  mkdir -p "$dest"
+  for name in zsh nvim tmux bin claude shared; do
+    cp -a "$REPO_ROOT/$name" "$dest/$name"
+  done
+  cp -a "$REPO_ROOT/deploy-all.sh" "$dest/deploy-all.sh"
 }
 
 # list_repo_skills
@@ -211,13 +270,40 @@ scenario_backup_symlink_idempotent_uninstall() {
   pass "deploy-all.sh --force --only $TOOLS が成功"
 
   if has_tool bin; then
-    assert_symlink "$sbx/bin/ocw" "$REPO_ROOT/bin/ocw"
-    assert_symlink "$sbx/bin/claude-ds" "$REPO_ROOT/bin/claude-ds"
+    local prefix gen_target
+    prefix="$(dotfiles_prefix_for "$sbx")"
+
+    # $HOME 側の symlink は current を経由する固定パスを指す（世代ディレク
+    # トリを直接指さない）。current の付け替えだけで全リンクの向き先が
+    # 一斉に切り替わる、という世代方式の要になっている（ADR §4.1）。
+    assert_symlink "$sbx/bin/ocw" "$prefix/current/bin/ocw"
+    assert_symlink "$sbx/bin/claude-ds" "$prefix/current/bin/claude-ds"
     assert_exists "$sbx/bin/ocw.backup"
     if [ "$(cat "$sbx/bin/ocw.backup" 2>/dev/null)" = "dummy-ocw" ]; then
       pass "既存ファイルの中身が退避先に保存されている: $sbx/bin/ocw.backup"
     else
       fail "既存ファイルの中身が退避先に保存されている: $sbx/bin/ocw.backup"
+    fi
+
+    if [ -L "$prefix/current" ]; then
+      pass "current が symlink として存在する: $prefix/current"
+    else
+      fail "current が symlink として存在する: $prefix/current"
+    fi
+    gen_target="$(current_target_for "$sbx")"
+    case "$gen_target" in
+      "$prefix/generations/"*)
+        pass "current が generations/ 配下を指している: $gen_target"
+        ;;
+      *)
+        fail "current が generations/ 配下を指している (実際: $gen_target)"
+        ;;
+    esac
+    assert_exists "$gen_target/.dotfiles-manifest"
+    if grep -q '^mode: generation$' "$gen_target/.dotfiles-manifest" 2>/dev/null; then
+      pass "manifest の mode が generation になっている"
+    else
+      fail "manifest の mode が generation になっている"
     fi
   fi
 
@@ -252,6 +338,10 @@ EOF
   fi
 
   # --- 冪等性: 同じ内容で2回目を実行しても壊れない ---
+  # 世代IDは秒精度（<date>-<sha>）なので、同一秒内の再デプロイは同じ内容
+  # でも世代IDが衝突しうる（衝突時は上書きせずエラーにする仕様。指摘3）。
+  # 秒が変わるまで待ってから2回目を実行する。
+  wait_for_next_second
   out="$(run_deploy "$sbx" --force --only "$TOOLS" 2>&1)"
   rc=$?
   if [ "$rc" -ne 0 ]; then
@@ -260,7 +350,7 @@ EOF
     pass "2回目の deploy-all.sh も成功（冪等）"
   fi
   if has_tool bin; then
-    assert_symlink "$sbx/bin/ocw" "$REPO_ROOT/bin/ocw"
+    assert_symlink "$sbx/bin/ocw" "$(dotfiles_prefix_for "$sbx")/current/bin/ocw"
   fi
   if has_tool claude; then
     if printf '%s' "$out" | grep -q "already up to date"; then
@@ -322,7 +412,7 @@ scenario_no_backup() {
     log "$out"
     return
   fi
-  assert_symlink "$sbx/bin/ocw" "$REPO_ROOT/bin/ocw"
+  assert_symlink "$sbx/bin/ocw" "$(dotfiles_prefix_for "$sbx")/current/bin/ocw"
   assert_not_exists "$sbx/bin/ocw.backup"
 }
 
@@ -330,7 +420,7 @@ scenario_no_backup() {
 
 scenario_only_filter() {
   log "=== シナリオ3: --only フィルタで指定ツール以外は触られない ==="
-  local sbx
+  local sbx gen_target tool
   new_sandbox
   sbx="$SANDBOX_DIR"
   run_deploy "$sbx" --force --only bin >/dev/null 2>&1
@@ -341,6 +431,280 @@ scenario_only_filter() {
     fail "--only bin では bin/ocw がデプロイされる"
   fi
   assert_not_exists "$sbx/.claude"
+
+  # --only は $HOME 側のリンク対象を絞るだけで、世代の中身には影響しない
+  # （ADR §4.3 / DOC-2608040229）。--only bin でも世代には全ツール分の
+  # ディレクトリが入っていることを確認する。
+  gen_target="$(current_target_for "$sbx")"
+  for tool in zsh nvim tmux bin claude shared; do
+    assert_exists "$gen_target/$tool"
+  done
+}
+
+# ── シナリオ4: ソースツリー消失耐性 ────────────────────────────────────
+
+scenario_source_tree_disappears() {
+  if ! has_tool bin; then
+    return
+  fi
+  log "=== シナリオ4: ソースツリー消失耐性 ==="
+  local sbx copy_dir out rc content
+  new_sandbox
+  sbx="$SANDBOX_DIR"
+  copy_dir="$(mktemp -d)"
+  CREATED_DIRS+=("$copy_dir")
+  copy_repo_snapshot "$copy_dir"
+
+  out="$(run_deploy_from "$copy_dir/deploy-all.sh" "$sbx" --force --only bin 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "コピーからの deploy-all.sh --only bin が失敗 (exit=$rc)"
+    log "$out"
+    return
+  fi
+
+  content="$(cat "$sbx/bin/ocw" 2>/dev/null)"
+  if [ -z "$content" ]; then
+    fail "deploy 直後に $sbx/bin/ocw が読めること"
+    return
+  fi
+  pass "deploy 直後に $sbx/bin/ocw が読める"
+
+  # ソースツリー（コピー）を削除する。世代は cp -a による実体コピーなので、
+  # 消えたソースツリーに依存していなければ $HOME 側は引き続き読めるはず
+  # （ADR 問題2の回帰テスト）。
+  rm -rf "$copy_dir"
+
+  if [ "$(cat "$sbx/bin/ocw" 2>/dev/null)" = "$content" ]; then
+    pass "ソースツリー削除後も $sbx/bin/ocw が同じ内容で読める（消失耐性）"
+  else
+    fail "ソースツリー削除後も $sbx/bin/ocw が同じ内容で読める（消失耐性）"
+  fi
+}
+
+# ── シナリオ5: 編集分離（deploy後のソースツリー編集は即反映されない） ────
+
+scenario_edit_isolation() {
+  if ! has_tool bin; then
+    return
+  fi
+  log "=== シナリオ5: 編集分離 + 再デプロイでの反映 ==="
+  local sbx copy_dir out rc original marker
+
+  new_sandbox
+  sbx="$SANDBOX_DIR"
+  copy_dir="$(mktemp -d)"
+  CREATED_DIRS+=("$copy_dir")
+  copy_repo_snapshot "$copy_dir"
+
+  out="$(run_deploy_from "$copy_dir/deploy-all.sh" "$sbx" --force --only bin 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "コピーからの deploy-all.sh --only bin が失敗 (exit=$rc)"
+    log "$out"
+    return
+  fi
+
+  original="$(cat "$sbx/bin/ocw" 2>/dev/null)"
+
+  marker="# smoke-test marker $$"
+  printf '%s\n' "$marker" >>"$copy_dir/bin/ocw"
+
+  if [ "$(cat "$sbx/bin/ocw" 2>/dev/null)" = "$original" ]; then
+    pass "deploy 後にソースツリーを書き換えても \$HOME 側の内容は変わらない（編集分離）"
+  else
+    fail "deploy 後にソースツリーを書き換えても \$HOME 側の内容は変わらない（編集分離）"
+  fi
+
+  # 世代IDは秒精度（<date>-<sha>）なので、同一秒内の再デプロイは世代が
+  # 衝突しうる。秒が変わるまで待ってから再デプロイし、編集が反映される
+  # ことを確認する。
+  wait_for_next_second
+  out="$(run_deploy_from "$copy_dir/deploy-all.sh" "$sbx" --force --only bin 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "2回目のコピーからの deploy-all.sh --only bin が失敗 (exit=$rc)"
+    log "$out"
+    return
+  fi
+
+  if cat "$sbx/bin/ocw" 2>/dev/null | grep -qF "$marker"; then
+    pass "再デプロイでソースツリーの編集が反映される"
+  else
+    fail "再デプロイでソースツリーの編集が反映される"
+  fi
+}
+
+# ── シナリオ6: 世代の増加とGC ──────────────────────────────────────────
+
+scenario_generation_gc() {
+  if ! has_tool bin; then
+    return
+  fi
+  log "=== シナリオ6: 世代の増加とGC ==="
+  local sbx copy_dir prefix gen_count keep i out rc first_target cur_target
+
+  new_sandbox
+  sbx="$SANDBOX_DIR"
+  copy_dir="$(mktemp -d)"
+  CREATED_DIRS+=("$copy_dir")
+  copy_repo_snapshot "$copy_dir"
+  prefix="$(dotfiles_prefix_for "$sbx")"
+
+  out="$(run_deploy_from "$copy_dir/deploy-all.sh" "$sbx" --force --only bin 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "1回目の deploy-all.sh --only bin が失敗 (exit=$rc)"
+    log "$out"
+    return
+  fi
+  first_target="$(current_target_for "$sbx")"
+
+  wait_for_next_second
+  out="$(run_deploy_from "$copy_dir/deploy-all.sh" "$sbx" --force --only bin 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "2回目の deploy-all.sh --only bin が失敗 (exit=$rc)"
+    log "$out"
+    return
+  fi
+
+  gen_count="$(find "$prefix/generations" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')"
+  if [ "$gen_count" -eq 2 ]; then
+    pass "再デプロイで世代が増える（既定の保持数では削除されない）: $gen_count 件"
+  else
+    fail "再デプロイで世代が増える（既定の保持数では削除されない）: 期待2件、実際 $gen_count 件"
+  fi
+
+  if [ -d "$first_target" ]; then
+    pass "保持数を超えていない古い世代は削除されない: $first_target"
+  else
+    fail "保持数を超えていない古い世代は削除されない: $first_target"
+  fi
+
+  # --- 保持数を超えるとGCされ、current が指す世代は消えないこと ---
+  keep=2
+  EXTRA_ENV=("DOTFILES_KEEP_GENERATIONS=$keep")
+  i=0
+  while [ "$i" -lt 3 ]; do
+    i=$((i + 1))
+    wait_for_next_second
+    out="$(run_deploy_from "$copy_dir/deploy-all.sh" "$sbx" --force --only bin 2>&1)"
+    rc=$?
+    if [ "$rc" -ne 0 ]; then
+      fail "GC検証用の再デプロイが失敗 (exit=$rc)"
+      log "$out"
+      EXTRA_ENV=()
+      return
+    fi
+  done
+  EXTRA_ENV=()
+
+  gen_count="$(find "$prefix/generations" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')"
+  if [ "$gen_count" -eq "$keep" ]; then
+    pass "DOTFILES_KEEP_GENERATIONS=$keep を超えた古い世代がGCされる: $gen_count 件"
+  else
+    fail "DOTFILES_KEEP_GENERATIONS=$keep を超えた古い世代がGCされる: 期待${keep}件、実際 $gen_count 件"
+  fi
+
+  cur_target="$(current_target_for "$sbx")"
+  if [ -d "$cur_target" ]; then
+    pass "current が指す世代はGCされずに残っている: $cur_target"
+  else
+    fail "current が指す世代はGCされずに残っている: $cur_target"
+  fi
+}
+
+# ── シナリオ7: 旧方式（直リンク）symlink の移行は退避されない ────────────
+
+scenario_migration_no_backup_for_repo_owned_symlink() {
+  if ! has_tool bin; then
+    return
+  fi
+  log "=== シナリオ7: 旧方式(直リンク)symlinkの移行は退避されない ==="
+  local sbx out rc
+
+  new_sandbox
+  sbx="$SANDBOX_DIR"
+  mkdir -p "$sbx/bin"
+  ln -s "$REPO_ROOT/bin/ocw" "$sbx/bin/ocw"
+
+  out="$(run_deploy "$sbx" --force --only bin 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "旧方式リンクが存在する状態での deploy-all.sh --only bin が失敗 (exit=$rc)"
+    log "$out"
+    return
+  fi
+
+  assert_symlink "$sbx/bin/ocw" "$(dotfiles_prefix_for "$sbx")/current/bin/ocw"
+  assert_not_exists "$sbx/bin/ocw.backup"
+}
+
+# ── シナリオ8: 由来判定の偽陽性防止 + 単体実行時のcurrent不在エラー ─────
+
+scenario_symlink_ownership_and_standalone_deploy() {
+  if ! has_tool bin; then
+    return
+  fi
+  log "=== シナリオ8: 由来判定の偽陽性防止 + 単体実行時のcurrent不在エラー ==="
+  local sbx out rc prefix
+
+  # --- 偽陽性防止: リポジトリ外を指す symlink は退避される ---
+  new_sandbox
+  sbx="$SANDBOX_DIR"
+  mkdir -p "$sbx/bin"
+  printf 'my-own-ocw\n' >"$sbx/my-own-ocw"
+  ln -s "$sbx/my-own-ocw" "$sbx/bin/ocw"
+
+  out="$(run_deploy "$sbx" --force --only bin 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "ユーザー所有symlinkが存在する状態での deploy-all.sh --only bin が失敗 (exit=$rc)"
+    log "$out"
+  else
+    assert_exists "$sbx/bin/ocw.backup"
+    if [ -L "$sbx/bin/ocw.backup" ] && [ "$(readlink "$sbx/bin/ocw.backup")" = "$sbx/my-own-ocw" ]; then
+      pass "リポジトリ外を指すユーザー所有symlinkは退避される（偽陽性なし）: $sbx/bin/ocw.backup -> $sbx/my-own-ocw"
+    else
+      fail "リポジトリ外を指すユーザー所有symlinkは退避される（偽陽性なし）: $sbx/bin/ocw.backup -> $(readlink "$sbx/bin/ocw.backup" 2>/dev/null || echo '(symlinkでない)')"
+    fi
+    assert_symlink "$sbx/bin/ocw" "$(dotfiles_prefix_for "$sbx")/current/bin/ocw"
+  fi
+
+  # --- 単体実行: current が存在しない状態で bin/deploy.sh を直接実行するとエラー終了する ---
+  new_sandbox
+  sbx="$SANDBOX_DIR"
+  sandbox_env "$sbx"
+  out="$(env "${SANDBOX_ENV[@]}" DRY_RUN=1 sh "$REPO_ROOT/bin/deploy.sh" 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    pass "current が無い状態での bin/deploy.sh 単体実行はエラー終了する (exit=$rc)"
+  else
+    fail "current が無い状態での bin/deploy.sh 単体実行はエラー終了する (exit=0 になってしまった)"
+  fi
+  if printf '%s' "$out" | grep -q "does not exist yet"; then
+    pass "current 不在時のエラーメッセージが表示される"
+  else
+    fail "current 不在時のエラーメッセージが表示される"
+  fi
+
+  # --- 単体実行: current がリンク切れのときは別のメッセージになる ---
+  prefix="$(dotfiles_prefix_for "$sbx")"
+  mkdir -p "$prefix"
+  ln -s "$prefix/generations/does-not-exist" "$prefix/current"
+  out="$(env "${SANDBOX_ENV[@]}" DRY_RUN=1 sh "$REPO_ROOT/bin/deploy.sh" 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    pass "current がリンク切れの状態での bin/deploy.sh 単体実行はエラー終了する (exit=$rc)"
+  else
+    fail "current がリンク切れの状態での bin/deploy.sh 単体実行はエラー終了する (exit=0 になってしまった)"
+  fi
+  if printf '%s' "$out" | grep -q "broken symlink"; then
+    pass "current がリンク切れのときは『存在しない』ではなく『リンク切れ』のメッセージになる"
+  else
+    fail "current がリンク切れのときは『存在しない』ではなく『リンク切れ』のメッセージになる"
+  fi
 }
 
 log "REPO_ROOT: $REPO_ROOT"
@@ -352,6 +716,16 @@ log
 scenario_no_backup
 log
 scenario_only_filter
+log
+scenario_source_tree_disappears
+log
+scenario_edit_isolation
+log
+scenario_generation_gc
+log
+scenario_migration_no_backup_for_repo_owned_symlink
+log
+scenario_symlink_ownership_and_standalone_deploy
 log
 
 if [ "$FAIL" -eq 0 ]; then
