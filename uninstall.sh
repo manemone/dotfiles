@@ -91,16 +91,16 @@ KNOWN_GENERATED_claude=$(
 # surfaces as "No link list defined for '<tool>'. Skipping." ONLY when
 # <tool> is in $TOOLS AND has no KNOWN_GENERATED_* entry either — the
 # main loop below only warns when both _links and _generated come back
-# empty (uninstall.sh:211). claude is the one tool where this doesn't
-# save you: it has KNOWN_GENERATED_claude (~/.claude/settings.json), so a
-# forgotten claude arm here still leaves _generated non-empty, the warning
-# never fires, and ~/.claude/CLAUDE.md quietly stops being touched while
-# the generation it points into gets deleted out from under it. A tool
-# NOT in $TOOLS is missed silently regardless of KNOWN_GENERATED_*: it's
-# only ever passed to this function by the cleanup's cross-tool scan,
-# which has no warning path at all (the tool is treated as having no
-# links, so a live symlink into a soon-to-be-deleted generation goes
-# undetected).
+# empty (see its "No link list defined" check). claude is the one tool
+# where this doesn't save you: it has KNOWN_GENERATED_claude
+# (~/.claude/settings.json), so a forgotten claude arm here still leaves
+# _generated non-empty, the warning never fires, and ~/.claude/CLAUDE.md
+# quietly stops being touched while the generation it points into gets
+# deleted out from under it. A tool NOT in $TOOLS is missed silently
+# regardless of KNOWN_GENERATED_*: it's only ever passed to this function
+# by the cleanup's cross-tool scan, which has no warning path at all (the
+# tool is treated as having no links, so a live symlink into a
+# soon-to-be-deleted generation goes undetected).
 #
 # A function (not eval-based indirection through a "KNOWN_LINKS_$tool"
 # name) keeps each KNOWN_LINKS_* variable directly referenced, so a
