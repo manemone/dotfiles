@@ -1640,7 +1640,7 @@ scenario_rollback() {
     return
   fi
   log "=== シナリオ24: --rollback ==="
-  local sbx copy_dir prefix out rc gen1_content gen2_content gen1_target gen2_target gen1_name gen2_name marker
+  local sbx copy_dir prefix out rc gen1_content gen2_content gen1_target gen2_target gen1_name gen2_name marker skill_name
 
   new_sandbox
   sbx="$SANDBOX_DIR"
@@ -1649,10 +1649,13 @@ scenario_rollback() {
   copy_repo_snapshot "$copy_dir"
   prefix="$(dotfiles_prefix_for "$sbx")"
 
-  out="$(run_deploy_from "$copy_dir/deploy-all.sh" "$sbx" --force --only bin 2>&1)"
+  # $TOOLS を deploy する（既定は bin,claude）。claude が対象に含まれるときは
+  # 2回目のdeployでskillを1つ追加し、rollbackで巻き戻ったあとにそのskillの
+  # symlinkがリンク切れとして扱われることも検証する。
+  out="$(run_deploy_from "$copy_dir/deploy-all.sh" "$sbx" --force --only "$TOOLS" 2>&1)"
   rc=$?
   if [ "$rc" -ne 0 ]; then
-    fail "1回目の deploy-all.sh --only bin が失敗 (exit=$rc)"
+    fail "1回目の deploy-all.sh --only $TOOLS が失敗 (exit=$rc)"
     log "$out"
     return
   fi
@@ -1663,17 +1666,27 @@ scenario_rollback() {
   marker="# smoke-test rollback marker $$"
   printf '%s\n' "$marker" >>"$copy_dir/bin/ocw"
 
+  if has_tool claude; then
+    skill_name="added-later"
+    mkdir -p "$copy_dir/claude/skills/$skill_name"
+    printf '# smoke-test skill added in gen2\n' >"$copy_dir/claude/skills/$skill_name/SKILL.md"
+  fi
+
   wait_for_next_second
-  out="$(run_deploy_from "$copy_dir/deploy-all.sh" "$sbx" --force --only bin 2>&1)"
+  out="$(run_deploy_from "$copy_dir/deploy-all.sh" "$sbx" --force --only "$TOOLS" 2>&1)"
   rc=$?
   if [ "$rc" -ne 0 ]; then
-    fail "2回目の deploy-all.sh --only bin が失敗 (exit=$rc)"
+    fail "2回目の deploy-all.sh --only $TOOLS が失敗 (exit=$rc)"
     log "$out"
     return
   fi
   gen2_content="$(cat "$sbx/bin/ocw" 2>/dev/null)"
   gen2_target="$(current_target_for "$sbx")"
   gen2_name="$(basename "$gen2_target")"
+
+  if has_tool claude; then
+    assert_symlink "$sbx/.claude/skills/$skill_name" "$prefix/current/claude/skills/$skill_name"
+  fi
 
   if printf '%s' "$gen2_content" | grep -qF "$marker"; then
     pass "2回目のdeployでソースツリーの編集内容が反映されている（rollback検証の前提）"
@@ -1781,6 +1794,25 @@ scenario_rollback() {
   # $HOME 側の symlink 自体は current という固定パスを指したまま変わらない
   # ことも確認する（current の付け替えだけで向き先が変わる、が世代方式の要）。
   assert_symlink "$sbx/bin/ocw" "$prefix/current/bin/ocw"
+
+  # --- gen1にはまだ無いskill(gen2で追加)のsymlinkは、rollback後に
+  #     current経由で解決できなくなりリンク切れとして残る。--rollback自身は
+  #     世代間差分を検出しない設計（指摘2への回答）なので、--statusがそれを
+  #     検出できることをここで固定する。 ---
+  if has_tool claude; then
+    out="$(run_deploy_from "$copy_dir/deploy-all.sh" "$sbx" --status 2>&1)"
+    rc=$?
+    if [ "$rc" -ne 0 ]; then
+      pass "rollbackでgen1に無いskillがリンク切れになると--statusが非0で終了する (exit=$rc)"
+    else
+      fail "rollbackでgen1に無いskillがリンク切れになると--statusが非0で終了する (exit=0のままだった)"
+    fi
+    if printf '%s' "$out" | grep -qE "\[BROKEN\][[:space:]]+$sbx/\.claude/skills/$skill_name"; then
+      pass "rollback後、gen2で追加されたskillのリンク切れを--statusが検出する"
+    else
+      fail "rollback後、gen2で追加されたskillのリンク切れを--statusが検出する"
+    fi
+  fi
 
   # --- これ以上戻れない場合は明確なエラーになる ---
   out="$(run_deploy_from "$copy_dir/deploy-all.sh" "$sbx" --rollback 2>&1)"
