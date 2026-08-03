@@ -416,6 +416,18 @@ create_generation() {
     printf 'exit 1\n'
     return 1
   }
+
+  # Sweep any scratch dirs left behind by a previous run that never reached
+  # its own cleanup (e.g. killed mid-copy) — gc_generations only ever looks
+  # at generations/, so .tmp/ is nobody else's job. This repo assumes a
+  # single user running deploys sequentially, so by definition nothing here
+  # from a prior invocation is still in use.
+  for _cg_stale in "$_cg_prefix/.tmp"/gen.*; do
+    [ -e "$_cg_stale" ] || [ -L "$_cg_stale" ] || continue
+    log_warn "Sweeping leftover scratch directory: $_cg_stale"
+    _dotfiles_safe_rmdir "$_cg_stale" "$_cg_prefix/.tmp"
+  done
+
   _cg_scratch=$(mktemp -d "$_cg_prefix/.tmp/gen.XXXXXX") || {
     log_error "Failed to create a scratch directory under $_cg_prefix/.tmp"
     printf 'exit 1\n'
@@ -437,11 +449,14 @@ create_generation() {
     return 1
   }
 
-  # mktemp -d creates the scratch dir 0700; carry the repo's usual 0755 over
-  # to the generation directory itself so distributed config keeps the same
-  # permissions it had before this scratch-dir mechanism existed (deliberate
-  # choice, not a side effect of mktemp's default mode).
-  chmod 0755 "$_cg_scratch" || log_warn "Failed to set permissions on scratch directory: $_cg_scratch"
+  # mktemp -d always creates the scratch dir 0700, ignoring the user's
+  # umask. Before this scratch-dir mechanism existed, the generation
+  # directory came from a plain `mkdir -p`, whose mode is umask-derived —
+  # so match that instead of hardcoding a mode, or umask 077 (the user's
+  # explicit "keep new things private to me" signal) would get silently
+  # overridden to world-readable 0755.
+  _cg_mode=$(printf '%03o' $((0777 & ~0$(umask))))
+  chmod "$_cg_mode" "$_cg_scratch" || log_warn "Failed to set permissions on scratch directory: $_cg_scratch"
 
   mkdir -p "$_cg_gens_dir" || {
     log_error "Failed to create generations directory: $_cg_gens_dir"

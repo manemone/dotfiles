@@ -154,6 +154,23 @@ current_target_for() {
   readlink "$(dotfiles_prefix_for "$1")/current" 2>/dev/null
 }
 
+# wait_for_next_second
+# 世代IDは秒精度（<date +%Y%m%dT%H%M%S>-<sha>）なので、意図的に世代を
+# 増やしたい再デプロイの間には最低1秒空ける必要がある。固定の `sleep 1`
+# は「1回目の date 呼び出し直後」ではなく「テストコードがこの行に来た
+# 時点」から数えるため、1回目のdeploy内の処理時間や実行環境の負荷次第
+# では計算上ぎりぎり足りず、まれに同一秒に収まって世代ID衝突を起こす
+# （衝突自体は仕様通り正しく拒否されるが、テストの意図は「増える」側の
+# 検証なので偽陽性の失敗になる）。秒の値が実際に変わるまで待つことで、
+# タイミングに依存せず確実に次の秒へ進める。
+wait_for_next_second() {
+  local start
+  start="$(date +%s)"
+  while [ "$(date +%s)" = "$start" ]; do
+    sleep 0.1
+  done
+}
+
 # copy_repo_snapshot <dest_dir>
 # deploy-all.sh が世代へコピーする対象一式（全ツールディレクトリ + shared/）
 # と deploy-all.sh 自身を dest_dir へコピーする。「ソースツリー消失耐性」
@@ -323,8 +340,8 @@ EOF
   # --- 冪等性: 同じ内容で2回目を実行しても壊れない ---
   # 世代IDは秒精度（<date>-<sha>）なので、同一秒内の再デプロイは同じ内容
   # でも世代IDが衝突しうる（衝突時は上書きせずエラーにする仕様。指摘3）。
-  # 1秒空けてから2回目を実行する。
-  sleep 1
+  # 秒が変わるまで待ってから2回目を実行する。
+  wait_for_next_second
   out="$(run_deploy "$sbx" --force --only "$TOOLS" 2>&1)"
   rc=$?
   if [ "$rc" -ne 0 ]; then
@@ -500,8 +517,9 @@ scenario_edit_isolation() {
   fi
 
   # 世代IDは秒精度（<date>-<sha>）なので、同一秒内の再デプロイは世代が
-  # 衝突しうる。1秒空けてから再デプロイし、編集が反映されることを確認する。
-  sleep 1
+  # 衝突しうる。秒が変わるまで待ってから再デプロイし、編集が反映される
+  # ことを確認する。
+  wait_for_next_second
   out="$(run_deploy_from "$copy_dir/deploy-all.sh" "$sbx" --force --only bin 2>&1)"
   rc=$?
   if [ "$rc" -ne 0 ]; then
@@ -542,7 +560,7 @@ scenario_generation_gc() {
   fi
   first_target="$(current_target_for "$sbx")"
 
-  sleep 1
+  wait_for_next_second
   out="$(run_deploy_from "$copy_dir/deploy-all.sh" "$sbx" --force --only bin 2>&1)"
   rc=$?
   if [ "$rc" -ne 0 ]; then
@@ -570,7 +588,7 @@ scenario_generation_gc() {
   i=0
   while [ "$i" -lt 3 ]; do
     i=$((i + 1))
-    sleep 1
+    wait_for_next_second
     out="$(run_deploy_from "$copy_dir/deploy-all.sh" "$sbx" --force --only bin 2>&1)"
     rc=$?
     if [ "$rc" -ne 0 ]; then
