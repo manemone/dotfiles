@@ -147,61 +147,95 @@ resolve_tools() {
 
 # ── Known $HOME-side link destinations per tool ─────────────────────────
 #
-# Single source of truth for "which paths under $HOME does this repo's
-# deploy create". uninstall.sh needs it to know what to remove;
-# deploy-all.sh --status needs it to check for broken symlinks. Keeping one
-# copy here (instead of duplicating the list in both scripts) is what
-# prevents the drift that let ocw-meter go unlisted from KNOWN_LINKS_bin in
-# the first place (see ADR DOC-2608040229 §2.6 / AGENTS.md 実装時の注意).
-# Use printf so the trailing-newline line-continuation works portably.
-KNOWN_LINKS_zsh=$(
-  printf '%s\n' \
-    "$HOME/.zshrc" \
-    "$HOME/.zsh_plugins.txt"
-)
-
-KNOWN_LINKS_nvim=$(
-  printf '%s\n' \
-    "${XDG_CONFIG_HOME:-$HOME/.config}/nvim/init.lua" \
-    "${XDG_CONFIG_HOME:-$HOME/.config}/nvim/lua" \
-    "${XDG_CONFIG_HOME:-$HOME/.config}/nvim/lazy-lock.json"
-)
-
-KNOWN_LINKS_tmux=$(
-  printf '%s\n' \
-    "$HOME/.tmux.conf"
-)
-
-KNOWN_LINKS_bin=$(
-  printf '%s\n' \
-    "$HOME/bin/ocw" \
-    "$HOME/bin/claude-ds" \
-    "$HOME/bin/ocw-meter"
-)
-
-KNOWN_LINKS_claude=$(
-  printf '%s\n' \
-    "$HOME/.claude/CLAUDE.md"
-)
-
 # links_for_tool <tool>
-# Print (one per line) the KNOWN_LINKS_<tool> destinations for <tool>
-# (empty if <tool> has none). Callers (uninstall.sh's per-tool loop and
-# distribution-artifact cleanup, deploy-all.sh's --status link-health scan)
-# all need the same tool -> KNOWN_LINKS_* mapping, and duplicating this case
-# statement is exactly the kind of drift the comment above warns about.
+# Print (one per line) the known $HOME symlink destinations for <tool>
+# (empty if <tool> has none). Single source of truth for "which paths under
+# $HOME does this repo's deploy create": uninstall.sh needs it to know what
+# to remove, deploy-all.sh --status needs it to check for broken symlinks.
+# Keeping one copy (instead of duplicating the list in both scripts) is
+# what prevents the drift that let ocw-meter go unlisted from
+# KNOWN_LINKS_bin in the first place (see ADR DOC-2608040229 §2.6 /
+# AGENTS.md 実装時の注意).
 #
-# A function (not eval-based indirection through a "KNOWN_LINKS_$tool" name)
-# keeps each KNOWN_LINKS_* variable directly referenced, so a static
-# analysis tool can still see the use.
+# A forgotten arm here surfaces as "No link list defined for '<tool>'.
+# Skipping." in uninstall.sh's per-tool loop ONLY when <tool> is in $TOOLS
+# AND has no KNOWN_GENERATED_* entry either (that loop only warns when both
+# _links and _generated come back empty). claude is the one tool where this
+# doesn't save you: it has a KNOWN_GENERATED_claude entry
+# (~/.claude/settings.json), so a forgotten claude arm here still leaves
+# _generated non-empty, the warning never fires, and ~/.claude/CLAUDE.md
+# quietly stops being touched while the generation it points into gets
+# deleted out from under it. deploy-all.sh --status's link-health scan
+# (a third consumer, added alongside this comment) has no warning path at
+# all for a forgotten arm: the tool's entries are just silently absent from
+# the report, so a broken symlink for that tool goes undetected too — the
+# same blind spot claude_skill_links() below exists to close for skills.
+#
+# Values are inlined into the case arms (not module-level KNOWN_LINKS_*
+# variables) on purpose: this file is sourced by every interactive zsh
+# startup (zsh/.zshrc), and module-level `VAR=$(printf ...)` assignments
+# both leak into that shell's namespace (zsh/.zshrc already has to unset
+# AVAILABLE_TOOLS for the same reason — see its "helpers.sh exports
+# AVAILABLE_TOOLS which we don't need in an interactive shell" comment) and
+# fork one subshell per tool at source time. Inlining also means $HOME /
+# $XDG_CONFIG_HOME are read at call time instead of source time, which is
+# what lets tests override them via `env HOME=...` after helpers.sh is
+# already sourced.
 links_for_tool() {
   case "$1" in
-    zsh) printf '%s\n' "$KNOWN_LINKS_zsh" ;;
-    nvim) printf '%s\n' "$KNOWN_LINKS_nvim" ;;
-    tmux) printf '%s\n' "$KNOWN_LINKS_tmux" ;;
-    bin) printf '%s\n' "$KNOWN_LINKS_bin" ;;
-    claude) printf '%s\n' "$KNOWN_LINKS_claude" ;;
+    zsh)
+      printf '%s\n' \
+        "$HOME/.zshrc" \
+        "$HOME/.zsh_plugins.txt"
+      ;;
+    nvim)
+      printf '%s\n' \
+        "${XDG_CONFIG_HOME:-$HOME/.config}/nvim/init.lua" \
+        "${XDG_CONFIG_HOME:-$HOME/.config}/nvim/lua" \
+        "${XDG_CONFIG_HOME:-$HOME/.config}/nvim/lazy-lock.json"
+      ;;
+    tmux)
+      printf '%s\n' \
+        "$HOME/.tmux.conf"
+      ;;
+    bin)
+      printf '%s\n' \
+        "$HOME/bin/ocw" \
+        "$HOME/bin/claude-ds" \
+        "$HOME/bin/ocw-meter"
+      ;;
+    claude)
+      printf '%s\n' \
+        "$HOME/.claude/CLAUDE.md"
+      ;;
   esac
+}
+
+# claude_skill_links [repo_root]
+# Print (one per line) the paths under $HOME/.claude/skills/ that are
+# symlinks owned by this repo's distribution (see
+# _dotfiles_symlink_is_repo_owned for the ownership test — the canonical
+# prefix always counts, and repo_root additionally recognizes the
+# pre-migration direct-to-worktree scheme, see ADR DOC-2608040229 §4.8/
+# §4.9). Skills aren't in links_for_tool()/KNOWN_LINKS_claude because
+# claude/deploy.sh symlinks them individually, one per skill directory
+# auto-detected under claude/skills/, rather than as a fixed list — but
+# they are still $HOME symlinks this repo creates, and in practice the
+# tool with the most of them (ADR §1.1). Shared by uninstall.sh (needs the
+# list to know what to restore) and deploy-all.sh --status (needs it so
+# its $HOME link-health scan doesn't blind-spot the tool with the most
+# symlinks of any of them). Prints nothing (not an error) if
+# ~/.claude/skills doesn't exist.
+claude_skill_links() {
+  _csl_repo_root="${1:-}"
+  _csl_dir="$HOME/.claude/skills"
+  [ -d "$_csl_dir" ] || return 0
+  for _csl_link in "$_csl_dir"/*; do
+    [ -L "$_csl_link" ] || continue
+    if _dotfiles_symlink_is_repo_owned "$_csl_link" "$_csl_repo_root"; then
+      printf '%s\n' "$_csl_link"
+    fi
+  done
 }
 
 # ── Logging (colourised when the output fd is a terminal) ─────────────
@@ -320,6 +354,16 @@ dotfiles_prefix() {
 # re-linking anything under $HOME.
 dotfiles_current_link() {
   printf '%s' "$(dotfiles_prefix)/current"
+}
+
+# dotfiles_keep_generations
+# Print the configured generation retention count
+# (${DOTFILES_KEEP_GENERATIONS:-3} — 3 is the default ADR §4.6 settled on:
+# enough to protect a running process's lazy-loaded files plus one
+# rollback target). Single source for this default so gc_generations and
+# deploy-all.sh --status can't drift apart and report different numbers.
+dotfiles_keep_generations() {
+  printf '%s' "${DOTFILES_KEEP_GENERATIONS:-3}"
 }
 
 # resolve_deploy_src
@@ -644,7 +688,7 @@ switch_current() {
 }
 
 # gc_generations
-# Removes generations beyond ${DOTFILES_KEEP_GENERATIONS:-3}, oldest first.
+# Removes generations beyond dotfiles_keep_generations(), oldest first.
 # Invariants: the generation `current` points at is never removed, and if
 # `current` points outside generations/ (dev mode — see ADR §4.5) nothing
 # is removed at all. Deletion goes through _dotfiles_safe_rmdir, which
@@ -671,7 +715,7 @@ gc_generations() {
   esac
   _gc_current_name=$(basename "$_gc_current_target")
 
-  _gc_keep="${DOTFILES_KEEP_GENERATIONS:-3}"
+  _gc_keep="$(dotfiles_keep_generations)"
 
   # Two passes over generations/, deliberately kept separate:
   #   1. Enumerate every entry (no -type filter) so a stray symlink or file

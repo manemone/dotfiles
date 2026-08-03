@@ -180,41 +180,38 @@ for _tool in $TOOLS; do
     claude) _skills_src="$KNOWN_SKILLS_SRC_claude" ;;
   esac
 
-  if [ -n "$_skills_src" ] && [ -d "$HOME/.claude/skills" ]; then
-    for _skill_link in "$HOME/.claude/skills"/*; do
-      [ -L "$_skill_link" ] || continue
-      _target=$(readlink "$_skill_link")
-      # Recognize both schemes: current-scheme links go through
-      # DOTFILES_PREFIX/current/claude/skills/<name> (the normal case) or,
-      # if DOTFILES_DEPLOY_SRC was pointed at a generation directly, through
-      # DOTFILES_PREFIX/generations/<id>/claude/skills/<name>. $_skills_src
-      # (the working tree) covers pre-migration direct-to-worktree links.
-      case "$_target" in
-        "$DOTFILES_PREFIX/current/claude/skills"/* | "$DOTFILES_GENERATIONS_DIR"/*/claude/skills/* | "$_skills_src"/*)
-          _skill_name=$(basename "$_skill_link")
-          symlink_restore "$_skill_link" || OVERALL_OK=1
+  if [ -n "$_skills_src" ]; then
+    _OLDIFS="$IFS"
+    IFS='
+'
+    for _skill_link in $(claude_skill_links "$SCRIPT_DIR"); do
+      IFS="$_OLDIFS"
+      [ -z "$_skill_link" ] && continue
+      _skill_name=$(basename "$_skill_link")
+      symlink_restore "$_skill_link" || OVERALL_OK=1
 
-          # After removing the symlink, try to restore the original skill
-          # that deploy.sh backed up into ~/.claude/skills-backup/.
-          # Pick the oldest backup (first in glob order) — same policy as
-          # symlink_restore for .backup files.
-          for _cand in "$HOME/.claude/skills-backup/$_skill_name".*; do
-            [ -e "$_cand" ] || [ -L "$_cand" ] || continue
-            if [ "${DRY_RUN:-0}" -eq 1 ]; then
-              printf '[DRY-RUN] mv %s %s\n' "$_cand" "$_skill_link"
-            else
-              if mv "$_cand" "$_skill_link"; then
-                log_ok "Restored skill from backup: $_skill_link (from $(basename "$_cand"))"
-              else
-                log_error "Failed to restore skill backup: $_cand → $_skill_link"
-                OVERALL_OK=1
-              fi
-            fi
-            break
-          done
-          ;;
-      esac
+      # After removing the symlink, try to restore the original skill
+      # that deploy.sh backed up into ~/.claude/skills-backup/.
+      # Pick the oldest backup (first in glob order) — same policy as
+      # symlink_restore for .backup files.
+      for _cand in "$HOME/.claude/skills-backup/$_skill_name".*; do
+        [ -e "$_cand" ] || [ -L "$_cand" ] || continue
+        if [ "${DRY_RUN:-0}" -eq 1 ]; then
+          printf '[DRY-RUN] mv %s %s\n' "$_cand" "$_skill_link"
+        else
+          if mv "$_cand" "$_skill_link"; then
+            log_ok "Restored skill from backup: $_skill_link (from $(basename "$_cand"))"
+          else
+            log_error "Failed to restore skill backup: $_cand → $_skill_link"
+            OVERALL_OK=1
+          fi
+        fi
+        break
+      done
+      IFS='
+'
     done
+    IFS="$_OLDIFS"
   fi
 
   # skills-backup/ is where deploy.sh set aside pre-existing skills before

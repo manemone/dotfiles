@@ -1503,6 +1503,59 @@ scenario_status() {
   else
     fail "--status がリンク切れを検出する"
   fi
+
+  # --- devモードでは Mode: DEV と表示され、manifestの代わりにgit状態が出る ---
+  out="$(run_deploy "$sbx" --dev 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "--dev が失敗 (exit=$rc)"
+    log "$out"
+  fi
+  out="$(run_deploy "$sbx" --status 2>&1)"
+  if printf '%s' "$out" | grep -q "Mode: DEV"; then
+    pass "devモードの--statusはMode: DEVを表示する"
+  else
+    fail "devモードの--statusはMode: DEVを表示する"
+  fi
+  if printf '%s' "$out" | grep -q "Live source tree state"; then
+    pass "devモードの--statusはmanifestの代わりに実ソースツリーのgit状態を表示する"
+  else
+    fail "devモードの--statusはmanifestの代わりに実ソースツリーのgit状態を表示する"
+  fi
+
+  # --- currentが消えた世代を指しているとエラーとして報告される ---
+  new_sandbox
+  sbx="$SANDBOX_DIR"
+  prefix="$(dotfiles_prefix_for "$sbx")"
+  mkdir -p "$prefix"
+  ln -sfn "$prefix/generations/does-not-exist" "$prefix/current"
+
+  out="$(run_deploy "$sbx" --status 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    pass "currentが消えた世代を指すとき--statusが非0で終了する (exit=$rc)"
+  else
+    fail "currentが消えた世代を指すとき--statusが非0で終了する (exit=0のままだった)"
+  fi
+  if printf '%s' "$out" | grep -q "current points at a generation directory that no longer exists"; then
+    pass "currentが消えた世代を指すときの--statusエラーメッセージが表示される"
+  else
+    fail "currentが消えた世代を指すときの--statusエラーメッセージが表示される"
+  fi
+
+  # --- --status/--rollback/--devは互いに組み合わせられない ---
+  out="$(run_deploy "$sbx" --status --dev 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    pass "--status --dev はモード衝突としてエラーになる (exit=$rc)"
+  else
+    fail "--status --dev はモード衝突としてエラーになる (exit=0になってしまった)"
+  fi
+  if printf '%s' "$out" | grep -qi "cannot combine"; then
+    pass "モード衝突のエラーメッセージが表示される"
+  else
+    fail "モード衝突のエラーメッセージが表示される"
+  fi
 }
 
 # ── シナリオ24: --rollback ──────────────────────────────────────────────
@@ -1512,7 +1565,7 @@ scenario_rollback() {
     return
   fi
   log "=== シナリオ24: --rollback ==="
-  local sbx copy_dir prefix out rc gen1_content gen2_content gen2_target marker
+  local sbx copy_dir prefix out rc gen1_content gen2_content gen1_target gen2_target gen1_name gen2_name marker
 
   new_sandbox
   sbx="$SANDBOX_DIR"
@@ -1529,6 +1582,8 @@ scenario_rollback() {
     return
   fi
   gen1_content="$(cat "$sbx/bin/ocw" 2>/dev/null)"
+  gen1_target="$(current_target_for "$sbx")"
+  gen1_name="$(basename "$gen1_target")"
 
   marker="# smoke-test rollback marker $$"
   printf '%s\n' "$marker" >>"$copy_dir/bin/ocw"
@@ -1543,12 +1598,76 @@ scenario_rollback() {
   fi
   gen2_content="$(cat "$sbx/bin/ocw" 2>/dev/null)"
   gen2_target="$(current_target_for "$sbx")"
+  gen2_name="$(basename "$gen2_target")"
 
   if printf '%s' "$gen2_content" | grep -qF "$marker"; then
     pass "2回目のdeployでソースツリーの編集内容が反映されている（rollback検証の前提）"
   else
     fail "2回目のdeployでソースツリーの編集内容が反映されている（rollback検証の前提）"
     return
+  fi
+
+  # --- 明示的な世代ID指定: gen2 -> gen1 -> gen2 と往復して、
+  #     引数なし(直前の世代)とは別のコードパスを通ることを確認する ---
+  out="$(run_deploy_from "$copy_dir/deploy-all.sh" "$sbx" --rollback "$gen1_name" 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "--rollback <世代ID>(明示指定)が失敗 (exit=$rc)"
+    log "$out"
+  else
+    pass "--rollback <世代ID>(明示指定)が成功する"
+  fi
+  if [ "$(current_target_for "$sbx")" = "$gen1_target" ] && [ "$(cat "$sbx/bin/ocw" 2>/dev/null)" = "$gen1_content" ]; then
+    pass "--rollback <世代ID>で指定した世代へ切り替わる"
+  else
+    fail "--rollback <世代ID>で指定した世代へ切り替わる"
+  fi
+
+  out="$(run_deploy_from "$copy_dir/deploy-all.sh" "$sbx" --rollback "$gen2_name" 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "--rollback <世代ID>(gen2へ明示指定で戻す)が失敗 (exit=$rc)"
+    log "$out"
+    return
+  fi
+  if [ "$(current_target_for "$sbx")" = "$gen2_target" ]; then
+    pass "--rollback <世代ID>でgen2へ戻せる(以降のテストの前提を復元)"
+  else
+    fail "--rollback <世代ID>でgen2へ戻せる(以降のテストの前提を復元)"
+    return
+  fi
+
+  # --- パストラバーサルを狙った世代IDは拒否される ---
+  out="$(run_deploy_from "$copy_dir/deploy-all.sh" "$sbx" --rollback ../../etc 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    pass "--rollback ../../etc は拒否される (exit=$rc)"
+  else
+    fail "--rollback ../../etc は拒否される (exit=0になってしまった)"
+  fi
+  if printf '%s' "$out" | grep -q "Invalid generation id"; then
+    pass "パストラバーサルの拒否メッセージが表示される"
+  else
+    fail "パストラバーサルの拒否メッセージが表示される"
+  fi
+  if [ "$(current_target_for "$sbx")" = "$gen2_target" ]; then
+    pass "パストラバーサル入力を拒否してもcurrentは変更されない"
+  else
+    fail "パストラバーサル入力を拒否してもcurrentは変更されない"
+  fi
+
+  # --- -h は世代IDとして食われず、ヘルプ表示になる ---
+  out="$(run_deploy_from "$copy_dir/deploy-all.sh" "$sbx" --rollback -h 2>&1)"
+  rc=$?
+  if printf '%s' "$out" | grep -q "^Usage:"; then
+    pass "--rollback -h は世代IDとして消費されずヘルプが表示される"
+  else
+    fail "--rollback -h は世代IDとして消費されずヘルプが表示される"
+  fi
+  if printf '%s' "$out" | grep -q "Unknown generation: -h"; then
+    fail "--rollback -h が誤って世代IDとして扱われている"
+  else
+    pass "--rollback -h が世代IDとして誤消費されていない"
   fi
 
   # --- --dry-run は current を実際には変更しない ---
@@ -1601,6 +1720,22 @@ scenario_rollback() {
   else
     fail "戻せる世代が無い場合のエラーメッセージが表示される"
   fi
+
+  # --- currentが消えた世代を指しているとき、引数なしrollbackは
+  #     明示指定を促す明確なエラーになる ---
+  ln -sfn "$prefix/generations/does-not-exist" "$prefix/current"
+  out="$(run_deploy_from "$copy_dir/deploy-all.sh" "$sbx" --rollback 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    pass "currentが消えた世代を指すとき引数なしrollbackはエラー終了する (exit=$rc)"
+  else
+    fail "currentが消えた世代を指すとき引数なしrollbackはエラー終了する (exit=0になってしまった)"
+  fi
+  if printf '%s' "$out" | grep -q "current points at a generation that no longer exists"; then
+    pass "currentが消えた世代を指すときのエラーメッセージが表示される"
+  else
+    fail "currentが消えた世代を指すときのエラーメッセージが表示される"
+  fi
 }
 
 # ── シナリオ25: --dev ───────────────────────────────────────────────────
@@ -1610,7 +1745,7 @@ scenario_dev_mode() {
     return
   fi
   log "=== シナリオ25: --dev ==="
-  local sbx copy_dir prefix out rc marker gen_count_before gen_count_after
+  local sbx copy_dir prefix out rc marker gen_count_before gen_count_after latest_gen_target
 
   new_sandbox
   sbx="$SANDBOX_DIR"
@@ -1636,6 +1771,7 @@ scenario_dev_mode() {
     return
   fi
   gen_count_before="$(find "$prefix/generations" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')"
+  latest_gen_target="$(current_target_for "$sbx")"
 
   # --- --dry-run は current を実際には変更しない ---
   out="$(run_deploy_from "$copy_dir/deploy-all.sh" "$sbx" --dev --dry-run 2>&1)"
@@ -1690,6 +1826,100 @@ scenario_dev_mode() {
     pass "devモード中はDOTFILES_KEEP_GENERATIONSを絞ってもGCで世代が削除されない: $gen_count_after 件のまま"
   else
     fail "devモード中はDOTFILES_KEEP_GENERATIONSを絞ってもGCで世代が削除されない: 期待${gen_count_before}件、実際 $gen_count_after 件"
+  fi
+
+  # --- positive control: 同じgc_generationsが generation モードでは
+  #     実際に削除することを確認する（devモードで削除されないのがGCの
+  #     不変条件によるものであり、GC自体が何もしていないからではないことを
+  #     区別するため）。redeployでdevモードを抜けさせてから同条件で呼ぶ。 ---
+  wait_for_next_second
+  out="$(run_deploy_from "$copy_dir/deploy-all.sh" "$sbx" --force --only bin 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "positive control用の再deployが失敗 (exit=$rc)"
+    log "$out"
+    return
+  fi
+  case "$(current_target_for "$sbx")" in
+    "$prefix/generations"/*)
+      pass "再deployでdevモードを抜けgenerationモードへ戻る（positive controlの前提）"
+      ;;
+    *)
+      fail "再deployでdevモードを抜けgenerationモードへ戻る（positive controlの前提）"
+      return
+      ;;
+  esac
+
+  sandbox_env "$sbx"
+  env "${SANDBOX_ENV[@]}" DOTFILES_KEEP_GENERATIONS=1 sh -c '. "'"$REPO_ROOT"'/shared/helpers.sh" && gc_generations' >/dev/null 2>&1
+  gen_count_after="$(find "$prefix/generations" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')"
+  if [ "$gen_count_after" -eq 1 ]; then
+    pass "positive control: generationモードでは同じgc_generationsが実際に1件まで削除する"
+  else
+    fail "positive control: generationモードでは同じgc_generationsが実際に1件まで削除する（実際: ${gen_count_after}件）"
+  fi
+}
+
+# ── シナリオ26: devモード中の --rollback は最新世代へ切り替える ─────────
+
+scenario_dev_mode_rollback() {
+  if ! has_tool bin; then
+    return
+  fi
+  log "=== シナリオ26: devモード中の--rollbackは最新世代へ切り替える ==="
+  local sbx copy_dir prefix out rc latest_gen_target
+
+  new_sandbox
+  sbx="$SANDBOX_DIR"
+  copy_dir="$(mktemp -d)"
+  CREATED_DIRS+=("$copy_dir")
+  copy_repo_snapshot "$copy_dir"
+  prefix="$(dotfiles_prefix_for "$sbx")"
+
+  out="$(run_deploy_from "$copy_dir/deploy-all.sh" "$sbx" --force --only bin 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "事前準備(1回目のdeploy-all.sh --only bin)が失敗 (exit=$rc)"
+    log "$out"
+    return
+  fi
+
+  wait_for_next_second
+  out="$(run_deploy_from "$copy_dir/deploy-all.sh" "$sbx" --force --only bin 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "事前準備(2回目のdeploy-all.sh --only bin)が失敗 (exit=$rc)"
+    log "$out"
+    return
+  fi
+  latest_gen_target="$(current_target_for "$sbx")"
+
+  out="$(run_deploy_from "$copy_dir/deploy-all.sh" "$sbx" --dev 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "--dev が失敗 (exit=$rc)"
+    log "$out"
+    return
+  fi
+
+  # --- devモード中に引数なし--rollbackすると、
+  #     「直前の世代」が定義できないため最新世代へ切り替わる ---
+  out="$(run_deploy_from "$copy_dir/deploy-all.sh" "$sbx" --rollback 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "devモード中の--rollbackが失敗 (exit=$rc)"
+    log "$out"
+    return
+  fi
+  if printf '%s' "$out" | grep -qi "dev mode"; then
+    pass "devモード中の--rollbackはdevモードからの離脱であることを明示する"
+  else
+    fail "devモード中の--rollbackはdevモードからの離脱であることを明示する"
+  fi
+  if [ "$(current_target_for "$sbx")" = "$latest_gen_target" ]; then
+    pass "devモード中の引数なし--rollbackは最新世代へ切り替わる"
+  else
+    fail "devモード中の引数なし--rollbackは最新世代へ切り替わる (実際: $(current_target_for "$sbx"))"
   fi
 }
 
@@ -1746,6 +1976,8 @@ log
 scenario_rollback
 log
 scenario_dev_mode
+log
+scenario_dev_mode_rollback
 log
 
 if [ "$FAIL" -eq 0 ]; then
