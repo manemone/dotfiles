@@ -12,6 +12,7 @@
 | PR を出す前に読む | [design/DOC-2608020715_プルリクエストの作法.md](design/DOC-2608020715_プルリクエストの作法.md) | 説明文の構成・コメントのプレフィクス・ブランチ構成 |
 | シェルを書く前に読む | [design/DOC-2608020715-a_シェルスクリプトコーディング方針.md](design/DOC-2608020715-a_シェルスクリプトコーディング方針.md) | POSIX sh / bash の使い分け、bashism の回避 |
 | デプロイを検証する | [design/DOC-2608020715-b_テスト方針.md](design/DOC-2608020715-b_テスト方針.md) | 実 HOME を汚さずに検証する4層の方法 |
+| なぜ配布方式を今の形にしたかを知る | [adr/DOC-2608040229_deploy-distribution-method.md](adr/DOC-2608040229_deploy-distribution-method.md) | 世代ディレクトリ + `current` を採用した理由と、却下した案 |
 | なぜ `ocw-meter` をこの設計にしたかを知る | [adr/DOC-2608021229_llm-cost-observability-collection-method.md](adr/DOC-2608021229_llm-cost-observability-collection-method.md) | feasibility probe の実測結果に基づく収集方式の決定記録 |
 | `ocw-meter` のイベントスキーマを調べる | [reference/DOC-2608021229-c_ocw-meterイベントスキーマ.md](reference/DOC-2608021229-c_ocw-meterイベントスキーマ.md) | 全 event_type・全フィールド・費用計算式の一次情報源 |
 | LLM費用のベースラインを測る手順を知る | [reference/DOC-2608021229-b_LLM費用観測ベースライン計測手順.md](reference/DOC-2608021229-b_LLM費用観測ベースライン計測手順.md) | 実PR 5〜10本での計測手順 |
@@ -55,6 +56,7 @@
 | DOC-ID | ファイル | 概要 |
 |---|---|---|
 | DOC-2608021229 | [llm-cost-observability-collection-method.md](adr/DOC-2608021229_llm-cost-observability-collection-method.md) | LLM費用・Claude利用枠の収集方式決定。孫0のfeasibility probe実測結果（transcriptのmessage.id重複問題、statusLineのrate_limits取得可否、Herdrのrole↔session紐付け等）に基づき、「事後読み取り + 軽量イベント刻み」方式を確定した（旧ID: `ADR-001`） |
+| DOC-2608040229 | [deploy-distribution-method.md](adr/DOC-2608040229_deploy-distribution-method.md) | dotfiles の配布方式の決定。作業ツリーへの直接 symlink をやめ、世代ディレクトリ + `current` シンボリックリンクによる配布実体を1段挟む方式を採用した。実体コピー配布・世代を持たない方式・警告のみの最小案などの却下理由も記録 |
 
 ### planning/ — ロードマップ・計画
 
@@ -64,6 +66,7 @@
 | DOC-2607291400 | [ai-dotfiles-add-tools_計画.md](planning/DOC-2607291400_ai-dotfiles-add-tools_計画.md) | 自作ツールの dotfiles への移行計画（傘 `ai/dotfiles-add-tools`、全孫マージ済） |
 | DOC-2608020558 | [repo-baseline_計画.md](planning/DOC-2608020558_repo-baseline_計画.md) | AI エージェント支援基盤の整備と汎用テンプレート化の傘ブランチ計画書（傘 `ai/repo-baseline`） |
 | DOC-2608021229-a | [ai-llm-cost-observability_計画.md](planning/DOC-2608021229-a_ai-llm-cost-observability_計画.md) | LLM費用・Claude利用枠の観測基盤（`ocw-meter`）構築計画（傘 `ai/llm-cost-observability`、全孫マージ済。旧ID: `DOC-003`） |
+| DOC-2608040234 | [ai-deploy-stability_計画.md](planning/DOC-2608040234_ai-deploy-stability_計画.md) | デプロイ配布方式の安定化の傘ブランチ計画書（傘 `ai/deploy-stability`）。ADR DOC-2608040229 で確定した配布実体方式を6本の孫へ分解したもの |
 
 ### reference/ — 運用リファレンス
 
