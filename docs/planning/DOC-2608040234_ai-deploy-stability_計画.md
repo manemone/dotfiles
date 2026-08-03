@@ -28,7 +28,7 @@
 
 | 孫 | ブランチ | 内容 | 状況 |
 |---|---|---|---|
-| 1 | `ai/ds-01-distribution-layer` | 配布実体レイヤ（世代ディレクトリ + `current` + manifest + GC）と、単純 symlink 系4ツール（`zsh` `nvim` `tmux` `bin`）の切り替え | ⬜ 待機中 |
+| 1 | `ai/ds-01-distribution-layer` | 配布実体レイヤ（世代ディレクトリ + `current` + manifest + GC）と、単純 symlink 系4ツール（`zsh` `nvim` `tmux` `bin`）の切り替え | 🔄 実装中 |
 | 2 | `ai/ds-02-claude-sources` | `claude` の例外2箇所（`settings.json` の生成・`skills/` の個別 symlink）を `current` 経由へ追従 | ⬜ 待機中 |
 | 3 | `ai/ds-03-uninstall` | `uninstall.sh` の追従（配布実体の後片付け・由来判定の両対応）と `KNOWN_LINKS_bin` の `ocw-meter` 欠落修正 | ⬜ 待機中 |
 | 4 | `ai/ds-04-operations` | 運用コマンド `--status` / `--rollback` / `--dev` / リンク切れ検出 | ⬜ 待機中 |
