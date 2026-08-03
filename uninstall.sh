@@ -31,37 +31,10 @@ FORCE=0
 ONLY_TOOLS=""
 
 # ── Known symlinks per tool (dst only) ────────────────────────────────
-# Each tool entry lists one symlink destination per line.
-# Use printf so the trailing-newline line-continuation works portably.
-KNOWN_LINKS_zsh=$(
-  printf '%s\n' \
-    "$HOME/.zshrc" \
-    "$HOME/.zsh_plugins.txt"
-)
-
-KNOWN_LINKS_nvim=$(
-  printf '%s\n' \
-    "${XDG_CONFIG_HOME:-$HOME/.config}/nvim/init.lua" \
-    "${XDG_CONFIG_HOME:-$HOME/.config}/nvim/lua" \
-    "${XDG_CONFIG_HOME:-$HOME/.config}/nvim/lazy-lock.json"
-)
-
-KNOWN_LINKS_tmux=$(
-  printf '%s\n' \
-    "$HOME/.tmux.conf"
-)
-
-KNOWN_LINKS_bin=$(
-  printf '%s\n' \
-    "$HOME/bin/ocw" \
-    "$HOME/bin/claude-ds" \
-    "$HOME/bin/ocw-meter"
-)
-
-KNOWN_LINKS_claude=$(
-  printf '%s\n' \
-    "$HOME/.claude/CLAUDE.md"
-)
+# KNOWN_LINKS_<tool> and links_for_tool() now live in shared/helpers.sh —
+# deploy-all.sh --status needs the same list to check for broken symlinks,
+# and keeping one copy is what prevents the drift that let ocw-meter go
+# unlisted here in the first place (see ADR DOC-2608040229 §2.6).
 
 # Skills are symlinked individually by deploy.sh (auto-detected from
 # claude/skills/).  We walk ~/.claude/skills/ at uninstall time and
@@ -80,40 +53,6 @@ KNOWN_GENERATED_claude=$(
   printf '%s\n' \
     "$HOME/.claude/settings.json"
 )
-
-# links_for_tool <tool>
-# Print (one per line) the KNOWN_LINKS_<tool> destinations for <tool>
-# (empty if <tool> has none). Single source of truth for the tool ->
-# KNOWN_LINKS_* mapping: the main per-tool loop below and the distribution
-# artifact cleanup's cross-tool scan both need it, and duplicating this
-# case statement is exactly the kind of drift that let ocw-meter go
-# unlisted from KNOWN_LINKS_bin in the first place. A forgotten arm here
-# surfaces as "No link list defined for '<tool>'. Skipping." ONLY when
-# <tool> is in $TOOLS AND has no KNOWN_GENERATED_* entry either — the
-# main loop below only warns when both _links and _generated come back
-# empty (see its "No link list defined" check). claude is the one tool
-# where this doesn't save you: it has KNOWN_GENERATED_claude
-# (~/.claude/settings.json), so a forgotten claude arm here still leaves
-# _generated non-empty, the warning never fires, and ~/.claude/CLAUDE.md
-# quietly stops being touched while the generation it points into gets
-# deleted out from under it. A tool NOT in $TOOLS is missed silently
-# regardless of KNOWN_GENERATED_*: it's only ever passed to this function
-# by the cleanup's cross-tool scan, which has no warning path at all (the
-# tool is treated as having no links, so a live symlink into a
-# soon-to-be-deleted generation goes undetected).
-#
-# A function (not eval-based indirection through a "KNOWN_LINKS_$tool"
-# name) keeps each KNOWN_LINKS_* variable directly referenced, so a
-# static analysis tool can still see the use.
-links_for_tool() {
-  case "$1" in
-    zsh) printf '%s\n' "$KNOWN_LINKS_zsh" ;;
-    nvim) printf '%s\n' "$KNOWN_LINKS_nvim" ;;
-    tmux) printf '%s\n' "$KNOWN_LINKS_tmux" ;;
-    bin) printf '%s\n' "$KNOWN_LINKS_bin" ;;
-    claude) printf '%s\n' "$KNOWN_LINKS_claude" ;;
-  esac
-}
 
 # ── Usage ─────────────────────────────────────────────────────────────
 
@@ -205,9 +144,10 @@ for _tool in $TOOLS; do
   log_hr
   log_info "Uninstalling: $_tool"
 
-  # Get the list of known links for this tool via links_for_tool (see its
-  # definition above). KNOWN_GENERATED_* has only one case arm (claude), so
-  # it isn't worth routing through a helper the way KNOWN_LINKS_* is.
+  # Get the list of known links for this tool via links_for_tool (defined
+  # in shared/helpers.sh). KNOWN_GENERATED_* has only one case arm
+  # (claude), so it isn't worth routing through a helper the way
+  # KNOWN_LINKS_* is.
   _links="$(links_for_tool "$_tool")"
   _generated=""
   case "$_tool" in
@@ -240,41 +180,38 @@ for _tool in $TOOLS; do
     claude) _skills_src="$KNOWN_SKILLS_SRC_claude" ;;
   esac
 
-  if [ -n "$_skills_src" ] && [ -d "$HOME/.claude/skills" ]; then
-    for _skill_link in "$HOME/.claude/skills"/*; do
-      [ -L "$_skill_link" ] || continue
-      _target=$(readlink "$_skill_link")
-      # Recognize both schemes: current-scheme links go through
-      # DOTFILES_PREFIX/current/claude/skills/<name> (the normal case) or,
-      # if DOTFILES_DEPLOY_SRC was pointed at a generation directly, through
-      # DOTFILES_PREFIX/generations/<id>/claude/skills/<name>. $_skills_src
-      # (the working tree) covers pre-migration direct-to-worktree links.
-      case "$_target" in
-        "$DOTFILES_PREFIX/current/claude/skills"/* | "$DOTFILES_GENERATIONS_DIR"/*/claude/skills/* | "$_skills_src"/*)
-          _skill_name=$(basename "$_skill_link")
-          symlink_restore "$_skill_link" || OVERALL_OK=1
+  if [ -n "$_skills_src" ]; then
+    _OLDIFS="$IFS"
+    IFS='
+'
+    for _skill_link in $(claude_skill_links "$SCRIPT_DIR"); do
+      IFS="$_OLDIFS"
+      [ -z "$_skill_link" ] && continue
+      _skill_name=$(basename "$_skill_link")
+      symlink_restore "$_skill_link" || OVERALL_OK=1
 
-          # After removing the symlink, try to restore the original skill
-          # that deploy.sh backed up into ~/.claude/skills-backup/.
-          # Pick the oldest backup (first in glob order) — same policy as
-          # symlink_restore for .backup files.
-          for _cand in "$HOME/.claude/skills-backup/$_skill_name".*; do
-            [ -e "$_cand" ] || [ -L "$_cand" ] || continue
-            if [ "${DRY_RUN:-0}" -eq 1 ]; then
-              printf '[DRY-RUN] mv %s %s\n' "$_cand" "$_skill_link"
-            else
-              if mv "$_cand" "$_skill_link"; then
-                log_ok "Restored skill from backup: $_skill_link (from $(basename "$_cand"))"
-              else
-                log_error "Failed to restore skill backup: $_cand → $_skill_link"
-                OVERALL_OK=1
-              fi
-            fi
-            break
-          done
-          ;;
-      esac
+      # After removing the symlink, try to restore the original skill
+      # that deploy.sh backed up into ~/.claude/skills-backup/.
+      # Pick the oldest backup (first in glob order) — same policy as
+      # symlink_restore for .backup files.
+      for _cand in "$HOME/.claude/skills-backup/$_skill_name".*; do
+        [ -e "$_cand" ] || [ -L "$_cand" ] || continue
+        if [ "${DRY_RUN:-0}" -eq 1 ]; then
+          printf '[DRY-RUN] mv %s %s\n' "$_cand" "$_skill_link"
+        else
+          if mv "$_cand" "$_skill_link"; then
+            log_ok "Restored skill from backup: $_skill_link (from $(basename "$_cand"))"
+          else
+            log_error "Failed to restore skill backup: $_cand → $_skill_link"
+            OVERALL_OK=1
+          fi
+        fi
+        break
+      done
+      IFS='
+'
     done
+    IFS="$_OLDIFS"
   fi
 
   # skills-backup/ is where deploy.sh set aside pre-existing skills before

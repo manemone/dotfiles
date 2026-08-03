@@ -145,6 +145,117 @@ resolve_tools() {
   return 0
 }
 
+# ── Known $HOME-side link destinations per tool ─────────────────────────
+#
+# links_for_tool <tool>
+# Print (one per line) the known $HOME symlink destinations for <tool>
+# (empty if <tool> has none). Single source of truth for "which paths under
+# $HOME does this repo's deploy create": uninstall.sh needs it to know what
+# to remove, deploy-all.sh --status needs it to check for broken symlinks.
+# Keeping one copy (instead of duplicating the list in both scripts) is
+# what prevents the drift that let ocw-meter go unlisted from
+# KNOWN_LINKS_bin in the first place (see ADR DOC-2608040229 §2.6 /
+# AGENTS.md 実装時の注意).
+#
+# A forgotten arm here surfaces as "No link list defined for '<tool>'.
+# Skipping." in uninstall.sh's per-tool loop ONLY when <tool> is in $TOOLS
+# AND has no KNOWN_GENERATED_* entry either (that loop only warns when both
+# _links and _generated come back empty). claude is the one tool where this
+# doesn't save you: it has a KNOWN_GENERATED_claude entry
+# (~/.claude/settings.json), so a forgotten claude arm here still leaves
+# _generated non-empty, the warning never fires, and ~/.claude/CLAUDE.md
+# quietly stops being touched while the generation it points into gets
+# deleted out from under it. deploy-all.sh --status's link-health scan
+# (a third consumer, added alongside this comment) has no warning path at
+# all for a forgotten arm: the tool's entries are just silently absent from
+# the report, so a broken symlink for that tool goes undetected too — the
+# same blind spot claude_skill_links() below exists to close for skills.
+#
+# Values are inlined into the case arms (not module-level KNOWN_LINKS_*
+# variables) on purpose: this file is sourced by every interactive zsh
+# startup (zsh/.zshrc), and module-level `VAR=$(printf ...)` assignments
+# both leak into that shell's namespace (zsh/.zshrc already has to unset
+# AVAILABLE_TOOLS for the same reason — see its "helpers.sh exports
+# AVAILABLE_TOOLS which we don't need in an interactive shell" comment) and
+# fork one subshell per tool at source time. Inlining also means $HOME /
+# $XDG_CONFIG_HOME are read at call time instead of source time, which is
+# what lets tests override them via `env HOME=...` after helpers.sh is
+# already sourced.
+links_for_tool() {
+  case "$1" in
+    zsh)
+      printf '%s\n' \
+        "$HOME/.zshrc" \
+        "$HOME/.zsh_plugins.txt"
+      ;;
+    nvim)
+      printf '%s\n' \
+        "${XDG_CONFIG_HOME:-$HOME/.config}/nvim/init.lua" \
+        "${XDG_CONFIG_HOME:-$HOME/.config}/nvim/lua" \
+        "${XDG_CONFIG_HOME:-$HOME/.config}/nvim/lazy-lock.json"
+      ;;
+    tmux)
+      printf '%s\n' \
+        "$HOME/.tmux.conf"
+      ;;
+    bin)
+      printf '%s\n' \
+        "$HOME/bin/ocw" \
+        "$HOME/bin/claude-ds" \
+        "$HOME/bin/ocw-meter"
+      ;;
+    claude)
+      printf '%s\n' \
+        "$HOME/.claude/CLAUDE.md"
+      ;;
+  esac
+}
+
+# claude_skill_links [repo_root]
+# Print (one per line) the paths under $HOME/.claude/skills/ that are
+# symlinks owned by this repo's distribution. Recognizes three schemes:
+# current-scheme (target under <prefix>/current/claude/skills/), a
+# generation directly (target under <prefix>/generations/*/claude/skills/,
+# e.g. when DOTFILES_DEPLOY_SRC was pointed at one directly), and the
+# pre-migration direct-to-worktree scheme (target under
+# repo_root/claude/skills/, if repo_root is given — see ADR
+# DOC-2608040229 §4.8/§4.9). Deliberately narrower than
+# _dotfiles_symlink_is_repo_owned's generic "anywhere under repo_root"
+# check: a user's own symlink into some other part of the working tree
+# (e.g. a scratch directory) is not a skill this repo distributed, and
+# treating it as one would make uninstall.sh delete a link it doesn't own.
+# Skills aren't in links_for_tool()/KNOWN_LINKS_claude because
+# claude/deploy.sh symlinks them individually, one per skill directory
+# auto-detected under claude/skills/, rather than as a fixed list — but
+# they are still $HOME symlinks this repo creates, and in practice the
+# tool with the most of them (ADR §1.1). Shared by uninstall.sh (needs the
+# list to know what to restore) and deploy-all.sh --status (needs it so
+# its $HOME link-health scan doesn't blind-spot the tool with the most
+# symlinks of any of them). Prints nothing (not an error) if
+# ~/.claude/skills doesn't exist.
+claude_skill_links() {
+  _csl_repo_root="${1:-}"
+  _csl_dir="$HOME/.claude/skills"
+  [ -d "$_csl_dir" ] || return 0
+  _csl_prefix="$(dotfiles_prefix)"
+  for _csl_link in "$_csl_dir"/*; do
+    [ -L "$_csl_link" ] || continue
+    _csl_target=$(readlink "$_csl_link")
+    case "$_csl_target" in
+      "$_csl_prefix/current/claude/skills"/* | "$_csl_prefix/generations"/*/claude/skills/*)
+        printf '%s\n' "$_csl_link"
+        ;;
+      *)
+        if [ -n "$_csl_repo_root" ]; then
+          case "$_csl_target" in
+            "$_csl_repo_root/claude/skills"/*) printf '%s\n' "$_csl_link" ;;
+          esac
+        fi
+        ;;
+    esac
+  done
+}
+
 # ── Logging (colourised when the output fd is a terminal) ─────────────
 
 # _can_color <fd>
@@ -261,6 +372,16 @@ dotfiles_prefix() {
 # re-linking anything under $HOME.
 dotfiles_current_link() {
   printf '%s' "$(dotfiles_prefix)/current"
+}
+
+# dotfiles_keep_generations
+# Print the configured generation retention count
+# (${DOTFILES_KEEP_GENERATIONS:-3} — 3 is the default ADR §4.6 settled on:
+# enough to protect a running process's lazy-loaded files plus one
+# rollback target). Single source for this default so gc_generations and
+# deploy-all.sh --status can't drift apart and report different numbers.
+dotfiles_keep_generations() {
+  printf '%s' "${DOTFILES_KEEP_GENERATIONS:-3}"
 }
 
 # resolve_deploy_src
@@ -511,7 +632,13 @@ create_generation() {
 
 # write_manifest <generation_dir> <src_tree> <mode>
 # Writes a plain-text .dotfiles-manifest into generation_dir recording
-# where this generation came from. <mode> is "generation" or "dev".
+# where this generation came from. <mode> is "generation" or "dev", but no
+# caller currently passes "dev": cmd_dev (deploy-all.sh) never calls this
+# function at all, since dev mode points current at a source tree rather
+# than a generation directory, and writing a manifest into the user's own
+# working tree would dirty it. deploy-all.sh --status instead reads dev
+# mode's provenance live via git rev-parse/status against the source tree
+# it points at, rather than through a written manifest.
 write_manifest() {
   _wm_gen_dir="$1"
   _wm_src_tree="$2"
@@ -585,7 +712,7 @@ switch_current() {
 }
 
 # gc_generations
-# Removes generations beyond ${DOTFILES_KEEP_GENERATIONS:-3}, oldest first.
+# Removes generations beyond dotfiles_keep_generations(), oldest first.
 # Invariants: the generation `current` points at is never removed, and if
 # `current` points outside generations/ (dev mode — see ADR §4.5) nothing
 # is removed at all. Deletion goes through _dotfiles_safe_rmdir, which
@@ -612,7 +739,7 @@ gc_generations() {
   esac
   _gc_current_name=$(basename "$_gc_current_target")
 
-  _gc_keep="${DOTFILES_KEEP_GENERATIONS:-3}"
+  _gc_keep="$(dotfiles_keep_generations)"
 
   # Two passes over generations/, deliberately kept separate:
   #   1. Enumerate every entry (no -type filter) so a stray symlink or file

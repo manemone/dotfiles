@@ -1231,6 +1231,50 @@ scenario_claude_old_scheme_skill_removed_by_uninstall() {
   assert_not_exists "$sbx/.claude/skills/$skill_name"
 }
 
+# ── シナリオ18b: リポジトリ内だがclaude/skills/配下ではない先を指す
+#     ユーザー自作skillリンクはuninstallの対象にならない ──────────────
+
+scenario_claude_user_skill_pointing_elsewhere_in_repo_not_swept() {
+  if ! has_tool claude; then
+    return
+  fi
+  log "=== シナリオ18b: repo_root配下だがclaude/skills/外を指すユーザー自作skillリンクは撤去されない ==="
+  local sbx out rc
+
+  new_sandbox
+  sbx="$SANDBOX_DIR"
+  mkdir -p "$sbx/.claude/skills"
+
+  # claude_skill_links() の repo_root チェックは「repo_root/claude/skills/配下」
+  # だけを配布物とみなす必要がある。REPO_ROOT配下の別ディレクトリ(例えば
+  # このテストファイル自身が置かれているtests/)を指すリンクまで拾ってしまうと、
+  # ユーザーがリポジトリ内の何かにリンクしているだけのskillをuninstallが
+  # 誤って削除してしまう(レビュー指摘: repo_root全体に対する前方一致は広すぎる)。
+  ln -s "$REPO_ROOT/tests" "$sbx/.claude/skills/my-own-skill"
+
+  out="$(run_uninstall "$sbx" --dry-run --only claude 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "uninstall.sh --dry-run --only claude が失敗 (exit=$rc)"
+    log "$out"
+    return
+  fi
+  if printf '%s' "$out" | grep -q "my-own-skill"; then
+    fail "claude/skills/外を指すユーザー自作skillリンクはuninstallの対象にならない（dry-runで言及されてしまった）"
+  else
+    pass "claude/skills/外を指すユーザー自作skillリンクはuninstallの対象にならない（dry-run）"
+  fi
+
+  out="$(run_uninstall "$sbx" --force --only claude 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "uninstall.sh --force --only claude が失敗 (exit=$rc)"
+    log "$out"
+    return
+  fi
+  assert_symlink "$sbx/.claude/skills/my-own-skill" "$REPO_ROOT/tests"
+}
+
 # ── シナリオ19: スコープ外ツールが参照している間は配布実体の後片付けをスキップする ──
 
 scenario_cleanup_skipped_while_other_tool_in_scope() {
@@ -1433,6 +1477,559 @@ scenario_cleanup_removes_orphaned_scratch_without_generation() {
   assert_not_exists "$prefix"
 }
 
+# ── シナリオ23: --status ────────────────────────────────────────────────
+
+scenario_status() {
+  if ! has_tool bin; then
+    return
+  fi
+  log "=== シナリオ23: --status ==="
+  local sbx prefix out rc skill_name skill_link
+
+  new_sandbox
+  sbx="$SANDBOX_DIR"
+  prefix="$(dotfiles_prefix_for "$sbx")"
+
+  # $TOOLS を deploy する（既定は bin,claude）。claude が対象に含まれるときだけ
+  # 下の「claude/skills/* のリンク切れ検出」を検証できるようにするため、
+  # bin 固定ではなく実行時の対象ツールに合わせる。
+  out="$(run_deploy "$sbx" --force --only "$TOOLS" 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "deploy-all.sh --force --only $TOOLS が失敗 (exit=$rc)"
+    log "$out"
+    return
+  fi
+
+  out="$(run_deploy "$sbx" --status 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "--status が成功終了する (exit=$rc)"
+    log "$out"
+  else
+    pass "--status が成功終了する"
+  fi
+
+  if printf '%s' "$out" | grep -q "Mode: generation"; then
+    pass "--status がgenerationモードを表示する"
+  else
+    fail "--status がgenerationモードを表示する"
+  fi
+
+  if printf '%s' "$out" | grep -q "^  commit_sha: "; then
+    pass "--status がmanifestのcommit_shaを表示する"
+  else
+    fail "--status がmanifestのcommit_shaを表示する"
+  fi
+
+  if printf '%s' "$out" | grep -q "(current)"; then
+    pass "--status が世代一覧でcurrentを明示する"
+  else
+    fail "--status が世代一覧でcurrentを明示する"
+  fi
+
+  if printf '%s' "$out" | grep -qE "\[OK\][[:space:]]+$sbx/bin/ocw$"; then
+    pass "--status がリンク健全性をOKと報告する"
+  else
+    fail "--status がリンク健全性をOKと報告する"
+  fi
+
+  # --- リンク切れを作ると検出されること ---
+  rm -f "$sbx/bin/ocw-meter"
+  ln -s "$prefix/current/bin/does-not-exist" "$sbx/bin/ocw-meter"
+
+  out="$(run_deploy "$sbx" --status 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    pass "リンク切れがあると--statusが非0で終了する (exit=$rc)"
+  else
+    fail "リンク切れがあると--statusが非0で終了する (exit=0のままだった)"
+  fi
+  if printf '%s' "$out" | grep -qE "\[BROKEN\][[:space:]]+$sbx/bin/ocw-meter"; then
+    pass "--status がリンク切れを検出する"
+  else
+    fail "--status がリンク切れを検出する"
+  fi
+
+  # --- claudeも対象のとき、claude/skills/* のリンク切れも検出されること ---
+  # 配布 symlink のうち本数が最も多い集合（ADR §1.1）が、KNOWN_LINKS_claude
+  # には載らずclaude_skill_links()経由でしか拾えないため、bin側の壊れた
+  # symlinkだけでは検証できない。実際にskillを1本壊して確認する。
+  if has_tool claude; then
+    skill_name="$(list_repo_skills | head -n1)"
+    if [ -n "$skill_name" ]; then
+      skill_link="$sbx/.claude/skills/$skill_name"
+      rm -f "$skill_link"
+      ln -s "$prefix/current/claude/skills/does-not-exist" "$skill_link"
+
+      out="$(run_deploy "$sbx" --status 2>&1)"
+      rc=$?
+      if [ "$rc" -ne 0 ]; then
+        pass "claude/skills/*のリンク切れがあると--statusが非0で終了する (exit=$rc)"
+      else
+        fail "claude/skills/*のリンク切れがあると--statusが非0で終了する (exit=0のままだった)"
+      fi
+      if printf '%s' "$out" | grep -qE "\[BROKEN\][[:space:]]+$skill_link"; then
+        pass "--status がclaude/skills/*のリンク切れを検出する"
+      else
+        fail "--status がclaude/skills/*のリンク切れを検出する"
+      fi
+    else
+      fail "claude/skills/*のリンク切れ検出テストの前提（skillが1つ以上存在すること）"
+    fi
+  fi
+
+  # --- devモードでは Mode: DEV と表示され、manifestの代わりにgit状態が出る ---
+  out="$(run_deploy "$sbx" --dev 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "--dev が失敗 (exit=$rc)"
+    log "$out"
+  fi
+  out="$(run_deploy "$sbx" --status 2>&1)"
+  if printf '%s' "$out" | grep -q "Mode: DEV"; then
+    pass "devモードの--statusはMode: DEVを表示する"
+  else
+    fail "devモードの--statusはMode: DEVを表示する"
+  fi
+  if printf '%s' "$out" | grep -q "Live source tree state"; then
+    pass "devモードの--statusはmanifestの代わりに実ソースツリーのgit状態を表示する"
+  else
+    fail "devモードの--statusはmanifestの代わりに実ソースツリーのgit状態を表示する"
+  fi
+
+  # --- currentが消えた世代を指しているとエラーとして報告される ---
+  new_sandbox
+  sbx="$SANDBOX_DIR"
+  prefix="$(dotfiles_prefix_for "$sbx")"
+  mkdir -p "$prefix"
+  ln -sfn "$prefix/generations/does-not-exist" "$prefix/current"
+
+  out="$(run_deploy "$sbx" --status 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    pass "currentが消えた世代を指すとき--statusが非0で終了する (exit=$rc)"
+  else
+    fail "currentが消えた世代を指すとき--statusが非0で終了する (exit=0のままだった)"
+  fi
+  if printf '%s' "$out" | grep -q "current points at a generation directory that no longer exists"; then
+    pass "currentが消えた世代を指すときの--statusエラーメッセージが表示される"
+  else
+    fail "currentが消えた世代を指すときの--statusエラーメッセージが表示される"
+  fi
+
+  # --- --status/--rollback/--devは互いに組み合わせられない ---
+  out="$(run_deploy "$sbx" --status --dev 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    pass "--status --dev はモード衝突としてエラーになる (exit=$rc)"
+  else
+    fail "--status --dev はモード衝突としてエラーになる (exit=0になってしまった)"
+  fi
+  if printf '%s' "$out" | grep -qi "cannot combine"; then
+    pass "モード衝突のエラーメッセージが表示される"
+  else
+    fail "モード衝突のエラーメッセージが表示される"
+  fi
+}
+
+# ── シナリオ24: --rollback ──────────────────────────────────────────────
+
+scenario_rollback() {
+  if ! has_tool bin; then
+    return
+  fi
+  log "=== シナリオ24: --rollback ==="
+  local sbx copy_dir prefix out rc gen1_content gen2_content gen1_target gen2_target gen1_name gen2_name marker skill_name
+
+  new_sandbox
+  sbx="$SANDBOX_DIR"
+  copy_dir="$(mktemp -d)"
+  CREATED_DIRS+=("$copy_dir")
+  copy_repo_snapshot "$copy_dir"
+  prefix="$(dotfiles_prefix_for "$sbx")"
+
+  # $TOOLS を deploy する（既定は bin,claude）。claude が対象に含まれるときは
+  # 2回目のdeployでskillを1つ追加し、rollbackで巻き戻ったあとにそのskillの
+  # symlinkがリンク切れとして扱われることも検証する。
+  out="$(run_deploy_from "$copy_dir/deploy-all.sh" "$sbx" --force --only "$TOOLS" 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "1回目の deploy-all.sh --only $TOOLS が失敗 (exit=$rc)"
+    log "$out"
+    return
+  fi
+  gen1_content="$(cat "$sbx/bin/ocw" 2>/dev/null)"
+  gen1_target="$(current_target_for "$sbx")"
+  gen1_name="$(basename "$gen1_target")"
+
+  marker="# smoke-test rollback marker $$"
+  printf '%s\n' "$marker" >>"$copy_dir/bin/ocw"
+
+  if has_tool claude; then
+    skill_name="added-later"
+    mkdir -p "$copy_dir/claude/skills/$skill_name"
+    printf '# smoke-test skill added in gen2\n' >"$copy_dir/claude/skills/$skill_name/SKILL.md"
+  fi
+
+  wait_for_next_second
+  out="$(run_deploy_from "$copy_dir/deploy-all.sh" "$sbx" --force --only "$TOOLS" 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "2回目の deploy-all.sh --only $TOOLS が失敗 (exit=$rc)"
+    log "$out"
+    return
+  fi
+  gen2_content="$(cat "$sbx/bin/ocw" 2>/dev/null)"
+  gen2_target="$(current_target_for "$sbx")"
+  gen2_name="$(basename "$gen2_target")"
+
+  if has_tool claude; then
+    assert_symlink "$sbx/.claude/skills/$skill_name" "$prefix/current/claude/skills/$skill_name"
+  fi
+
+  if printf '%s' "$gen2_content" | grep -qF "$marker"; then
+    pass "2回目のdeployでソースツリーの編集内容が反映されている（rollback検証の前提）"
+  else
+    fail "2回目のdeployでソースツリーの編集内容が反映されている（rollback検証の前提）"
+    return
+  fi
+
+  # --- 明示的な世代ID指定: gen2 -> gen1 -> gen2 と往復して、
+  #     引数なし(直前の世代)とは別のコードパスを通ることを確認する ---
+  out="$(run_deploy_from "$copy_dir/deploy-all.sh" "$sbx" --rollback "$gen1_name" 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "--rollback <世代ID>(明示指定)が失敗 (exit=$rc)"
+    log "$out"
+  else
+    pass "--rollback <世代ID>(明示指定)が成功する"
+  fi
+  if [ "$(current_target_for "$sbx")" = "$gen1_target" ] && [ "$(cat "$sbx/bin/ocw" 2>/dev/null)" = "$gen1_content" ]; then
+    pass "--rollback <世代ID>で指定した世代へ切り替わる"
+  else
+    fail "--rollback <世代ID>で指定した世代へ切り替わる"
+  fi
+
+  out="$(run_deploy_from "$copy_dir/deploy-all.sh" "$sbx" --rollback "$gen2_name" 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "--rollback <世代ID>(gen2へ明示指定で戻す)が失敗 (exit=$rc)"
+    log "$out"
+    return
+  fi
+  if [ "$(current_target_for "$sbx")" = "$gen2_target" ]; then
+    pass "--rollback <世代ID>でgen2へ戻せる(以降のテストの前提を復元)"
+  else
+    fail "--rollback <世代ID>でgen2へ戻せる(以降のテストの前提を復元)"
+    return
+  fi
+
+  # --- パストラバーサルを狙った世代IDは拒否される ---
+  out="$(run_deploy_from "$copy_dir/deploy-all.sh" "$sbx" --rollback ../../etc 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    pass "--rollback ../../etc は拒否される (exit=$rc)"
+  else
+    fail "--rollback ../../etc は拒否される (exit=0になってしまった)"
+  fi
+  if printf '%s' "$out" | grep -q "Invalid generation id"; then
+    pass "パストラバーサルの拒否メッセージが表示される"
+  else
+    fail "パストラバーサルの拒否メッセージが表示される"
+  fi
+  if [ "$(current_target_for "$sbx")" = "$gen2_target" ]; then
+    pass "パストラバーサル入力を拒否してもcurrentは変更されない"
+  else
+    fail "パストラバーサル入力を拒否してもcurrentは変更されない"
+  fi
+
+  # --- -h は世代IDとして食われず、ヘルプ表示になる ---
+  out="$(run_deploy_from "$copy_dir/deploy-all.sh" "$sbx" --rollback -h 2>&1)"
+  rc=$?
+  if printf '%s' "$out" | grep -q "^Usage:"; then
+    pass "--rollback -h は世代IDとして消費されずヘルプが表示される"
+  else
+    fail "--rollback -h は世代IDとして消費されずヘルプが表示される"
+  fi
+  if printf '%s' "$out" | grep -q "Unknown generation: -h"; then
+    fail "--rollback -h が誤って世代IDとして扱われている"
+  else
+    pass "--rollback -h が世代IDとして誤消費されていない"
+  fi
+
+  # --- --dry-run は current を実際には変更しない ---
+  out="$(run_deploy_from "$copy_dir/deploy-all.sh" "$sbx" --rollback --dry-run 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "--rollback --dry-run が失敗 (exit=$rc)"
+    log "$out"
+  elif printf '%s' "$out" | grep -q '\[DRY-RUN\]'; then
+    pass "--rollback --dry-run はDRY-RUN出力になる"
+  else
+    fail "--rollback --dry-run はDRY-RUN出力になる"
+  fi
+  if [ "$(current_target_for "$sbx")" = "$gen2_target" ]; then
+    pass "--rollback --dry-run はcurrentを実際には変更しない"
+  else
+    fail "--rollback --dry-run はcurrentを実際には変更しない"
+  fi
+
+  # --- 実際にrollbackする ---
+  out="$(run_deploy_from "$copy_dir/deploy-all.sh" "$sbx" --rollback 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "--rollback が失敗 (exit=$rc)"
+    log "$out"
+    return
+  fi
+  pass "--rollback が成功する"
+
+  if [ "$(cat "$sbx/bin/ocw" 2>/dev/null)" = "$gen1_content" ]; then
+    pass "rollbackで\$HOME側から読める内容が前の世代のものに戻る（symlinkは張り直さない）"
+  else
+    fail "rollbackで\$HOME側から読める内容が前の世代のものに戻る（symlinkは張り直さない）"
+  fi
+
+  # $HOME 側の symlink 自体は current という固定パスを指したまま変わらない
+  # ことも確認する（current の付け替えだけで向き先が変わる、が世代方式の要）。
+  assert_symlink "$sbx/bin/ocw" "$prefix/current/bin/ocw"
+
+  # --- gen1にはまだ無いskill(gen2で追加)のsymlinkは、rollback後に
+  #     current経由で解決できなくなりリンク切れとして残る。--rollback自身は
+  #     世代間差分を検出しない設計（指摘2への回答）なので、--statusがそれを
+  #     検出できることをここで固定する。 ---
+  if has_tool claude; then
+    out="$(run_deploy_from "$copy_dir/deploy-all.sh" "$sbx" --status 2>&1)"
+    rc=$?
+    if [ "$rc" -ne 0 ]; then
+      pass "rollbackでgen1に無いskillがリンク切れになると--statusが非0で終了する (exit=$rc)"
+    else
+      fail "rollbackでgen1に無いskillがリンク切れになると--statusが非0で終了する (exit=0のままだった)"
+    fi
+    if printf '%s' "$out" | grep -qE "\[BROKEN\][[:space:]]+$sbx/\.claude/skills/$skill_name"; then
+      pass "rollback後、gen2で追加されたskillのリンク切れを--statusが検出する"
+    else
+      fail "rollback後、gen2で追加されたskillのリンク切れを--statusが検出する"
+    fi
+  fi
+
+  # --- これ以上戻れない場合は明確なエラーになる ---
+  out="$(run_deploy_from "$copy_dir/deploy-all.sh" "$sbx" --rollback 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    pass "戻せる世代が無い場合はエラー終了する (exit=$rc)"
+  else
+    fail "戻せる世代が無い場合はエラー終了する (exit=0になってしまった)"
+  fi
+  if printf '%s' "$out" | grep -q "No older generation"; then
+    pass "戻せる世代が無い場合のエラーメッセージが表示される"
+  else
+    fail "戻せる世代が無い場合のエラーメッセージが表示される"
+  fi
+
+  # --- currentが消えた世代を指しているとき、引数なしrollbackは
+  #     明示指定を促す明確なエラーになる ---
+  ln -sfn "$prefix/generations/does-not-exist" "$prefix/current"
+  out="$(run_deploy_from "$copy_dir/deploy-all.sh" "$sbx" --rollback 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    pass "currentが消えた世代を指すとき引数なしrollbackはエラー終了する (exit=$rc)"
+  else
+    fail "currentが消えた世代を指すとき引数なしrollbackはエラー終了する (exit=0になってしまった)"
+  fi
+  if printf '%s' "$out" | grep -q "current points at a generation that no longer exists"; then
+    pass "currentが消えた世代を指すときのエラーメッセージが表示される"
+  else
+    fail "currentが消えた世代を指すときのエラーメッセージが表示される"
+  fi
+}
+
+# ── シナリオ25: --dev ───────────────────────────────────────────────────
+
+scenario_dev_mode() {
+  if ! has_tool bin; then
+    return
+  fi
+  log "=== シナリオ25: --dev ==="
+  local sbx copy_dir prefix out rc marker gen_count_before gen_count_after latest_gen_target
+
+  new_sandbox
+  sbx="$SANDBOX_DIR"
+  copy_dir="$(mktemp -d)"
+  CREATED_DIRS+=("$copy_dir")
+  copy_repo_snapshot "$copy_dir"
+  prefix="$(dotfiles_prefix_for "$sbx")"
+
+  out="$(run_deploy_from "$copy_dir/deploy-all.sh" "$sbx" --force --only bin 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "事前準備(1回目のdeploy-all.sh --only bin)が失敗 (exit=$rc)"
+    log "$out"
+    return
+  fi
+
+  wait_for_next_second
+  out="$(run_deploy_from "$copy_dir/deploy-all.sh" "$sbx" --force --only bin 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "事前準備(2回目のdeploy-all.sh --only bin)が失敗 (exit=$rc)"
+    log "$out"
+    return
+  fi
+  gen_count_before="$(find "$prefix/generations" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')"
+  latest_gen_target="$(current_target_for "$sbx")"
+
+  # --- --dry-run は current を実際には変更しない ---
+  out="$(run_deploy_from "$copy_dir/deploy-all.sh" "$sbx" --dev --dry-run 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "--dev --dry-run が失敗 (exit=$rc)"
+    log "$out"
+  fi
+  case "$(current_target_for "$sbx")" in
+    "$prefix/generations"/*)
+      pass "--dev --dry-run はcurrentを実際には変更しない"
+      ;;
+    *)
+      fail "--dev --dry-run はcurrentを実際には変更しない"
+      ;;
+  esac
+
+  # --- 実際に dev モードへ切り替える ---
+  out="$(run_deploy_from "$copy_dir/deploy-all.sh" "$sbx" --dev 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "--dev が失敗 (exit=$rc)"
+    log "$out"
+    return
+  fi
+  pass "--dev が成功する"
+
+  if [ "$(current_target_for "$sbx")" = "$copy_dir" ]; then
+    pass "--dev でcurrentがソースツリーを指す"
+  else
+    fail "--dev でcurrentがソースツリーを指す (実際: $(current_target_for "$sbx"))"
+  fi
+
+  marker="# smoke-test dev marker $$"
+  printf '%s\n' "$marker" >>"$copy_dir/bin/ocw"
+
+  if cat "$sbx/bin/ocw" 2>/dev/null | grep -qF "$marker"; then
+    pass "devモードではソースツリーの書き換えが\$HOME側へ即座に反映される"
+  else
+    fail "devモードではソースツリーの書き換えが\$HOME側へ即座に反映される"
+  fi
+
+  # --- devモード中はGCで世代が削除されないことを直接gc_generationsで検証する ---
+  # deploy-all.sh の通常フロー（--dev/--status/--rollback以外）は
+  # switch_current で必ずcurrentを新世代へ切り替えてからgc_generationsを
+  # 呼ぶため、この不変条件（shared/helpers.shのgc_generations、孫1実装）を
+  # 実際にdevモードのまま踏むには直接呼び出すしかない。
+  sandbox_env "$sbx"
+  env "${SANDBOX_ENV[@]}" DOTFILES_KEEP_GENERATIONS=1 sh -c '. "'"$REPO_ROOT"'/shared/helpers.sh" && gc_generations' >/dev/null 2>&1
+  gen_count_after="$(find "$prefix/generations" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')"
+  if [ "$gen_count_after" = "$gen_count_before" ]; then
+    pass "devモード中はDOTFILES_KEEP_GENERATIONSを絞ってもGCで世代が削除されない: $gen_count_after 件のまま"
+  else
+    fail "devモード中はDOTFILES_KEEP_GENERATIONSを絞ってもGCで世代が削除されない: 期待${gen_count_before}件、実際 $gen_count_after 件"
+  fi
+
+  # --- positive control: 同じgc_generationsが generation モードでは
+  #     実際に削除することを確認する（devモードで削除されないのがGCの
+  #     不変条件によるものであり、GC自体が何もしていないからではないことを
+  #     区別するため）。redeployでdevモードを抜けさせてから同条件で呼ぶ。 ---
+  wait_for_next_second
+  out="$(run_deploy_from "$copy_dir/deploy-all.sh" "$sbx" --force --only bin 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "positive control用の再deployが失敗 (exit=$rc)"
+    log "$out"
+    return
+  fi
+  case "$(current_target_for "$sbx")" in
+    "$prefix/generations"/*)
+      pass "再deployでdevモードを抜けgenerationモードへ戻る（positive controlの前提）"
+      ;;
+    *)
+      fail "再deployでdevモードを抜けgenerationモードへ戻る（positive controlの前提）"
+      return
+      ;;
+  esac
+
+  sandbox_env "$sbx"
+  env "${SANDBOX_ENV[@]}" DOTFILES_KEEP_GENERATIONS=1 sh -c '. "'"$REPO_ROOT"'/shared/helpers.sh" && gc_generations' >/dev/null 2>&1
+  gen_count_after="$(find "$prefix/generations" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')"
+  if [ "$gen_count_after" -eq 1 ]; then
+    pass "positive control: generationモードでは同じgc_generationsが実際に1件まで削除する"
+  else
+    fail "positive control: generationモードでは同じgc_generationsが実際に1件まで削除する（実際: ${gen_count_after}件）"
+  fi
+}
+
+# ── シナリオ26: devモード中の --rollback は最新世代へ切り替える ─────────
+
+scenario_dev_mode_rollback() {
+  if ! has_tool bin; then
+    return
+  fi
+  log "=== シナリオ26: devモード中の--rollbackは最新世代へ切り替える ==="
+  local sbx copy_dir prefix out rc latest_gen_target
+
+  new_sandbox
+  sbx="$SANDBOX_DIR"
+  copy_dir="$(mktemp -d)"
+  CREATED_DIRS+=("$copy_dir")
+  copy_repo_snapshot "$copy_dir"
+  prefix="$(dotfiles_prefix_for "$sbx")"
+
+  out="$(run_deploy_from "$copy_dir/deploy-all.sh" "$sbx" --force --only bin 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "事前準備(1回目のdeploy-all.sh --only bin)が失敗 (exit=$rc)"
+    log "$out"
+    return
+  fi
+
+  wait_for_next_second
+  out="$(run_deploy_from "$copy_dir/deploy-all.sh" "$sbx" --force --only bin 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "事前準備(2回目のdeploy-all.sh --only bin)が失敗 (exit=$rc)"
+    log "$out"
+    return
+  fi
+  latest_gen_target="$(current_target_for "$sbx")"
+
+  out="$(run_deploy_from "$copy_dir/deploy-all.sh" "$sbx" --dev 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "--dev が失敗 (exit=$rc)"
+    log "$out"
+    return
+  fi
+
+  # --- devモード中に引数なし--rollbackすると、
+  #     「直前の世代」が定義できないため最新世代へ切り替わる ---
+  out="$(run_deploy_from "$copy_dir/deploy-all.sh" "$sbx" --rollback 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "devモード中の--rollbackが失敗 (exit=$rc)"
+    log "$out"
+    return
+  fi
+  if printf '%s' "$out" | grep -qi "dev mode"; then
+    pass "devモード中の--rollbackはdevモードからの離脱であることを明示する"
+  else
+    fail "devモード中の--rollbackはdevモードからの離脱であることを明示する"
+  fi
+  if [ "$(current_target_for "$sbx")" = "$latest_gen_target" ]; then
+    pass "devモード中の引数なし--rollbackは最新世代へ切り替わる"
+  else
+    fail "devモード中の引数なし--rollbackは最新世代へ切り替わる (実際: $(current_target_for "$sbx"))"
+  fi
+}
+
 log "REPO_ROOT: $REPO_ROOT"
 log "対象ツール: $TOOLS"
 log
@@ -1473,6 +2070,8 @@ scenario_claude_new_scheme_skill_removed_and_restored
 log
 scenario_claude_old_scheme_skill_removed_by_uninstall
 log
+scenario_claude_user_skill_pointing_elsewhere_in_repo_not_swept
+log
 scenario_cleanup_skipped_while_other_tool_in_scope
 log
 scenario_cleanup_skipped_when_symlink_removal_fails
@@ -1480,6 +2079,14 @@ log
 scenario_cleanup_dry_run_matches_reality
 log
 scenario_cleanup_removes_orphaned_scratch_without_generation
+log
+scenario_status
+log
+scenario_rollback
+log
+scenario_dev_mode
+log
+scenario_dev_mode_rollback
 log
 
 if [ "$FAIL" -eq 0 ]; then
