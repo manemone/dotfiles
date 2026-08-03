@@ -208,6 +208,13 @@ fi
 # Uses an independent _skills_fail flag so that a prior failure in CLAUDE.md
 # or settings.json does not silently skip skill deployment.
 SKILLS_SRC_DIR="$CLAUDE_SRC_DIR/skills"
+# Distinct from SKILLS_SRC_DIR on purpose: SKILLS_SRC_DIR is only the
+# enumeration input (which skills exist, per CLAUDE_SRC_DIR's DRY_RUN
+# branching above). SKILLS_DEPLOY_DIR is what symlinks actually get pointed
+# at, and that must always be the real distribution source regardless of
+# DRY_RUN — otherwise a dry-run plan would propose linking through the
+# working tree, which is exactly the pre-migration scheme this PR retires.
+SKILLS_DEPLOY_DIR="$DOTFILES_DEPLOY_SRC/claude/skills"
 SKILLS_DST_DIR="$CLAUDE_DIR/skills"
 SKILLS_BACKUP_DIR="$CLAUDE_DIR/skills-backup"
 _skills_fail=0
@@ -244,9 +251,11 @@ if [ -d "$SKILLS_SRC_DIR" ]; then
     for _skill_dir in "$SKILLS_SRC_DIR"/*/; do
       [ -d "$_skill_dir" ] || continue
       _skill_name=$(basename "$_skill_dir")
-      # Use $SKILLS_SRC_DIR/$_skill_name (no trailing slash) so the symlink
-      # target is clean and consistent with other links (e.g. CLAUDE.md).
-      _skill_src="$SKILLS_SRC_DIR/$_skill_name"
+      # Use $SKILLS_DEPLOY_DIR/$_skill_name (no trailing slash) so the
+      # symlink target is clean and consistent with other links (e.g.
+      # CLAUDE.md). Deliberately SKILLS_DEPLOY_DIR, not SKILLS_SRC_DIR — see
+      # the SKILLS_DEPLOY_DIR comment above.
+      _skill_src="$SKILLS_DEPLOY_DIR/$_skill_name"
       _skill_dst="$SKILLS_DST_DIR/$_skill_name"
 
       # Safety: if dst and src resolve to the same path, skip to avoid
@@ -326,19 +335,24 @@ if [ -d "$SKILLS_SRC_DIR" ]; then
     fi
 
     # Clean up stale symlinks inside ~/.claude/skills/ that point into
-    # SKILLS_SRC_DIR but whose targets no longer exist (renamed / removed).
-    # Also recognizes the pre-migration direct-to-worktree scheme
-    # ($SCRIPT_DIR/skills/<name>) so skills removed/renamed before this
-    # machine adopted the current-scheme distribution still get swept
-    # (ADR §4.8 / DOC-2608040229 asks uninstall.sh's ownership check to
-    # recognize both schemes for the same reason). Only touches symlinks
-    # whose target starts with one of these two prefixes, leaving
-    # user-owned and Herdr-managed symlinks alone.
+    # SKILLS_DEPLOY_DIR but whose targets no longer exist (renamed /
+    # removed). Uses SKILLS_DEPLOY_DIR, not SKILLS_SRC_DIR, for the same
+    # reason the symlink target above does: in DRY_RUN mode SKILLS_SRC_DIR
+    # is the working tree, so matching against it would miss stale
+    # current-scheme links (the ones this deploy actually created) and the
+    # plan would silently propose nothing to sweep. Also recognizes the
+    # pre-migration direct-to-worktree scheme ($SCRIPT_DIR/skills/<name>)
+    # so skills removed/renamed before this machine adopted the
+    # current-scheme distribution still get swept (ADR §4.8 /
+    # DOC-2608040229 asks uninstall.sh's ownership check to recognize both
+    # schemes for the same reason). Only touches symlinks whose target
+    # starts with one of these two prefixes, leaving user-owned and
+    # Herdr-managed symlinks alone.
     for _dst_link in "$SKILLS_DST_DIR"/*; do
       [ -L "$_dst_link" ] || continue
       _target=$(readlink "$_dst_link")
       case "$_target" in
-        "$SKILLS_SRC_DIR"/* | "$SCRIPT_DIR/skills"/*)
+        "$SKILLS_DEPLOY_DIR"/* | "$SCRIPT_DIR/skills"/*)
           if [ ! -d "$_target" ]; then
             if [ "${DRY_RUN:-0}" -eq 1 ]; then
               log_info "[DRY-RUN] Would remove stale skill symlink: $_dst_link → $_target"

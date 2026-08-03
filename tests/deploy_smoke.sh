@@ -853,8 +853,8 @@ scenario_claude_skill_migration() {
   fi
 
   # 旧方式(作業ツリー直リンク)の skill symlink を再現する。current 経由へ
-  # 配布元が変わったことで、244行目付近の「既に正しいsymlinkか」の判定に
-  # 一致しなくなり、バックアップ処理へ落ちる経路を通る(ADR §4.9)。
+  # 配布元が変わったことで、claude/deploy.sh の「Already correct symlink?」
+  # の判定に一致しなくなり、バックアップ処理へ落ちる経路を通る(ADR §4.9)。
   ln -s "$REPO_ROOT/claude/skills/$skill_name" "$sbx/.claude/skills/$skill_name"
   # 存在しないスキルを指す旧方式リンク(stale)も再現する。
   ln -s "$REPO_ROOT/claude/skills/smoke-test-gone-skill" "$sbx/.claude/skills/smoke-test-gone-skill"
@@ -875,6 +875,60 @@ scenario_claude_skill_migration() {
     fail "存在しないスキルを指す旧方式リンクが掃除される: $sbx/.claude/skills/smoke-test-gone-skill"
   else
     pass "存在しないスキルを指す旧方式リンクが掃除される"
+  fi
+}
+
+# ── シナリオ12: デプロイ済み状態でのdry-runが作業ツリーへのリンクを提案しない ──
+
+scenario_claude_dry_run_matches_deployed_state() {
+  if ! has_tool claude; then
+    return
+  fi
+  log "=== シナリオ12: デプロイ済み状態でのdry-runが作業ツリーへのリンクを提案しない ==="
+  local sbx out rc
+
+  new_sandbox
+  sbx="$SANDBOX_DIR"
+
+  out="$(run_deploy "$sbx" --force --only claude 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "claude の初回 deploy-all.sh --force が失敗 (exit=$rc)"
+    log "$out"
+    return
+  fi
+
+  # 世代IDは秒精度なので、直後の --dry-run が同一秒に収まると世代ID衝突で
+  # 意図と無関係に失敗する。秒が変わるまで待ってから実行する。
+  wait_for_next_second
+
+  # デプロイ済みの状態に対して --dry-run --only claude を実行する。既に
+  # current 経由で正しくリンクされているはずなので、計画には何も変更が
+  # 無いはず。出力に作業ツリー(REPO_ROOT)のパスが混ざっていたら、dry-run
+  # が「作業ツリーへ張り替える」という誤った計画を出している証拠になる
+  # (このPRが廃止しようとしている直リンク方式そのもの)。
+  out="$(run_deploy "$sbx" --dry-run --only claude 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "デプロイ済み状態での deploy-all.sh --dry-run --only claude が失敗 (exit=$rc)"
+    log "$out"
+    return
+  fi
+
+  # 出力全体には create_generation の DRY-RUN 計画(cp -a REPO_ROOT/<tool> ...)
+  # が含まれ、これは作業ツリーのパスを含んでいて正常なので、出力全体に対して
+  # grep すると必ず誤検知する。見るべきは symlink の向き先を報告する行だけ。
+  if printf '%s' "$out" | grep -E "Would (symlink|replace)|Already linked" | grep -qF "$REPO_ROOT"; then
+    fail "デプロイ済み状態でのdry-run計画のsymlink向き先に作業ツリーのパスが現れない"
+    log "$out"
+  else
+    pass "デプロイ済み状態でのdry-run計画のsymlink向き先に作業ツリーのパスが現れない"
+  fi
+
+  if printf '%s' "$out" | grep -q "Already linked"; then
+    pass "デプロイ済み状態でのdry-runは『既にリンク済み』と判定する(変更を提案しない)"
+  else
+    fail "デプロイ済み状態でのdry-runは『既にリンク済み』と判定する(変更を提案しない)"
   fi
 }
 
@@ -903,6 +957,8 @@ log
 scenario_claude_settings_machine_merge
 log
 scenario_claude_skill_migration
+log
+scenario_claude_dry_run_matches_deployed_state
 log
 
 if [ "$FAIL" -eq 0 ]; then
