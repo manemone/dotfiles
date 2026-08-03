@@ -111,8 +111,8 @@
 
 オプション: `--dry-run` / `--force` / `--only <tools>` / `--backup` / `--no-backup` /
 `--status` / `--rollback [世代ID]` / `--dev`。後者3つは `current` シンボリックリンク自体を
-操作するコマンドで、互いに組み合わせられず、`--only` / `--force` / `--backup` とも
-組み合わせられない（`--dry-run` のみ併用可）。
+操作するコマンドで、互いに組み合わせられず、`--only` / `--force` / `--backup` / `--no-backup`
+とも組み合わせられない（`--dry-run` のみ併用可）。
 
 - `--status`: 副作用なし。`current` の向き先（世代か dev モードか）・その manifest の内容
   （dev モードでは manifest が無いためソースツリーの git 状態をその場で読んで代わりに表示する）・
@@ -157,10 +157,11 @@ uninstall 側の対応関数。ただし退避の前提は次の3点で崩れる
 ### uninstall.sh の後片付け
 
 `uninstall.sh` は `$HOME` 側の symlink・生成ファイルを撤去したあと、配布実体
-（`<prefix>/generations/` と `current`）も片付ける。撤去対象に含まれないツールの symlink が
-まだ配布実体を参照している場合は片付けを行わず安全側に倒す。dev モード中（`current` が
-人間の作業ツリーを指している）は `current` というシンボリックリンク自体だけを取り除き、
-作業ツリーの実体には一切触れない。
+（`<prefix>/generations/` `<prefix>/.tmp/` と `current`、空になった `<prefix>` 自体）も
+片付ける。撤去対象に含まれないツールの symlink がまだ配布実体を参照している場合は片付けを
+行わず安全側に倒す。dev モード中（`current` が人間の作業ツリーを指している）でも
+`generations/` `.tmp/` と `current` 自体は通常どおり片付けられる。保護されるのは
+**`current` が指す作業ツリーの実体だけ**であり、そちらには一切触れない。
 
 ## クロスプラットフォーム制約
 

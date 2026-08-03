@@ -20,16 +20,25 @@ Claude Code の設定ファイル群。`~/.claude/` にデプロイして使う�
 
 ## 2. Quick Start
 
+初回（新規マシン、まだ何もデプロイしていない状態）は、単体の `claude/deploy.sh` ではなく
+必ずリポジトリルートの `deploy-all.sh` を実行してください。単体実行は配布実体
+（`current`）経由でしか読まないため、`current` がまだ無い新規マシンではエラーで終了します
+（詳細は「デプロイの仕組み」節。ルート `AGENTS.md` にも同じ規約があります）。
+
 ```bash
-# 1. Run deploy script
-cd ~/.dotfiles/claude
-./deploy.sh
+# 1. リポジトリルートから実行（初回は必ずこちら）
+cd ~/.dotfiles
+./deploy-all.sh --only claude
 
 # 2. Verify
-ls -la ~/.claude/CLAUDE.md         # symlink
+ls -la ~/.claude/CLAUDE.md         # symlink（current 経由）
 ls -la ~/.claude/settings.json     # 実ファイル（deploy.sh が生成）
 ls -la ~/.claude/skills/           # 各スキルが symlink（herdr など独自スキルは残る）
 ```
+
+すでに一度 `deploy-all.sh` を実行済みで `current` が存在する状態であれば、
+`claude/` ディレクトリから単体の `./deploy.sh` を実行しても構いません（配布実体を
+作り直さず、既存の `current` を読み直すだけです）。
 
 The deploy script:
 - Creates `~/.claude/` directory with mode `700`（認証情報を置く可能性があるため）
@@ -130,7 +139,7 @@ EOF
 # リポジトリ側に新しいスキルを追加
 mkdir -p claude/skills/new-skill
 # ... SKILL.md を作成 ...
-./deploy.sh  # 自動検出されて symlink が作られる
+cd ~/.dotfiles && ./deploy-all.sh --only claude  # 自動検出されて symlink が作られる
 ```
 
 ### 3.4 statusLine — Claude 利用枠スナップショット
@@ -152,9 +161,9 @@ Claude Code のステータスバーに 5時間枠 / 週間枠 / コンテキス
 （推定値からのフォールバック計算は記録用イベントにのみ使い、表示には使わない）。
 
 **事前準備（必須）**: `ocw-meter` が PATH に無い環境では statusLine コマンド自体が
-`command not found` になり、表示が壊れる。必ず先に `bin/deploy.sh` を実行して
-`~/bin/ocw-meter` を配置し、`~/bin` が PATH に入っていることを確認すること
-（`~/bin` の PATH 追加は `zsh/.zshrc` 依存。`bin/README.md` §5 参照）。
+`command not found` になり、表示が壊れる。必ず先に `./deploy-all.sh --only bin`
+（リポジトリルートから）を実行して `~/bin/ocw-meter` を配置し、`~/bin` が PATH に
+入っていることを確認すること（`~/bin` の PATH 追加は `zsh/.zshrc` 依存。`bin/README.md` §5 参照）。
 
 **観測は既存フローに一切割り込まない。** `snapshot-quota` は例外が起きても必ず表示文字列を
 stdout に返し exit 0 する（statusLine が壊れて画面が崩れる事態を避けるための最優先事項）。
@@ -187,7 +196,9 @@ statusLine が描画のたびに呼ばれても書き込みが肥大しない。
    ```
 2. `claude/settings.machine.json`（無ければ `settings.machine.json.example` からコピー）に、
    確認した `hooks`（通常は Herdr の `herdr-agent-state.sh`）を明記する（§4.3参照）
-3. `./deploy.sh` を実行する
+3. `./deploy-all.sh --only claude`（リポジトリルートから）を実行する。**単体の
+   `claude/deploy.sh` では不可**（配布実体経由でしか読まないため、今編集した
+   `settings.machine.json` の内容を拾わない）
 4. deploy 後、再度 手順1 のコマンドを実行し、`hooks.SessionStart` が健在であることを確認する
 
 **statusLine の無効化方法:**
@@ -195,7 +206,7 @@ statusLine が描画のたびに呼ばれても書き込みが肥大しない。
 `claude/settings.machine.json` に `"statusLine": null` は効かない（machine側の shallow merge は
 `null` も値として上書きしてしまうだけで、キー自体を消せない）。無効化したい場合は
 `~/.claude/settings.json` の `statusLine` キーを deploy 後に手動で削除する
-（**次回 `./deploy.sh` 実行時に `claude/settings.json` の内容で再度上書きされる**ので、
+（**次回 `./deploy-all.sh` 実行時に `claude/settings.json` の内容で再度上書きされる**ので、
 恒久的に無効化したい場合はリポジトリ側の `claude/settings.json` から `statusLine` を削除すること）。
 
 ## 4. Customization — マシン固有設定の追加
@@ -219,8 +230,12 @@ cp settings.machine.json.example settings.machine.json
 # 自分の環境に合わせて編集
 vim settings.machine.json
 
-# デプロイ実行（ベース + machine をマージして ~/.claude/settings.json を生成）
-./deploy.sh
+# デプロイ実行(ベース + machine をマージして ~/.claude/settings.json を生成)
+# 単体の ./deploy.sh ではなく、リポジトリルートから ./deploy-all.sh を実行すること。
+# 単体実行は配布実体(current)経由でしか settings.machine.json を読まないため、
+# 作業ツリー側で今編集した内容を拾わない(「デプロイの仕組み」節参照)。
+cd ~/.dotfiles
+./deploy-all.sh --only claude
 ```
 
 `settings.machine.json` は `.gitignore` で除外されているため、commit されません。
@@ -307,11 +322,13 @@ vim settings.machine.json
 
 ### 4.7 設定の反映確認
 
-`settings.machine.json` を編集した後は、再デプロイで反映されます:
+`settings.machine.json` を編集した後は、再デプロイで反映されます。**単体の `claude/deploy.sh`
+ではなく `./deploy-all.sh` を使うこと**（単体実行は配布実体経由でしか読まないため、
+作業ツリー側の編集を拾わない）:
 
 ```bash
-cd ~/.dotfiles/claude
-./deploy.sh
+cd ~/.dotfiles
+./deploy-all.sh --only claude
 ```
 
 Claude Code は起動時に設定を読み込むため、設定変更後は Claude Code を再起動してください。
@@ -323,9 +340,10 @@ symlink であり、**リポジトリの作業ツリーを直接指してはい�
 とは異なる点に注意）。
 
 - `~/.claude/CLAUDE.md` を直接編集すると即座に反映されるが、リポジトリ側には反映されず、
-  次回 `./deploy.sh`（または `./deploy-all.sh`）実行時に上書きされる
-- リポジトリ側の `claude/CLAUDE.md` を編集しても、再デプロイするまで `~/.claude/CLAUDE.md`
-  には反映されない
+  次回 `./deploy-all.sh` 実行時に上書きされる
+- リポジトリ側の `claude/CLAUDE.md` を編集しても、`./deploy-all.sh` を再実行するまで
+  `~/.claude/CLAUDE.md` には反映されない。**単体の `claude/deploy.sh` を実行しても
+  反映されない**（配布実体経由でしか読まないため。新しい世代を作るのは `deploy-all.sh` だけ）
 - 編集のたびに即時反映させたい場合は dev モード（`./deploy-all.sh --dev`）を使う。この場合
   `current` が作業ツリーそのものを指すため、リポジトリ側の編集がそのまま
   `~/.claude/CLAUDE.md` に反映される（世代方式の詳細はルート `AGENTS.md`
@@ -334,7 +352,7 @@ symlink であり、**リポジトリの作業ツリーを直接指してはい�
 ```bash
 # 恒久的に変更する場合（世代モード）
 vim ~/.dotfiles/claude/CLAUDE.md
-./deploy.sh   # または ./deploy-all.sh
+cd ~/.dotfiles && ./deploy-all.sh --only claude
 
 # 試行錯誤したい場合（dev モード）
 ./deploy-all.sh --dev
@@ -347,20 +365,23 @@ vim ~/.dotfiles/claude/CLAUDE.md   # 即座に ~/.claude/CLAUDE.md に反映さ�
 
 Claude Code は起動時に設定を読み込みます。
 
-- **マシン固有の設定を追加・変更する** → `claude/settings.machine.json` を編集して再デプロイ:
+- **マシン固有の設定を追加・変更する** → `claude/settings.machine.json` を編集して再デプロイ
+  （単体の `claude/deploy.sh` ではなく `./deploy-all.sh` を使うこと。単体実行は配布実体
+  経由でしか読まないため、今編集した内容を拾わない）:
   ```bash
-  cd ~/.dotfiles/claude && ./deploy.sh
+  cd ~/.dotfiles && ./deploy-all.sh --only claude
   ```
 - **`~/.claude/settings.json` を何らかの理由で直接編集した** → Claude Code を再起動。
-  ただし次回 `deploy.sh` 実行時に上書きされるため、恒久的な変更は `settings.machine.json` に転記してください。
+  ただし次回 `./deploy-all.sh` 実行時に上書きされるため、恒久的な変更は `settings.machine.json` に転記してください。
 
 ### `settings.machine.json` の変更が反映されない
 
-`settings.machine.json` を編集した後は、**必ず再デプロイ**してください。
-deploy.sh がその時点の `settings.machine.json` を読み取って `~/.claude/settings.json` を再生成します。
+`settings.machine.json` を編集した後は、**必ず `./deploy-all.sh` で再デプロイ**してください。
+単体の `claude/deploy.sh` では配布実体（`current`）経由でしか読まないため、
+今編集した `settings.machine.json` の内容を拾いません。
 
 ```bash
-cd ~/.dotfiles/claude && ./deploy.sh
+cd ~/.dotfiles && ./deploy-all.sh --only claude
 ```
 
 ### デプロイで既存設定が消えた
@@ -398,10 +419,12 @@ python3 -m json.tool claude/settings.machine.json
 ### symlink が壊れている
 
 ```bash
+cd ~/.dotfiles
+
 # 確認
 ls -la ~/.claude/CLAUDE.md
+./deploy-all.sh --status   # current の向き先・リンク切れの有無も確認できる
 
 # 修復
-cd ~/.dotfiles/claude
-./deploy.sh
+./deploy-all.sh --only claude
 ```

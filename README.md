@@ -70,7 +70,7 @@ Options can be combined:
 
 `--status` / `--rollback` / `--dev` operate on the `current` symlink itself (see
 [docs/adr/DOC-2608040229_deploy-distribution-method.md](docs/adr/DOC-2608040229_deploy-distribution-method.md))
-and cannot be combined with each other or with `--only` / `--force` / `--backup` —
+and cannot be combined with each other or with `--only` / `--force` / `--backup` / `--no-backup` —
 `--dry-run` is the only modifier they accept. `--status` has no side effects and is
 safe to run against your real `$HOME`; `--rollback` and `--dev` actually repoint
 `current`, so preview them with `--dry-run` first.
@@ -203,6 +203,22 @@ worktree and that worktree is removed (`ocw rm`, `git worktree remove`), every
 [WARN] back to generation mode.
 ```
 
+A related but separate warning can show up during an ordinary (non-`--dev`) deploy
+too: running `./deploy-all.sh` itself from a linked worktree still prints the
+"Deploying from a linked git worktree" warning below, left over from the pre-generation
+direct-link scheme. In generation mode this warning is misleading — the
+generation this deploy creates is a `cp -a` snapshot, so `$HOME` symlinks resolve
+through it rather than through the worktree, and removing the worktree afterward
+does **not** break them. Only dev mode actually makes the worktree's removal
+break `$HOME` symlinks, as described above.
+
+```
+[WARN] Deploying from a linked git worktree:
+[WARN]   /path/to/dotfiles/my-feature
+[WARN] Symlinks will point INTO this worktree and will break when it is
+[WARN] removed (e.g. by 'ocw rm').
+```
+
 Re-run `./deploy-all.sh` (without `--dev`) to leave dev mode and go back to the
 default, safer generation mode — this also fixes any symlinks a removed dev-mode
 worktree left broken. Set `DOTFILES_QUIET_WORKTREE_WARNING=1` to silence the
@@ -224,10 +240,11 @@ any `$HOME` symlink is broken) without side effects:
 
 The uninstall script removes **known symlinks**, restores backed-up config files
 (`*.backup`), and — once no remaining tool still references it — cleans up the
-distribution artifacts themselves (the `generations/` directory and the `current`
-symlink under the canonical prefix). If `current` is in dev mode (pointing at a
-working tree), only the `current` symlink is removed; the working tree itself is
-never touched.
+distribution artifacts themselves (the `generations/` directory, the scratch `.tmp/`
+directory, the `current` symlink, and the canonical prefix itself once empty). If
+`current` is in dev mode (pointing at a working tree), `generations/` / `.tmp/` /
+`current` are still cleaned up as usual; only the working tree `current` points at
+is protected and never touched.
 Note: `--only nvim` currently removes legacy dein.vim symlinks; lazy.nvim symlinks (`init.lua`, `lua/`, `lazy-lock.json`) are not yet tracked.
 See each tool's deploy script for the full list of files it creates.
 
