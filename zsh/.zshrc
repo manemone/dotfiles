@@ -4,9 +4,23 @@
 # Use %x prompt expansion to get the sourced file path.
 # This works regardless of FUNCTION_ARGZERO / POSIX_ARGZERO settings,
 # unlike $0 which depends on those options.
-_ZSHRC_PATH="${${(%):-%x}:A}"
+#
+# ~/.zshrc -> .../dotfiles/current/zsh/.zshrc, where `current` is itself a
+# symlink to a dated generation directory that gets garbage-collected once
+# older than DOTFILES_KEEP_GENERATIONS deploys ago. `:A` (full realpath)
+# would resolve straight through `current` to that generation directory, so
+# DOTFILES_DIR would end up pointing at a path that can vanish out from
+# under an already-running shell after a later re-deploy's GC. Resolve only
+# the ~/.zshrc symlink itself (one hop, via readlink) so DOTFILES_DIR stops
+# at the stable `current` path instead.
+_ZSHRC_SOURCE="${(%):-%x}"
+if [ -L "$_ZSHRC_SOURCE" ]; then
+  _ZSHRC_PATH="$(readlink "$_ZSHRC_SOURCE")"
+else
+  _ZSHRC_PATH="${_ZSHRC_SOURCE:A}"
+fi
 DOTFILES_DIR="${_ZSHRC_PATH:h:h}"
-unset _ZSHRC_PATH
+unset _ZSHRC_SOURCE _ZSHRC_PATH
 
 # =============================================================================
 # Source shared helpers (CURRENT_PLATFORM, is_macos, is_linux, is_wsl, etc.)

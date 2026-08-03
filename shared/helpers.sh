@@ -263,14 +263,42 @@ dotfiles_current_link() {
   printf '%s' "$(dotfiles_prefix)/current"
 }
 
-# _dotfiles_symlink_is_repo_owned <dst>
+# resolve_deploy_src
+# Ensures DOTFILES_DEPLOY_SRC is set for a standalone `<tool>/deploy.sh` run
+# (deploy-all.sh always sets it itself before calling any tool script). If
+# unset, defaults to `current`; exits with an explanatory error if `current`
+# doesn't resolve to a generation — distinguishing "nothing there yet" from
+# "current is a broken symlink" (e.g. it still points at a generation that
+# was since GC'd), since those call for different next steps.
+resolve_deploy_src() {
+  [ -n "${DOTFILES_DEPLOY_SRC:-}" ] && return 0
+
+  DOTFILES_DEPLOY_SRC="$(dotfiles_current_link)"
+  if [ ! -e "$DOTFILES_DEPLOY_SRC" ]; then
+    if [ -L "$DOTFILES_DEPLOY_SRC" ]; then
+      log_error "current is a broken symlink: $DOTFILES_DEPLOY_SRC -> $(readlink "$DOTFILES_DEPLOY_SRC")"
+      log_error "The generation it pointed to is gone. Run ./deploy-all.sh from the repo root to create a new one."
+    else
+      log_error "No distributed generation found (current does not exist yet)."
+      log_error "Run ./deploy-all.sh from the repo root first."
+    fi
+    exit 1
+  fi
+}
+
+# _dotfiles_symlink_is_repo_owned <dst> [repo_root]
 # Returns 0 if dst is a symlink whose target lives under the canonical
-# prefix (current-scheme distribution) or under this repo's working tree
-# (pre-migration direct-link scheme, detected via the caller's SCRIPT_DIR).
+# prefix (current-scheme distribution) or under repo_root (pre-migration
+# direct-link scheme). repo_root is an explicit argument rather than
+# something this function infers from a global: what counts as "this
+# repository's working tree" depends on the caller's own context (a
+# tool-scoped deploy.sh vs. a future root-scoped caller), so each call site
+# must state it. Pass "" (or omit it) to skip the working-tree check.
 # Used by symlink_backup to decide whether an existing symlink is a leftover
 # deploy artifact (safe to replace without backup) or user data.
 _dotfiles_symlink_is_repo_owned() {
   _diro_dst="$1"
+  _diro_repo_root="${2:-}"
 
   [ -L "$_diro_dst" ] || return 1
   _diro_target=$(readlink "$_diro_dst")
@@ -280,8 +308,7 @@ _dotfiles_symlink_is_repo_owned() {
     "$_diro_prefix"/*) return 0 ;;
   esac
 
-  if [ -n "${SCRIPT_DIR:-}" ]; then
-    _diro_repo_root="$(dirname "$SCRIPT_DIR")"
+  if [ -n "$_diro_repo_root" ]; then
     case "$_diro_target" in
       "$_diro_repo_root"/*) return 0 ;;
     esac
@@ -298,11 +325,18 @@ _dotfiles_symlink_is_repo_owned() {
 # (via eval, same calling convention as resolve_tools).
 # In DRY_RUN mode, nothing is copied; the would-be path is still emitted so
 # callers can print a coherent plan.
+#
+# On failure, stdout carries a literal "exit 1" (mirroring resolve_tools),
+# because the caller's `eval "$(create_generation ...)"` discards our
+# function return code: a failed command substitution still yields success
+# to eval once its (empty) output is evaluated as a no-op. Emitting "exit 1"
+# is what actually stops the caller.
 create_generation() {
   _cg_src_tree="$1"
   _cg_var="${2:-GENERATION_DIR}"
 
-  _cg_gens_dir="$(dotfiles_prefix)/generations"
+  _cg_prefix="$(dotfiles_prefix)"
+  _cg_gens_dir="$_cg_prefix/generations"
   _cg_sha=$(git -C "$_cg_src_tree" rev-parse --short HEAD 2>/dev/null)
   [ -n "$_cg_sha" ] || _cg_sha="nogit"
   _cg_dir="$_cg_gens_dir/$(date +%Y%m%dT%H%M%S)-$_cg_sha"
@@ -320,23 +354,74 @@ create_generation() {
     return 0
   fi
 
-  mkdir -p "$_cg_dir" || {
-    log_error "Failed to create generation directory: $_cg_dir"
+  if [ -e "$_cg_dir" ]; then
+    # Generation IDs are second-precision (<date>-<short sha>). Two deploys
+    # within the same second from the same commit collide on this path;
+    # `cp -a` into an *existing* directory nests instead of overwriting
+    # (e.g. .../bin/ocw stays stale while the new content lands unseen at
+    # .../bin/bin/ocw), silently distributing stale content while reporting
+    # success. Refuse instead of nesting.
+    log_error "Generation already exists (id collision): $_cg_dir"
+    printf 'exit 1\n'
+    return 1
+  fi
+
+  # Build in a scratch directory OUTSIDE generations/ (gc_generations only
+  # ever lists generations/*, so a half-built attempt left there by a crash
+  # would otherwise be counted as a real generation) and rename into place
+  # once complete. This also keeps the id-collision case above from ever
+  # observing a partially-copied directory.
+  mkdir -p "$_cg_prefix/.tmp" || {
+    log_error "Failed to create scratch directory: $_cg_prefix/.tmp"
+    printf 'exit 1\n'
+    return 1
+  }
+  _cg_scratch=$(mktemp -d "$_cg_prefix/.tmp/gen.XXXXXX") || {
+    log_error "Failed to create a scratch directory under $_cg_prefix/.tmp"
+    printf 'exit 1\n'
     return 1
   }
 
   for _cg_t in $AVAILABLE_TOOLS; do
-    cp -a "$_cg_src_tree/$_cg_t" "$_cg_dir/$_cg_t" || {
-      log_error "Failed to copy '$_cg_t' into generation: $_cg_dir"
+    cp -a "$_cg_src_tree/$_cg_t" "$_cg_scratch/$_cg_t" || {
+      log_error "Failed to copy '$_cg_t' into generation: $_cg_scratch"
+      rm -rf "$_cg_scratch"
+      printf 'exit 1\n'
       return 1
     }
   done
-  cp -a "$_cg_src_tree/shared" "$_cg_dir/shared" || {
-    log_error "Failed to copy 'shared' into generation: $_cg_dir"
+  cp -a "$_cg_src_tree/shared" "$_cg_scratch/shared" || {
+    log_error "Failed to copy 'shared' into generation: $_cg_scratch"
+    rm -rf "$_cg_scratch"
+    printf 'exit 1\n'
     return 1
   }
 
-  log_ok "Created generation: $_cg_dir"
+  mkdir -p "$_cg_gens_dir" || {
+    log_error "Failed to create generations directory: $_cg_gens_dir"
+    rm -rf "$_cg_scratch"
+    printf 'exit 1\n'
+    return 1
+  }
+
+  if [ -e "$_cg_dir" ]; then
+    log_error "Generation already exists (id collision): $_cg_dir"
+    rm -rf "$_cg_scratch"
+    printf 'exit 1\n'
+    return 1
+  fi
+
+  mv "$_cg_scratch" "$_cg_dir" || {
+    log_error "Failed to finalize generation: $_cg_dir"
+    rm -rf "$_cg_scratch"
+    printf 'exit 1\n'
+    return 1
+  }
+
+  # stdout is eval'd by the caller (see the function comment above), so the
+  # success message goes to stderr — mixing it into stdout would feed
+  # "[OK] Created generation: ..." to eval as a command.
+  log_ok "Created generation: $_cg_dir" >&2
   printf '%s="%s"\n' "$_cg_var" "$_cg_dir"
   return 0
 }
@@ -445,7 +530,9 @@ gc_generations() {
   _gc_current_name=$(basename "$_gc_current_target")
 
   _gc_keep="${DOTFILES_KEEP_GENERATIONS:-3}"
-  _gc_names=$(find "$_gc_gens_dir" -mindepth 1 -maxdepth 1 -type d -exec basename {} \; | sort)
+  # No -type filter here: it must enumerate symlinks and stray files too, or
+  # the "-L" guard below (and the total/retention count) never sees them.
+  _gc_names=$(find "$_gc_gens_dir" -mindepth 1 -maxdepth 1 -exec basename {} \; | sort)
 
   _gc_total=0
   for _gc_n in $_gc_names; do
@@ -481,14 +568,18 @@ gc_generations() {
 
     if [ "${DRY_RUN:-0}" -eq 1 ]; then
       printf '[DRY-RUN] rm -rf %s\n' "$_gc_target_dir"
+      _gc_removed=$((_gc_removed + 1))
     else
       if rm -rf "$_gc_target_dir"; then
         log_info "Removed old generation: $_gc_target_dir"
+        _gc_removed=$((_gc_removed + 1))
       else
+        # Do not count a failed removal — counting it would let a later,
+        # removable generation be skipped once `_gc_removed` reaches
+        # `_gc_excess`, leaving more than the configured number kept.
         log_error "Failed to remove old generation: $_gc_target_dir"
       fi
     fi
-    _gc_removed=$((_gc_removed + 1))
   done
 
   return 0
@@ -524,11 +615,19 @@ symlink_backup() {
     return 0
   fi
 
+  # Every current caller is a <tool>/deploy.sh with SCRIPT_DIR=<repo_root>/<tool>,
+  # so its parent is the repo root. This is computed here (not inside
+  # _dotfiles_symlink_is_repo_owned) so the assumption stays visible at the
+  # one place today's callers share, instead of being buried in a shared
+  # helper that a differently-scoped future caller could inherit by accident.
+  _sb_repo_root=""
+  [ -n "${SCRIPT_DIR:-}" ] && _sb_repo_root="$(dirname "$SCRIPT_DIR")"
+
   if [ "${DRY_RUN:-0}" -eq 1 ]; then
     if [ -e "$_dst" ] || [ -L "$_dst" ]; then
       if [ "${BACKUP:-1}" -eq 0 ]; then
         printf '[DRY-RUN] rm -f %s\n' "$_dst"
-      elif _dotfiles_symlink_is_repo_owned "$_dst"; then
+      elif _dotfiles_symlink_is_repo_owned "$_dst" "$_sb_repo_root"; then
         printf '[DRY-RUN] rm -f %s (repo-owned symlink, no backup)\n' "$_dst"
       else
         printf '[DRY-RUN] mv %s %s\n' "$_dst" "$(backup_dst "$_dst")"
@@ -555,7 +654,7 @@ symlink_backup() {
         log_error "Failed to remove: $_dst"
         return 1
       }
-    elif _dotfiles_symlink_is_repo_owned "$_dst"; then
+    elif _dotfiles_symlink_is_repo_owned "$_dst" "$_sb_repo_root"; then
       # A leftover symlink from a previous deploy (either the old direct-
       # to-worktree scheme or a stale current-scheme link) is not user
       # data, so replacing it should not leave a .backup that uninstall.sh

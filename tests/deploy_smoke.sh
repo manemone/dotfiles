@@ -321,6 +321,10 @@ EOF
   fi
 
   # --- 冪等性: 同じ内容で2回目を実行しても壊れない ---
+  # 世代IDは秒精度（<date>-<sha>）なので、同一秒内の再デプロイは同じ内容
+  # でも世代IDが衝突しうる（衝突時は上書きせずエラーにする仕様。指摘3）。
+  # 1秒空けてから2回目を実行する。
+  sleep 1
   out="$(run_deploy "$sbx" --force --only "$TOOLS" 2>&1)"
   rc=$?
   if [ "$rc" -ne 0 ]; then
@@ -619,6 +623,72 @@ scenario_migration_no_backup_for_repo_owned_symlink() {
   assert_not_exists "$sbx/bin/ocw.backup"
 }
 
+# ── シナリオ8: 由来判定の偽陽性防止 + 単体実行時のcurrent不在エラー ─────
+
+scenario_symlink_ownership_and_standalone_deploy() {
+  if ! has_tool bin; then
+    return
+  fi
+  log "=== シナリオ8: 由来判定の偽陽性防止 + 単体実行時のcurrent不在エラー ==="
+  local sbx out rc prefix
+
+  # --- 偽陽性防止: リポジトリ外を指す symlink は退避される ---
+  new_sandbox
+  sbx="$SANDBOX_DIR"
+  mkdir -p "$sbx/bin"
+  printf 'my-own-ocw\n' >"$sbx/my-own-ocw"
+  ln -s "$sbx/my-own-ocw" "$sbx/bin/ocw"
+
+  out="$(run_deploy "$sbx" --force --only bin 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "ユーザー所有symlinkが存在する状態での deploy-all.sh --only bin が失敗 (exit=$rc)"
+    log "$out"
+  else
+    assert_exists "$sbx/bin/ocw.backup"
+    if [ -L "$sbx/bin/ocw.backup" ] && [ "$(readlink "$sbx/bin/ocw.backup")" = "$sbx/my-own-ocw" ]; then
+      pass "リポジトリ外を指すユーザー所有symlinkは退避される（偽陽性なし）: $sbx/bin/ocw.backup -> $sbx/my-own-ocw"
+    else
+      fail "リポジトリ外を指すユーザー所有symlinkは退避される（偽陽性なし）: $sbx/bin/ocw.backup -> $(readlink "$sbx/bin/ocw.backup" 2>/dev/null || echo '(symlinkでない)')"
+    fi
+    assert_symlink "$sbx/bin/ocw" "$(dotfiles_prefix_for "$sbx")/current/bin/ocw"
+  fi
+
+  # --- 単体実行: current が存在しない状態で bin/deploy.sh を直接実行するとエラー終了する ---
+  new_sandbox
+  sbx="$SANDBOX_DIR"
+  sandbox_env "$sbx"
+  out="$(env "${SANDBOX_ENV[@]}" DRY_RUN=1 sh "$REPO_ROOT/bin/deploy.sh" 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    pass "current が無い状態での bin/deploy.sh 単体実行はエラー終了する (exit=$rc)"
+  else
+    fail "current が無い状態での bin/deploy.sh 単体実行はエラー終了する (exit=0 になってしまった)"
+  fi
+  if printf '%s' "$out" | grep -q "does not exist yet"; then
+    pass "current 不在時のエラーメッセージが表示される"
+  else
+    fail "current 不在時のエラーメッセージが表示される"
+  fi
+
+  # --- 単体実行: current がリンク切れのときは別のメッセージになる ---
+  prefix="$(dotfiles_prefix_for "$sbx")"
+  mkdir -p "$prefix"
+  ln -s "$prefix/generations/does-not-exist" "$prefix/current"
+  out="$(env "${SANDBOX_ENV[@]}" DRY_RUN=1 sh "$REPO_ROOT/bin/deploy.sh" 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    pass "current がリンク切れの状態での bin/deploy.sh 単体実行はエラー終了する (exit=$rc)"
+  else
+    fail "current がリンク切れの状態での bin/deploy.sh 単体実行はエラー終了する (exit=0 になってしまった)"
+  fi
+  if printf '%s' "$out" | grep -q "broken symlink"; then
+    pass "current がリンク切れのときは『存在しない』ではなく『リンク切れ』のメッセージになる"
+  else
+    fail "current がリンク切れのときは『存在しない』ではなく『リンク切れ』のメッセージになる"
+  fi
+}
+
 log "REPO_ROOT: $REPO_ROOT"
 log "対象ツール: $TOOLS"
 log
@@ -636,6 +706,8 @@ log
 scenario_generation_gc
 log
 scenario_migration_no_backup_for_repo_owned_symlink
+log
+scenario_symlink_ownership_and_standalone_deploy
 log
 
 if [ "$FAIL" -eq 0 ]; then
