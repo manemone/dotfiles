@@ -23,7 +23,7 @@ Claude Code の設定ファイル群。`~/.claude/` にデプロイして使う�
 初回（新規マシン、まだ何もデプロイしていない状態）は、単体の `claude/deploy.sh` ではなく
 必ずリポジトリルートの `deploy-all.sh` を実行してください。単体実行は配布実体
 （`current`）経由でしか読まないため、`current` がまだ無い新規マシンではエラーで終了します
-（詳細は「デプロイの仕組み」節。ルート `AGENTS.md` にも同じ規約があります）。
+（詳細はルート `AGENTS.md`「デプロイの仕組み」節を参照）。
 
 ```bash
 # 1. リポジトリルートから実行（初回は必ずこちら）
@@ -233,7 +233,7 @@ vim settings.machine.json
 # デプロイ実行(ベース + machine をマージして ~/.claude/settings.json を生成)
 # 単体の ./deploy.sh ではなく、リポジトリルートから ./deploy-all.sh を実行すること。
 # 単体実行は配布実体(current)経由でしか settings.machine.json を読まないため、
-# 作業ツリー側で今編集した内容を拾わない(「デプロイの仕組み」節参照)。
+# 作業ツリー側で今編集した内容を拾わない(ルート AGENTS.md「デプロイの仕組み」節参照)。
 cd ~/.dotfiles
 ./deploy-all.sh --only claude
 ```

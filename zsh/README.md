@@ -174,11 +174,13 @@ antidote update
 
 ### Custom Antidote Install Location
 
-Set `ANTIDOTE_HOME` **before** running `deploy.sh`:
+Set `ANTIDOTE_HOME` **before the first deploy** (this is usually done on a fresh
+machine, before `current` exists — use the top-level `deploy-all.sh`, not
+`zsh/deploy.sh` directly; see Quick Start above):
 
 ```bash
 export ANTIDOTE_HOME="$HOME/.local/share/antidote"
-./deploy.sh
+cd ~/.dotfiles && ./deploy-all.sh --only zsh
 ```
 
 To make it permanent, add to `~/.zshenv` (sourced before `.zshrc`):
