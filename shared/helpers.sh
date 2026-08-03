@@ -317,6 +317,39 @@ _dotfiles_symlink_is_repo_owned() {
   return 1
 }
 
+# _dotfiles_safe_rmdir <path> <required_prefix>
+# rm -rf path, but only after verifying it's not a symlink, exists, is a
+# real directory, and lives under required_prefix (prefix match) — the
+# three checks "全孫共通の注意" §2 requires before every `rm -rf` in this
+# codebase. The symlink check runs before the existence check on purpose: a
+# broken symlink is -L true but -e false (it follows the dangling target),
+# so checking -e first would silently let a broken symlink slip past this
+# guard entirely. Shared by create_generation (scratch cleanup) and
+# gc_generations (old-generation cleanup) so both go through one path.
+_dotfiles_safe_rmdir() {
+  _dsr_path="$1"
+  _dsr_prefix="$2"
+
+  if [ -L "$_dsr_path" ]; then
+    log_warn "Refusing to remove a symlink: $_dsr_path"
+    return 1
+  fi
+  [ -e "$_dsr_path" ] || return 0
+  if [ ! -d "$_dsr_path" ]; then
+    log_warn "Refusing to remove a non-directory: $_dsr_path"
+    return 1
+  fi
+  case "$_dsr_path" in
+    "$_dsr_prefix"/*) ;;
+    *)
+      log_error "Refusing to remove path outside canonical prefix: $_dsr_path"
+      return 1
+      ;;
+  esac
+
+  rm -rf "$_dsr_path"
+}
+
 # create_generation <src_tree> <var_name>
 # Copies AVAILABLE_TOOLS dirs + shared/ from src_tree into a new dated
 # generation directory under the canonical prefix (cp -a; ignores any
@@ -341,19 +374,9 @@ create_generation() {
   [ -n "$_cg_sha" ] || _cg_sha="nogit"
   _cg_dir="$_cg_gens_dir/$(date +%Y%m%dT%H%M%S)-$_cg_sha"
 
-  if [ "${DRY_RUN:-0}" -eq 1 ]; then
-    # Caller evals our stdout to receive <var_name>=<path> (same convention
-    # as resolve_tools), so the human-readable plan must go to stderr —
-    # mixing it into stdout would feed "[DRY-RUN] ..." text to eval.
-    printf '[DRY-RUN] mkdir -p %s\n' "$_cg_dir" >&2
-    for _cg_t in $AVAILABLE_TOOLS; do
-      printf '[DRY-RUN] cp -a %s/%s %s/%s\n' "$_cg_src_tree" "$_cg_t" "$_cg_dir" "$_cg_t" >&2
-    done
-    printf '[DRY-RUN] cp -a %s/shared %s/shared\n' "$_cg_src_tree" "$_cg_dir" >&2
-    printf '%s="%s"\n' "$_cg_var" "$_cg_dir"
-    return 0
-  fi
-
+  # Checked before the DRY_RUN branch so `--dry-run` reports the same
+  # collision a real run would hit, instead of silently reporting a plan
+  # that would actually fail.
   if [ -e "$_cg_dir" ]; then
     # Generation IDs are second-precision (<date>-<short sha>). Two deploys
     # within the same second from the same commit collide on this path;
@@ -364,6 +387,23 @@ create_generation() {
     log_error "Generation already exists (id collision): $_cg_dir"
     printf 'exit 1\n'
     return 1
+  fi
+
+  if [ "${DRY_RUN:-0}" -eq 1 ]; then
+    # Caller evals our stdout to receive <var_name>=<path> (same convention
+    # as resolve_tools), so the human-readable plan must go to stderr —
+    # mixing it into stdout would feed "[DRY-RUN] ..." text to eval.
+    # Mirrors the real build below: scratch dir under .tmp/, copy each tool
+    # into it, then mv into place — not a direct mkdir+cp into $_cg_dir.
+    printf '[DRY-RUN] mkdir -p %s/.tmp\n' "$_cg_prefix" >&2
+    printf '[DRY-RUN] mktemp -d %s/.tmp/gen.XXXXXX\n' "$_cg_prefix" >&2
+    for _cg_t in $AVAILABLE_TOOLS; do
+      printf '[DRY-RUN] cp -a %s/%s <scratch>/%s\n' "$_cg_src_tree" "$_cg_t" "$_cg_t" >&2
+    done
+    printf '[DRY-RUN] cp -a %s/shared <scratch>/shared\n' "$_cg_src_tree" >&2
+    printf '[DRY-RUN] mv <scratch> %s\n' "$_cg_dir" >&2
+    printf '%s="%s"\n' "$_cg_var" "$_cg_dir"
+    return 0
   fi
 
   # Build in a scratch directory OUTSIDE generations/ (gc_generations only
@@ -385,35 +425,41 @@ create_generation() {
   for _cg_t in $AVAILABLE_TOOLS; do
     cp -a "$_cg_src_tree/$_cg_t" "$_cg_scratch/$_cg_t" || {
       log_error "Failed to copy '$_cg_t' into generation: $_cg_scratch"
-      rm -rf "$_cg_scratch"
+      _dotfiles_safe_rmdir "$_cg_scratch" "$_cg_prefix/.tmp"
       printf 'exit 1\n'
       return 1
     }
   done
   cp -a "$_cg_src_tree/shared" "$_cg_scratch/shared" || {
     log_error "Failed to copy 'shared' into generation: $_cg_scratch"
-    rm -rf "$_cg_scratch"
+    _dotfiles_safe_rmdir "$_cg_scratch" "$_cg_prefix/.tmp"
     printf 'exit 1\n'
     return 1
   }
 
+  # mktemp -d creates the scratch dir 0700; carry the repo's usual 0755 over
+  # to the generation directory itself so distributed config keeps the same
+  # permissions it had before this scratch-dir mechanism existed (deliberate
+  # choice, not a side effect of mktemp's default mode).
+  chmod 0755 "$_cg_scratch" || log_warn "Failed to set permissions on scratch directory: $_cg_scratch"
+
   mkdir -p "$_cg_gens_dir" || {
     log_error "Failed to create generations directory: $_cg_gens_dir"
-    rm -rf "$_cg_scratch"
+    _dotfiles_safe_rmdir "$_cg_scratch" "$_cg_prefix/.tmp"
     printf 'exit 1\n'
     return 1
   }
 
   if [ -e "$_cg_dir" ]; then
     log_error "Generation already exists (id collision): $_cg_dir"
-    rm -rf "$_cg_scratch"
+    _dotfiles_safe_rmdir "$_cg_scratch" "$_cg_prefix/.tmp"
     printf 'exit 1\n'
     return 1
   fi
 
   mv "$_cg_scratch" "$_cg_dir" || {
     log_error "Failed to finalize generation: $_cg_dir"
-    rm -rf "$_cg_scratch"
+    _dotfiles_safe_rmdir "$_cg_scratch" "$_cg_prefix/.tmp"
     printf 'exit 1\n'
     return 1
   }
@@ -505,9 +551,9 @@ switch_current() {
 # Removes generations beyond ${DOTFILES_KEEP_GENERATIONS:-3}, oldest first.
 # Invariants: the generation `current` points at is never removed, and if
 # `current` points outside generations/ (dev mode — see ADR §4.5) nothing
-# is removed at all. Every candidate is re-verified to exist, be a real
-# directory (not a symlink), and live under the canonical prefix before
-# being passed to rm -rf.
+# is removed at all. Deletion goes through _dotfiles_safe_rmdir, which
+# re-verifies each candidate is not a symlink, is a real directory, and
+# lives under the canonical prefix before touching rm -rf.
 gc_generations() {
   _gc_prefix="$(dotfiles_prefix)"
   _gc_gens_dir="$_gc_prefix/generations"
@@ -530,12 +576,35 @@ gc_generations() {
   _gc_current_name=$(basename "$_gc_current_target")
 
   _gc_keep="${DOTFILES_KEEP_GENERATIONS:-3}"
-  # No -type filter here: it must enumerate symlinks and stray files too, or
-  # the "-L" guard below (and the total/retention count) never sees them.
-  _gc_names=$(find "$_gc_gens_dir" -mindepth 1 -maxdepth 1 -exec basename {} \; | sort)
 
+  # Two passes over generations/, deliberately kept separate:
+  #   1. Enumerate every entry (no -type filter) so a stray symlink or file
+  #      dropped in generations/ (e.g. macOS's .DS_Store) still gets a
+  #      warning instead of being silently ignored.
+  #   2. Only entries that pass the not-a-symlink / real-directory checks
+  #      go into `_gc_names` and count toward `_gc_total`. Mixing stray
+  #      entries into the retention count would make each one cost one
+  #      extra *real* generation deleted (the count goes up, but only real
+  #      generations are ever actually removable).
+  # The symlink check runs before -e for the same reason as
+  # _dotfiles_safe_rmdir: a broken symlink is -L true but -e false, so
+  # checking -e first would let it through uncounted and unwarned.
+  _gc_all_names=$(find "$_gc_gens_dir" -mindepth 1 -maxdepth 1 -exec basename {} \; | sort)
+
+  _gc_names=""
   _gc_total=0
-  for _gc_n in $_gc_names; do
+  for _gc_n in $_gc_all_names; do
+    _gc_candidate="$_gc_gens_dir/$_gc_n"
+    if [ -L "$_gc_candidate" ]; then
+      log_warn "Ignoring a symlink in generations/: $_gc_candidate"
+      continue
+    fi
+    if [ ! -d "$_gc_candidate" ]; then
+      log_warn "Ignoring a non-directory in generations/: $_gc_candidate"
+      continue
+    fi
+    _gc_names="$_gc_names
+$_gc_n"
     _gc_total=$((_gc_total + 1))
   done
 
@@ -544,33 +613,17 @@ gc_generations() {
 
   _gc_removed=0
   for _gc_n in $_gc_names; do
+    [ -n "$_gc_n" ] || continue
     [ "$_gc_removed" -lt "$_gc_excess" ] || break
     [ "$_gc_n" = "$_gc_current_name" ] && continue
 
     _gc_target_dir="$_gc_gens_dir/$_gc_n"
 
-    [ -e "$_gc_target_dir" ] || continue
-    if [ -L "$_gc_target_dir" ]; then
-      log_warn "Refusing to GC a symlink: $_gc_target_dir"
-      continue
-    fi
-    if [ ! -d "$_gc_target_dir" ]; then
-      log_warn "Refusing to GC a non-directory: $_gc_target_dir"
-      continue
-    fi
-    case "$_gc_target_dir" in
-      "$_gc_prefix"/*) ;;
-      *)
-        log_error "Refusing to GC path outside canonical prefix: $_gc_target_dir"
-        continue
-        ;;
-    esac
-
     if [ "${DRY_RUN:-0}" -eq 1 ]; then
       printf '[DRY-RUN] rm -rf %s\n' "$_gc_target_dir"
       _gc_removed=$((_gc_removed + 1))
     else
-      if rm -rf "$_gc_target_dir"; then
+      if _dotfiles_safe_rmdir "$_gc_target_dir" "$_gc_prefix"; then
         log_info "Removed old generation: $_gc_target_dir"
         _gc_removed=$((_gc_removed + 1))
       else

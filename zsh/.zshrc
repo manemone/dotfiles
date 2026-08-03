@@ -15,12 +15,20 @@
 # at the stable `current` path instead.
 _ZSHRC_SOURCE="${(%):-%x}"
 if [ -L "$_ZSHRC_SOURCE" ]; then
-  _ZSHRC_PATH="$(readlink "$_ZSHRC_SOURCE")"
+  # readlink returns the link's raw target text, which is relative when the
+  # symlink itself is relative (deploy.sh always writes absolute targets,
+  # but a hand-made or third-party-tool link might not). Anchor a relative
+  # target to the symlink's own directory so DOTFILES_DIR is always absolute.
+  _ZSHRC_TARGET="$(readlink "$_ZSHRC_SOURCE")"
+  case "$_ZSHRC_TARGET" in
+    /*) _ZSHRC_PATH="$_ZSHRC_TARGET" ;;
+    *) _ZSHRC_PATH="${_ZSHRC_SOURCE:h}/$_ZSHRC_TARGET" ;;
+  esac
 else
   _ZSHRC_PATH="${_ZSHRC_SOURCE:A}"
 fi
 DOTFILES_DIR="${_ZSHRC_PATH:h:h}"
-unset _ZSHRC_SOURCE _ZSHRC_PATH
+unset _ZSHRC_SOURCE _ZSHRC_TARGET _ZSHRC_PATH
 
 # =============================================================================
 # Source shared helpers (CURRENT_PLATFORM, is_macos, is_linux, is_wsl, etc.)
