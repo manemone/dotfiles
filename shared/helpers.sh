@@ -213,11 +213,18 @@ links_for_tool() {
 
 # claude_skill_links [repo_root]
 # Print (one per line) the paths under $HOME/.claude/skills/ that are
-# symlinks owned by this repo's distribution (see
-# _dotfiles_symlink_is_repo_owned for the ownership test — the canonical
-# prefix always counts, and repo_root additionally recognizes the
-# pre-migration direct-to-worktree scheme, see ADR DOC-2608040229 §4.8/
-# §4.9). Skills aren't in links_for_tool()/KNOWN_LINKS_claude because
+# symlinks owned by this repo's distribution. Recognizes three schemes:
+# current-scheme (target under <prefix>/current/claude/skills/), a
+# generation directly (target under <prefix>/generations/*/claude/skills/,
+# e.g. when DOTFILES_DEPLOY_SRC was pointed at one directly), and the
+# pre-migration direct-to-worktree scheme (target under
+# repo_root/claude/skills/, if repo_root is given — see ADR
+# DOC-2608040229 §4.8/§4.9). Deliberately narrower than
+# _dotfiles_symlink_is_repo_owned's generic "anywhere under repo_root"
+# check: a user's own symlink into some other part of the working tree
+# (e.g. a scratch directory) is not a skill this repo distributed, and
+# treating it as one would make uninstall.sh delete a link it doesn't own.
+# Skills aren't in links_for_tool()/KNOWN_LINKS_claude because
 # claude/deploy.sh symlinks them individually, one per skill directory
 # auto-detected under claude/skills/, rather than as a fixed list — but
 # they are still $HOME symlinks this repo creates, and in practice the
@@ -230,11 +237,22 @@ claude_skill_links() {
   _csl_repo_root="${1:-}"
   _csl_dir="$HOME/.claude/skills"
   [ -d "$_csl_dir" ] || return 0
+  _csl_prefix="$(dotfiles_prefix)"
   for _csl_link in "$_csl_dir"/*; do
     [ -L "$_csl_link" ] || continue
-    if _dotfiles_symlink_is_repo_owned "$_csl_link" "$_csl_repo_root"; then
-      printf '%s\n' "$_csl_link"
-    fi
+    _csl_target=$(readlink "$_csl_link")
+    case "$_csl_target" in
+      "$_csl_prefix/current/claude/skills"/* | "$_csl_prefix/generations"/*/claude/skills/*)
+        printf '%s\n' "$_csl_link"
+        ;;
+      *)
+        if [ -n "$_csl_repo_root" ]; then
+          case "$_csl_target" in
+            "$_csl_repo_root/claude/skills"/*) printf '%s\n' "$_csl_link" ;;
+          esac
+        fi
+        ;;
+    esac
   done
 }
 

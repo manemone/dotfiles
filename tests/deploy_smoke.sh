@@ -1231,6 +1231,50 @@ scenario_claude_old_scheme_skill_removed_by_uninstall() {
   assert_not_exists "$sbx/.claude/skills/$skill_name"
 }
 
+# ── シナリオ18b: リポジトリ内だがclaude/skills/配下ではない先を指す
+#     ユーザー自作skillリンクはuninstallの対象にならない ──────────────
+
+scenario_claude_user_skill_pointing_elsewhere_in_repo_not_swept() {
+  if ! has_tool claude; then
+    return
+  fi
+  log "=== シナリオ18b: repo_root配下だがclaude/skills/外を指すユーザー自作skillリンクは撤去されない ==="
+  local sbx out rc
+
+  new_sandbox
+  sbx="$SANDBOX_DIR"
+  mkdir -p "$sbx/.claude/skills"
+
+  # claude_skill_links() の repo_root チェックは「repo_root/claude/skills/配下」
+  # だけを配布物とみなす必要がある。REPO_ROOT配下の別ディレクトリ(例えば
+  # このテストファイル自身が置かれているtests/)を指すリンクまで拾ってしまうと、
+  # ユーザーがリポジトリ内の何かにリンクしているだけのskillをuninstallが
+  # 誤って削除してしまう(レビュー指摘: repo_root全体に対する前方一致は広すぎる)。
+  ln -s "$REPO_ROOT/tests" "$sbx/.claude/skills/my-own-skill"
+
+  out="$(run_uninstall "$sbx" --dry-run --only claude 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "uninstall.sh --dry-run --only claude が失敗 (exit=$rc)"
+    log "$out"
+    return
+  fi
+  if printf '%s' "$out" | grep -q "my-own-skill"; then
+    fail "claude/skills/外を指すユーザー自作skillリンクはuninstallの対象にならない（dry-runで言及されてしまった）"
+  else
+    pass "claude/skills/外を指すユーザー自作skillリンクはuninstallの対象にならない（dry-run）"
+  fi
+
+  out="$(run_uninstall "$sbx" --force --only claude 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "uninstall.sh --force --only claude が失敗 (exit=$rc)"
+    log "$out"
+    return
+  fi
+  assert_symlink "$sbx/.claude/skills/my-own-skill" "$REPO_ROOT/tests"
+}
+
 # ── シナリオ19: スコープ外ツールが参照している間は配布実体の後片付けをスキップする ──
 
 scenario_cleanup_skipped_while_other_tool_in_scope() {
@@ -1440,16 +1484,19 @@ scenario_status() {
     return
   fi
   log "=== シナリオ23: --status ==="
-  local sbx prefix out rc
+  local sbx prefix out rc skill_name skill_link
 
   new_sandbox
   sbx="$SANDBOX_DIR"
   prefix="$(dotfiles_prefix_for "$sbx")"
 
-  out="$(run_deploy "$sbx" --force --only bin 2>&1)"
+  # $TOOLS を deploy する（既定は bin,claude）。claude が対象に含まれるときだけ
+  # 下の「claude/skills/* のリンク切れ検出」を検証できるようにするため、
+  # bin 固定ではなく実行時の対象ツールに合わせる。
+  out="$(run_deploy "$sbx" --force --only "$TOOLS" 2>&1)"
   rc=$?
   if [ "$rc" -ne 0 ]; then
-    fail "deploy-all.sh --force --only bin が失敗 (exit=$rc)"
+    fail "deploy-all.sh --force --only $TOOLS が失敗 (exit=$rc)"
     log "$out"
     return
   fi
@@ -1502,6 +1549,34 @@ scenario_status() {
     pass "--status がリンク切れを検出する"
   else
     fail "--status がリンク切れを検出する"
+  fi
+
+  # --- claudeも対象のとき、claude/skills/* のリンク切れも検出されること ---
+  # 配布 symlink のうち本数が最も多い集合（ADR §1.1）が、KNOWN_LINKS_claude
+  # には載らずclaude_skill_links()経由でしか拾えないため、bin側の壊れた
+  # symlinkだけでは検証できない。実際にskillを1本壊して確認する。
+  if has_tool claude; then
+    skill_name="$(list_repo_skills | head -n1)"
+    if [ -n "$skill_name" ]; then
+      skill_link="$sbx/.claude/skills/$skill_name"
+      rm -f "$skill_link"
+      ln -s "$prefix/current/claude/skills/does-not-exist" "$skill_link"
+
+      out="$(run_deploy "$sbx" --status 2>&1)"
+      rc=$?
+      if [ "$rc" -ne 0 ]; then
+        pass "claude/skills/*のリンク切れがあると--statusが非0で終了する (exit=$rc)"
+      else
+        fail "claude/skills/*のリンク切れがあると--statusが非0で終了する (exit=0のままだった)"
+      fi
+      if printf '%s' "$out" | grep -qE "\[BROKEN\][[:space:]]+$skill_link"; then
+        pass "--status がclaude/skills/*のリンク切れを検出する"
+      else
+        fail "--status がclaude/skills/*のリンク切れを検出する"
+      fi
+    else
+      fail "claude/skills/*のリンク切れ検出テストの前提（skillが1つ以上存在すること）"
+    fi
   fi
 
   # --- devモードでは Mode: DEV と表示され、manifestの代わりにgit状態が出る ---
@@ -1962,6 +2037,8 @@ log
 scenario_claude_new_scheme_skill_removed_and_restored
 log
 scenario_claude_old_scheme_skill_removed_by_uninstall
+log
+scenario_claude_user_skill_pointing_elsewhere_in_repo_not_swept
 log
 scenario_cleanup_skipped_while_other_tool_in_scope
 log

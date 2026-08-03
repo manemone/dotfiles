@@ -368,21 +368,25 @@ cmd_rollback() {
     log_info "[DRY-RUN] \$HOME symlinks are unaffected by rollback — they already resolve through current."
   else
     log_ok "Rollback complete. \$HOME symlinks now resolve through: $_rb_target_dir"
-    # Two things a plain "current now points here" message doesn't cover:
-    #   - the target generation may not have every symlink the one we just
-    #     left had (e.g. a claude skill added since), which leaves a
-    #     dangling $HOME symlink that this command has no way to detect
-    #     without walking every tool's links here too — --status already
-    #     does exactly that, so point at it instead of duplicating the scan
-    #   - ~/.claude/settings.json is a generated real file, not a symlink
-    #     (ADR §4.8), so switching current never touches it; without this
-    #     line a rollback silently leaves stale settings.json content in
-    #     place while claiming the rollback is "complete"
-    log_info "Run '$0 --status' to check for symlinks the target generation doesn't have."
-    log_info "Note: ~/.claude/settings.json is a generated file, not a symlink — rollback"
-    log_info "does not revert it. Re-run claude/deploy.sh from the target generation if"
-    log_info "its content also needs to go back."
   fi
+
+  # Two things a plain "current now points here" message doesn't cover, and
+  # both are exactly the kind of thing that should show up in a --dry-run
+  # preview too (that's the whole point of previewing a rollback before
+  # committing to it), so this isn't gated on DRY_RUN:
+  #   - the target generation may not have every symlink the one we just
+  #     left had (e.g. a claude skill added since), which leaves a
+  #     dangling $HOME symlink that this command has no way to detect
+  #     without walking every tool's links here too — --status already
+  #     does exactly that, so point at it instead of duplicating the scan
+  #   - ~/.claude/settings.json is a generated real file, not a symlink
+  #     (ADR §4.8), so switching current never touches it; without this
+  #     line a rollback silently leaves stale settings.json content in
+  #     place while claiming the rollback is "complete"
+  log_info "Run '$0 --status' to check for symlinks the target generation doesn't have."
+  log_info "Note: ~/.claude/settings.json is a generated file, not a symlink — rollback"
+  log_info "does not revert it. Re-run claude/deploy.sh from the target generation if"
+  log_info "its content also needs to go back."
   return 0
 }
 
