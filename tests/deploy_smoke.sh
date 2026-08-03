@@ -235,9 +235,10 @@ assert_not_exists() {
 
 scenario_backup_symlink_idempotent_uninstall() {
   log "=== シナリオ1: 退避 / symlink / 冪等性 / uninstall 復元 (対象: $TOOLS) ==="
-  local sbx out rc existing_skill
+  local sbx out rc existing_skill prefix
   new_sandbox
   sbx="$SANDBOX_DIR"
+  prefix="$(dotfiles_prefix_for "$sbx")"
 
   if has_tool bin; then
     mkdir -p "$sbx/bin"
@@ -270,8 +271,7 @@ scenario_backup_symlink_idempotent_uninstall() {
   pass "deploy-all.sh --force --only $TOOLS が成功"
 
   if has_tool bin; then
-    local prefix gen_target
-    prefix="$(dotfiles_prefix_for "$sbx")"
+    local gen_target
 
     # $HOME 側の symlink は current を経由する固定パスを指す（世代ディレク
     # トリを直接指さない）。current の付け替えだけで全リンクの向き先が
@@ -308,7 +308,10 @@ scenario_backup_symlink_idempotent_uninstall() {
   fi
 
   if has_tool claude; then
-    assert_symlink "$sbx/.claude/CLAUDE.md" "$REPO_ROOT/claude/CLAUDE.md"
+    # $HOME 側の symlink は current を経由する固定パスを指す(作業ツリーを
+    # 直接指さない)。孫2で claude も他ツールと同じ配布実体経由へ揃えた
+    # (ADR §4.8 / DOC-2608040229)。
+    assert_symlink "$sbx/.claude/CLAUDE.md" "$prefix/current/claude/CLAUDE.md"
     assert_exists "$sbx/.claude/CLAUDE.md.backup"
     assert_real_file "$sbx/.claude/settings.json"
     if grep -q '"dummy"' "$sbx/.claude/settings.json" 2>/dev/null; then
@@ -319,7 +322,7 @@ scenario_backup_symlink_idempotent_uninstall() {
     local skill
     while IFS= read -r skill; do
       [ -n "$skill" ] || continue
-      assert_symlink "$sbx/.claude/skills/$skill" "$REPO_ROOT/claude/skills/$skill"
+      assert_symlink "$sbx/.claude/skills/$skill" "$prefix/current/claude/skills/$skill"
     done <<EOF
 $(list_repo_skills)
 EOF
@@ -383,10 +386,31 @@ EOF
       fail "uninstall で claude/CLAUDE.md が元のファイルに復元された"
     fi
     if [ -n "$existing_skill" ]; then
-      if [ -d "$sbx/.claude/skills/$existing_skill" ] && [ ! -L "$sbx/.claude/skills/$existing_skill" ] && [ -f "$sbx/.claude/skills/$existing_skill/DUMMY_MARKER" ]; then
-        pass "uninstall で既存skillがskills-backupから復元された"
+      # 孫2時点では uninstall.sh の KNOWN_SKILLS_SRC_claude が作業ツリーの
+      # パスを見たままで、current 経由で張られた新方式の skill symlink を
+      # 認識できない(孫3で対応予定 — 計画書 DOC-2608040234 孫2「やらない
+      # こと」参照)。そのため uninstall はこの skill を素通りし、symlink
+      # が current 経由のまま残り、skills-backup からの復元も起きない。
+      # 孫3が由来判定を両対応させたら、この期待値は「復元される」側へ
+      # 反転させる。
+      if [ -L "$sbx/.claude/skills/$existing_skill" ] && [ "$(readlink "$sbx/.claude/skills/$existing_skill")" = "$prefix/current/claude/skills/$existing_skill" ]; then
+        pass "uninstall は新方式skillのsymlinkを未対応のまま残す(孫3で対応予定)"
       else
-        fail "uninstall で既存skillがskills-backupから復元された"
+        fail "uninstall は新方式skillのsymlinkを未対応のまま残す(孫3で対応予定)"
+      fi
+
+      # symlink を素通りするだけでなく、deploy 時に skills-backup へ退避した
+      # 元のスキルも失われずに残っていることを確認する。孫3が復元を実装する
+      # 前提はここに元データが残っていることなので、deploy 側の退化(取りこぼし・
+      # 上書き)が起きていないことをこのタイミングで検証しておく。
+      local backup_match_after_uninstall=""
+      for cand in "$sbx/.claude/skills-backup/$existing_skill".*; do
+        [ -e "$cand" ] && backup_match_after_uninstall="$cand" && break
+      done
+      if [ -n "$backup_match_after_uninstall" ] && [ -f "$backup_match_after_uninstall/DUMMY_MARKER" ]; then
+        pass "uninstall 後も退避された元skillがskills-backupに残っている(孫3の復元実装の前提): $backup_match_after_uninstall"
+      else
+        fail "uninstall 後も退避された元skillがskills-backupに残っている(孫3の復元実装の前提)"
       fi
     fi
   fi
@@ -707,6 +731,273 @@ scenario_symlink_ownership_and_standalone_deploy() {
   fi
 }
 
+# ── シナリオ9: ソースツリー消失耐性(claude版) ──────────────────────────
+
+scenario_claude_source_tree_disappears() {
+  if ! has_tool claude; then
+    return
+  fi
+  log "=== シナリオ9: ソースツリー消失耐性(claude版) ==="
+  local sbx copy_dir out rc claude_md_content skill
+
+  new_sandbox
+  sbx="$SANDBOX_DIR"
+  copy_dir="$(mktemp -d)"
+  CREATED_DIRS+=("$copy_dir")
+  copy_repo_snapshot "$copy_dir"
+
+  out="$(run_deploy_from "$copy_dir/deploy-all.sh" "$sbx" --force --only claude 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "コピーからの deploy-all.sh --only claude が失敗 (exit=$rc)"
+    log "$out"
+    return
+  fi
+
+  claude_md_content="$(cat "$sbx/.claude/CLAUDE.md" 2>/dev/null)"
+  if [ -z "$claude_md_content" ]; then
+    fail "deploy 直後に $sbx/.claude/CLAUDE.md が読めること"
+    return
+  fi
+  pass "deploy 直後に $sbx/.claude/CLAUDE.md が読める"
+
+  # ソースツリー(コピー)を削除する。世代は cp -a による実体コピーなので、
+  # 消えたソースツリーに依存していなければ $HOME 側は引き続き読めるはず
+  # (ADR 問題2の回帰テスト。claude 側は孫1では未対応だったため孫2で追加)。
+  rm -rf "$copy_dir"
+
+  if [ "$(cat "$sbx/.claude/CLAUDE.md" 2>/dev/null)" = "$claude_md_content" ]; then
+    pass "ソースツリー削除後も \$HOME/.claude/CLAUDE.md が同じ内容で読める(消失耐性)"
+  else
+    fail "ソースツリー削除後も \$HOME/.claude/CLAUDE.md が同じ内容で読める(消失耐性)"
+  fi
+
+  while IFS= read -r skill; do
+    [ -n "$skill" ] || continue
+    if [ -d "$sbx/.claude/skills/$skill" ]; then
+      pass "ソースツリー削除後も skill が読める: $skill"
+    else
+      fail "ソースツリー削除後も skill が読める: $skill"
+    fi
+  done <<EOF
+$(list_repo_skills)
+EOF
+}
+
+# ── シナリオ10: settings.machine.json が世代に入りマージが効く ───────────
+
+scenario_claude_settings_machine_merge() {
+  if ! has_tool claude; then
+    return
+  fi
+  log "=== シナリオ10: settings.machine.json が世代に入りマージが効く ==="
+  local sbx copy_dir out rc
+
+  new_sandbox
+  sbx="$SANDBOX_DIR"
+  copy_dir="$(mktemp -d)"
+  CREATED_DIRS+=("$copy_dir")
+  copy_repo_snapshot "$copy_dir"
+
+  # settings.machine.json は非追跡(.gitignore)だが、create_generation は
+  # 作業ツリーのファイルコピー(cp -a)であって git archive ではないので、
+  # このコピー側に置いたファイルも世代に入るはず(ADR §2.4)。
+  cat >"$copy_dir/claude/settings.machine.json" <<'JSONEOF'
+{
+  "smokeTestMarker": "smoke-test-value"
+}
+JSONEOF
+
+  out="$(run_deploy_from "$copy_dir/deploy-all.sh" "$sbx" --force --only claude 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "settings.machine.json 付きの deploy-all.sh --only claude が失敗 (exit=$rc)"
+    log "$out"
+    return
+  fi
+
+  if grep -q "smokeTestMarker" "$sbx/.claude/settings.json" 2>/dev/null; then
+    pass "非追跡の settings.machine.json が世代にコピーされ、マージ結果が settings.json に反映される"
+  else
+    fail "非追跡の settings.machine.json が世代にコピーされ、マージ結果が settings.json に反映される"
+  fi
+
+  # smokeTestMarker の有無だけでは、settings.machine.json を「マージ」でなく
+  # 「丸ごとコピー」する実装に退化しても緑のままになってしまう。ベース設定
+  # (claude/settings.json)側にしかないキーも一緒に残っていることを確認し、
+  # 両方が合成された結果であることを検証する。
+  if grep -q '"permissions"' "$sbx/.claude/settings.json" 2>/dev/null; then
+    pass "ベース設定(claude/settings.json)側のキーもマージ後に残っている(丸ごと上書きされていない)"
+  else
+    fail "ベース設定(claude/settings.json)側のキーもマージ後に残っている(丸ごと上書きされていない)"
+  fi
+}
+
+# ── シナリオ11: 旧方式(直リンク)skill symlinkの移行 + stale掃除(claude版) ──
+
+scenario_claude_skill_migration() {
+  if ! has_tool claude; then
+    return
+  fi
+  log "=== シナリオ11: 旧方式(直リンク)skill symlinkの移行 + stale掃除(claude版) ==="
+  local sbx out rc skill_name prefix
+
+  new_sandbox
+  sbx="$SANDBOX_DIR"
+  mkdir -p "$sbx/.claude/skills"
+
+  skill_name="$(list_repo_skills | head -n1)"
+  if [ -z "$skill_name" ]; then
+    log "  (claude/skills/ 配下にスキルが無いためスキップ)"
+    return
+  fi
+
+  # 旧方式(作業ツリー直リンク)の skill symlink を再現する。current 経由へ
+  # 配布元が変わったことで、claude/deploy.sh の「Already correct symlink?」
+  # の判定に一致しなくなり、バックアップ処理へ落ちる経路を通る(ADR §4.9)。
+  ln -s "$REPO_ROOT/claude/skills/$skill_name" "$sbx/.claude/skills/$skill_name"
+  # 存在しないスキルを指す旧方式リンク(stale)も再現する。
+  ln -s "$REPO_ROOT/claude/skills/smoke-test-gone-skill" "$sbx/.claude/skills/smoke-test-gone-skill"
+
+  out="$(run_deploy "$sbx" --force --only claude 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "旧方式skillリンクが存在する状態での deploy-all.sh --only claude が失敗 (exit=$rc)"
+    log "$out"
+    return
+  fi
+
+  prefix="$(dotfiles_prefix_for "$sbx")"
+  assert_symlink "$sbx/.claude/skills/$skill_name" "$prefix/current/claude/skills/$skill_name"
+  assert_not_exists "$sbx/.claude/skills-backup"
+
+  if [ -L "$sbx/.claude/skills/smoke-test-gone-skill" ] || [ -e "$sbx/.claude/skills/smoke-test-gone-skill" ]; then
+    fail "存在しないスキルを指す旧方式リンクが掃除される: $sbx/.claude/skills/smoke-test-gone-skill"
+  else
+    pass "存在しないスキルを指す旧方式リンクが掃除される"
+  fi
+}
+
+# ── シナリオ12: デプロイ済み状態でのdry-runが作業ツリーへのリンクを提案しない ──
+
+scenario_claude_dry_run_matches_deployed_state() {
+  if ! has_tool claude; then
+    return
+  fi
+  log "=== シナリオ12: デプロイ済み状態でのdry-runが作業ツリーへのリンクを提案しない ==="
+  local sbx out rc
+
+  new_sandbox
+  sbx="$SANDBOX_DIR"
+
+  out="$(run_deploy "$sbx" --force --only claude 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "claude の初回 deploy-all.sh --force が失敗 (exit=$rc)"
+    log "$out"
+    return
+  fi
+
+  # 世代IDは秒精度なので、直後の --dry-run が同一秒に収まると世代ID衝突で
+  # 意図と無関係に失敗する。秒が変わるまで待ってから実行する。
+  wait_for_next_second
+
+  # デプロイ済みの状態に対して --dry-run --only claude を実行する。既に
+  # current 経由で正しくリンクされているはずなので、計画には何も変更が
+  # 無いはず。出力に作業ツリー(REPO_ROOT)のパスが混ざっていたら、dry-run
+  # が「作業ツリーへ張り替える」という誤った計画を出している証拠になる
+  # (このPRが廃止しようとしている直リンク方式そのもの)。
+  out="$(run_deploy "$sbx" --dry-run --only claude 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "デプロイ済み状態での deploy-all.sh --dry-run --only claude が失敗 (exit=$rc)"
+    log "$out"
+    return
+  fi
+
+  # 出力全体には create_generation の DRY-RUN 計画(cp -a REPO_ROOT/<tool> ...)
+  # が含まれ、これは作業ツリーのパスを含んでいて正常なので、出力全体に対して
+  # grep すると必ず誤検知する。見るべきは symlink の向き先を報告する行だけ。
+  if printf '%s' "$out" | grep -E "Would (symlink|replace)|Already linked" | grep -qF "$REPO_ROOT"; then
+    fail "デプロイ済み状態でのdry-run計画のsymlink向き先に作業ツリーのパスが現れない"
+    log "$out"
+  else
+    pass "デプロイ済み状態でのdry-run計画のsymlink向き先に作業ツリーのパスが現れない"
+  fi
+
+  if printf '%s' "$out" | grep -q "Already linked"; then
+    pass "デプロイ済み状態でのdry-runは『既にリンク済み』と判定する(変更を提案しない)"
+  else
+    fail "デプロイ済み状態でのdry-runは『既にリンク済み』と判定する(変更を提案しない)"
+  fi
+}
+
+# ── シナリオ13: current不在状態でのdry-runが配布実体の中身を計画できる ──
+
+scenario_claude_dry_run_before_first_deploy() {
+  if ! has_tool claude; then
+    return
+  fi
+  log "=== シナリオ13: current不在状態でのdry-runが配布実体の中身を計画できる ==="
+  local sbx copy_dir out rc skill prefix
+
+  new_sandbox
+  sbx="$SANDBOX_DIR"
+  copy_dir="$(mktemp -d)"
+  CREATED_DIRS+=("$copy_dir")
+  copy_repo_snapshot "$copy_dir"
+
+  # settings.machine.json を置いた状態で、まだ一度も deploy していない
+  # (current が存在しない)サンドボックスに対して --dry-run を実行する。
+  # ここが指摘1・6のバグが実際に発現していた条件そのもの: current が
+  # 無い状態では配布実体がまだ存在しないため、-f/-d による実在性判定を
+  # 素朴に配布実体へ向けると「マージ対象なし」「スキルなし」に見えて
+  # しまう(指摘1)。逆にその回避として列挙元を作業ツリーに振ったせいで
+  # リンクの向き先まで作業ツリーになってしまったのが指摘6。シナリオ12
+  # は「デプロイ済み」状態しか見ないためこの分岐を一度も通らず、この
+  # シナリオを置き換えではなく追加する。
+  cat >"$copy_dir/claude/settings.machine.json" <<'JSONEOF'
+{
+  "smokeTestMarker": "smoke-test-value"
+}
+JSONEOF
+
+  out="$(run_deploy_from "$copy_dir/deploy-all.sh" "$sbx" --dry-run --only claude 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "current不在状態での deploy-all.sh --dry-run --only claude が失敗 (exit=$rc)"
+    log "$out"
+    return
+  fi
+
+  if printf '%s' "$out" | grep -q "Would merge settings.json + settings.machine.json"; then
+    pass "current不在でもsettings.machine.jsonありなら『マージ』の計画になる(コピーに退化しない)"
+  else
+    fail "current不在でもsettings.machine.jsonありなら『マージ』の計画になる(コピーに退化しない)"
+  fi
+
+  while IFS= read -r skill; do
+    [ -n "$skill" ] || continue
+    if printf '%s' "$out" | grep -qF "Would symlink: $sbx/.claude/skills/$skill"; then
+      pass "current不在でも配布対象のskillが計画に列挙される: $skill"
+    else
+      fail "current不在でも配布対象のskillが計画に列挙される: $skill"
+    fi
+  done <<EOF
+$(list_repo_skills)
+EOF
+
+  # リンクの向き先は常に配布実体(current経由)でなければならない(指摘6の
+  # 回帰)。列挙元だけ直っていてリンク先が作業ツリーのままの退化を検知
+  # するため、Would symlink の行を配布実体prefixで確認する。
+  prefix="$(dotfiles_prefix_for "$sbx")"
+  if printf '%s' "$out" | grep "Would symlink:" | grep -qF "$prefix/current/claude/skills/"; then
+    pass "current不在でもskillのリンク先は配布実体(current経由)になる"
+  else
+    fail "current不在でもskillのリンク先は配布実体(current経由)になる"
+  fi
+}
+
 log "REPO_ROOT: $REPO_ROOT"
 log "対象ツール: $TOOLS"
 log
@@ -726,6 +1017,16 @@ log
 scenario_migration_no_backup_for_repo_owned_symlink
 log
 scenario_symlink_ownership_and_standalone_deploy
+log
+scenario_claude_source_tree_disappears
+log
+scenario_claude_settings_machine_merge
+log
+scenario_claude_skill_migration
+log
+scenario_claude_dry_run_matches_deployed_state
+log
+scenario_claude_dry_run_before_first_deploy
 log
 
 if [ "$FAIL" -eq 0 ]; then
