@@ -133,10 +133,39 @@ if [ "$FORCE" -eq 0 ] && [ "$DRY_RUN" -eq 0 ]; then
   printf '\n'
 fi
 
-# ── Run each tool's deploy script ─────────────────────────────────────
+# ── Build a new generation and switch `current` ────────────────────────
+#
+# A generation always holds the full tool set regardless of --only (see
+# ADR §4.3 / DOC-2608040229) — --only only controls which $HOME symlinks
+# get (re)created below. Every tool's deploy.sh links $HOME through the
+# `current` symlink itself, never through the generation directory, so a
+# later rollback is a single `current` swap (ADR §4.1).
 
 export DRY_RUN
 export BACKUP
+
+DOTFILES_DEPLOY_SRC="$(dotfiles_current_link)"
+export DOTFILES_DEPLOY_SRC
+
+GENERATION_DIR=""
+eval "$(create_generation "$SCRIPT_DIR" "GENERATION_DIR")" || {
+  log_error "Failed to create generation from: $SCRIPT_DIR"
+  exit 1
+}
+log_info "Generation: $GENERATION_DIR"
+
+write_manifest "$GENERATION_DIR" "$SCRIPT_DIR" "generation" || {
+  log_warn "Failed to write .dotfiles-manifest (continuing)."
+}
+
+switch_current "$GENERATION_DIR" || {
+  log_error "Failed to switch current -> $GENERATION_DIR"
+  exit 1
+}
+
+printf '\n'
+
+# ── Run each tool's deploy script ─────────────────────────────────────
 
 OVERALL_OK=0
 
@@ -177,6 +206,10 @@ for _tool in $TOOLS; do
     OVERALL_OK=1
   }
 done
+
+# ── Garbage-collect old generations ────────────────────────────────────
+
+gc_generations
 
 # ── Summary ───────────────────────────────────────────────────────────
 

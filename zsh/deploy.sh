@@ -7,6 +7,18 @@ SCRIPT_DIR=$(
 # shellcheck source=SCRIPTDIR/../shared/helpers.sh
 . "$SCRIPT_DIR/../shared/helpers.sh"
 
+# --- Resolve distribution source (current generation) ---
+# See AGENTS.md "デプロイの仕組み": standalone runs default to `current`;
+# deploy-all.sh overrides this with the generation it just created.
+if [ -z "${DOTFILES_DEPLOY_SRC:-}" ]; then
+  DOTFILES_DEPLOY_SRC="$(dotfiles_current_link)"
+  if [ ! -e "$DOTFILES_DEPLOY_SRC" ]; then
+    log_error "No distributed generation found (current does not exist yet)."
+    log_error "Run ./deploy-all.sh from the repo root first."
+    exit 1
+  fi
+fi
+
 log_hr
 log_info "Deploying: zsh"
 
@@ -29,8 +41,8 @@ if ! command -v mise >/dev/null 2>&1; then
 fi
 
 # --- Symlink config files ---
-symlink_backup "$SCRIPT_DIR/.zshrc" "$HOME/.zshrc" || FAIL=1
-symlink_backup "$SCRIPT_DIR/.zsh_plugins.txt" "$HOME/.zsh_plugins.txt" || FAIL=1
+symlink_backup "$DOTFILES_DEPLOY_SRC/zsh/.zshrc" "$HOME/.zshrc" || FAIL=1
+symlink_backup "$DOTFILES_DEPLOY_SRC/zsh/.zsh_plugins.txt" "$HOME/.zsh_plugins.txt" || FAIL=1
 
 # --- Install Antidote plugin manager ---
 ANTIDOTE_HOME="${ANTIDOTE_HOME:-$HOME/.antidote}"

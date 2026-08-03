@@ -7,13 +7,25 @@ SCRIPT_DIR=$(
 # shellcheck source=SCRIPTDIR/../shared/helpers.sh
 . "$SCRIPT_DIR/../shared/helpers.sh"
 
+# --- Resolve distribution source (current generation) ---
+# See AGENTS.md "デプロイの仕組み": standalone runs default to `current`;
+# deploy-all.sh overrides this with the generation it just created.
+if [ -z "${DOTFILES_DEPLOY_SRC:-}" ]; then
+  DOTFILES_DEPLOY_SRC="$(dotfiles_current_link)"
+  if [ ! -e "$DOTFILES_DEPLOY_SRC" ]; then
+    log_error "No distributed generation found (current does not exist yet)."
+    log_error "Run ./deploy-all.sh from the repo root first."
+    exit 1
+  fi
+fi
+
 log_hr
 log_info "Deploying: tmux"
 
 FAIL=0
 
 # --- Symlink config ---
-symlink_backup "$SCRIPT_DIR/tmux.conf" "$HOME/.tmux.conf" || FAIL=1
+symlink_backup "$DOTFILES_DEPLOY_SRC/tmux/tmux.conf" "$HOME/.tmux.conf" || FAIL=1
 
 # --- Install tmux ---
 install_tmux_macos() {

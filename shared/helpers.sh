@@ -239,6 +239,261 @@ get_brew_prefix() {
   fi
 }
 
+# ── Distribution layer (generations + current) ─────────────────────────
+#
+# $HOME never links directly into the working tree. Instead, deploy-all.sh
+# copies the working tree into a dated "generation" directory under the
+# canonical prefix, points a `current` symlink at it, and every tool's
+# deploy.sh links $HOME through `current` (never through the generation
+# directory directly — that indirection is what lets a rollback be a single
+# symlink swap). See ADR DOC-2608040229 for the full rationale.
+
+# dotfiles_prefix
+# Print the canonical prefix that holds generations/ and current.
+dotfiles_prefix() {
+  printf '%s' "${XDG_DATA_HOME:-$HOME/.local/share}/dotfiles"
+}
+
+# dotfiles_current_link
+# Print the path to the `current` symlink (not its resolved target).
+# Tool deploy.sh scripts must link $HOME through this literal path so that
+# a later `current` swap changes what every symlink resolves to without
+# re-linking anything under $HOME.
+dotfiles_current_link() {
+  printf '%s' "$(dotfiles_prefix)/current"
+}
+
+# _dotfiles_symlink_is_repo_owned <dst>
+# Returns 0 if dst is a symlink whose target lives under the canonical
+# prefix (current-scheme distribution) or under this repo's working tree
+# (pre-migration direct-link scheme, detected via the caller's SCRIPT_DIR).
+# Used by symlink_backup to decide whether an existing symlink is a leftover
+# deploy artifact (safe to replace without backup) or user data.
+_dotfiles_symlink_is_repo_owned() {
+  _diro_dst="$1"
+
+  [ -L "$_diro_dst" ] || return 1
+  _diro_target=$(readlink "$_diro_dst")
+  _diro_prefix="$(dotfiles_prefix)"
+
+  case "$_diro_target" in
+    "$_diro_prefix"/*) return 0 ;;
+  esac
+
+  if [ -n "${SCRIPT_DIR:-}" ]; then
+    _diro_repo_root="$(dirname "$SCRIPT_DIR")"
+    case "$_diro_target" in
+      "$_diro_repo_root"/*) return 0 ;;
+    esac
+  fi
+
+  return 1
+}
+
+# create_generation <src_tree> <var_name>
+# Copies AVAILABLE_TOOLS dirs + shared/ from src_tree into a new dated
+# generation directory under the canonical prefix (cp -a; ignores any
+# --only filter — a generation always holds the full tool set, see
+# ADR §4.3). Sets the caller's <var_name> to the generation directory path
+# (via eval, same calling convention as resolve_tools).
+# In DRY_RUN mode, nothing is copied; the would-be path is still emitted so
+# callers can print a coherent plan.
+create_generation() {
+  _cg_src_tree="$1"
+  _cg_var="${2:-GENERATION_DIR}"
+
+  _cg_gens_dir="$(dotfiles_prefix)/generations"
+  _cg_sha=$(git -C "$_cg_src_tree" rev-parse --short HEAD 2>/dev/null)
+  [ -n "$_cg_sha" ] || _cg_sha="nogit"
+  _cg_dir="$_cg_gens_dir/$(date +%Y%m%dT%H%M%S)-$_cg_sha"
+
+  if [ "${DRY_RUN:-0}" -eq 1 ]; then
+    # Caller evals our stdout to receive <var_name>=<path> (same convention
+    # as resolve_tools), so the human-readable plan must go to stderr —
+    # mixing it into stdout would feed "[DRY-RUN] ..." text to eval.
+    printf '[DRY-RUN] mkdir -p %s\n' "$_cg_dir" >&2
+    for _cg_t in $AVAILABLE_TOOLS; do
+      printf '[DRY-RUN] cp -a %s/%s %s/%s\n' "$_cg_src_tree" "$_cg_t" "$_cg_dir" "$_cg_t" >&2
+    done
+    printf '[DRY-RUN] cp -a %s/shared %s/shared\n' "$_cg_src_tree" "$_cg_dir" >&2
+    printf '%s="%s"\n' "$_cg_var" "$_cg_dir"
+    return 0
+  fi
+
+  mkdir -p "$_cg_dir" || {
+    log_error "Failed to create generation directory: $_cg_dir"
+    return 1
+  }
+
+  for _cg_t in $AVAILABLE_TOOLS; do
+    cp -a "$_cg_src_tree/$_cg_t" "$_cg_dir/$_cg_t" || {
+      log_error "Failed to copy '$_cg_t' into generation: $_cg_dir"
+      return 1
+    }
+  done
+  cp -a "$_cg_src_tree/shared" "$_cg_dir/shared" || {
+    log_error "Failed to copy 'shared' into generation: $_cg_dir"
+    return 1
+  }
+
+  log_ok "Created generation: $_cg_dir"
+  printf '%s="%s"\n' "$_cg_var" "$_cg_dir"
+  return 0
+}
+
+# write_manifest <generation_dir> <src_tree> <mode>
+# Writes a plain-text .dotfiles-manifest into generation_dir recording
+# where this generation came from. <mode> is "generation" or "dev".
+write_manifest() {
+  _wm_gen_dir="$1"
+  _wm_src_tree="$2"
+  _wm_mode="$3"
+
+  if [ "${DRY_RUN:-0}" -eq 1 ]; then
+    printf '[DRY-RUN] write manifest -> %s/.dotfiles-manifest\n' "$_wm_gen_dir"
+    return 0
+  fi
+
+  _wm_sha=$(git -C "$_wm_src_tree" rev-parse HEAD 2>/dev/null)
+  [ -n "$_wm_sha" ] || _wm_sha="unknown"
+  _wm_branch=$(git -C "$_wm_src_tree" rev-parse --abbrev-ref HEAD 2>/dev/null)
+  [ -n "$_wm_branch" ] || _wm_branch="unknown"
+
+  _wm_dirty="unknown"
+  if git -C "$_wm_src_tree" rev-parse --git-dir >/dev/null 2>&1; then
+    if [ -z "$(git -C "$_wm_src_tree" status --porcelain 2>/dev/null)" ]; then
+      _wm_dirty="0"
+    else
+      _wm_dirty="1"
+    fi
+  fi
+
+  _wm_linked_worktree="0"
+  is_linked_worktree "$_wm_src_tree" && _wm_linked_worktree="1"
+
+  _wm_host=$(uname -n 2>/dev/null)
+  [ -n "$_wm_host" ] || _wm_host="unknown"
+
+  {
+    printf 'deployed_at: %s\n' "$(date +%Y-%m-%dT%H:%M:%S%z)"
+    printf 'source_tree: %s\n' "$_wm_src_tree"
+    printf 'commit_sha: %s\n' "$_wm_sha"
+    printf 'branch: %s\n' "$_wm_branch"
+    printf 'dirty: %s\n' "$_wm_dirty"
+    printf 'linked_worktree: %s\n' "$_wm_linked_worktree"
+    printf 'mode: %s\n' "$_wm_mode"
+    printf 'hostname: %s\n' "$_wm_host"
+  } >"$_wm_gen_dir/.dotfiles-manifest" || {
+    log_error "Failed to write manifest: $_wm_gen_dir/.dotfiles-manifest"
+    return 1
+  }
+  return 0
+}
+
+# switch_current <target_dir>
+# Point the `current` symlink at target_dir using `ln -sfn` (not atomic —
+# see ADR §4.7 for why mv -T/-h was rejected).
+switch_current() {
+  _sc_target="$1"
+  _sc_link="$(dotfiles_current_link)"
+  _sc_parent="$(dirname "$_sc_link")"
+
+  if [ "${DRY_RUN:-0}" -eq 1 ]; then
+    printf '[DRY-RUN] mkdir -p %s\n' "$_sc_parent"
+    printf '[DRY-RUN] ln -sfn %s %s\n' "$_sc_target" "$_sc_link"
+    return 0
+  fi
+
+  mkdir -p "$_sc_parent" || {
+    log_error "Failed to create directory: $_sc_parent"
+    return 1
+  }
+  ln -sfn "$_sc_target" "$_sc_link" || {
+    log_error "Failed to switch current -> $_sc_target"
+    return 1
+  }
+  log_ok "current -> $_sc_target"
+  return 0
+}
+
+# gc_generations
+# Removes generations beyond ${DOTFILES_KEEP_GENERATIONS:-3}, oldest first.
+# Invariants: the generation `current` points at is never removed, and if
+# `current` points outside generations/ (dev mode — see ADR §4.5) nothing
+# is removed at all. Every candidate is re-verified to exist, be a real
+# directory (not a symlink), and live under the canonical prefix before
+# being passed to rm -rf.
+gc_generations() {
+  _gc_prefix="$(dotfiles_prefix)"
+  _gc_gens_dir="$_gc_prefix/generations"
+  _gc_link="$(dotfiles_current_link)"
+
+  [ -d "$_gc_gens_dir" ] || return 0
+
+  _gc_current_target=""
+  if [ -L "$_gc_link" ]; then
+    _gc_current_target=$(readlink "$_gc_link")
+  fi
+
+  case "$_gc_current_target" in
+    "$_gc_gens_dir"/*) ;;
+    *)
+      log_info "Dev mode (or no current yet) — skipping generation GC."
+      return 0
+      ;;
+  esac
+  _gc_current_name=$(basename "$_gc_current_target")
+
+  _gc_keep="${DOTFILES_KEEP_GENERATIONS:-3}"
+  _gc_names=$(find "$_gc_gens_dir" -mindepth 1 -maxdepth 1 -type d -exec basename {} \; | sort)
+
+  _gc_total=0
+  for _gc_n in $_gc_names; do
+    _gc_total=$((_gc_total + 1))
+  done
+
+  _gc_excess=$((_gc_total - _gc_keep))
+  [ "$_gc_excess" -gt 0 ] || return 0
+
+  _gc_removed=0
+  for _gc_n in $_gc_names; do
+    [ "$_gc_removed" -lt "$_gc_excess" ] || break
+    [ "$_gc_n" = "$_gc_current_name" ] && continue
+
+    _gc_target_dir="$_gc_gens_dir/$_gc_n"
+
+    [ -e "$_gc_target_dir" ] || continue
+    if [ -L "$_gc_target_dir" ]; then
+      log_warn "Refusing to GC a symlink: $_gc_target_dir"
+      continue
+    fi
+    if [ ! -d "$_gc_target_dir" ]; then
+      log_warn "Refusing to GC a non-directory: $_gc_target_dir"
+      continue
+    fi
+    case "$_gc_target_dir" in
+      "$_gc_prefix"/*) ;;
+      *)
+        log_error "Refusing to GC path outside canonical prefix: $_gc_target_dir"
+        continue
+        ;;
+    esac
+
+    if [ "${DRY_RUN:-0}" -eq 1 ]; then
+      printf '[DRY-RUN] rm -rf %s\n' "$_gc_target_dir"
+    else
+      if rm -rf "$_gc_target_dir"; then
+        log_info "Removed old generation: $_gc_target_dir"
+      else
+        log_error "Failed to remove old generation: $_gc_target_dir"
+      fi
+    fi
+    _gc_removed=$((_gc_removed + 1))
+  done
+
+  return 0
+}
+
 # ── Filesystem helpers ────────────────────────────────────────────────
 
 # backup_dst <dst>
@@ -273,6 +528,8 @@ symlink_backup() {
     if [ -e "$_dst" ] || [ -L "$_dst" ]; then
       if [ "${BACKUP:-1}" -eq 0 ]; then
         printf '[DRY-RUN] rm -f %s\n' "$_dst"
+      elif _dotfiles_symlink_is_repo_owned "$_dst"; then
+        printf '[DRY-RUN] rm -f %s (repo-owned symlink, no backup)\n' "$_dst"
       else
         printf '[DRY-RUN] mv %s %s\n' "$_dst" "$(backup_dst "$_dst")"
       fi
@@ -294,6 +551,16 @@ symlink_backup() {
   if [ -e "$_dst" ] || [ -L "$_dst" ]; then
     if [ "${BACKUP:-1}" -eq 0 ]; then
       log_warn "Removing existing (backup disabled): $_dst"
+      rm -f "$_dst" || {
+        log_error "Failed to remove: $_dst"
+        return 1
+      }
+    elif _dotfiles_symlink_is_repo_owned "$_dst"; then
+      # A leftover symlink from a previous deploy (either the old direct-
+      # to-worktree scheme or a stale current-scheme link) is not user
+      # data, so replacing it should not leave a .backup that uninstall.sh
+      # would later "restore" as if it were the user's original file.
+      log_info "Replacing repo-owned symlink (no backup needed): $_dst"
       rm -f "$_dst" || {
         log_error "Failed to remove: $_dst"
         return 1

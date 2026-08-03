@@ -7,6 +7,18 @@ SCRIPT_DIR=$(
 # shellcheck source=SCRIPTDIR/../shared/helpers.sh
 . "$SCRIPT_DIR/../shared/helpers.sh"
 
+# --- Resolve distribution source (current generation) ---
+# See AGENTS.md "デプロイの仕組み": standalone runs default to `current`;
+# deploy-all.sh overrides this with the generation it just created.
+if [ -z "${DOTFILES_DEPLOY_SRC:-}" ]; then
+  DOTFILES_DEPLOY_SRC="$(dotfiles_current_link)"
+  if [ ! -e "$DOTFILES_DEPLOY_SRC" ]; then
+    log_error "No distributed generation found (current does not exist yet)."
+    log_error "Run ./deploy-all.sh from the repo root first."
+    exit 1
+  fi
+fi
+
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/nvim"
 CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}"
 DEIN_CACHE="$CACHE_DIR/dein"
@@ -63,9 +75,9 @@ fi
 
 # ── Symlink config files ─────────────────────────────────────────────────
 
-symlink_backup "$SCRIPT_DIR/init.lua" "$CONFIG_DIR/init.lua" || FAIL=1
-symlink_backup "$SCRIPT_DIR/lua" "$CONFIG_DIR/lua" || FAIL=1
-symlink_backup "$SCRIPT_DIR/lazy-lock.json" "$CONFIG_DIR/lazy-lock.json" || FAIL=1
+symlink_backup "$DOTFILES_DEPLOY_SRC/nvim/init.lua" "$CONFIG_DIR/init.lua" || FAIL=1
+symlink_backup "$DOTFILES_DEPLOY_SRC/nvim/lua" "$CONFIG_DIR/lua" || FAIL=1
+symlink_backup "$DOTFILES_DEPLOY_SRC/nvim/lazy-lock.json" "$CONFIG_DIR/lazy-lock.json" || FAIL=1
 
 # ── Clean up old dein.vim symlinks ──────────────────────────────────────
 
