@@ -149,7 +149,7 @@ After first launch:
 | `<Leader>fd` | n | Diagnostics (Telescope) |
 | `<Leader>fs` | n | Document symbols (Telescope) |
 | `<Leader>w` | n | Save buffer |
-| `<Leader>n` | n | Rename current file (`:saveas` + delete old file) |
+| `<Leader>n` | n | Rename current file (filesystem rename; refuses to overwrite an existing file) |
 | `<Leader>/` | n, v | Toggle comment (built-in `gcc` / `gc`) |
 | `<Leader>y` | v | Yank to system clipboard |
 | `<Leader>p` | n, v | Paste from system clipboard |
