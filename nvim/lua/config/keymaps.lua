@@ -51,11 +51,24 @@ local function rename_current_file()
   -- Refuse to silently clobber a different existing file — vim.fn.rename()
   -- below is a plain rename(2) wrapper and overwrites without asking. A
   -- same-file "rename" (case-only, "./foo" vs "foo", ...) is still allowed.
+  -- fs_lstat (not filereadable/isdirectory, and not fs_stat) so this also
+  -- catches directory entries we can't read the contents of — an unreadable
+  -- file, a broken symlink — since rename(2) only cares about the parent
+  -- directory's permissions, not the target's.
   if
-    (vim.fn.filereadable(new_name) == 1 or vim.fn.isdirectory(new_name) == 1)
+    vim.uv.fs_lstat(vim.fn.fnamemodify(new_name, ":p")) ~= nil
     and not same_file(old_name, new_name)
   then
     vim.notify("Rename aborted: " .. new_name .. " already exists", vim.log.levels.ERROR)
+    return
+  end
+
+  -- A buffer with the target name may already be open (even if nothing on
+  -- disk has that name yet, e.g. an unsaved `:e draft.md`). Renaming onto it
+  -- anyway would leave nvim_buf_set_name() below to fail with E95 *after*
+  -- the file has already been moved on disk.
+  if vim.fn.bufexists(new_name) == 1 and vim.fn.bufnr(new_name) ~= vim.api.nvim_get_current_buf() then
+    vim.notify("Rename aborted: a buffer named " .. new_name .. " is already open", vim.log.levels.ERROR)
     return
   end
 
@@ -76,9 +89,22 @@ local function rename_current_file()
 
   -- nvim_buf_set_name() alone leaves the buffer "not edited", which makes a
   -- subsequent :write fail with E13. :edit! re-reads the (just-renamed)
-  -- file under its new name and clears that state.
-  vim.api.nvim_buf_set_name(0, new_name)
-  vim.cmd.edit({ bang = true })
+  -- file under its new name and clears that state. Both are pcall'd because
+  -- the file has already been moved on disk at this point — if updating the
+  -- buffer fails (e.g. E95, a same-named buffer slipped past the bufexists
+  -- check above via a race), the editor's state would otherwise silently
+  -- fall out of sync with what's on disk.
+  local ok, err = pcall(function()
+    vim.api.nvim_buf_set_name(0, new_name)
+    vim.cmd.edit({ bang = true })
+  end)
+  if not ok then
+    vim.notify(
+      "Renamed " .. old_name .. " to " .. new_name .. " on disk, but could not update the buffer: " .. tostring(err),
+      vim.log.levels.ERROR
+    )
+    return
+  end
   vim.cmd.redraw()
 end
 map("n", "<Leader>n", rename_current_file, { desc = "Rename current file" })
