@@ -386,31 +386,27 @@ EOF
       fail "uninstall で claude/CLAUDE.md が元のファイルに復元された"
     fi
     if [ -n "$existing_skill" ]; then
-      # 孫2時点では uninstall.sh の KNOWN_SKILLS_SRC_claude が作業ツリーの
-      # パスを見たままで、current 経由で張られた新方式の skill symlink を
-      # 認識できない(孫3で対応予定 — 計画書 DOC-2608040234 孫2「やらない
-      # こと」参照)。そのため uninstall はこの skill を素通りし、symlink
-      # が current 経由のまま残り、skills-backup からの復元も起きない。
-      # 孫3が由来判定を両対応させたら、この期待値は「復元される」側へ
-      # 反転させる。
-      if [ -L "$sbx/.claude/skills/$existing_skill" ] && [ "$(readlink "$sbx/.claude/skills/$existing_skill")" = "$prefix/current/claude/skills/$existing_skill" ]; then
-        pass "uninstall は新方式skillのsymlinkを未対応のまま残す(孫3で対応予定)"
+      # 孫3で uninstall.sh の由来判定が両対応になり、current 経由で張られた
+      # 新方式の skill symlink も認識・撤去できるようになった(ADR §4.8/§4.9
+      # / DOC-2608040229)。撤去後は deploy 時に skills-backup へ退避して
+      # おいた元のスキルが復元される。
+      if [ -d "$sbx/.claude/skills/$existing_skill" ] && [ ! -L "$sbx/.claude/skills/$existing_skill" ] && [ -f "$sbx/.claude/skills/$existing_skill/DUMMY_MARKER" ]; then
+        pass "uninstallで新方式skillのsymlinkが撤去され、元skillが復元された: $sbx/.claude/skills/$existing_skill"
       else
-        fail "uninstall は新方式skillのsymlinkを未対応のまま残す(孫3で対応予定)"
+        fail "uninstallで新方式skillのsymlinkが撤去され、元skillが復元された: $sbx/.claude/skills/$existing_skill"
       fi
 
-      # symlink を素通りするだけでなく、deploy 時に skills-backup へ退避した
-      # 元のスキルも失われずに残っていることを確認する。孫3が復元を実装する
-      # 前提はここに元データが残っていることなので、deploy 側の退化(取りこぼし・
-      # 上書き)が起きていないことをこのタイミングで検証しておく。
+      # 復元は「移動」であって「コピー」ではないので、skills-backup 配下に
+      # 退避データが残っていないことも確認する(残っていれば復元処理の
+      # 実装が mv ではなく cp 相当に退化している証拠になる)。
       local backup_match_after_uninstall=""
       for cand in "$sbx/.claude/skills-backup/$existing_skill".*; do
         [ -e "$cand" ] && backup_match_after_uninstall="$cand" && break
       done
-      if [ -n "$backup_match_after_uninstall" ] && [ -f "$backup_match_after_uninstall/DUMMY_MARKER" ]; then
-        pass "uninstall 後も退避された元skillがskills-backupに残っている(孫3の復元実装の前提): $backup_match_after_uninstall"
+      if [ -z "$backup_match_after_uninstall" ]; then
+        pass "復元後、skills-backup配下の退避データは残っていない(復元先へ移動済み)"
       else
-        fail "uninstall 後も退避された元skillがskills-backupに残っている(孫3の復元実装の前提)"
+        fail "復元後、skills-backup配下の退避データは残っていない(復元先へ移動済み): $backup_match_after_uninstall が残存"
       fi
     fi
   fi
@@ -998,6 +994,202 @@ EOF
   fi
 }
 
+# ── シナリオ14: 配布実体(generations/current)の後片付け ─────────────────
+
+scenario_distribution_artifact_cleanup() {
+  if ! has_tool bin; then
+    return
+  fi
+  log "=== シナリオ14: uninstallで配布実体(generations/current)が片付く ==="
+  local sbx prefix out rc
+
+  new_sandbox
+  sbx="$SANDBOX_DIR"
+  prefix="$(dotfiles_prefix_for "$sbx")"
+
+  out="$(run_deploy "$sbx" --force --only bin 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "deploy-all.sh --force --only bin が失敗 (exit=$rc)"
+    log "$out"
+    return
+  fi
+
+  if [ -d "$prefix/generations" ] && [ -L "$prefix/current" ]; then
+    pass "deploy 直後は generations/ と current が存在する"
+  else
+    fail "deploy 直後は generations/ と current が存在する"
+    return
+  fi
+
+  out="$(run_uninstall "$sbx" --force --only bin 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "uninstall.sh --force --only bin が失敗 (exit=$rc)"
+    log "$out"
+    return
+  fi
+
+  assert_not_exists "$prefix/generations"
+  assert_not_exists "$prefix/current"
+}
+
+# ── シナリオ15: devモード(currentがソースツリーを指す)でのソースツリー保護 ──
+
+scenario_dev_mode_source_tree_protection() {
+  log "=== シナリオ15: devモードでのuninstallはcurrentが指すソースツリーを削除しない ==="
+  local sbx dev_src prefix marker out rc
+
+  new_sandbox
+  sbx="$SANDBOX_DIR"
+  dev_src="$(mktemp -d)"
+  CREATED_DIRS+=("$dev_src")
+  marker="dev-source-tree-marker-$$"
+  printf '%s\n' "$marker" >"$dev_src/MARKER"
+
+  prefix="$(dotfiles_prefix_for "$sbx")"
+  mkdir -p "$prefix"
+  # 孫4の --dev はまだ無いので、current を手でソースツリーへ向けて dev
+  # モードを再現する(計画書 DOC-2608040234 孫3「dev モードの検証はサンド
+  # ボックス内で current を手でソースツリーへ向ければよい」を参照)。
+  ln -sfn "$dev_src" "$prefix/current"
+
+  out="$(run_uninstall "$sbx" --force 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "devモード状態での uninstall.sh --force が失敗 (exit=$rc)"
+    log "$out"
+    return
+  fi
+
+  if [ -d "$dev_src" ] && [ -f "$dev_src/MARKER" ] && [ "$(cat "$dev_src/MARKER")" = "$marker" ]; then
+    pass "devモードのソースツリーはuninstallで削除されない(実体は無傷)"
+  else
+    fail "devモードのソースツリーはuninstallで削除されない(実体は無傷)"
+  fi
+}
+
+# ── シナリオ16: uninstall で ~/bin/ocw-meter が撤去される ────────────────
+
+scenario_ocw_meter_removed_on_uninstall() {
+  if ! has_tool bin; then
+    return
+  fi
+  log "=== シナリオ16: uninstall で ~/bin/ocw-meter が撤去される ==="
+  local sbx out rc
+
+  new_sandbox
+  sbx="$SANDBOX_DIR"
+
+  out="$(run_deploy "$sbx" --force --only bin 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "deploy-all.sh --force --only bin が失敗 (exit=$rc)"
+    log "$out"
+    return
+  fi
+  assert_symlink "$sbx/bin/ocw-meter" "$(dotfiles_prefix_for "$sbx")/current/bin/ocw-meter"
+
+  out="$(run_uninstall "$sbx" --force --only bin 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "uninstall.sh --force --only bin が失敗 (exit=$rc)"
+    log "$out"
+    return
+  fi
+  assert_not_exists "$sbx/bin/ocw-meter"
+}
+
+# ── シナリオ17: 新方式skillの撤去とskills-backupからの復元 ───────────────
+
+scenario_claude_new_scheme_skill_removed_and_restored() {
+  if ! has_tool claude; then
+    return
+  fi
+  log "=== シナリオ17: 新方式skillのsymlinkが撤去され、元skillがskills-backupから復元される ==="
+  local sbx prefix skill_name out rc backup_match
+
+  new_sandbox
+  sbx="$SANDBOX_DIR"
+  prefix="$(dotfiles_prefix_for "$sbx")"
+
+  skill_name="$(list_repo_skills | head -n1)"
+  if [ -z "$skill_name" ]; then
+    log "  (claude/skills/ 配下にスキルが無いためスキップ)"
+    return
+  fi
+
+  mkdir -p "$sbx/.claude/skills/$skill_name"
+  printf 'dummy-existing-skill\n' >"$sbx/.claude/skills/$skill_name/DUMMY_MARKER"
+
+  out="$(run_deploy "$sbx" --force --only claude 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "deploy-all.sh --force --only claude が失敗 (exit=$rc)"
+    log "$out"
+    return
+  fi
+  assert_symlink "$sbx/.claude/skills/$skill_name" "$prefix/current/claude/skills/$skill_name"
+
+  out="$(run_uninstall "$sbx" --force --only claude 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "uninstall.sh --force --only claude が失敗 (exit=$rc)"
+    log "$out"
+    return
+  fi
+
+  if [ -d "$sbx/.claude/skills/$skill_name" ] && [ ! -L "$sbx/.claude/skills/$skill_name" ] && [ -f "$sbx/.claude/skills/$skill_name/DUMMY_MARKER" ]; then
+    pass "新方式skillのsymlinkが撤去され、元skillがskills-backupから復元された: $sbx/.claude/skills/$skill_name"
+  else
+    fail "新方式skillのsymlinkが撤去され、元skillがskills-backupから復元された: $sbx/.claude/skills/$skill_name"
+  fi
+
+  backup_match=""
+  for cand in "$sbx/.claude/skills-backup/$skill_name".*; do
+    [ -e "$cand" ] && backup_match="$cand" && break
+  done
+  if [ -z "$backup_match" ]; then
+    pass "復元後、skills-backup配下の退避データは残っていない(復元先へ移動済み)"
+  else
+    fail "復元後、skills-backup配下の退避データは残っていない(復元先へ移動済み): $backup_match が残存"
+  fi
+}
+
+# ── シナリオ18: deployを介さない旧方式skillリンクもuninstallが撤去する ────
+
+scenario_claude_old_scheme_skill_removed_by_uninstall() {
+  if ! has_tool claude; then
+    return
+  fi
+  log "=== シナリオ18: deployを介さない旧方式skillリンクもuninstallが撤去する ==="
+  local sbx skill_name out rc
+
+  new_sandbox
+  sbx="$SANDBOX_DIR"
+  mkdir -p "$sbx/.claude/skills"
+
+  skill_name="$(list_repo_skills | head -n1)"
+  if [ -z "$skill_name" ]; then
+    log "  (claude/skills/ 配下にスキルが無いためスキップ)"
+    return
+  fi
+
+  # deploy.sh を一度も実行していない(=新方式へ移行する前の)状態を再現する。
+  # 作業ツリーを直接指す旧方式のskillリンクを手で張る。
+  ln -s "$REPO_ROOT/claude/skills/$skill_name" "$sbx/.claude/skills/$skill_name"
+
+  out="$(run_uninstall "$sbx" --force --only claude 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "旧方式skillリンクのみが存在する状態での uninstall.sh --force --only claude が失敗 (exit=$rc)"
+    log "$out"
+    return
+  fi
+
+  assert_not_exists "$sbx/.claude/skills/$skill_name"
+}
+
 log "REPO_ROOT: $REPO_ROOT"
 log "対象ツール: $TOOLS"
 log
@@ -1027,6 +1219,16 @@ log
 scenario_claude_dry_run_matches_deployed_state
 log
 scenario_claude_dry_run_before_first_deploy
+log
+scenario_distribution_artifact_cleanup
+log
+scenario_dev_mode_source_tree_protection
+log
+scenario_ocw_meter_removed_on_uninstall
+log
+scenario_claude_new_scheme_skill_removed_and_restored
+log
+scenario_claude_old_scheme_skill_removed_by_uninstall
 log
 
 if [ "$FAIL" -eq 0 ]; then
