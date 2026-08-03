@@ -17,6 +17,13 @@ SCRIPT_DIR=$(
 # shellcheck source=SCRIPTDIR/shared/helpers.sh
 . "$SCRIPT_DIR/shared/helpers.sh"
 
+# ── Distribution layer paths ─────────────────────────────────────────
+# Computed once: dotfiles_prefix()/dotfiles_current_link() only depend on
+# $HOME / $XDG_DATA_HOME, which are stable for the life of this process.
+DOTFILES_PREFIX="$(dotfiles_prefix)"
+DOTFILES_CURRENT_LINK="$(dotfiles_current_link)"
+DOTFILES_GENERATIONS_DIR="$DOTFILES_PREFIX/generations"
+
 # ── Defaults ──────────────────────────────────────────────────────────
 
 DRY_RUN=0
@@ -47,7 +54,8 @@ KNOWN_LINKS_tmux=$(
 KNOWN_LINKS_bin=$(
   printf '%s\n' \
     "$HOME/bin/ocw" \
-    "$HOME/bin/claude-ds"
+    "$HOME/bin/claude-ds" \
+    "$HOME/bin/ocw-meter"
 )
 
 KNOWN_LINKS_claude=$(
@@ -57,7 +65,13 @@ KNOWN_LINKS_claude=$(
 
 # Skills are symlinked individually by deploy.sh (auto-detected from
 # claude/skills/).  We walk ~/.claude/skills/ at uninstall time and
-# restore any symlink whose target points into the repo's claude/skills/.
+# restore any symlink whose target is repo-owned. A symlink counts as
+# repo-owned under either scheme: the current distribution scheme
+# (target under DOTFILES_PREFIX — via `current` or a generations/ dir
+# directly, see resolve_deploy_src) or the pre-migration direct-to-worktree
+# scheme (target under the checkout itself). Both must be recognized so
+# that machines with leftover pre-migration links can still be cleaned up
+# after adopting the new scheme (ADR DOC-2608040229 §4.8/§4.9).
 KNOWN_SKILLS_SRC_claude="$SCRIPT_DIR/claude/skills"
 
 # settings.json is a generated file (not a symlink) — handled separately.
@@ -66,6 +80,40 @@ KNOWN_GENERATED_claude=$(
   printf '%s\n' \
     "$HOME/.claude/settings.json"
 )
+
+# links_for_tool <tool>
+# Print (one per line) the KNOWN_LINKS_<tool> destinations for <tool>
+# (empty if <tool> has none). Single source of truth for the tool ->
+# KNOWN_LINKS_* mapping: the main per-tool loop below and the distribution
+# artifact cleanup's cross-tool scan both need it, and duplicating this
+# case statement is exactly the kind of drift that let ocw-meter go
+# unlisted from KNOWN_LINKS_bin in the first place. A forgotten arm here
+# surfaces as "No link list defined for '<tool>'. Skipping." ONLY when
+# <tool> is in $TOOLS AND has no KNOWN_GENERATED_* entry either — the
+# main loop below only warns when both _links and _generated come back
+# empty (see its "No link list defined" check). claude is the one tool
+# where this doesn't save you: it has KNOWN_GENERATED_claude
+# (~/.claude/settings.json), so a forgotten claude arm here still leaves
+# _generated non-empty, the warning never fires, and ~/.claude/CLAUDE.md
+# quietly stops being touched while the generation it points into gets
+# deleted out from under it. A tool NOT in $TOOLS is missed silently
+# regardless of KNOWN_GENERATED_*: it's only ever passed to this function
+# by the cleanup's cross-tool scan, which has no warning path at all (the
+# tool is treated as having no links, so a live symlink into a
+# soon-to-be-deleted generation goes undetected).
+#
+# A function (not eval-based indirection through a "KNOWN_LINKS_$tool"
+# name) keeps each KNOWN_LINKS_* variable directly referenced, so a
+# static analysis tool can still see the use.
+links_for_tool() {
+  case "$1" in
+    zsh) printf '%s\n' "$KNOWN_LINKS_zsh" ;;
+    nvim) printf '%s\n' "$KNOWN_LINKS_nvim" ;;
+    tmux) printf '%s\n' "$KNOWN_LINKS_tmux" ;;
+    bin) printf '%s\n' "$KNOWN_LINKS_bin" ;;
+    claude) printf '%s\n' "$KNOWN_LINKS_claude" ;;
+  esac
+}
 
 # ── Usage ─────────────────────────────────────────────────────────────
 
@@ -157,18 +205,10 @@ for _tool in $TOOLS; do
   log_hr
   log_info "Uninstalling: $_tool"
 
-  # Get the list of known links for this tool. A case statement (rather
-  # than eval-based indirection through a "KNOWN_LINKS_$_tool" variable
-  # name) keeps each KNOWN_LINKS_* / KNOWN_GENERATED_* variable directly
-  # referenced, so shellcheck can see the use and avoids eval entirely.
-  _links=""
-  case "$_tool" in
-    zsh) _links="$KNOWN_LINKS_zsh" ;;
-    nvim) _links="$KNOWN_LINKS_nvim" ;;
-    tmux) _links="$KNOWN_LINKS_tmux" ;;
-    bin) _links="$KNOWN_LINKS_bin" ;;
-    claude) _links="$KNOWN_LINKS_claude" ;;
-  esac
+  # Get the list of known links for this tool via links_for_tool (see its
+  # definition above). KNOWN_GENERATED_* has only one case arm (claude), so
+  # it isn't worth routing through a helper the way KNOWN_LINKS_* is.
+  _links="$(links_for_tool "$_tool")"
   _generated=""
   case "$_tool" in
     claude) _generated="$KNOWN_GENERATED_claude" ;;
@@ -204,8 +244,13 @@ for _tool in $TOOLS; do
     for _skill_link in "$HOME/.claude/skills"/*; do
       [ -L "$_skill_link" ] || continue
       _target=$(readlink "$_skill_link")
+      # Recognize both schemes: current-scheme links go through
+      # DOTFILES_PREFIX/current/claude/skills/<name> (the normal case) or,
+      # if DOTFILES_DEPLOY_SRC was pointed at a generation directly, through
+      # DOTFILES_PREFIX/generations/<id>/claude/skills/<name>. $_skills_src
+      # (the working tree) covers pre-migration direct-to-worktree links.
       case "$_target" in
-        "$_skills_src"/*)
+        "$DOTFILES_PREFIX/current/claude/skills"/* | "$DOTFILES_GENERATIONS_DIR"/*/claude/skills/* | "$_skills_src"/*)
           _skill_name=$(basename "$_skill_link")
           symlink_restore "$_skill_link" || OVERALL_OK=1
 
@@ -230,6 +275,20 @@ for _tool in $TOOLS; do
           ;;
       esac
     done
+  fi
+
+  # skills-backup/ is where deploy.sh set aside pre-existing skills before
+  # symlinking over them (see the claude/deploy.sh backup step). Once every
+  # restorable skill above has been moved back out of it, an empty
+  # directory is the only thing left — clean it up as part of the same
+  # "undo what deploy.sh did" pass, the same way the distribution artifact
+  # cleanup below cleans up what deploy-all.sh created.
+  if [ -n "$_skills_src" ] && [ -d "$HOME/.claude/skills-backup" ]; then
+    if [ "${DRY_RUN:-0}" -eq 1 ]; then
+      printf '[DRY-RUN] rmdir %s (only if empty)\n' "$HOME/.claude/skills-backup"
+    elif rmdir "$HOME/.claude/skills-backup" 2>/dev/null; then
+      log_ok "Removed empty skills-backup directory: $HOME/.claude/skills-backup"
+    fi
   fi
 
   # Handle generated files (real files, not symlinks — e.g. claude/settings.json)
@@ -297,6 +356,149 @@ for _tool in $TOOLS; do
   fi
   IFS="$_OLDIFS"
 done
+
+# ── Distribution artifact cleanup (generations/ + current) ─────────────
+#
+# The canonical prefix is shared across every tool, not owned by any single
+# one — it is not something a per-tool KNOWN_LINKS_* loop can safely tear
+# down. If this uninstall run only targeted some tools (--only), a symlink
+# belonging to a tool NOT in $TOOLS is untouched by this run and may still
+# resolve through `current`, so we must not delete the prefix out from
+# under it. The same is true of a tool that WAS in scope but whose
+# symlink_restore call above failed (OVERALL_OK=1): the link may still be
+# sitting there, live, pointing into the generation we're about to delete.
+#
+# So in real (non-DRY_RUN) mode we scan the live filesystem for every tool
+# in AVAILABLE_TOOLS, regardless of $TOOLS — a tool's links only count as
+# "cleared" if they're actually gone, not because this run merely
+# attempted them. Only under --dry-run, where the loop above never touches
+# the filesystem at all, do we instead trust that a tool in $TOOLS would be
+# cleared by a real run and skip re-checking it (checking it would just
+# see its still-intact symlink and wrongly report "still referenced").
+#
+# Deletion never touches whatever `current` resolves to. In dev mode (see
+# ADR §4.5 / DOC-2608040229) `current` points at the human's own source
+# tree; the only thing removed there is the `current` symlink itself. The
+# real, cp -a'd generation directories under generations/ are always safe
+# to remove outright (rm -rf via _dotfiles_safe_rmdir), independent of what
+# `current` happens to point at, because a dev-mode `current` never points
+# inside generations/ in the first place — see "全孫共通の注意" §2.
+
+_dfu_still_referenced=0
+_dfu_reason_path=""
+_dfu_scope=" $TOOLS "
+
+for _dfu_check_tool in $AVAILABLE_TOOLS; do
+  if [ "${DRY_RUN:-0}" -eq 1 ]; then
+    case "$_dfu_scope" in
+      *" $_dfu_check_tool "*) continue ;; # dry-run: trust a real run would clear this
+    esac
+  fi
+
+  _OLDIFS="$IFS"
+  IFS='
+'
+  for _dfu_dst in $(links_for_tool "$_dfu_check_tool"); do
+    IFS="$_OLDIFS"
+    [ -z "$_dfu_dst" ] && continue
+    if [ -L "$_dfu_dst" ]; then
+      case "$(readlink "$_dfu_dst")" in
+        "$DOTFILES_PREFIX"/*)
+          _dfu_still_referenced=1
+          [ -n "$_dfu_reason_path" ] || _dfu_reason_path="$_dfu_dst"
+          ;;
+      esac
+    fi
+    IFS='
+'
+  done
+  IFS="$_OLDIFS"
+done
+
+if [ "${DRY_RUN:-0}" -eq 1 ]; then
+  case "$_dfu_scope" in
+    *" claude "*) _dfu_check_claude_skills=0 ;; # dry-run: trust claude's skills would be cleared
+    *) _dfu_check_claude_skills=1 ;;
+  esac
+else
+  _dfu_check_claude_skills=1 # real run: always verify against the live filesystem
+fi
+
+if [ "$_dfu_still_referenced" -eq 0 ] && [ "$_dfu_check_claude_skills" -eq 1 ] && [ -d "$HOME/.claude/skills" ]; then
+  for _dfu_skill_link in "$HOME/.claude/skills"/*; do
+    [ -L "$_dfu_skill_link" ] || continue
+    case "$(readlink "$_dfu_skill_link")" in
+      "$DOTFILES_PREFIX"/*)
+        _dfu_still_referenced=1
+        [ -n "$_dfu_reason_path" ] || _dfu_reason_path="$_dfu_skill_link"
+        ;;
+    esac
+  done
+fi
+
+if [ "$_dfu_still_referenced" -ne 0 ]; then
+  # Deliberately not "another tool's" — in real mode this can just as well
+  # be a tool that WAS in scope but whose own removal above failed
+  # (OVERALL_OK=1). Naming the actual offending path lets the operator
+  # tell the two cases apart instead of guessing.
+  log_info "Still referenced: $_dfu_reason_path points into the distribution prefix — skipping its cleanup (either a tool outside --only, or removal of this link failed above)."
+elif [ -L "$DOTFILES_CURRENT_LINK" ] || [ -d "$DOTFILES_GENERATIONS_DIR" ] || [ -d "$DOTFILES_PREFIX/.tmp" ]; then
+  log_hr
+  log_info "Cleaning up distribution artifacts"
+
+  if [ -L "$DOTFILES_CURRENT_LINK" ]; then
+    _dfu_current_target=$(readlink "$DOTFILES_CURRENT_LINK")
+    case "$_dfu_current_target" in
+      "$DOTFILES_GENERATIONS_DIR"/*) ;;
+      *)
+        log_info "current is in dev mode: it points at a source tree ($_dfu_current_target), which will NOT be touched. Only the current symlink itself is removed here; any generations/ directory (from earlier generation-mode deploys) is still cleaned up separately below."
+        ;;
+    esac
+  fi
+
+  if [ -d "$DOTFILES_GENERATIONS_DIR" ]; then
+    if _dotfiles_safe_rmdir "$DOTFILES_GENERATIONS_DIR" "$DOTFILES_PREFIX"; then
+      [ "${DRY_RUN:-0}" -eq 1 ] || log_ok "Removed generations directory: $DOTFILES_GENERATIONS_DIR"
+    else
+      log_error "Failed to remove generations directory: $DOTFILES_GENERATIONS_DIR"
+      OVERALL_OK=1
+    fi
+  fi
+
+  # create_generation's scratch workspace (mktemp -d "$DOTFILES_PREFIX/.tmp/gen.XXXXXX",
+  # then mv'd into generations/ on success — see shared/helpers.sh). The
+  # .tmp/ directory itself is created with `mkdir -p` and outlives every
+  # generation it ever scratch-built, so it's always present after at
+  # least one successful deploy; a crashed deploy can also leave a
+  # half-built gen.XXXXXX scratch dir under it that nothing else ever
+  # sweeps. Removing it here is what actually lets the final rmdir below
+  # succeed, and also clears any orphaned crash leftovers.
+  if [ -d "$DOTFILES_PREFIX/.tmp" ]; then
+    if _dotfiles_safe_rmdir "$DOTFILES_PREFIX/.tmp" "$DOTFILES_PREFIX"; then
+      [ "${DRY_RUN:-0}" -eq 1 ] || log_ok "Removed scratch directory: $DOTFILES_PREFIX/.tmp"
+    else
+      log_error "Failed to remove scratch directory: $DOTFILES_PREFIX/.tmp"
+      OVERALL_OK=1
+    fi
+  fi
+
+  if [ -L "$DOTFILES_CURRENT_LINK" ]; then
+    if [ "${DRY_RUN:-0}" -eq 1 ]; then
+      printf '[DRY-RUN] rm %s\n' "$DOTFILES_CURRENT_LINK"
+    elif rm "$DOTFILES_CURRENT_LINK"; then
+      log_ok "Removed current symlink: $DOTFILES_CURRENT_LINK"
+    else
+      log_error "Failed to remove current symlink: $DOTFILES_CURRENT_LINK"
+      OVERALL_OK=1
+    fi
+  fi
+
+  if [ "${DRY_RUN:-0}" -eq 1 ]; then
+    printf '[DRY-RUN] rmdir %s (only if empty)\n' "$DOTFILES_PREFIX"
+  elif [ -d "$DOTFILES_PREFIX" ] && rmdir "$DOTFILES_PREFIX" 2>/dev/null; then
+    log_ok "Removed empty prefix directory: $DOTFILES_PREFIX"
+  fi
+fi
 
 # ── Summary ───────────────────────────────────────────────────────────
 
