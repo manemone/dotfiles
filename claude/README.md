@@ -52,7 +52,11 @@ Claude Code がセッション開始時に読み込むグローバルな個人�
 現在の設定:
 - 脳筋後輩キャラクターでの応答スタイル指定（語尾・一人称・二人称）
 
-CLAUDE.md は個人設定のため、このファイルを直接編集することで即座に反映される。
+`~/.claude/CLAUDE.md` を直接編集すればその場ですぐに反映されるが、これは配布実体（世代
+ディレクトリ）内のコピーを直接編集しているだけで、リポジトリの作業ツリー側
+（`claude/CLAUDE.md`）には反映されない。恒久的に変更したい場合はリポジトリ側を編集して
+再デプロイするか、編集のたびに即時反映させたいなら dev モード（`./deploy-all.sh --dev`）を
+使うこと。詳細は §4.8 を参照。
 
 ### 3.2 settings.json
 
@@ -312,16 +316,29 @@ cd ~/.dotfiles/claude
 
 Claude Code は起動時に設定を読み込むため、設定変更後は Claude Code を再起動してください。
 
-### 4.8 CLAUDE.md の直接編集
+### 4.8 CLAUDE.md の編集
 
-CLAUDE.md は個人設定のため、symlink 先を直接編集して問題ありません。リポジトリ側のファイルに即反映されます。
+既定（世代モード）では、`~/.claude/CLAUDE.md` は配布実体（世代ディレクトリ）内のコピーへの
+symlink であり、**リポジトリの作業ツリーを直接指してはいない**（旧方式（作業ツリー直リンク）
+とは異なる点に注意）。
+
+- `~/.claude/CLAUDE.md` を直接編集すると即座に反映されるが、リポジトリ側には反映されず、
+  次回 `./deploy.sh`（または `./deploy-all.sh`）実行時に上書きされる
+- リポジトリ側の `claude/CLAUDE.md` を編集しても、再デプロイするまで `~/.claude/CLAUDE.md`
+  には反映されない
+- 編集のたびに即時反映させたい場合は dev モード（`./deploy-all.sh --dev`）を使う。この場合
+  `current` が作業ツリーそのものを指すため、リポジトリ側の編集がそのまま
+  `~/.claude/CLAUDE.md` に反映される（世代方式の詳細はルート `AGENTS.md`
+  「デプロイの仕組み」・ADR DOC-2608040229 を参照）
 
 ```bash
-# 直接編集
-vim ~/.claude/CLAUDE.md
-
-# またはリポジトリ側を編集（同じファイル）
+# 恒久的に変更する場合（世代モード）
 vim ~/.dotfiles/claude/CLAUDE.md
+./deploy.sh   # または ./deploy-all.sh
+
+# 試行錯誤したい場合（dev モード）
+./deploy-all.sh --dev
+vim ~/.dotfiles/claude/CLAUDE.md   # 即座に ~/.claude/CLAUDE.md に反映される
 ```
 
 ## 5. Troubleshooting

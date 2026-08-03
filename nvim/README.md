@@ -255,5 +255,7 @@ Delete or move them manually if found.
 This means lazy.nvim can't find a plugin file. Ensure `nvim/lua/plugins/` is symlinked correctly:
 ```bash
 readlink ~/.config/nvim/lua
-# Should point to ~/.dotfiles/nvim/lua
+# Should point through the distribution's `current` symlink, e.g.
+# ~/.local/share/dotfiles/current/nvim/lua (not directly into ~/.dotfiles).
+# Run ./deploy-all.sh --status from the repo root to see what `current` resolves to.
 ```

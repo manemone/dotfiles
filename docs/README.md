@@ -13,6 +13,7 @@
 | シェルを書く前に読む | [design/DOC-2608020715-a_シェルスクリプトコーディング方針.md](design/DOC-2608020715-a_シェルスクリプトコーディング方針.md) | POSIX sh / bash の使い分け、bashism の回避 |
 | デプロイを検証する | [design/DOC-2608020715-b_テスト方針.md](design/DOC-2608020715-b_テスト方針.md) | 実 HOME を汚さずに検証する4層の方法 |
 | なぜ配布方式を今の形にしたかを知る | [adr/DOC-2608040229_deploy-distribution-method.md](adr/DOC-2608040229_deploy-distribution-method.md) | 世代ディレクトリ + `current` を採用した理由と、却下した案 |
+| デプロイの運用手順（世代確認・ロールバック・dev モード等）を調べる | [reference/DOC-2608040805_配布実体運用ガイド.md](reference/DOC-2608040805_配布実体運用ガイド.md) | canonical prefix の構造・manifest 全フィールド・移行手順 |
 | なぜ `ocw-meter` をこの設計にしたかを知る | [adr/DOC-2608021229_llm-cost-observability-collection-method.md](adr/DOC-2608021229_llm-cost-observability-collection-method.md) | feasibility probe の実測結果に基づく収集方式の決定記録 |
 | `ocw-meter` のイベントスキーマを調べる | [reference/DOC-2608021229-c_ocw-meterイベントスキーマ.md](reference/DOC-2608021229-c_ocw-meterイベントスキーマ.md) | 全 event_type・全フィールド・費用計算式の一次情報源 |
 | LLM費用のベースラインを測る手順を知る | [reference/DOC-2608021229-b_LLM費用観測ベースライン計測手順.md](reference/DOC-2608021229-b_LLM費用観測ベースライン計測手順.md) | 実PR 5〜10本での計測手順 |
@@ -74,6 +75,7 @@
 |---|---|---|
 | DOC-2608021229-b | [LLM費用観測ベースライン計測手順.md](reference/DOC-2608021229-b_LLM費用観測ベースライン計測手順.md) | `ocw-meter` 導入後、実PR 5〜10本でLLM費用・Claude利用枠のベースラインを計測する手順書（旧ID: `DOC-004`） |
 | DOC-2608021229-c | [ocw-meterイベントスキーマ.md](reference/DOC-2608021229-c_ocw-meterイベントスキーマ.md) | `ocw-meter` が書く全イベント型の恒久リファレンス。共通エンベロープの全フィールド、全 `event_type`、`idempotency_key` の生成規則、費用計算式、`completeness` の判定基準を実データで検証した上でまとめたもの（旧ID: `DOC-005`） |
+| DOC-2608040805 | [配布実体運用ガイド.md](reference/DOC-2608040805_配布実体運用ガイド.md) | 世代ディレクトリ + `current` 配布方式の日常運用手順。canonical prefix のディレクトリ構造・manifest の全フィールド・世代確認・ロールバック・dev モードの出入り・リンク切れ対処・旧方式からの移行手順 |
 
 ## 新規ファイル追加時のルール
 

@@ -57,6 +57,9 @@ sudo apt update && sudo apt install $(cat apt-packages.txt)
 ./deploy-all.sh --only zsh,nvim          # Deploy specific tools (comma-separated)
 ./deploy-all.sh --backup                 # Back up existing config files (default)
 ./deploy-all.sh --no-backup              # Overwrite without backing up
+./deploy-all.sh --status                 # Show what's currently deployed (read-only)
+./deploy-all.sh --rollback [id]          # Switch current back to the previous (or given) generation
+./deploy-all.sh --dev                    # Point current at this working tree (live-edit mode)
 ```
 
 Options can be combined:
@@ -64,6 +67,13 @@ Options can be combined:
 ./deploy-all.sh --dry-run --only tmux
 ./deploy-all.sh --force --only zsh,nvim --no-backup
 ```
+
+`--status` / `--rollback` / `--dev` operate on the `current` symlink itself (see
+[docs/adr/DOC-2608040229_deploy-distribution-method.md](docs/adr/DOC-2608040229_deploy-distribution-method.md))
+and cannot be combined with each other or with `--only` / `--force` / `--backup` —
+`--dry-run` is the only modifier they accept. `--status` has no side effects and is
+safe to run against your real `$HOME`; `--rollback` and `--dev` actually repoint
+`current`, so preview them with `--dry-run` first.
 
 ## Development Setup
 
@@ -148,37 +158,60 @@ for details. `bin/` changes should additionally be verified with
     └── README.md
 ```
 
-## Deploying from a git worktree
+## How deployment works
 
-Deploy scripts symlink files **from this checkout** into `$HOME`. If you deploy
-from a linked git worktree (created by `git worktree add`, or by `ocw`), those
-symlinks point into that worktree — and they break silently the moment the
-worktree is removed (`ocw rm`, `git worktree remove`). `~/.zshrc`,
-`~/.claude/skills/*` and `~/bin/*` all stop working, long after the deploy
-reported success.
+`$HOME` never links directly into this checkout. `./deploy-all.sh` copies the tool
+directories into a dated **generation** directory under
+`${XDG_DATA_HOME:-$HOME/.local/share}/dotfiles/generations/`, points a `current`
+symlink at it, and every tool's `deploy.sh` links `$HOME` through `current` — never
+through the generation directory directly. Re-running deploy creates a new
+generation and swaps `current` over; the last few generations are kept (default 3,
+override with `DOTFILES_KEEP_GENERATIONS`) so a broken deploy can be undone with
+`--rollback` instead of git surgery. Editing this checkout after a deploy has no
+effect on `$HOME` unless you're in dev mode (see below) — `$HOME` reads from the
+generation snapshot, not the live working tree.
 
-The deploy scripts warn when this happens:
+See
+[docs/adr/DOC-2608040229_deploy-distribution-method.md](docs/adr/DOC-2608040229_deploy-distribution-method.md)
+for the full rationale, and
+[docs/reference/DOC-2608040805_配布実体運用ガイド.md](docs/reference/DOC-2608040805_配布実体運用ガイド.md)
+for day-to-day operations (inspecting what's deployed, rolling back, entering/leaving
+dev mode, recovering a broken symlink, migrating an older machine).
 
-```
-[WARN] Deploying from a linked git worktree:
-[WARN]   /path/to/dotfiles/my-feature
-[WARN] Symlinks will point INTO this worktree and will break when it is
-[WARN] removed (e.g. by 'ocw rm').
-[WARN] After merging, re-run the deploy from the main worktree:
-[WARN]   cd /path/to/dotfiles/master && ./deploy-all.sh
-```
+## Working on this checkout: dev mode and worktrees
 
-Deploying from a worktree is fine while testing a change. Just **re-run the
-deploy from the main worktree once the change is merged**, before removing the
-worktree. Set `DOTFILES_QUIET_WORKTREE_WARNING=1` to silence the warning.
-
-If symlinks are already broken, list the dangling ones with:
+Because `$HOME` normally reads from a copied generation, edits to this checkout
+(including in a linked `git worktree` created by `git worktree add` or `ocw`) do
+**not** reach `$HOME` until you re-deploy. If you want live-edit behavior instead —
+useful while iterating on a config change — use dev mode:
 
 ```bash
-find ~ ~/.config ~/.claude ~/.claude/skills ~/bin -maxdepth 1 -type l ! -exec test -e {} \; -print
+./deploy-all.sh --dev
 ```
 
-then re-run `./deploy-all.sh` from the main worktree.
+This points `current` directly at this working tree (no generation is created), so
+edits take effect immediately, matching how earlier versions of this repo always
+behaved. The tradeoff dev mode brings back: if `current` points at a **linked**
+worktree and that worktree is removed (`ocw rm`, `git worktree remove`), every
+`$HOME` symlink breaks the moment it disappears. `--dev` warns when this applies:
+
+```
+[WARN] This working tree is a linked git worktree:
+[WARN]   /path/to/dotfiles/my-feature
+[WARN] Dev mode makes $HOME resolve directly into it via current. Removing this
+[WARN] worktree (e.g. 'ocw rm') will break every $HOME symlink until you switch
+[WARN] back to generation mode.
+```
+
+Re-run `./deploy-all.sh` (without `--dev`) to leave dev mode and go back to the
+default, safer generation mode — this also fixes any symlinks a removed dev-mode
+worktree left broken. Set `DOTFILES_QUIET_WORKTREE_WARNING=1` to silence the
+warning. To check what's currently deployed (generation vs. dev mode, and whether
+any `$HOME` symlink is broken) without side effects:
+
+```bash
+./deploy-all.sh --status
+```
 
 ## Uninstalling
 
@@ -189,7 +222,12 @@ then re-run `./deploy-all.sh` from the main worktree.
 ./uninstall.sh --only tmux   # Uninstall a specific tool
 ```
 
-The uninstall script removes **known symlinks** and restores backed-up config files (`*.backup`).
+The uninstall script removes **known symlinks**, restores backed-up config files
+(`*.backup`), and — once no remaining tool still references it — cleans up the
+distribution artifacts themselves (the `generations/` directory and the `current`
+symlink under the canonical prefix). If `current` is in dev mode (pointing at a
+working tree), only the `current` symlink is removed; the working tree itself is
+never touched.
 Note: `--only nvim` currently removes legacy dein.vim symlinks; lazy.nvim symlinks (`init.lua`, `lua/`, `lazy-lock.json`) are not yet tracked.
 See each tool's deploy script for the full list of files it creates.
 
