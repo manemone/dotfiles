@@ -7,6 +7,11 @@ SCRIPT_DIR=$(
 # shellcheck source=SCRIPTDIR/../shared/helpers.sh
 . "$SCRIPT_DIR/../shared/helpers.sh"
 
+# --- Resolve distribution source (current generation) ---
+# See AGENTS.md "デプロイの仕組み": standalone runs default to `current`;
+# deploy-all.sh overrides this with the generation it just created.
+resolve_deploy_src
+
 log_hr
 log_info "Deploying: claude (Claude Code config)"
 
@@ -36,7 +41,7 @@ else
 fi
 
 # --- Symlink CLAUDE.md ---
-symlink_backup "$SCRIPT_DIR/CLAUDE.md" "$CLAUDE_DIR/CLAUDE.md" || FAIL=1
+symlink_backup "$DOTFILES_DEPLOY_SRC/claude/CLAUDE.md" "$CLAUDE_DIR/CLAUDE.md" || FAIL=1
 
 # --- Generate settings.json (NOT a symlink) ---
 # Claude Code does NOT read ~/.claude/settings.local.json at the user level
@@ -45,8 +50,8 @@ symlink_backup "$SCRIPT_DIR/CLAUDE.md" "$CLAUDE_DIR/CLAUDE.md" || FAIL=1
 # (not tracked in git — copy from settings.machine.json.example).
 # deploy.sh merges base + machine overrides into ~/.claude/settings.json.
 
-SETTINGS_SRC="$SCRIPT_DIR/settings.json"
-MACHINE_SRC="$SCRIPT_DIR/settings.machine.json"
+SETTINGS_SRC="$DOTFILES_DEPLOY_SRC/claude/settings.json"
+MACHINE_SRC="$DOTFILES_DEPLOY_SRC/claude/settings.machine.json"
 SETTINGS_DST="$CLAUDE_DIR/settings.json"
 
 if [ -f "$MACHINE_SRC" ]; then
@@ -185,7 +190,7 @@ fi
 #
 # Uses an independent _skills_fail flag so that a prior failure in CLAUDE.md
 # or settings.json does not silently skip skill deployment.
-SKILLS_SRC_DIR="$SCRIPT_DIR/skills"
+SKILLS_SRC_DIR="$DOTFILES_DEPLOY_SRC/claude/skills"
 SKILLS_DST_DIR="$CLAUDE_DIR/skills"
 SKILLS_BACKUP_DIR="$CLAUDE_DIR/skills-backup"
 _skills_fail=0
