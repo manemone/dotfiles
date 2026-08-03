@@ -396,6 +396,10 @@ create_generation() {
     # Mirrors the real build below: scratch dir under .tmp/, copy each tool
     # into it, then mv into place — not a direct mkdir+cp into $_cg_dir.
     printf '[DRY-RUN] mkdir -p %s/.tmp\n' "$_cg_prefix" >&2
+    for _cg_stale in "$_cg_prefix/.tmp"/gen.*; do
+      [ -e "$_cg_stale" ] || [ -L "$_cg_stale" ] || continue
+      printf '[DRY-RUN] rm -rf %s (leftover scratch)\n' "$_cg_stale" >&2
+    done
     printf '[DRY-RUN] mktemp -d %s/.tmp/gen.XXXXXX\n' "$_cg_prefix" >&2
     for _cg_t in $AVAILABLE_TOOLS; do
       printf '[DRY-RUN] cp -a %s/%s <scratch>/%s\n' "$_cg_src_tree" "$_cg_t" "$_cg_t" >&2
@@ -424,8 +428,14 @@ create_generation() {
   # from a prior invocation is still in use.
   for _cg_stale in "$_cg_prefix/.tmp"/gen.*; do
     [ -e "$_cg_stale" ] || [ -L "$_cg_stale" ] || continue
-    log_warn "Sweeping leftover scratch directory: $_cg_stale"
-    _dotfiles_safe_rmdir "$_cg_stale" "$_cg_prefix/.tmp"
+    # _dotfiles_safe_rmdir already logs its own warning/error when it
+    # refuses to remove something, so only announce success here — logging
+    # "sweeping" unconditionally before the check would print a contradictory
+    # "sweeping" followed by "refusing" on every deploy for anything it
+    # can't actually remove (e.g. a symlink someone dropped in .tmp/).
+    if _dotfiles_safe_rmdir "$_cg_stale" "$_cg_prefix/.tmp"; then
+      log_warn "Swept leftover scratch directory: $_cg_stale"
+    fi
   done
 
   _cg_scratch=$(mktemp -d "$_cg_prefix/.tmp/gen.XXXXXX") || {
