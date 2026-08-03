@@ -47,14 +47,23 @@ mise use ripgrep fd node@lts python@latest
 
 ## 2. Quick Start
 
+On a fresh machine, run the top-level `deploy-all.sh` (not `nvim/deploy.sh` directly) —
+`$HOME` links through a distribution artifact under `${XDG_DATA_HOME:-$HOME/.local/share}/dotfiles/`
+that only `deploy-all.sh` creates. Running `nvim/deploy.sh` standalone before that
+exists fails with an error pointing you back here.
+
 ```bash
-# 1. Run deploy script
-cd ~/.dotfiles/nvim
-./deploy.sh
+# 1. Run the top-level deploy script
+cd ~/.dotfiles
+./deploy-all.sh --only nvim
 
 # 2. Open NeoVim — plugins auto-install via lazy.nvim on first launch
 nvim
 ```
+
+Once `deploy-all.sh` has run at least once, you can re-run `nvim/deploy.sh` directly
+to re-link `nvim` alone (it reuses the existing distribution artifact rather than
+creating a new one).
 
 The deploy script:
 - Creates `~/.config/nvim/` directory
@@ -255,5 +264,7 @@ Delete or move them manually if found.
 This means lazy.nvim can't find a plugin file. Ensure `nvim/lua/plugins/` is symlinked correctly:
 ```bash
 readlink ~/.config/nvim/lua
-# Should point to ~/.dotfiles/nvim/lua
+# Should point through the distribution's `current` symlink, e.g.
+# ~/.local/share/dotfiles/current/nvim/lua (not directly into ~/.dotfiles).
+# Run ./deploy-all.sh --status from the repo root to see what `current` resolves to.
 ```

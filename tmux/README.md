@@ -42,10 +42,19 @@ WSLg / Windows Terminal users get automatic clipboard passthrough to Windows. Fo
 
 ## 2. Quick Start
 
+On a fresh machine, run the top-level `deploy-all.sh` (not `tmux/deploy.sh` directly) —
+`$HOME` links through a distribution artifact under `${XDG_DATA_HOME:-$HOME/.local/share}/dotfiles/`
+that only `deploy-all.sh` creates. Running `tmux/deploy.sh` standalone before that
+exists fails with an error pointing you back here.
+
 ```bash
-cd ~/.dotfiles/tmux
-./deploy.sh
+cd ~/.dotfiles
+./deploy-all.sh --only tmux
 ```
+
+Once `deploy-all.sh` has run at least once, you can re-run `tmux/deploy.sh` directly
+to re-link `tmux` alone (it reuses the existing distribution artifact rather than
+creating a new one).
 
 The deploy script:
 - Symlinks `tmux.conf` → `~/.tmux.conf`

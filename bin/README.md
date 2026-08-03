@@ -23,10 +23,15 @@
 
 ## 2. Quick Start
 
+新規マシンでは単体の `bin/deploy.sh` ではなく、リポジトリルートの `deploy-all.sh` を実行してください。
+`$HOME` 側のリンクは `${XDG_DATA_HOME:-$HOME/.local/share}/dotfiles/` 配下の配布実体を経由しており、
+これを作るのは `deploy-all.sh` だけです。`current` がまだ無い状態で `bin/deploy.sh` を単体実行すると、
+エラーで終了し `./deploy-all.sh` の実行を案内されます。
+
 ```bash
-# 1. Run deploy script
-cd ~/.dotfiles/bin
-./deploy.sh
+# 1. リポジトリルートから実行
+cd ~/.dotfiles
+./deploy-all.sh --only bin
 
 # 2. Restart your shell (or source ~/.zshrc) so ~/bin is on PATH
 exec $SHELL -l
@@ -35,6 +40,9 @@ exec $SHELL -l
 which ocw
 which claude-ds
 ```
+
+すでに一度 `deploy-all.sh` を実行済みで配布実体（`current`）が存在するなら、
+`bin/` ディレクトリから単体の `./deploy.sh` を実行しても構いません。
 
 > **Note**: `~/bin` の PATH 追加は `zsh/.zshrc` が担っています。bash 等他のシェルを使う場合は、各自で `~/bin` を PATH に通してください。
 
@@ -276,8 +284,9 @@ PR番号はリポジトリ**内**でしか一意でない。`--pr`とstandalone�
 - `OCW_METER_RAW=1`のときのみ、redaction済みのstatusLine生JSONを`raw/YYYY-MM-DD/`へ保存し、
   イベントの`raw_ref`にそのパスを記録する（既定では一切保存しない）
 - **事前準備（必須）**: `ocw-meter` が PATH に無い環境では statusLine コマンド自体が
-  `command not found` になり表示が壊れる。必ず先に `bin/deploy.sh` を実行して
-  `~/bin/ocw-meter` を配置し、`~/bin` が PATH に入っていることを確認すること（本ドキュメント §5 参照）
+  `command not found` になり表示が壊れる。必ず先に `./deploy-all.sh --only bin`
+  （リポジトリルートから）を実行して `~/bin/ocw-meter` を配置し、`~/bin` が PATH に
+  入っていることを確認すること（本ドキュメント §5 参照）
 
 **保存先と環境変数:**
 
