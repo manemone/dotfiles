@@ -145,6 +145,65 @@ resolve_tools() {
   return 0
 }
 
+# ── Known $HOME-side link destinations per tool ─────────────────────────
+#
+# Single source of truth for "which paths under $HOME does this repo's
+# deploy create". uninstall.sh needs it to know what to remove;
+# deploy-all.sh --status needs it to check for broken symlinks. Keeping one
+# copy here (instead of duplicating the list in both scripts) is what
+# prevents the drift that let ocw-meter go unlisted from KNOWN_LINKS_bin in
+# the first place (see ADR DOC-2608040229 §2.6 / AGENTS.md 実装時の注意).
+# Use printf so the trailing-newline line-continuation works portably.
+KNOWN_LINKS_zsh=$(
+  printf '%s\n' \
+    "$HOME/.zshrc" \
+    "$HOME/.zsh_plugins.txt"
+)
+
+KNOWN_LINKS_nvim=$(
+  printf '%s\n' \
+    "${XDG_CONFIG_HOME:-$HOME/.config}/nvim/init.lua" \
+    "${XDG_CONFIG_HOME:-$HOME/.config}/nvim/lua" \
+    "${XDG_CONFIG_HOME:-$HOME/.config}/nvim/lazy-lock.json"
+)
+
+KNOWN_LINKS_tmux=$(
+  printf '%s\n' \
+    "$HOME/.tmux.conf"
+)
+
+KNOWN_LINKS_bin=$(
+  printf '%s\n' \
+    "$HOME/bin/ocw" \
+    "$HOME/bin/claude-ds" \
+    "$HOME/bin/ocw-meter"
+)
+
+KNOWN_LINKS_claude=$(
+  printf '%s\n' \
+    "$HOME/.claude/CLAUDE.md"
+)
+
+# links_for_tool <tool>
+# Print (one per line) the KNOWN_LINKS_<tool> destinations for <tool>
+# (empty if <tool> has none). Callers (uninstall.sh's per-tool loop and
+# distribution-artifact cleanup, deploy-all.sh's --status link-health scan)
+# all need the same tool -> KNOWN_LINKS_* mapping, and duplicating this case
+# statement is exactly the kind of drift the comment above warns about.
+#
+# A function (not eval-based indirection through a "KNOWN_LINKS_$tool" name)
+# keeps each KNOWN_LINKS_* variable directly referenced, so a static
+# analysis tool can still see the use.
+links_for_tool() {
+  case "$1" in
+    zsh) printf '%s\n' "$KNOWN_LINKS_zsh" ;;
+    nvim) printf '%s\n' "$KNOWN_LINKS_nvim" ;;
+    tmux) printf '%s\n' "$KNOWN_LINKS_tmux" ;;
+    bin) printf '%s\n' "$KNOWN_LINKS_bin" ;;
+    claude) printf '%s\n' "$KNOWN_LINKS_claude" ;;
+  esac
+}
+
 # ── Logging (colourised when the output fd is a terminal) ─────────────
 
 # _can_color <fd>
