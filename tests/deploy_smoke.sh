@@ -398,6 +398,20 @@ EOF
       else
         fail "uninstall は新方式skillのsymlinkを未対応のまま残す(孫3で対応予定)"
       fi
+
+      # symlink を素通りするだけでなく、deploy 時に skills-backup へ退避した
+      # 元のスキルも失われずに残っていることを確認する。孫3が復元を実装する
+      # 前提はここに元データが残っていることなので、deploy 側の退化(取りこぼし・
+      # 上書き)が起きていないことをこのタイミングで検証しておく。
+      local backup_match_after_uninstall=""
+      for cand in "$sbx/.claude/skills-backup/$existing_skill".*; do
+        [ -e "$cand" ] && backup_match_after_uninstall="$cand" && break
+      done
+      if [ -n "$backup_match_after_uninstall" ] && [ -f "$backup_match_after_uninstall/DUMMY_MARKER" ]; then
+        pass "uninstall 後も退避された元skillがskills-backupに残っている(孫3の復元実装の前提): $backup_match_after_uninstall"
+      else
+        fail "uninstall 後も退避された元skillがskills-backupに残っている(孫3の復元実装の前提)"
+      fi
     fi
   fi
 }
@@ -807,6 +821,61 @@ JSONEOF
   else
     fail "非追跡の settings.machine.json が世代にコピーされ、マージ結果が settings.json に反映される"
   fi
+
+  # smokeTestMarker の有無だけでは、settings.machine.json を「マージ」でなく
+  # 「丸ごとコピー」する実装に退化しても緑のままになってしまう。ベース設定
+  # (claude/settings.json)側にしかないキーも一緒に残っていることを確認し、
+  # 両方が合成された結果であることを検証する。
+  if grep -q '"permissions"' "$sbx/.claude/settings.json" 2>/dev/null; then
+    pass "ベース設定(claude/settings.json)側のキーもマージ後に残っている(丸ごと上書きされていない)"
+  else
+    fail "ベース設定(claude/settings.json)側のキーもマージ後に残っている(丸ごと上書きされていない)"
+  fi
+}
+
+# ── シナリオ11: 旧方式(直リンク)skill symlinkの移行 + stale掃除(claude版) ──
+
+scenario_claude_skill_migration() {
+  if ! has_tool claude; then
+    return
+  fi
+  log "=== シナリオ11: 旧方式(直リンク)skill symlinkの移行 + stale掃除(claude版) ==="
+  local sbx out rc skill_name prefix
+
+  new_sandbox
+  sbx="$SANDBOX_DIR"
+  mkdir -p "$sbx/.claude/skills"
+
+  skill_name="$(list_repo_skills | head -n1)"
+  if [ -z "$skill_name" ]; then
+    log "  (claude/skills/ 配下にスキルが無いためスキップ)"
+    return
+  fi
+
+  # 旧方式(作業ツリー直リンク)の skill symlink を再現する。current 経由へ
+  # 配布元が変わったことで、244行目付近の「既に正しいsymlinkか」の判定に
+  # 一致しなくなり、バックアップ処理へ落ちる経路を通る(ADR §4.9)。
+  ln -s "$REPO_ROOT/claude/skills/$skill_name" "$sbx/.claude/skills/$skill_name"
+  # 存在しないスキルを指す旧方式リンク(stale)も再現する。
+  ln -s "$REPO_ROOT/claude/skills/smoke-test-gone-skill" "$sbx/.claude/skills/smoke-test-gone-skill"
+
+  out="$(run_deploy "$sbx" --force --only claude 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "旧方式skillリンクが存在する状態での deploy-all.sh --only claude が失敗 (exit=$rc)"
+    log "$out"
+    return
+  fi
+
+  prefix="$(dotfiles_prefix_for "$sbx")"
+  assert_symlink "$sbx/.claude/skills/$skill_name" "$prefix/current/claude/skills/$skill_name"
+  assert_not_exists "$sbx/.claude/skills-backup"
+
+  if [ -L "$sbx/.claude/skills/smoke-test-gone-skill" ] || [ -e "$sbx/.claude/skills/smoke-test-gone-skill" ]; then
+    fail "存在しないスキルを指す旧方式リンクが掃除される: $sbx/.claude/skills/smoke-test-gone-skill"
+  else
+    pass "存在しないスキルを指す旧方式リンクが掃除される"
+  fi
 }
 
 log "REPO_ROOT: $REPO_ROOT"
@@ -832,6 +901,8 @@ log
 scenario_claude_source_tree_disappears
 log
 scenario_claude_settings_machine_merge
+log
+scenario_claude_skill_migration
 log
 
 if [ "$FAIL" -eq 0 ]; then

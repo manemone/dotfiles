@@ -43,6 +43,23 @@ fi
 # --- Symlink CLAUDE.md ---
 symlink_backup "$DOTFILES_DEPLOY_SRC/claude/CLAUDE.md" "$CLAUDE_DIR/CLAUDE.md" || FAIL=1
 
+# --- Resolve where to read claude/'s own contents from for THIS run ---
+# symlink_backup (used for CLAUDE.md above) always links through
+# DOTFILES_DEPLOY_SRC regardless of DRY_RUN — its DRY-RUN branch only prints
+# a planned `ln -fs`, so the source never needs to exist yet. But the code
+# below branches on "-f $MACHINE_SRC" / "-d $SKILLS_SRC_DIR" to decide what
+# to do, and in DRY_RUN mode DOTFILES_DEPLOY_SRC/claude may not exist yet
+# (current not switched, or create_generation's own DRY-RUN branch never
+# actually copies anything) — so those existence checks would silently see
+# "nothing to merge" / "no skills" even when the real run will create both.
+# A generation is a cp -a snapshot of the working tree (see
+# create_generation), so the working tree is what the plan should describe.
+if [ "${DRY_RUN:-0}" -eq 1 ]; then
+  CLAUDE_SRC_DIR="$SCRIPT_DIR"
+else
+  CLAUDE_SRC_DIR="$DOTFILES_DEPLOY_SRC/claude"
+fi
+
 # --- Generate settings.json (NOT a symlink) ---
 # Claude Code does NOT read ~/.claude/settings.local.json at the user level
 # (only project-level .claude/settings.local.json is supported).
@@ -50,8 +67,8 @@ symlink_backup "$DOTFILES_DEPLOY_SRC/claude/CLAUDE.md" "$CLAUDE_DIR/CLAUDE.md" |
 # (not tracked in git — copy from settings.machine.json.example).
 # deploy.sh merges base + machine overrides into ~/.claude/settings.json.
 
-SETTINGS_SRC="$DOTFILES_DEPLOY_SRC/claude/settings.json"
-MACHINE_SRC="$DOTFILES_DEPLOY_SRC/claude/settings.machine.json"
+SETTINGS_SRC="$CLAUDE_SRC_DIR/settings.json"
+MACHINE_SRC="$CLAUDE_SRC_DIR/settings.machine.json"
 SETTINGS_DST="$CLAUDE_DIR/settings.json"
 
 if [ -f "$MACHINE_SRC" ]; then
@@ -190,7 +207,7 @@ fi
 #
 # Uses an independent _skills_fail flag so that a prior failure in CLAUDE.md
 # or settings.json does not silently skip skill deployment.
-SKILLS_SRC_DIR="$DOTFILES_DEPLOY_SRC/claude/skills"
+SKILLS_SRC_DIR="$CLAUDE_SRC_DIR/skills"
 SKILLS_DST_DIR="$CLAUDE_DIR/skills"
 SKILLS_BACKUP_DIR="$CLAUDE_DIR/skills-backup"
 _skills_fail=0
@@ -249,8 +266,26 @@ if [ -d "$SKILLS_SRC_DIR" ]; then
 
       # If an existing file / directory / different symlink is in the way,
       # back it up OUTSIDE skills/ so it isn't picked up as a duplicate skill.
+      # Exception: a symlink left over from a previous deploy (either the
+      # old direct-to-worktree scheme or a stale current-scheme link) is not
+      # user data — replace it without backup, the same treatment
+      # symlink_backup gives CLAUDE.md above (ADR §4.9 / DOC-2608040229).
+      # Without this check, every pre-migration skill symlink would get
+      # "backed up" here as if it were the user's original skill, and a
+      # later uninstall would restore that backup as if it were real data.
       if [ -e "$_skill_dst" ] || [ -L "$_skill_dst" ]; then
-        if [ "${DRY_RUN:-0}" -eq 1 ]; then
+        if _dotfiles_symlink_is_repo_owned "$_skill_dst" "$(dirname "$SCRIPT_DIR")"; then
+          if [ "${DRY_RUN:-0}" -eq 1 ]; then
+            log_info "[DRY-RUN] Would replace repo-owned skill symlink (no backup): $_skill_dst"
+          else
+            log_info "Replacing repo-owned skill symlink (no backup needed): $_skill_dst"
+            rm -f "$_skill_dst" || {
+              log_error "Failed to remove: $_skill_dst"
+              _skills_fail=1
+              continue
+            }
+          fi
+        elif [ "${DRY_RUN:-0}" -eq 1 ]; then
           log_info "[DRY-RUN] Would back up existing: $_skill_dst → $SKILLS_BACKUP_DIR/"
         else
           mkdir -p "$SKILLS_BACKUP_DIR" || {
@@ -292,13 +327,18 @@ if [ -d "$SKILLS_SRC_DIR" ]; then
 
     # Clean up stale symlinks inside ~/.claude/skills/ that point into
     # SKILLS_SRC_DIR but whose targets no longer exist (renamed / removed).
-    # Only touches symlinks whose target starts with SKILLS_SRC_DIR, leaving
+    # Also recognizes the pre-migration direct-to-worktree scheme
+    # ($SCRIPT_DIR/skills/<name>) so skills removed/renamed before this
+    # machine adopted the current-scheme distribution still get swept
+    # (ADR §4.8 / DOC-2608040229 asks uninstall.sh's ownership check to
+    # recognize both schemes for the same reason). Only touches symlinks
+    # whose target starts with one of these two prefixes, leaving
     # user-owned and Herdr-managed symlinks alone.
     for _dst_link in "$SKILLS_DST_DIR"/*; do
       [ -L "$_dst_link" ] || continue
       _target=$(readlink "$_dst_link")
       case "$_target" in
-        "$SKILLS_SRC_DIR"/*)
+        "$SKILLS_SRC_DIR"/* | "$SCRIPT_DIR/skills"/*)
           if [ ! -d "$_target" ]; then
             if [ "${DRY_RUN:-0}" -eq 1 ]; then
               log_info "[DRY-RUN] Would remove stale skill symlink: $_dst_link → $_target"
