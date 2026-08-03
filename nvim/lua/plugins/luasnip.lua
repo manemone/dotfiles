@@ -3,11 +3,9 @@
 return {
   "L3MON4D3/LuaSnip",
   version = "v2.*",
-  -- Loaded via blink.lua's dependency on this plugin, which loads on
-  -- BufReadPre/BufNewFile (see the comment in blink.lua) rather than
-  -- InsertEnter — matching that event here instead of claiming a lazy-load
-  -- that doesn't actually happen.
-  event = { "BufReadPre", "BufNewFile" },
+  -- Loaded via blink.lua's dependency on this plugin — matching blink.lua's
+  -- event list here (see the comment there for why all three are needed).
+  event = { "BufReadPre", "BufNewFile", "InsertEnter" },
   dependencies = {
     "rafamadriz/friendly-snippets",
   },

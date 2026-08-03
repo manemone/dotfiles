@@ -11,10 +11,11 @@ return {
   "saghen/blink.cmp",
   -- lsp.lua requires("blink.cmp") to build LSP capabilities, which lazy.nvim
   -- resolves by loading this plugin immediately on BufReadPre/BufNewFile —
-  -- before the InsertEnter event below would otherwise fire. Declaring the
-  -- event lsp.lua actually forces keeps this honest instead of claiming a
-  -- lazy-load that doesn't happen.
-  event = { "BufReadPre", "BufNewFile" },
+  -- so those two are listed for honesty. InsertEnter is kept alongside them
+  -- because neither BufReadPre nor BufNewFile fires for an unnamed buffer
+  -- (plain `nvim` with no file argument, or `:enew`), which would otherwise
+  -- leave completion dead in the most basic case.
+  event = { "BufReadPre", "BufNewFile", "InsertEnter" },
   version = "1.*",
   dependencies = { "L3MON4D3/LuaSnip" },
   opts = {
