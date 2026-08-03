@@ -1032,23 +1032,54 @@ scenario_distribution_artifact_cleanup() {
 
   assert_not_exists "$prefix/generations"
   assert_not_exists "$prefix/current"
+  # generations/ と current だけでなく、prefix自体(.tmp/を含む)も片付く
+  # ことを確認する。create_generation はビルド用scratchを
+  # <prefix>/.tmp/ に作り(shared/helpers.sh)、成功時にgenerations/へ
+  # mvするが .tmp ディレクトリ自体は残り続けるため、これを消し忘れると
+  # prefixがいつまでも空にならない(rmdirが常に失敗する)。
+  assert_not_exists "$prefix"
 }
 
 # ── シナリオ15: devモード(currentがソースツリーを指す)でのソースツリー保護 ──
 
 scenario_dev_mode_source_tree_protection() {
+  if ! has_tool bin; then
+    return
+  fi
   log "=== シナリオ15: devモードでのuninstallはcurrentが指すソースツリーを削除しない ==="
-  local sbx dev_src prefix marker out rc
+  local sbx dev_src prefix marker out rc copy_dir
 
   new_sandbox
   sbx="$SANDBOX_DIR"
+  prefix="$(dotfiles_prefix_for "$sbx")"
+
+  # 先に世代モードで一度 deploy し、generations/ に実体を作っておく。
+  # 実運用でありうる「世代モードで運用したあと dev モードへ切り替えて
+  # uninstall する」経路を再現する。dev モードの current は実運用でも
+  # generations/ を経由しないので、この generations/ は dev モードに
+  # 切り替えたあとに uninstall で消えるべき「片付け対象」であり、
+  # 「消してはいけないソースツリー」とは別物であることを検証する。
+  copy_dir="$(mktemp -d)"
+  CREATED_DIRS+=("$copy_dir")
+  copy_repo_snapshot "$copy_dir"
+  out="$(run_deploy_from "$copy_dir/deploy-all.sh" "$sbx" --force --only bin 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "事前準備(世代モードでのdeploy-all.sh --force --only bin)が失敗 (exit=$rc)"
+    log "$out"
+    return
+  fi
+  if [ ! -d "$prefix/generations" ]; then
+    fail "事前準備: generations/ が作られている"
+    return
+  fi
+  pass "事前準備: 世代モードでdeployし、generations/ が存在する"
+
   dev_src="$(mktemp -d)"
   CREATED_DIRS+=("$dev_src")
   marker="dev-source-tree-marker-$$"
   printf '%s\n' "$marker" >"$dev_src/MARKER"
 
-  prefix="$(dotfiles_prefix_for "$sbx")"
-  mkdir -p "$prefix"
   # 孫4の --dev はまだ無いので、current を手でソースツリーへ向けて dev
   # モードを再現する(計画書 DOC-2608040234 孫3「dev モードの検証はサンド
   # ボックス内で current を手でソースツリーへ向ければよい」を参照)。
@@ -1067,6 +1098,12 @@ scenario_dev_mode_source_tree_protection() {
   else
     fail "devモードのソースツリーはuninstallで削除されない(実体は無傷)"
   fi
+
+  # ソースツリー自体は無傷である一方、current というリンク自体と
+  # generations/ (dev モードのcurrentが指す先ではない、別に存在していた
+  # 実体)は片付けられることを確認する。
+  assert_not_exists "$prefix/current"
+  assert_not_exists "$prefix/generations"
 }
 
 # ── シナリオ16: uninstall で ~/bin/ocw-meter が撤去される ────────────────
@@ -1154,6 +1191,10 @@ scenario_claude_new_scheme_skill_removed_and_restored() {
   else
     fail "復元後、skills-backup配下の退避データは残っていない(復元先へ移動済み): $backup_match が残存"
   fi
+
+  # 退避データそのものだけでなく、空になった skills-backup ディレクトリ
+  # 自体も片付くことを確認する。
+  assert_not_exists "$sbx/.claude/skills-backup"
 }
 
 # ── シナリオ18: deployを介さない旧方式skillリンクもuninstallが撤去する ────
@@ -1188,6 +1229,180 @@ scenario_claude_old_scheme_skill_removed_by_uninstall() {
   fi
 
   assert_not_exists "$sbx/.claude/skills/$skill_name"
+}
+
+# ── シナリオ19: スコープ外ツールが参照している間は配布実体の後片付けをスキップする ──
+
+scenario_cleanup_skipped_while_other_tool_in_scope() {
+  if ! has_tool bin || ! has_tool claude; then
+    return
+  fi
+  log "=== シナリオ19: bin,claudeをdeployし、binだけuninstallしても配布実体は残る(claudeがまだ参照している) ==="
+  local sbx prefix out rc skill_name
+
+  new_sandbox
+  sbx="$SANDBOX_DIR"
+  prefix="$(dotfiles_prefix_for "$sbx")"
+
+  skill_name="$(list_repo_skills | head -n1)"
+
+  out="$(run_deploy "$sbx" --force --only bin,claude 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "deploy-all.sh --force --only bin,claude が失敗 (exit=$rc)"
+    log "$out"
+    return
+  fi
+
+  out="$(run_uninstall "$sbx" --force --only bin 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "uninstall.sh --force --only bin が失敗 (exit=$rc)"
+    log "$out"
+    return
+  fi
+
+  assert_not_exists "$sbx/bin/ocw"
+  if [ -d "$prefix/generations" ] && [ -L "$prefix/current" ]; then
+    pass "claudeがまだ配布実体を参照しているため、bin単独のuninstallでは配布実体が残る"
+  else
+    fail "claudeがまだ配布実体を参照しているため、bin単独のuninstallでは配布実体が残る"
+  fi
+  if [ -n "$skill_name" ]; then
+    assert_symlink "$sbx/.claude/skills/$skill_name" "$prefix/current/claude/skills/$skill_name"
+  fi
+
+  # claude も uninstall してはじめて、どのツールも配布実体を参照しなくなり
+  # 後片付けが実行される。
+  out="$(run_uninstall "$sbx" --force --only claude 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "uninstall.sh --force --only claude が失敗 (exit=$rc)"
+    log "$out"
+    return
+  fi
+
+  assert_not_exists "$prefix/generations"
+  assert_not_exists "$prefix/current"
+}
+
+# ── シナリオ20: symlink撤去に失敗した場合は配布実体を残す ────────────────
+
+scenario_cleanup_skipped_when_symlink_removal_fails() {
+  if ! has_tool bin; then
+    return
+  fi
+  log "=== シナリオ20: symlinkの撤去に失敗した場合、配布実体を消さず生き残ったリンクをリンク切れにしない ==="
+  local sbx prefix out rc
+
+  new_sandbox
+  sbx="$SANDBOX_DIR"
+  prefix="$(dotfiles_prefix_for "$sbx")"
+
+  out="$(run_deploy "$sbx" --force --only bin 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "deploy-all.sh --force --only bin が失敗 (exit=$rc)"
+    log "$out"
+    return
+  fi
+
+  # ~/bin を書き込み不可にして、symlinkの削除(rm)自体を失敗させる。
+  chmod 555 "$sbx/bin"
+
+  out="$(run_uninstall "$sbx" --force --only bin 2>&1)"
+  rc=$?
+
+  # trap cleanup がサンドボックスを削除できるよう、権限を元に戻す。
+  chmod 755 "$sbx/bin"
+
+  if [ "$rc" -eq 0 ]; then
+    fail "symlink削除に失敗する状況でuninstall.shがエラー終了する (exit=0になってしまった)"
+    log "$out"
+    return
+  fi
+  pass "symlink削除に失敗する状況でuninstall.shがエラー終了する (exit=$rc)"
+
+  if [ -L "$sbx/bin/ocw" ]; then
+    pass "削除に失敗したsymlinkは(壊れずに)残っている"
+  else
+    fail "削除に失敗したsymlinkは(壊れずに)残っている"
+  fi
+
+  if [ -d "$prefix/generations" ] && [ -L "$prefix/current" ]; then
+    pass "symlinkの撤去に失敗した場合、配布実体は消されずに残る(生き残ったリンクをリンク切れにしない)"
+  else
+    fail "symlinkの撤去に失敗した場合、配布実体は消されずに残る(生き残ったリンクをリンク切れにしない)"
+  fi
+}
+
+# ── シナリオ21: 配布実体後片付けのdry-run出力が実際の挙動と一致する ────────
+
+scenario_cleanup_dry_run_matches_reality() {
+  if ! has_tool bin; then
+    return
+  fi
+  log "=== シナリオ21: 配布実体後片付けのdry-run出力が実際の挙動と一致する ==="
+  local sbx prefix out rc
+
+  new_sandbox
+  sbx="$SANDBOX_DIR"
+  prefix="$(dotfiles_prefix_for "$sbx")"
+
+  out="$(run_deploy "$sbx" --force --only bin 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "deploy-all.sh --force --only bin が失敗 (exit=$rc)"
+    log "$out"
+    return
+  fi
+
+  out="$(run_uninstall "$sbx" --dry-run --only bin 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "uninstall.sh --dry-run --only bin が失敗 (exit=$rc)"
+    log "$out"
+    return
+  fi
+
+  if [ -d "$prefix/generations" ] && [ -L "$prefix/current" ]; then
+    pass "--dry-runでは配布実体が実際には消えない"
+  else
+    fail "--dry-runでは配布実体が実際には消えない"
+  fi
+
+  if printf '%s' "$out" | grep -qF "[DRY-RUN] rm -rf $prefix/generations"; then
+    pass "dry-run出力にgenerationsの削除計画が含まれる"
+  else
+    fail "dry-run出力にgenerationsの削除計画が含まれる"
+    log "$out"
+  fi
+
+  # --- generations が(何らかの理由で)symlinkだった場合、dry-runでも
+  #     実行時と同じ拒否になること(create_generationのid衝突チェックが
+  #     dry-runでも実行時と同じ失敗を報告する方針に揃える) ---
+  new_sandbox
+  sbx="$SANDBOX_DIR"
+  prefix="$(dotfiles_prefix_for "$sbx")"
+  out="$(run_deploy "$sbx" --force --only bin 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "2回目のdeploy-all.sh --force --only bin が失敗 (exit=$rc)"
+    log "$out"
+    return
+  fi
+
+  rm -rf "$prefix/generations"
+  ln -s "$sbx" "$prefix/generations"
+
+  out="$(run_uninstall "$sbx" --dry-run --only bin 2>&1)"
+  if printf '%s' "$out" | grep -q "Refusing to remove a symlink"; then
+    pass "generationsがsymlinkの場合、dry-runでも実行時と同じ拒否メッセージになる"
+  else
+    fail "generationsがsymlinkの場合、dry-runでも実行時と同じ拒否メッセージになる"
+    log "$out"
+  fi
+  rm -f "$prefix/generations"
 }
 
 log "REPO_ROOT: $REPO_ROOT"
@@ -1229,6 +1444,12 @@ log
 scenario_claude_new_scheme_skill_removed_and_restored
 log
 scenario_claude_old_scheme_skill_removed_by_uninstall
+log
+scenario_cleanup_skipped_while_other_tool_in_scope
+log
+scenario_cleanup_skipped_when_symlink_removal_fails
+log
+scenario_cleanup_dry_run_matches_reality
 log
 
 if [ "$FAIL" -eq 0 ]; then

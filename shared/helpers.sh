@@ -324,8 +324,15 @@ _dotfiles_symlink_is_repo_owned() {
 # codebase. The symlink check runs before the existence check on purpose: a
 # broken symlink is -L true but -e false (it follows the dangling target),
 # so checking -e first would silently let a broken symlink slip past this
-# guard entirely. Shared by create_generation (scratch cleanup) and
-# gc_generations (old-generation cleanup) so both go through one path.
+# guard entirely. Shared by create_generation (scratch cleanup),
+# gc_generations (old-generation cleanup) and uninstall.sh (distribution
+# artifact cleanup) so all three go through one path.
+#
+# DRY_RUN-aware: the three guard checks above always run (so a dry-run
+# report matches what a real run would refuse), and only the final
+# `rm -rf` itself is skipped, printed instead — the same "report what a
+# real run would actually hit" policy create_generation's id-collision
+# check follows for its own DRY_RUN branch.
 _dotfiles_safe_rmdir() {
   _dsr_path="$1"
   _dsr_prefix="$2"
@@ -346,6 +353,11 @@ _dotfiles_safe_rmdir() {
       return 1
       ;;
   esac
+
+  if [ "${DRY_RUN:-0}" -eq 1 ]; then
+    printf '[DRY-RUN] rm -rf %s\n' "$_dsr_path"
+    return 0
+  fi
 
   rm -rf "$_dsr_path"
 }
