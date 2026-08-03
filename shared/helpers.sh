@@ -614,7 +614,13 @@ create_generation() {
 
 # write_manifest <generation_dir> <src_tree> <mode>
 # Writes a plain-text .dotfiles-manifest into generation_dir recording
-# where this generation came from. <mode> is "generation" or "dev".
+# where this generation came from. <mode> is "generation" or "dev", but no
+# caller currently passes "dev": cmd_dev (deploy-all.sh) never calls this
+# function at all, since dev mode points current at a source tree rather
+# than a generation directory, and writing a manifest into the user's own
+# working tree would dirty it. deploy-all.sh --status instead reads dev
+# mode's provenance live via git rev-parse/status against the source tree
+# it points at, rather than through a written manifest.
 write_manifest() {
   _wm_gen_dir="$1"
   _wm_src_tree="$2"
