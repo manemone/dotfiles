@@ -9,6 +9,21 @@ local opts = { noremap = true, silent = true }
 -- File operations
 map("n", "<Leader>w", "<Cmd>write<CR>", { desc = "Save buffer" })
 
+-- Rename the current file in place (:saveas to the new name, delete the old
+-- one). Ported from the pre-lazy.nvim init.vim's RenameCurrentFile().
+-- <Leader>n, not to be confused with <Leader>rn (LSP rename) in lsp.lua.
+local function rename_current_file()
+  local old_name = vim.fn.expand("%")
+  local new_name = vim.fn.input("New filename: ", old_name, "file")
+  if new_name == "" or new_name == old_name then
+    return
+  end
+  vim.cmd.saveas(new_name)
+  vim.fn.delete(old_name)
+  vim.cmd.redraw()
+end
+map("n", "<Leader>n", rename_current_file, { desc = "Rename current file" })
+
 -- NOTE: Telescope keymaps are defined in lua/plugins/telescope.lua (lazy.nvim `keys`).
 -- They are NOT duplicated here to avoid dead code from lazy-loading key override.
 

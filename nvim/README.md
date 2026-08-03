@@ -85,6 +85,7 @@ After first launch:
 | Syntax | `nvim-treesitter/nvim-treesitter` | AST-based highlighting, text objects |
 | LSP | `neovim/nvim-lspconfig` | LSP client configuration |
 | LSP installer | `williamboman/mason.nvim` | LSP server / formatter / linter management |
+| Completion | `saghen/blink.cmp` | Auto-popup completion (lsp/path/snippets/buffer sources) |
 | Snippets | `L3MON4D3/LuaSnip` | Lua-native snippet engine |
 | Snippet collection | `rafamadriz/friendly-snippets` | VS Code-compatible snippet library |
 | Git signs | `lewis6991/gitsigns.nvim` | Gutter indicators for changed lines |
@@ -127,6 +128,7 @@ After first launch:
         ├── telescope.lua      # Fuzzy finder (ff, fg, fb, fh, fd, fs keymaps)
         ├── treesitter.lua     # Syntax highlighting + text objects
         ├── lsp.lua            # LSP config + Mason + on_attach keymaps (gd, gr, K, rn, ca)
+        ├── blink.lua          # Completion popup (Tab/S-Tab snippet nav, LuaSnip integration)
         ├── luasnip.lua        # Snippet engine
         ├── gitsigns.lua       # Git gutter (hs, hr, gs keymaps)
         ├── lualine.lua        # Statusline
@@ -147,6 +149,7 @@ After first launch:
 | `<Leader>fd` | n | Diagnostics (Telescope) |
 | `<Leader>fs` | n | Document symbols (Telescope) |
 | `<Leader>w` | n | Save buffer |
+| `<Leader>n` | n | Rename current file (`:saveas` + delete old file) |
 | `<Leader>/` | n, v | Toggle comment (built-in `gcc` / `gc`) |
 | `<Leader>y` | v | Yank to system clipboard |
 | `<Leader>p` | n, v | Paste from system clipboard |
@@ -159,6 +162,9 @@ After first launch:
 | `[d` / `]d` | n | Previous / next diagnostic |
 | `<C-h/j/k/l>` | n | Window navigation |
 | `<A-;>` / `<Esc>` | t | Exit terminal mode |
+| `<Tab>` / `<S-Tab>` | i, s | Next/prev completion item or snippet placeholder (blink.cmp) |
+| `<C-y>` | i | Accept completion item (blink.cmp) |
+| `<C-space>` | i | Trigger/toggle completion menu (blink.cmp) |
 
 Full keymaps in `lua/config/keymaps.lua` and `lua/plugins/lsp.lua`.
 Press `<Space>` and wait for which-key popup to discover available shortcuts.

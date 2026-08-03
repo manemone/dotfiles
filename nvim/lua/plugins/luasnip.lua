@@ -20,30 +20,10 @@ return {
 
     -- ── Key mappings ────────────────────────────────────────────────────
 
-    -- <Tab> / <S-Tab> to navigate snippet placeholders
-    vim.keymap.set({ "i", "s" }, "<Tab>", function()
-      if luasnip.expand_or_jumpable() then
-        luasnip.expand_or_jump()
-      else
-        vim.api.nvim_feedkeys(
-          vim.api.nvim_replace_termcodes("<Tab>", true, false, true),
-          "n",
-          false
-        )
-      end
-    end, { silent = true, desc = "LuaSnip: expand or jump forward" })
-
-    vim.keymap.set({ "i", "s" }, "<S-Tab>", function()
-      if luasnip.jumpable(-1) then
-        luasnip.jump(-1)
-      else
-        vim.api.nvim_feedkeys(
-          vim.api.nvim_replace_termcodes("<S-Tab>", true, false, true),
-          "n",
-          false
-        )
-      end
-    end, { silent = true, desc = "LuaSnip: jump backward" })
+    -- <Tab> / <S-Tab> placeholder navigation is bound by blink.cmp's
+    -- "default" keymap preset (snippet_forward/snippet_backward, falling
+    -- back to a literal Tab outside a snippet) — see lua/plugins/blink.lua.
+    -- No manual mapping here to avoid two plugins fighting over <Tab>.
 
     -- <C-k> expand (keeps compatibility with old neosnippet mapping)
     vim.keymap.set({ "i", "s" }, "<C-k>", function()
