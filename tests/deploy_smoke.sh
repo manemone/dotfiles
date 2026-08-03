@@ -1405,6 +1405,34 @@ scenario_cleanup_dry_run_matches_reality() {
   rm -f "$prefix/generations"
 }
 
+# ── シナリオ22: generations/もcurrentも無くscratchだけが残っていても片付く ──
+
+scenario_cleanup_removes_orphaned_scratch_without_generation() {
+  log "=== シナリオ22: generations/もcurrentも無く.tmp/のscratchだけが残っている状態でもuninstallで片付く ==="
+  local sbx prefix out rc
+
+  new_sandbox
+  sbx="$SANDBOX_DIR"
+  prefix="$(dotfiles_prefix_for "$sbx")"
+
+  # 初回deployがコピー中に中断された状態を再現する: create_generation
+  # (shared/helpers.sh)のscratch(.tmp/gen.XXXXXX)だけが残り、コピー完了後に
+  # mvされるはずの generations/ も switch_current が作る current も
+  # まだ存在しない。
+  mkdir -p "$prefix/.tmp/gen.CRASH1/bin"
+  printf 'dummy\n' >"$prefix/.tmp/gen.CRASH1/bin/ocw"
+
+  out="$(run_uninstall "$sbx" --force 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "uninstall.sh --force が失敗 (exit=$rc)"
+    log "$out"
+    return
+  fi
+
+  assert_not_exists "$prefix"
+}
+
 log "REPO_ROOT: $REPO_ROOT"
 log "対象ツール: $TOOLS"
 log
@@ -1450,6 +1478,8 @@ log
 scenario_cleanup_skipped_when_symlink_removal_fails
 log
 scenario_cleanup_dry_run_matches_reality
+log
+scenario_cleanup_removes_orphaned_scratch_without_generation
 log
 
 if [ "$FAIL" -eq 0 ]; then

@@ -87,12 +87,17 @@ KNOWN_GENERATED_claude=$(
 # KNOWN_LINKS_* mapping: the main per-tool loop below and the distribution
 # artifact cleanup's cross-tool scan both need it, and duplicating this
 # case statement is exactly the kind of drift that let ocw-meter go
-# unlisted from KNOWN_LINKS_bin in the first place — except a forgotten
-# arm here fails silently (the tool is treated as having no links, so a
-# live symlink into a soon-to-be-deleted generation would be missed)
-# rather than with a visible warning. A function (not eval-based
-# indirection through a "KNOWN_LINKS_$tool" name) keeps each KNOWN_LINKS_*
-# variable directly referenced, so shellcheck can still see the use.
+# unlisted from KNOWN_LINKS_bin in the first place. A forgotten arm here
+# now surfaces as "No link list defined for '<tool>'. Skipping." whenever
+# <tool> is in $TOOLS, since the main loop below already checks for an
+# empty _links. But a tool NOT in $TOOLS is only ever passed to this
+# function by the cleanup's cross-tool scan, which has no such warning
+# path — a forgotten arm for an out-of-scope tool is still missed
+# silently there (the tool is treated as having no links, so a live
+# symlink into a soon-to-be-deleted generation goes undetected). A
+# function (not eval-based indirection through a "KNOWN_LINKS_$tool"
+# name) keeps each KNOWN_LINKS_* variable directly referenced, so a
+# static analysis tool can still see the use.
 links_for_tool() {
   case "$1" in
     zsh) printf '%s\n' "$KNOWN_LINKS_zsh" ;;
@@ -373,6 +378,7 @@ done
 # inside generations/ in the first place — see "全孫共通の注意" §2.
 
 _dfu_still_referenced=0
+_dfu_reason_path=""
 _dfu_scope=" $TOOLS "
 
 for _dfu_check_tool in $AVAILABLE_TOOLS; do
@@ -390,7 +396,10 @@ for _dfu_check_tool in $AVAILABLE_TOOLS; do
     [ -z "$_dfu_dst" ] && continue
     if [ -L "$_dfu_dst" ]; then
       case "$(readlink "$_dfu_dst")" in
-        "$DOTFILES_PREFIX"/*) _dfu_still_referenced=1 ;;
+        "$DOTFILES_PREFIX"/*)
+          _dfu_still_referenced=1
+          [ -n "$_dfu_reason_path" ] || _dfu_reason_path="$_dfu_dst"
+          ;;
       esac
     fi
     IFS='
@@ -412,14 +421,21 @@ if [ "$_dfu_still_referenced" -eq 0 ] && [ "$_dfu_check_claude_skills" -eq 1 ] &
   for _dfu_skill_link in "$HOME/.claude/skills"/*; do
     [ -L "$_dfu_skill_link" ] || continue
     case "$(readlink "$_dfu_skill_link")" in
-      "$DOTFILES_PREFIX"/*) _dfu_still_referenced=1 ;;
+      "$DOTFILES_PREFIX"/*)
+        _dfu_still_referenced=1
+        [ -n "$_dfu_reason_path" ] || _dfu_reason_path="$_dfu_skill_link"
+        ;;
     esac
   done
 fi
 
 if [ "$_dfu_still_referenced" -ne 0 ]; then
-  log_info "Another tool's symlink still points into the distribution prefix — skipping its cleanup."
-elif [ -L "$DOTFILES_CURRENT_LINK" ] || [ -d "$DOTFILES_GENERATIONS_DIR" ]; then
+  # Deliberately not "another tool's" — in real mode this can just as well
+  # be a tool that WAS in scope but whose own removal above failed
+  # (OVERALL_OK=1). Naming the actual offending path lets the operator
+  # tell the two cases apart instead of guessing.
+  log_info "Still referenced: $_dfu_reason_path points into the distribution prefix — skipping its cleanup (either a tool outside --only, or removal of this link failed above)."
+elif [ -L "$DOTFILES_CURRENT_LINK" ] || [ -d "$DOTFILES_GENERATIONS_DIR" ] || [ -d "$DOTFILES_PREFIX/.tmp" ]; then
   log_hr
   log_info "Cleaning up distribution artifacts"
 
