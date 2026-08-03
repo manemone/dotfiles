@@ -932,6 +932,72 @@ scenario_claude_dry_run_matches_deployed_state() {
   fi
 }
 
+# ── シナリオ13: current不在状態でのdry-runが配布実体の中身を計画できる ──
+
+scenario_claude_dry_run_before_first_deploy() {
+  if ! has_tool claude; then
+    return
+  fi
+  log "=== シナリオ13: current不在状態でのdry-runが配布実体の中身を計画できる ==="
+  local sbx copy_dir out rc skill prefix
+
+  new_sandbox
+  sbx="$SANDBOX_DIR"
+  copy_dir="$(mktemp -d)"
+  CREATED_DIRS+=("$copy_dir")
+  copy_repo_snapshot "$copy_dir"
+
+  # settings.machine.json を置いた状態で、まだ一度も deploy していない
+  # (current が存在しない)サンドボックスに対して --dry-run を実行する。
+  # ここが指摘1・6のバグが実際に発現していた条件そのもの: current が
+  # 無い状態では配布実体がまだ存在しないため、-f/-d による実在性判定を
+  # 素朴に配布実体へ向けると「マージ対象なし」「スキルなし」に見えて
+  # しまう(指摘1)。逆にその回避として列挙元を作業ツリーに振ったせいで
+  # リンクの向き先まで作業ツリーになってしまったのが指摘6。シナリオ12
+  # は「デプロイ済み」状態しか見ないためこの分岐を一度も通らず、この
+  # シナリオを置き換えではなく追加する。
+  cat >"$copy_dir/claude/settings.machine.json" <<'JSONEOF'
+{
+  "smokeTestMarker": "smoke-test-value"
+}
+JSONEOF
+
+  out="$(run_deploy_from "$copy_dir/deploy-all.sh" "$sbx" --dry-run --only claude 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "current不在状態での deploy-all.sh --dry-run --only claude が失敗 (exit=$rc)"
+    log "$out"
+    return
+  fi
+
+  if printf '%s' "$out" | grep -q "Would merge settings.json + settings.machine.json"; then
+    pass "current不在でもsettings.machine.jsonありなら『マージ』の計画になる(コピーに退化しない)"
+  else
+    fail "current不在でもsettings.machine.jsonありなら『マージ』の計画になる(コピーに退化しない)"
+  fi
+
+  while IFS= read -r skill; do
+    [ -n "$skill" ] || continue
+    if printf '%s' "$out" | grep -qF "Would symlink: $sbx/.claude/skills/$skill"; then
+      pass "current不在でも配布対象のskillが計画に列挙される: $skill"
+    else
+      fail "current不在でも配布対象のskillが計画に列挙される: $skill"
+    fi
+  done <<EOF
+$(list_repo_skills)
+EOF
+
+  # リンクの向き先は常に配布実体(current経由)でなければならない(指摘6の
+  # 回帰)。列挙元だけ直っていてリンク先が作業ツリーのままの退化を検知
+  # するため、Would symlink の行を配布実体prefixで確認する。
+  prefix="$(dotfiles_prefix_for "$sbx")"
+  if printf '%s' "$out" | grep "Would symlink:" | grep -qF "$prefix/current/claude/skills/"; then
+    pass "current不在でもskillのリンク先は配布実体(current経由)になる"
+  else
+    fail "current不在でもskillのリンク先は配布実体(current経由)になる"
+  fi
+}
+
 log "REPO_ROOT: $REPO_ROOT"
 log "対象ツール: $TOOLS"
 log
@@ -959,6 +1025,8 @@ log
 scenario_claude_skill_migration
 log
 scenario_claude_dry_run_matches_deployed_state
+log
+scenario_claude_dry_run_before_first_deploy
 log
 
 if [ "$FAIL" -eq 0 ]; then
