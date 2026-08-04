@@ -60,7 +60,7 @@ sudo apt update && sudo apt install $(cat apt-packages.txt)
 ./deploy-all.sh --status                 # Show what's currently deployed (read-only)
 ./deploy-all.sh --rollback [id]          # Switch current back to the previous (or given) generation
 ./deploy-all.sh --dev                    # Point current at this working tree (live-edit mode)
-./deploy-all.sh --adopt-state             # Copy back state file writeback (e.g. nvim/lazy-lock.json) into the repo
+./deploy-all.sh --adopt-state            # Copy back state file writeback (e.g. nvim/lazy-lock.json) into the repo
 ```
 
 Options can be combined:
