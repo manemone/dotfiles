@@ -3,7 +3,9 @@
 return {
   "L3MON4D3/LuaSnip",
   version = "v2.*",
-  event = "InsertEnter",
+  -- Loaded via blink.lua's dependency on this plugin — matching blink.lua's
+  -- event list here (see the comment there for why all three are needed).
+  event = { "BufReadPre", "BufNewFile", "InsertEnter" },
   dependencies = {
     "rafamadriz/friendly-snippets",
   },
@@ -20,30 +22,13 @@ return {
 
     -- ── Key mappings ────────────────────────────────────────────────────
 
-    -- <Tab> / <S-Tab> to navigate snippet placeholders
-    vim.keymap.set({ "i", "s" }, "<Tab>", function()
-      if luasnip.expand_or_jumpable() then
-        luasnip.expand_or_jump()
-      else
-        vim.api.nvim_feedkeys(
-          vim.api.nvim_replace_termcodes("<Tab>", true, false, true),
-          "n",
-          false
-        )
-      end
-    end, { silent = true, desc = "LuaSnip: expand or jump forward" })
-
-    vim.keymap.set({ "i", "s" }, "<S-Tab>", function()
-      if luasnip.jumpable(-1) then
-        luasnip.jump(-1)
-      else
-        vim.api.nvim_feedkeys(
-          vim.api.nvim_replace_termcodes("<S-Tab>", true, false, true),
-          "n",
-          false
-        )
-      end
-    end, { silent = true, desc = "LuaSnip: jump backward" })
+    -- <Tab> / <S-Tab> placeholder *navigation* is bound by blink.cmp's
+    -- "default" keymap preset (snippet_forward/snippet_backward, falling
+    -- back to a literal Tab outside a snippet) — see lua/plugins/blink.lua.
+    -- No manual mapping here to avoid two plugins fighting over <Tab>.
+    -- Snippet *expansion* is not on <Tab> — it's the <C-k> mapping below.
+    -- blink.lua explicitly frees <C-k> from its own keymap preset so this
+    -- global mapping is reachable.
 
     -- <C-k> expand (keeps compatibility with old neosnippet mapping)
     vim.keymap.set({ "i", "s" }, "<C-k>", function()

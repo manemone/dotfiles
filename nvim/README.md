@@ -16,7 +16,7 @@
 |---|---|---|---|
 | **NeoVim** | ≥ 0.10 | LSP, built-in commenting (`gc`), Lua APIs | `mise use neovim` or [neovim.io](https://neovim.io) |
 | **Git** | any | Plugin management (lazy.nvim clones repos) | Built-in on most systems |
-| **curl** | any | Mason LSP downloads | Built-in on most systems |
+| **curl** | any | Mason LSP downloads; blink.cmp's prebuilt fuzzy-matcher binary (first launch only) | Built-in on most systems |
 | **Node.js** | LTS | LSP servers (ts_ls, volar, jsonls, yamlls, bashls) | `mise use node@lts` |
 | **Python 3** | 3.8+ | Python LSP (pyright), Neovim Python provider | `mise use python@latest` |
 | **ripgrep** (`rg`) | any | Telescope `live_grep` | `mise use ripgrep` |
@@ -94,6 +94,7 @@ After first launch:
 | Syntax | `nvim-treesitter/nvim-treesitter` | AST-based highlighting, text objects |
 | LSP | `neovim/nvim-lspconfig` | LSP client configuration |
 | LSP installer | `williamboman/mason.nvim` | LSP server / formatter / linter management |
+| Completion | `saghen/blink.cmp` | Auto-popup completion (lsp/path/snippets/buffer sources) |
 | Snippets | `L3MON4D3/LuaSnip` | Lua-native snippet engine |
 | Snippet collection | `rafamadriz/friendly-snippets` | VS Code-compatible snippet library |
 | Git signs | `lewis6991/gitsigns.nvim` | Gutter indicators for changed lines |
@@ -136,6 +137,7 @@ After first launch:
         ├── telescope.lua      # Fuzzy finder (ff, fg, fb, fh, fd, fs keymaps)
         ├── treesitter.lua     # Syntax highlighting + text objects
         ├── lsp.lua            # LSP config + Mason + on_attach keymaps (gd, gr, K, rn, ca)
+        ├── blink.lua          # Completion popup (Tab/S-Tab snippet nav, LuaSnip integration)
         ├── luasnip.lua        # Snippet engine
         ├── gitsigns.lua       # Git gutter (hs, hr, gs keymaps)
         ├── lualine.lua        # Statusline
@@ -156,6 +158,7 @@ After first launch:
 | `<Leader>fd` | n | Diagnostics (Telescope) |
 | `<Leader>fs` | n | Document symbols (Telescope) |
 | `<Leader>w` | n | Save buffer |
+| `<Leader>n` | n | Rename current file (filesystem rename; refuses to overwrite an existing file) |
 | `<Leader>/` | n, v | Toggle comment (built-in `gcc` / `gc`) |
 | `<Leader>y` | v | Yank to system clipboard |
 | `<Leader>p` | n, v | Paste from system clipboard |
@@ -168,8 +171,15 @@ After first launch:
 | `[d` / `]d` | n | Previous / next diagnostic |
 | `<C-h/j/k/l>` | n | Window navigation |
 | `<A-;>` / `<Esc>` | t | Exit terminal mode |
+| `<C-n>` / `<C-p>` (or `<Down>`/`<Up>`) | i | Next/prev completion item (blink.cmp) |
+| `<C-y>` | i | Accept completion item (blink.cmp) |
+| `<C-space>` | i | Trigger/toggle completion menu (blink.cmp) |
+| `<C-e>` | i | Cancel completion menu (blink.cmp) |
+| `<C-b>` / `<C-f>` | i | Scroll completion documentation (blink.cmp) |
+| `<Tab>` / `<S-Tab>` | i, s | Move to next/prev snippet placeholder, else a literal Tab (blink.cmp) |
+| `<C-k>` | i, s | Expand snippet at cursor (LuaSnip) |
 
-Full keymaps in `lua/config/keymaps.lua` and `lua/plugins/lsp.lua`.
+Full keymaps in `lua/config/keymaps.lua`, `lua/plugins/lsp.lua`, and `lua/plugins/blink.lua`.
 Press `<Space>` and wait for which-key popup to discover available shortcuts.
 
 ## 4. Customization
@@ -192,7 +202,7 @@ Press `<Space>` and wait for which-key popup to discover available shortcuts.
 
 ### Changing Keybindings
 
-Edit `nvim/lua/config/keymaps.lua` or the relevant plugin file. Telescope keymaps are in `lua/plugins/telescope.lua`, LSP keymaps are in `lua/plugins/lsp.lua`.
+Edit `nvim/lua/config/keymaps.lua` or the relevant plugin file. Telescope keymaps are in `lua/plugins/telescope.lua`, LSP keymaps are in `lua/plugins/lsp.lua`, completion keymaps are in `lua/plugins/blink.lua`.
 
 ### Changing Colorscheme
 
@@ -213,6 +223,19 @@ ls ~/.local/share/nvim/lazy/lazy.nvim
 git clone --filter=blob:none --branch=stable \
   https://github.com/folke/lazy.nvim.git \
   ~/.local/share/nvim/lazy/lazy.nvim
+```
+
+### Completion menu not showing suggestions / fuzzy matching feels off
+
+blink.cmp downloads a prebuilt Rust fuzzy-matcher binary via `curl` on its first load. If that
+download fails (no network access, blocked `curl`), it falls back to a pure-Lua matcher with a
+one-time warning — completion still works, just slower to filter large candidate lists. To silence
+the warning and stick with the Lua matcher intentionally, set in `lua/plugins/blink.lua`:
+```lua
+opts = {
+  fuzzy = { implementation = "lua" },
+  -- ...
+}
 ```
 
 ### LSP server not starting

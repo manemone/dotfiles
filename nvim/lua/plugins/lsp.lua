@@ -92,11 +92,14 @@ return {
       vim.fn.sign_define(sign.name, { texthl = sign.name, text = sign.text, numhl = sign.name })
     end
 
-    -- ── LSP capabilities (from cmp or manual) ─────────────────────────────
-
-    local capabilities = vim.lsp.protocol.make_client_capabilities()
-    -- If nvim-cmp is ever added, pass cmp's capabilities here:
-    -- capabilities = require("cmp_nvim_lsp").default_capabilities(capabilities)
+    -- ── LSP capabilities (advertise blink.cmp's completion support) ───────
+    -- require("blink.cmp") triggers lazy.nvim to load the plugin here if it
+    -- hasn't been loaded yet (lazy.nvim indexes every plugin's module path
+    -- regardless of its own lazy-load event). blink.cmp's (and, via its
+    -- dependency, LuaSnip's) `event` in their own plugin files lists
+    -- BufReadPre/BufNewFile for that reason, plus InsertEnter to still cover
+    -- unnamed buffers this require doesn't force-load for — see blink.lua.
+    local capabilities = require("blink.cmp").get_lsp_capabilities()
 
     -- ── mason.nvim ────────────────────────────────────────────────────────
 
