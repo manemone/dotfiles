@@ -6,17 +6,22 @@
 
 # ── Linked-worktree guard ─────────────────────────────────────────────
 #
-# Every deploy script sources this file. If the checkout it lives in is a
-# linked git worktree (created by `git worktree add`, e.g. by `ocw`), this
-# fires a one-time informational warning naming the worktree.
+# This file's source-time guard (bottom of this file) fires whenever a
+# script sources it from inside a linked git worktree (created by
+# `git worktree add`, e.g. by `ocw`) — that covers deploy-all.sh and every
+# standalone `<tool>/deploy.sh`. uninstall.sh pre-suppresses it (it never
+# deploys, so the notice would never be accurate there — see uninstall.sh).
 #
-# Since the move to generation-based distribution (ADR DOC-2608040229), an
-# ordinary deploy copies the checkout into a generation snapshot, so $HOME
-# symlinks resolve through that snapshot rather than through this worktree
-# — removing the worktree afterward does NOT break them. The one exception
-# is dev mode (`--dev`), which points `current` directly at a worktree;
-# cmd_dev in deploy-all.sh prints its own, more specific warning for that
-# case.
+# The wording below must stay true regardless of which of those two entry
+# points fired it: deploy-all.sh may be building a brand-new generation
+# right now, while a standalone `<tool>/deploy.sh` never creates one (it
+# only symlinks against whatever generation `current` already points at —
+# see AGENTS.md's "単体 <tool>/deploy.sh 実行時の規約"). What both share,
+# and what the wording says, is only that $HOME resolves through `current`
+# rather than through this worktree — not which of them is creating what.
+# The one exception is dev mode (`--dev`), which points `current` directly
+# at a worktree; cmd_dev in deploy-all.sh prints its own, more specific
+# warning for that case.
 #
 # Set DOTFILES_QUIET_WORKTREE_WARNING=1 to silence.
 
@@ -47,13 +52,20 @@ warn_if_linked_worktree() {
   DOTFILES_WORKTREE_WARNED=1
   export DOTFILES_WORKTREE_WARNED
 
+  # show-toplevel resolves to the worktree's own root, unlike plain `cd
+  # "${1:-.}" && pwd`, which is whatever subdirectory dirname -- "$0"
+  # happened to pass in (e.g. a per-tool deploy.sh passes its own tool
+  # directory, not the checkout root).
+  _wilw_root=$(git -C "${1:-.}" rev-parse --show-toplevel 2>/dev/null)
+  [ -n "$_wilw_root" ] || _wilw_root=$(cd "${1:-.}" && pwd)
+
   log_warn "Deploying from a linked git worktree:"
-  log_warn "  $(cd "${1:-.}" && pwd)"
-  log_warn "This deploy copies the checkout into a generation snapshot, so"
-  log_warn "\$HOME symlinks resolve through that snapshot, not through this"
-  log_warn "worktree — removing the worktree afterward will NOT break them."
-  log_warn "(The exception is dev mode: '--dev' points \$HOME directly at"
-  log_warn "whichever tree is current, and prints its own warning for that.)"
+  log_warn "  $_wilw_root"
+  log_warn "\$HOME symlinks resolve through the distributed generation (via"
+  log_warn "\`current\`), not through this worktree directly, so removing the"
+  log_warn "worktree afterward will NOT break them. (The exception is dev"
+  log_warn "mode: '--dev' points \$HOME directly at whichever tree is"
+  log_warn "current, and prints its own warning for that.)"
 
   # The main worktree is the parent of the common git dir. Named here for
   # reference only (e.g. to know where to deploy from once this worktree is

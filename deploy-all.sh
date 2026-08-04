@@ -29,15 +29,16 @@ SCRIPT_DIR=$(
 )
 
 # shared/helpers.sh fires a one-shot "Deploying from a linked git worktree"
-# warning the moment it's sourced (its source-time guard runs before this
-# script has parsed any arguments). That wording is only right for an
-# actual deploy: --status is documented as read-only/safe against a real
-# $HOME and shouldn't warn about anything, --rollback only ever points
-# current at an existing generation directory (never at $SCRIPT_DIR) so the
-# worktree it's invoked from is irrelevant, and --dev prints its own
-# dev-flavored warning below instead (cmd_dev). Pre-set the "already
-# warned" flag the guard checks (shared/helpers.sh's DOTFILES_WORKTREE_WARNED,
-# not DOTFILES_QUIET_WORKTREE_WARNING — that one is the user's own explicit
+# notice the moment it's sourced (its source-time guard runs before this
+# script has parsed any arguments). It is suppressed for three of our modes,
+# for reasons independent of the notice's wording: --status is documented as
+# read-only/safe against a real $HOME and shouldn't print anything unrelated
+# to the status report, --rollback only ever points current at an existing
+# generation directory (never at $SCRIPT_DIR) so the worktree it's invoked
+# from is irrelevant to what it does, and --dev prints its own dev-flavored
+# warning below instead (cmd_dev). Pre-set the "already warned" flag the
+# guard checks (shared/helpers.sh's DOTFILES_WORKTREE_WARNED, not
+# DOTFILES_QUIET_WORKTREE_WARNING — that one is the user's own explicit
 # silence switch and must stay untouched here) so it never fires for these
 # three, before we even know MODE (argument parsing hasn't happened yet).
 for _dsa_arg in "$@"; do
@@ -412,13 +413,13 @@ cmd_dev() {
 
   # Not warn_if_linked_worktree: its one-shot flag was pre-set before
   # shared/helpers.sh was even sourced (see the top of this script) so its
-  # deploy-flavored wording ("Symlinks will point INTO this worktree...
-  # re-run the deploy from the main worktree") never fires here — dev mode
-  # needs its own wording (removing the worktree breaks current itself, not
-  # freshly-created symlinks, and there's nothing to "re-run" — you switch
-  # back to generation mode instead). Still honours the user's own
-  # DOTFILES_QUIET_WORKTREE_WARNING, unlike the pre-set flag above which is
-  # this script's own internal suppression and not a user-facing switch.
+  # generic notice never fires here — dev mode needs its own wording. The
+  # generic notice says removing the worktree does NOT break $HOME (true for
+  # generation mode); dev mode is the opposite case, where removing the
+  # worktree DOES break $HOME because current points directly at it. Still
+  # honours the user's own DOTFILES_QUIET_WORKTREE_WARNING, unlike the
+  # pre-set flag above which is this script's own internal suppression and
+  # not a user-facing switch.
   if [ -z "${DOTFILES_QUIET_WORKTREE_WARNING:-}" ] && is_linked_worktree "$SCRIPT_DIR"; then
     log_warn "This working tree is a linked git worktree:"
     log_warn "  $SCRIPT_DIR"

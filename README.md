@@ -203,23 +203,24 @@ worktree and that worktree is removed (`ocw rm`, `git worktree remove`), every
 [WARN] back to generation mode.
 ```
 
-A related but separate, purely informational notice can show up during an
-ordinary (non-`--dev`) deploy too: running `./deploy-all.sh` itself from a
-linked worktree prints a "Deploying from a linked git worktree" notice naming
-the worktree. In generation mode this is just FYI — the generation this
-deploy creates is a `cp -a` snapshot, so `$HOME` symlinks resolve through it
-rather than through the worktree, and removing the worktree afterward does
-**not** break them. Only dev mode actually makes the worktree's removal break
-`$HOME` symlinks, as described above.
+A related but separate, purely informational notice can show up any time
+`deploy-all.sh` or a standalone `<tool>/deploy.sh` is run from a linked
+worktree (not `uninstall.sh`, which never deploys and so never prints it):
+a "Deploying from a linked git worktree" notice naming the worktree. This is
+just FYI in generation mode — `$HOME` symlinks resolve through the
+distributed generation (via `current`), not through the worktree directly,
+so removing the worktree afterward does **not** break them. Only dev mode
+actually makes the worktree's removal break `$HOME` symlinks, as described
+above.
 
 ```
 [WARN] Deploying from a linked git worktree:
 [WARN]   /path/to/dotfiles/my-feature
-[WARN] This deploy copies the checkout into a generation snapshot, so
-[WARN] $HOME symlinks resolve through that snapshot, not through this
-[WARN] worktree — removing the worktree afterward will NOT break them.
-[WARN] (The exception is dev mode: '--dev' points $HOME directly at
-[WARN] whichever tree is current, and prints its own warning for that.)
+[WARN] $HOME symlinks resolve through the distributed generation (via
+[WARN] `current`), not through this worktree directly, so removing the
+[WARN] worktree afterward will NOT break them. (The exception is dev
+[WARN] mode: '--dev' points $HOME directly at whichever tree is
+[WARN] current, and prints its own warning for that.)
 [WARN] Main worktree: /path/to/dotfiles/master
 [WARN] Silence this with DOTFILES_QUIET_WORKTREE_WARNING=1.
 ```

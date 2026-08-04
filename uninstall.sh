@@ -14,6 +14,16 @@ SCRIPT_DIR=$(
   cd "$(dirname "$0")" || exit 1
   pwd
 )
+
+# shared/helpers.sh fires a one-shot "Deploying from a linked git worktree"
+# notice the moment it's sourced (its source-time guard). uninstall.sh never
+# deploys anything — it only removes $HOME symlinks and cleans up the
+# distribution artifacts — so that notice would never be accurate here.
+# Pre-set the "already warned" flag the guard checks (not
+# DOTFILES_QUIET_WORKTREE_WARNING — that one is the user's own explicit
+# silence switch and must stay untouched here) before sourcing.
+DOTFILES_WORKTREE_WARNED=1
+
 # shellcheck source=SCRIPTDIR/shared/helpers.sh
 . "$SCRIPT_DIR/shared/helpers.sh"
 
