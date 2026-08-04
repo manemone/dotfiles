@@ -9,15 +9,23 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 status=0
 
+# Single source of truth for "every shell script in the repo" — used by
+# both the bash -n block below and the /bin/bash -n compatibility block.
+# Duplicating this find in two places is exactly the failure shape
+# AGENTS.md warns about for links_for_tool(): a future standalone CLI
+# added to bin/ only gets appended to one of the two copies, and the
+# other silently checks one file fewer with no error or warning.
+list_shell_scripts() {
+  find "$repo_root" \
+    \( -path "$repo_root/.git" -o -path "$repo_root/*/.git" \) -prune -o \
+    -type f \( -name '*.sh' -o -name 'ocw' -o -name 'claude-ds' -o -name 'ocw-meter' \) -print0
+}
+
 echo "== bash -n =="
 while IFS= read -r -d '' file; do
   echo "  bash -n $file"
   bash -n "$file" || status=1
-done < <(
-  find "$repo_root" \
-    \( -path "$repo_root/.git" -o -path "$repo_root/*/.git" \) -prune -o \
-    -type f \( -name '*.sh' -o -name 'ocw' -o -name 'claude-ds' -o -name 'ocw-meter' \) -print0
-)
+done < <(list_shell_scripts)
 
 echo "== /bin/bash -n (macOS bash 3.2 compatibility) =="
 # `bash -n` above resolves via PATH, which on a dev machine with
@@ -29,11 +37,7 @@ if [ -x /bin/bash ] && /bin/bash --version | head -1 | grep -q 'version 3\.'; th
   while IFS= read -r -d '' file; do
     echo "  /bin/bash -n $file"
     /bin/bash -n "$file" || status=1
-  done < <(
-    find "$repo_root" \
-      \( -path "$repo_root/.git" -o -path "$repo_root/*/.git" \) -prune -o \
-      -type f \( -name '*.sh' -o -name 'ocw' -o -name 'claude-ds' -o -name 'ocw-meter' \) -print0
-  )
+  done < <(list_shell_scripts)
 else
   echo "  skipped (no bash 3.x at /bin/bash)"
 fi

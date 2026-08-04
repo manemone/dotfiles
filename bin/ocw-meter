@@ -335,17 +335,19 @@ fi
 # fails with a parse-time syntax error (bash 5, e.g. CI, has no such
 # issue). `python3 /dev/fd/3 ... 3<<'PY'` (heredoc attached to fd 3,
 # python reads its program from that fd's path) parses fine on both
-# bash versions, but was rejected after testing: whenever this script
-# is invoked via PATH lookup (`command -v ocw-meter && ocw-meter ...`
-# — the exact shape bin/ocw's ocw_meter_event() uses) rather than by
-# an absolute/relative path, fd 3's heredoc content came back empty on
-# this machine (bash silently ran an empty program, exit 0, no error).
-# Confirmed reproducible outside this file too, with a trivial script
-# in the same two shapes — so it isn't specific to this codebase, but
-# it's a real failure mode for exactly the callers that matter here.
-# Writing the program text to a temp file sidesteps that: the write
-# happens before python3 is invoked at all, so PATH lookup vs direct
-# path makes no difference to what python3 ends up reading.
+# bash versions, but was rejected after testing: with this embedded
+# program's real size (173KB), bash always backs fd 3 with a regular
+# temp file rather than a pipe (bash 3.2 always does; bash 5 does too
+# once the heredoc exceeds the pipe buffer, which 173KB does) — and
+# Apple's /usr/bin/python3 (3.9.6) cannot read a program from
+# /dev/fd/N when that fd is a regular file: it silently runs an empty
+# program and exits 0, no error. (PATH lookup vs an absolute/relative
+# path is NOT the deciding factor here — that's a red herring from an
+# earlier, confounded test that changed PATH and the python3 binary at
+# the same time; a pyenv/Homebrew python3 handles the same fd fine.)
+# Writing the program text to a temp file sidesteps that: python3
+# reads an ordinary file path instead of /dev/fd/N, so which python3
+# binary answers to `python3` makes no difference.
 _ocw_meter_py="$(mktemp)" || die "mktemp failed"
 trap 'rm -f "$_ocw_meter_py"' EXIT
 cat >"$_ocw_meter_py" <<'PY' || die "failed to write the embedded program to $_ocw_meter_py"
