@@ -33,7 +33,7 @@
 | 3 | `ai/ds-03-uninstall` | `uninstall.sh` の追従（配布実体の後片付け・由来判定の両対応）と `KNOWN_LINKS_bin` の `ocw-meter` 欠落修正 | ✅ PR #43 マージ済 |
 | 4 | `ai/ds-04-operations` | 運用コマンド `--status` / `--rollback` / `--dev` / リンク切れ検出 | ✅ PR #44 マージ済 |
 | 5 | `ai/ds-05-docs` | 文書の更新（`AGENTS.md` / ルート `README.md` / テスト方針）と運用リファレンスの新規作成 | ✅ PR #45 マージ済 |
-| 6 | `ai/ds-06-ocw-meter-prices` | `bin/ocw-meter` が symlink 経由起動で価格表を見失うバグの修正 | 🔄 実装中 |
+| 6 | `ai/ds-06-ocw-meter-prices` | `bin/ocw-meter` が symlink 経由起動で価格表を見失うバグの修正 | ✅ PR #46 マージ済 |
 
 ## 依存関係と実行順序
 
