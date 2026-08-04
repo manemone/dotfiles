@@ -43,12 +43,13 @@ if [ -f "$meter_script" ]; then
   tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/ocw-meter-heredoc-XXXXXX")"
   trap 'rm -rf "$tmp_dir"' EXIT
   tmp_py="$tmp_dir/heredoc.py"
-  # Match only the actual heredoc opener line (`cat <<'PY'`, possibly
-  # indented), not prose that merely mentions `<<'PY'` in a comment — a
-  # loose `/<<'PY'/` pattern would start extraction at the first such
-  # mention (e.g. a comment explaining the heredoc) and pull in
-  # non-Python lines ahead of the real opener.
-  awk "/^[[:space:]]*cat <<'PY'\$/{flag=1; next} /^PY\$/{flag=0} flag" "$meter_script" >"$tmp_py"
+  # Match only the actual heredoc opener line (`cat >"$_ocw_meter_py"
+  # <<'PY'`, possibly indented), not prose that merely mentions
+  # `<<'PY'` in a comment — a loose `/<<'PY'/` pattern would start
+  # extraction at the first such mention (e.g. a comment explaining
+  # the heredoc) and pull in non-Python lines ahead of the real
+  # opener.
+  awk "/^[[:space:]]*cat >\"\\\$_ocw_meter_py\" <<'PY'\$/{flag=1; next} /^PY\$/{flag=0} flag" "$meter_script" >"$tmp_py"
   if [ -s "$tmp_py" ]; then
     echo "  py_compile (extracted heredoc)"
     python3 -m py_compile "$tmp_py" || status=1

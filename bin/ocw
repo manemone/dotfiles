@@ -91,6 +91,29 @@ normalize_name() {
     sed -E 's/^-+|-+$//g'
 }
 
+# GNU realpath の `-m`（存在しないパスでも解決する）相当。BSD 版
+# realpath（macOS 標準の /bin/realpath）は `-m` 非対応のため自前実装する。
+# 対象パス自体が存在しない場合でも、親ディレクトリまでは存在する前提
+# （remove_worktree での「今いる worktree を消そうとしていないか」比較用途）。
+realpath_m() {
+  local target="$1"
+  local dir=""
+  local base=""
+
+  if [ -d "$target" ]; then
+    (cd -P -- "$target" && pwd -P)
+    return
+  fi
+
+  dir="$(dirname -- "$target")"
+  base="$(basename -- "$target")"
+
+  [ -d "$dir" ] ||
+    die "cannot resolve path: $target"
+
+  printf '%s/%s\n' "$(cd -P -- "$dir" && pwd -P)" "$base"
+}
+
 json_nested_field() {
   local json="$1"
   local container="$2"
@@ -681,7 +704,7 @@ remove_worktree() {
   echo "branch:    ${branch}"
   echo "force:     ${force}"
 
-  if [[ "$(realpath -m "$invocation_root")" == "$(realpath -m "$worktree_dir")" ]]; then
+  if [[ "$(realpath_m "$invocation_root")" == "$(realpath_m "$worktree_dir")" ]]; then
     echo "error: do not remove the current worktree" >&2
     echo "move to main first:" >&2
     echo "  cd ${repo_root}" >&2

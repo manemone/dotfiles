@@ -328,12 +328,16 @@ fi
 # program, leaving sys.stdin at EOF, so snapshot-quota would ALWAYS see
 # empty input no matter what the caller piped in (caught by manual
 # testing while implementing 孫4 — every sample silently reported
-# rate_limits absent). Process substitution (`<(...)`) hands python a
-# FILE to read its program from instead of stdin, so fd 0 is never
-# touched here and passes through to the embedded script exactly as
-# the caller of `ocw-meter snapshot-quota` provided it.
-python3 <(
-  cat <<'PY'
+# rate_limits absent). This then became `python3 <(cat <<'PY' ... PY)`
+# (process substitution hands python a FILE to read its program from,
+# so fd 0 stays untouched) — but bash 3.2 (macOS's shipped /bin/bash)
+# cannot parse a heredoc nested inside a process substitution and
+# fails with a parse-time syntax error (bash 5, e.g. CI, has no such
+# issue). Writing the program text to a temp file first sidesteps that
+# parser bug while keeping fd 0 untouched for the same reason.
+_ocw_meter_py="$(mktemp)" || die "mktemp failed"
+trap 'rm -f "$_ocw_meter_py"' EXIT
+cat >"$_ocw_meter_py" <<'PY'
 # PERFORMANCE NOTE (why `ingest`, below, has its own write path instead
 # of calling `record`/`write_event` once per message): this CLI resolves
 # git metadata (repo slug, worktree root, branch, HEAD SHA, plus the
@@ -4236,7 +4240,7 @@ def main():
 
 sys.exit(main())
 PY
-) "$cmd" "$@"
+python3 "$_ocw_meter_py" "$cmd" "$@"
 py_status=$?
 
 case "$cmd" in
