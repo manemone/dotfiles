@@ -49,7 +49,7 @@ OCW = REPO_ROOT / "bin" / "ocw"
 # paths never shell out to python3, so it doesn't need to be on PATH here.
 BASE_PATH_DIRS = ("/usr/bin", "/bin", "/usr/local/bin")
 
-# bin/ocw's open_vscode() (bin/ocw:180-188) launches a real VS Code window
+# bin/ocw's open_vscode() (bin/ocw:180-197) launches a real VS Code window
 # whenever `command -v code` succeeds, which it does on any machine with VS
 # Code installed — /usr/local/bin (part of BASE_PATH_DIRS above) commonly
 # holds a `code` symlink to the real CLI. Every run_ocw(["widget-maker"],
@@ -61,10 +61,19 @@ BASE_PATH_DIRS = ("/usr/bin", "/bin", "/usr/local/bin")
 # placed ahead of BASE_PATH_DIRS in run_ocw()'s PATH, the same "shim
 # directory ahead of the real tool" shape as write_git_shim_* below use for
 # `git`.
+#
+# The shim also appends every invocation to _CODE_SHIM_LOG so tests can
+# assert it was never actually called — not just that ocw's own exit code
+# looked fine (a silent no-op and a real VS Code launch both return 0).
+# VscodeAutoLaunchRegressionTests below is what exercises that.
 _CODE_SHIM_DIR = tempfile.mkdtemp(prefix="ocw-test-code-shim-")
 atexit.register(shutil.rmtree, _CODE_SHIM_DIR, ignore_errors=True)
+_CODE_SHIM_LOG = pathlib.Path(_CODE_SHIM_DIR) / "invocations.log"
 _code_shim_path = pathlib.Path(_CODE_SHIM_DIR) / "code"
-_code_shim_path.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+_code_shim_path.write_text(
+    f"#!/bin/sh\necho \"$@\" >> {shlex.quote(str(_CODE_SHIM_LOG))}\nexit 0\n",
+    encoding="utf-8",
+)
 _code_shim_path.chmod(0o755)
 
 RUN_LINE_RE = re.compile(r"^run:\s+(\S+)$", re.MULTILINE)
@@ -136,6 +145,13 @@ def run_ocw(args, cwd, meter_on_path=False, meter_home=None, extra_env=None, pat
         env["OCW_METER_HOME"] = str(meter_home)
     if extra_env:
         env.update(extra_env)
+    # Belt-and-suspenders alongside _CODE_SHIM_DIR above: bin/ocw's own
+    # OCW_NO_VSCODE opt-out (open_vscode(), bin/ocw:180-197) is set
+    # unconditionally and after extra_env so no test can accidentally clear
+    # it. Two independent layers (a PATH that never resolves to a real
+    # `code`, and ocw refusing to invoke it at all) mean a regression in
+    # either one alone still can't launch a real VS Code window.
+    env["OCW_NO_VSCODE"] = "1"
     return subprocess.run(
         [str(OCW), *args],
         cwd=str(cwd),
@@ -497,6 +513,105 @@ class ExistingBehaviorRegressionTests(OcwTestCase):
         # Force-remove so this test doesn't leak a dangling worktree.
         force_remove = run_ocw(["rm", "-f", "widget-maker"], self.repo_root)
         self.assertEqual(force_remove.returncode, 0, force_remove.stderr)
+
+
+class VscodeAutoLaunchRegressionTests(OcwTestCase):
+    """Regression coverage for the incident where bin/ocw's open_vscode()
+    (bin/ocw:180-197) launched a real VS Code window as a side effect of
+    running this suite (and, separately, of a manual `bin/ocw` invocation
+    made outside run_ocw() while investigating a test failure in this
+    file). Two independent protections exist — _CODE_SHIM_DIR ahead of
+    BASE_PATH_DIRS in run_ocw()'s PATH, and ocw's own OCW_NO_VSCODE opt-out
+    — and this class proves each one actually suppresses an invocation,
+    not just that ocw's exit code looks fine (a silent no-op and a real VS
+    Code launch both return 0 here, so returncode alone can't tell them
+    apart).
+    """
+
+    def setUp(self):
+        super().setUp()
+        if _CODE_SHIM_LOG.exists():
+            _CODE_SHIM_LOG.unlink()
+
+    def test_widget_maker_never_invokes_the_path_shim(self):
+        # Exercises both protections together, exactly as every other test
+        # in this file does via run_ocw(): _CODE_SHIM_DIR ahead of
+        # BASE_PATH_DIRS, plus OCW_NO_VSCODE set unconditionally.
+        create = run_ocw(["widget-maker"], self.repo_root)
+        self.assertEqual(create.returncode, 0, create.stderr)
+        run_ocw(["rm", "-f", "widget-maker"], self.repo_root)
+
+        self.assertFalse(
+            _CODE_SHIM_LOG.exists(),
+            "open_vscode() invoked `code`: "
+            + (_CODE_SHIM_LOG.read_text(encoding="utf-8") if _CODE_SHIM_LOG.exists() else ""),
+        )
+
+    def test_ocw_no_vscode_alone_prevents_invocation(self):
+        # Isolates OCW_NO_VSCODE from _CODE_SHIM_DIR: puts a different,
+        # single-use detecting shim ahead of PATH via path_prepend, which
+        # takes priority over _CODE_SHIM_DIR (see run_ocw()'s comment on
+        # PATH ordering) — so a real invocation would land here even if
+        # _CODE_SHIM_DIR's PATH trick were doing all the work. A pass here
+        # means OCW_NO_VSCODE's check in open_vscode() (which runs before
+        # even the `command -v code` probe) is what's actually stopping it.
+        detect_dir = pathlib.Path(self.tmpdir.name) / "code-detect-shim"
+        detect_dir.mkdir()
+        detect_log = detect_dir / "invoked"
+        shim = detect_dir / "code"
+        shim.write_text(f"#!/bin/sh\ntouch {shlex.quote(str(detect_log))}\nexit 0\n", encoding="utf-8")
+        shim.chmod(0o755)
+
+        create = run_ocw(["widget-maker"], self.repo_root, path_prepend=[str(detect_dir)])
+        self.assertEqual(create.returncode, 0, create.stderr)
+        run_ocw(["rm", "-f", "widget-maker"], self.repo_root, path_prepend=[str(detect_dir)])
+
+        self.assertFalse(detect_log.exists(), "open_vscode() invoked `code` despite OCW_NO_VSCODE being set")
+
+    def test_without_ocw_no_vscode_open_vscode_would_actually_invoke_code(self):
+        # Negative control: proves the two tests above are exercising a
+        # real protection, not passing vacuously because ocw never calls
+        # `code` at all in this environment. Bypasses run_ocw() (which
+        # always sets OCW_NO_VSCODE=1 unconditionally — see its comment)
+        # to invoke ocw directly with a detecting shim on PATH and
+        # OCW_NO_VSCODE left unset.
+        detect_dir = pathlib.Path(self.tmpdir.name) / "code-negative-control-shim"
+        detect_dir.mkdir()
+        detect_log = detect_dir / "invoked"
+        shim = detect_dir / "code"
+        shim.write_text(f"#!/bin/sh\ntouch {shlex.quote(str(detect_log))}\nexit 0\n", encoding="utf-8")
+        shim.chmod(0o755)
+
+        env = {
+            "PATH": f"{detect_dir}:{':'.join(BASE_PATH_DIRS)}",
+            "HOME": os.environ.get("HOME", "/root"),
+        }
+        result = subprocess.run(
+            [str(OCW), "widget-maker"],
+            cwd=str(self.repo_root),
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(
+            detect_log.exists(),
+            "expected the negative control to invoke the detecting `code` shim "
+            "(OCW_NO_VSCODE left unset) — if it didn't, the two tests above may "
+            "be passing vacuously rather than because of a real protection",
+        )
+
+        # Best-effort cleanup of the worktree this negative-control call
+        # created (it bypassed run_ocw(), so nothing else tracks it).
+        subprocess.run(
+            [str(OCW), "rm", "-f", "widget-maker"],
+            cwd=str(self.repo_root),
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
 
 
 if __name__ == "__main__":

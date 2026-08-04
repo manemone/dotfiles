@@ -461,3 +461,11 @@ chmod 600 ~/.config/deepseek/api_key
 ### `warning: VS Code CLI 'code' was not found`
 
 `ocw` のデフォルトモード（`--herdr` なし）では worktree 作成後に VS Code を開こうとします。`code` CLI がインストールされていない場合、この警告が出ますが worktree 作成自体は成功しています。VS Code をインストールするか、`--herdr` モードを使用してください。
+
+### VS Code を開かずに worktree だけ作りたい（スクリプト・自動化・動作確認用）
+
+`OCW_NO_VSCODE=1` を設定すると、`--herdr` なしのデフォルトモードでも VS Code を起動しません（`code` の有無に関わらず無条件でスキップします）。`ocw` 自体の動作をスクリプトや手元のシェルから直接検証したいとき、あるいは自動化パイプラインから呼ぶときに使ってください。
+
+```bash
+OCW_NO_VSCODE=1 ocw widget-maker
+```

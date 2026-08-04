@@ -180,6 +180,18 @@ init_repo_context() {
 open_vscode() {
   local worktree_dir="$1"
 
+  # Explicit opt-out for anything that runs ocw non-interactively (test
+  # suites, manual reproduction/debugging of ocw itself, CI) without a real
+  # Herdr session to route through instead. Checked first, before even the
+  # `command -v code` probe, so this is a hard skip regardless of what's on
+  # PATH — bin/tests/test_ocw.py sets this for every run_ocw() call so a
+  # real `code` symlink under /usr/local/bin (present on any dev machine
+  # with VS Code installed) can never launch a window as a side effect of
+  # running the test suite.
+  if [ -n "${OCW_NO_VSCODE:-}" ]; then
+    return 0
+  fi
+
   if ! command -v code >/dev/null 2>&1; then
     warn "VS Code CLI 'code' was not found"
     return 0
