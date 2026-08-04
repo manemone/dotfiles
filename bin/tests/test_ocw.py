@@ -30,6 +30,7 @@ throwaway workspace was created with `--env FOO=bar`, and `herdr pane run
 ... "echo $FOO"` confirmed the value reached the pane's shell.
 """
 
+import atexit
 import json
 import os
 import pathlib
@@ -47,6 +48,24 @@ OCW = REPO_ROOT / "bin" / "ocw"
 # is absent unless a test opts in via meter_on_path=True. Non-Herdr ocw
 # paths never shell out to python3, so it doesn't need to be on PATH here.
 BASE_PATH_DIRS = ("/usr/bin", "/bin", "/usr/local/bin")
+
+# bin/ocw's open_vscode() (bin/ocw:180-188) launches a real VS Code window
+# whenever `command -v code` succeeds, which it does on any machine with VS
+# Code installed — /usr/local/bin (part of BASE_PATH_DIRS above) commonly
+# holds a `code` symlink to the real CLI. Every run_ocw(["widget-maker"],
+# ...) call in this suite runs in non-Herdr mode (the only mode reachable
+# without a live Herdr server), which is exactly the code path that calls
+# open_vscode() — so without this shim, the whole suite pops a real VS Code
+# window per call site (~20 of them). Built once at import time (the shim
+# is stateless, so every test in this file can safely share it) and always
+# placed ahead of BASE_PATH_DIRS in run_ocw()'s PATH, the same "shim
+# directory ahead of the real tool" shape as write_git_shim_* below use for
+# `git`.
+_CODE_SHIM_DIR = tempfile.mkdtemp(prefix="ocw-test-code-shim-")
+atexit.register(shutil.rmtree, _CODE_SHIM_DIR, ignore_errors=True)
+_code_shim_path = pathlib.Path(_CODE_SHIM_DIR) / "code"
+_code_shim_path.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+_code_shim_path.chmod(0o755)
 
 RUN_LINE_RE = re.compile(r"^run:\s+(\S+)$", re.MULTILINE)
 
@@ -99,7 +118,12 @@ def make_repo(root):
 
 
 def run_ocw(args, cwd, meter_on_path=False, meter_home=None, extra_env=None, path_prepend=None, timeout=30):
-    path_dirs = list(BASE_PATH_DIRS)
+    # _CODE_SHIM_DIR goes ahead of BASE_PATH_DIRS (see its module-level
+    # comment) so the no-op `code` always wins over a real one that might
+    # sit in /usr/local/bin. path_prepend (git shims) still takes priority
+    # over both — those shim directories only ever contain `git`, so `code`
+    # lookups fall through to _CODE_SHIM_DIR regardless.
+    path_dirs = [_CODE_SHIM_DIR, *BASE_PATH_DIRS]
     if meter_on_path:
         path_dirs.insert(0, str(REPO_ROOT / "bin"))
     if path_prepend:
