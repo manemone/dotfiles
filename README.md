@@ -60,6 +60,7 @@ sudo apt update && sudo apt install $(cat apt-packages.txt)
 ./deploy-all.sh --status                 # Show what's currently deployed (read-only)
 ./deploy-all.sh --rollback [id]          # Switch current back to the previous (or given) generation
 ./deploy-all.sh --dev                    # Point current at this working tree (live-edit mode)
+./deploy-all.sh --adopt-state             # Copy back state file writeback (e.g. nvim/lazy-lock.json) into the repo
 ```
 
 Options can be combined:
@@ -68,12 +69,22 @@ Options can be combined:
 ./deploy-all.sh --force --only zsh,nvim --no-backup
 ```
 
-`--status` / `--rollback` / `--dev` operate on the `current` symlink itself (see
+`--status` / `--rollback` / `--dev` / `--adopt-state` bypass the normal generation-build/deploy
+flow (see
 [docs/adr/DOC-2608040229_deploy-distribution-method.md](docs/adr/DOC-2608040229_deploy-distribution-method.md))
 and cannot be combined with each other or with `--only` / `--force` / `--backup` / `--no-backup` —
 `--dry-run` is the only modifier they accept. `--status` has no side effects and is
 safe to run against your real `$HOME`; `--rollback` and `--dev` actually repoint
 `current`, so preview them with `--dry-run` first.
+
+Some tools (e.g. lazy.nvim) write back through their `$HOME` symlink — `:Lazy update` rewrites
+`~/.config/nvim/lazy-lock.json`, which is really a symlink into the running generation, not this
+checkout. A plain deploy refuses to build a new generation if such writeback hasn't been adopted
+into the repo yet (it would otherwise be silently discarded); run `--adopt-state` to copy it back,
+review/commit it, then deploy normally. See
+[nvim/README.md](nvim/README.md#updating-the-plugin-lockfile) and
+[docs/reference/DOC-2608040805_配布実体運用ガイド.md](docs/reference/DOC-2608040805_配布実体運用ガイド.md)
+for details.
 
 ## Development Setup
 

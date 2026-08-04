@@ -2048,6 +2048,188 @@ scenario_dev_mode_rollback() {
   fi
 }
 
+# ── シナリオ27: 状態ファイル書き戻し(nvim/lazy-lock.json)の検知・取り込み ──
+#
+# lazy.nvim の `:Lazy update` が $HOME 側の symlink 経由で世代ディレクトリ内の
+# lazy-lock.json を書き換える状況を、nvim/deploy.sh を実際に呼ばずに再現する。
+# 世代は --only bin でデプロイしても常に全ツール分コピーされる(ADR §4.3)ため、
+# 世代内の nvim/lazy-lock.json を直接書き換えるだけで、$HOME 側に nvim を
+# デプロイしなくても検知ロジックを検証できる(ネットワークアクセス不要)。
+
+scenario_state_writeback() {
+  if ! has_tool bin; then
+    return
+  fi
+  log "=== シナリオ27: 状態ファイル書き戻し(nvim/lazy-lock.json)の検知・取り込み ==="
+  local sbx copy_dir prefix gen out rc
+
+  new_sandbox
+  sbx="$SANDBOX_DIR"
+  copy_dir="$(mktemp -d)"
+  CREATED_DIRS+=("$copy_dir")
+  copy_repo_snapshot "$copy_dir"
+  prefix="$(dotfiles_prefix_for "$sbx")"
+
+  out="$(run_deploy_from "$copy_dir/deploy-all.sh" "$sbx" --force --only bin 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "事前準備(1回目のdeploy-all.sh --only bin)が失敗 (exit=$rc)"
+    log "$out"
+    return
+  fi
+  gen="$(current_target_for "$sbx")"
+
+  printf '{"tampered": true}\n' >"$gen/nvim/lazy-lock.json"
+
+  # --- 検知: --forceなしの再デプロイは差分を検知して停止する ---
+  out="$(run_deploy_from "$copy_dir/deploy-all.sh" "$sbx" --only bin </dev/null 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    pass "未取り込みの状態ファイル書き戻しがあると--forceなしのデプロイが停止する (exit=$rc)"
+  else
+    fail "未取り込みの状態ファイル書き戻しがあると--forceなしのデプロイが停止する (exit=0のままだった)"
+    log "$out"
+  fi
+  if printf '%s' "$out" | grep -q "nvim/lazy-lock.json"; then
+    pass "検知メッセージが変更されたファイルを列挙する"
+  else
+    fail "検知メッセージが変更されたファイルを列挙する"
+  fi
+  if printf '%s' "$out" | grep -q -- "--adopt-state"; then
+    pass "検知メッセージが--adopt-stateを案内する"
+  else
+    fail "検知メッセージが--adopt-stateを案内する"
+  fi
+  # この時点でまだ新世代は作られていない(検知で停止したため)ことも確認する。
+  if [ "$(current_target_for "$sbx")" = "$gen" ]; then
+    pass "検知で停止した場合、currentは変更されない(新世代は作られない)"
+  else
+    fail "検知で停止した場合、currentは変更されない(新世代は作られない)"
+  fi
+
+  # --- --dry-runでも検知は出るが、停止はしない(report-only) ---
+  out="$(run_deploy_from "$copy_dir/deploy-all.sh" "$sbx" --dry-run --only bin 2>&1)"
+  rc=$?
+  if [ "$rc" -eq 0 ]; then
+    pass "--dry-runは検知があってもエラー終了しない"
+  else
+    fail "--dry-runは検知があってもエラー終了しない (exit=$rc になった)"
+  fi
+  if printf '%s' "$out" | grep -q "nvim/lazy-lock.json"; then
+    pass "--dry-runでも状態ファイルの検知が出る"
+  else
+    fail "--dry-runでも状態ファイルの検知が出る"
+  fi
+
+  # --- --statusでも未取り込みの状態ファイルが表示される(副作用ゼロのまま) ---
+  out="$(run_deploy "$sbx" --status 2>&1)"
+  if printf '%s' "$out" | grep -q "nvim/lazy-lock.json"; then
+    pass "--statusが未取り込みの状態ファイル書き戻しを表示する"
+  else
+    fail "--statusが未取り込みの状態ファイル書き戻しを表示する"
+  fi
+
+  # --- --force で破棄して続行できる ---
+  wait_for_next_second
+  out="$(run_deploy_from "$copy_dir/deploy-all.sh" "$sbx" --force --only bin 2>&1)"
+  rc=$?
+  if [ "$rc" -eq 0 ]; then
+    pass "--forceは未取り込みの状態ファイル書き戻しを破棄して続行する"
+  else
+    fail "--forceは未取り込みの状態ファイル書き戻しを破棄して続行する (exit=$rc)"
+    log "$out"
+  fi
+  if printf '%s' "$out" | grep -qi "discarding"; then
+    pass "--forceは破棄する旨を警告する"
+  else
+    fail "--forceは破棄する旨を警告する"
+  fi
+  gen="$(current_target_for "$sbx")"
+  if [ -f "$gen/nvim/lazy-lock.json" ] && ! grep -q tampered "$gen/nvim/lazy-lock.json" 2>/dev/null; then
+    pass "--forceで破棄した後、新世代のlazy-lock.jsonはソースツリー由来の内容になる"
+  else
+    fail "--forceで破棄した後、新世代のlazy-lock.jsonはソースツリー由来の内容になる"
+  fi
+
+  # --- --adopt-state でソースツリーへ取り込める ---
+  printf '{"tampered2": true}\n' >"$gen/nvim/lazy-lock.json"
+
+  out="$(run_deploy_from "$copy_dir/deploy-all.sh" "$sbx" --adopt-state --dry-run 2>&1)"
+  if printf '%s' "$out" | grep -q '\[DRY-RUN\] cp'; then
+    pass "--adopt-state --dry-runはコピー計画を表示する"
+  else
+    fail "--adopt-state --dry-runはコピー計画を表示する"
+  fi
+  if grep -q tampered2 "$copy_dir/nvim/lazy-lock.json" 2>/dev/null; then
+    fail "--adopt-state --dry-runは実際にはソースツリーを変更しない"
+  else
+    pass "--adopt-state --dry-runは実際にはソースツリーを変更しない"
+  fi
+
+  out="$(run_deploy_from "$copy_dir/deploy-all.sh" "$sbx" --adopt-state 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "--adopt-stateが失敗 (exit=$rc)"
+    log "$out"
+  else
+    pass "--adopt-stateが成功する"
+  fi
+  if grep -q tampered2 "$copy_dir/nvim/lazy-lock.json" 2>/dev/null; then
+    pass "--adopt-stateで世代側の内容がソースツリーへコピーバックされる"
+  else
+    fail "--adopt-stateで世代側の内容がソースツリーへコピーバックされる"
+  fi
+  # --adopt-stateは世代を作らず現在のcurrentも変えない(コピーバックのみ)。
+  if [ "$(current_target_for "$sbx")" = "$gen" ]; then
+    pass "--adopt-stateは新しい世代を作らずcurrentも変更しない"
+  else
+    fail "--adopt-stateは新しい世代を作らずcurrentも変更しない"
+  fi
+
+  # adopt後は差分が無くなっているので、再デプロイが検知に引っかからず素通りする。
+  wait_for_next_second
+  out="$(run_deploy_from "$copy_dir/deploy-all.sh" "$sbx" --force --only bin </dev/null 2>&1)"
+  rc=$?
+  if [ "$rc" -eq 0 ] && ! printf '%s' "$out" | grep -qi "lockfile changed"; then
+    pass "adopt後の再デプロイは検知に引っかからず素通りする"
+  else
+    fail "adopt後の再デプロイは検知に引っかからず素通りする (exit=$rc)"
+    log "$out"
+  fi
+
+  # --- --devモード中は検知がスキップされる ---
+  gen="$(current_target_for "$sbx")"
+  printf '{"tampered3": true}\n' >"$gen/nvim/lazy-lock.json"
+  out="$(run_deploy_from "$copy_dir/deploy-all.sh" "$sbx" --dev 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "--devが失敗 (exit=$rc)"
+    log "$out"
+    return
+  fi
+  if [ "$(current_target_for "$sbx")" != "$copy_dir" ]; then
+    fail "事前準備: --devでcurrentがソースツリーを指す"
+    return
+  fi
+  # devモードへ切り替わった時点で、tamperedな世代はもうcurrentではなくなる。
+  # devモード中(currentがソースツリーを指したまま)の新規デプロイはこの
+  # 「離れた世代」との差分を検知しないこと(検知ロジック自体がスキップ
+  # されること)を確認する。
+  wait_for_next_second
+  out="$(run_deploy_from "$copy_dir/deploy-all.sh" "$sbx" --force --only bin 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "devモード中の--force --only binが失敗 (exit=$rc)"
+    log "$out"
+    return
+  fi
+  if printf '%s' "$out" | grep -qi "lockfile changed\|state file writeback\|discarding"; then
+    fail "devモード中は状態ファイルの検知がスキップされる(スキップされず検知が出てしまった)"
+  else
+    pass "devモード中は状態ファイルの検知がスキップされる"
+  fi
+}
+
 log "REPO_ROOT: $REPO_ROOT"
 log "対象ツール: $TOOLS"
 log
@@ -2105,6 +2287,8 @@ log
 scenario_dev_mode
 log
 scenario_dev_mode_rollback
+log
+scenario_state_writeback
 log
 
 if [ "$FAIL" -eq 0 ]; then

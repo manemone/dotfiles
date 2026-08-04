@@ -190,6 +190,29 @@ Press `<Space>` and wait for which-key popup to discover available shortcuts.
 2. Add your plugin spec (see existing files for patterns)
 3. Run `nvim` — lazy.nvim installs missing plugins automatically
 4. Run `:Lazy lock` to update the lockfile
+5. Adopt the updated lockfile into the repo — see "Updating the plugin lockfile" below
+
+### Updating the plugin lockfile
+
+`~/.config/nvim/lazy-lock.json` is a symlink into the distribution artifact (`current`), not into
+this repo's working tree (see the top-level `AGENTS.md`'s "デプロイの仕組み" and ADR
+DOC-2608040229). When lazy.nvim writes to it — via `:Lazy update`, `:Lazy sync`, or `:Lazy lock` —
+the write lands in the currently-deployed *generation*, not in `nvim/lazy-lock.json` in this repo.
+It won't show up in `git status`, and it will be silently lost the next time `./deploy-all.sh`
+builds a new generation (a new generation is always copied from the source tree, not from the
+outgoing generation).
+
+`./deploy-all.sh` detects this before it can happen: if the currently-deployed generation's
+`lazy-lock.json` differs from this repo's, a plain deploy refuses to proceed and tells you to run:
+
+```bash
+./deploy-all.sh --adopt-state
+```
+
+This copies the updated `lazy-lock.json` (and any other state file writeback) back into this
+source tree — nothing else changes (no new generation, no `$HOME` symlink touched). Review the
+diff, commit it, then run `./deploy-all.sh` normally to deploy it. `./deploy-all.sh --status` also
+reports any not-yet-adopted lockfile changes if you want to check without triggering the refusal.
 
 ### Adding LSP Servers
 
