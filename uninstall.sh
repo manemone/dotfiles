@@ -54,7 +54,7 @@ ONLY_TOOLS=""
 # directly, see resolve_deploy_src) or the pre-migration direct-to-worktree
 # scheme (target under the checkout itself). Both must be recognized so
 # that machines with leftover pre-migration links can still be cleaned up
-# after adopting the new scheme (ADR DOC-2608040229 §4.8/§4.9).
+# after adopting the new scheme (ADR DOC-2608040229 §4.8/§4.10).
 #
 # This flag is a plain boolean (only its non-emptiness is checked below),
 # not a path — the actual repo-owned-symlink resolution for both schemes

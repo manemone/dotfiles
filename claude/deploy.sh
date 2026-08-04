@@ -278,7 +278,7 @@ if [ -d "$SKILLS_SRC_DIR" ]; then
       # Exception: a symlink left over from a previous deploy (either the
       # old direct-to-worktree scheme or a stale current-scheme link) is not
       # user data — replace it without backup, the same treatment
-      # symlink_backup gives CLAUDE.md above (ADR §4.9 / DOC-2608040229).
+      # symlink_backup gives CLAUDE.md above (ADR §4.10 / DOC-2608040229).
       # Without this check, every pre-migration skill symlink would get
       # "backed up" here as if it were the user's original skill, and a
       # later uninstall would restore that backup as if it were real data.

@@ -104,30 +104,46 @@
 ### デプロイの流れ
 
 1. `deploy-all.sh` が `shared/helpers.sh` を source し、`AVAILABLE_TOOLS` を解決する
-2. 新しい世代ディレクトリを作り、`.dotfiles-manifest` を書く
-3. `current` を新世代へ切り替える
-4. 各 `<tool>/deploy.sh` を、配布元を環境変数 `DOTFILES_DEPLOY_SRC`（= `current` を指す
+2. `current` が指す世代とソースツリーの間で、状態ファイル（後述）の書き戻しが無いか検知する。
+   差分があれば警告して停止する（`--force` で破棄して続行可）
+3. 新しい世代ディレクトリを作り、`.dotfiles-manifest` を書く
+4. `current` を新世代へ切り替える
+5. 各 `<tool>/deploy.sh` を、配布元を環境変数 `DOTFILES_DEPLOY_SRC`（= `current` を指す
    固定パス）として export した状態で呼び出す。symlink は `shared/helpers.sh` の
    `symlink_backup` 経由で `$DOTFILES_DEPLOY_SRC/<tool>/...` へ張る
-5. 古い世代を GC する
+6. 古い世代を GC する
 
 オプション: `--dry-run` / `--force` / `--only <tools>` / `--backup` / `--no-backup` /
-`--status` / `--rollback [世代ID]` / `--dev`。後者3つは `current` シンボリックリンク自体を
-操作するコマンドで、互いに組み合わせられず、`--only` / `--force` / `--backup` / `--no-backup`
-とも組み合わせられない（`--dry-run` のみ併用可）。
+`--status` / `--rollback [世代ID]` / `--dev` / `--adopt-state`。後者4つは通常の
+世代作成/デプロイ/GCフローを迂回するコマンドで、互いに組み合わせられず、`--only` /
+`--force` / `--backup` / `--no-backup` とも組み合わせられない（`--dry-run` のみ併用可）。
 
 - `--status`: 副作用なし。`current` の向き先（世代か dev モードか）・その manifest の内容
   （dev モードでは manifest が無いためソースツリーの git 状態をその場で読んで代わりに表示する）・
-  保持世代一覧・`$HOME` 側リンクの健全性（リンク切れ検出）を表示する
+  保持世代一覧・未取り込みの状態ファイル書き戻し・`$HOME` 側リンクの健全性（リンク切れ検出）を表示する
 - `--rollback [世代ID]`: `current` を1つ前（または指定した）世代へ付け替える。`$HOME` 側の
-  symlink は張り直さない（`current` の付け替えだけで全リンクの向き先が変わるのが世代方式の要）
+  symlink は張り直さない（`current` の付け替えだけで全リンクの向き先が変わるのが世代方式の要）。
+  切り替え前に、離れる世代に未取り込みの状態ファイル書き戻しがあれば警告する（ブロックはしない）
 - `--dev`: `current` を作業ツリーそのものへ向ける（世代は作らない。編集が即座に `$HOME` へ
   反映される）。dev モード中は GC を行わない
+- `--adopt-state`: `current` が指す世代の状態ファイル（後述）をソースツリーへコピーバックする。
+  世代を作らず `current` も `$HOME` symlink も一切触らない。コピーバックのみで終了するので、
+  `git diff` で確認・コミットしたうえで改めて通常の deploy を実行する
 
 `$HOME` 側の配布先一覧は `shared/helpers.sh` の `links_for_tool()`（symlink 系のツール）と
 `claude_skill_links()`（`claude/skills/` の個別 symlink）に一元化されており、`uninstall.sh` と
 `deploy-all.sh --status` の両方がここを参照する。リストを二重管理すると片方だけ更新される
 事故が起きる（`uninstall.sh` 側から `ocw-meter` が漏れていた過去の不具合がまさにこれ）。
+
+### 状態ファイル（$HOME 側からの書き戻し）
+
+`nvim/lazy-lock.json` のように、`$HOME` 側から symlink 経由でツール自身が書き戻すファイルがある
+（lazy.nvim の `:Lazy update` 等）。書き込み先は `current` が指す**世代ディレクトリ**であって
+ソースツリーではないため、何もしなければ次のデプロイで作られる新世代に引き継がれず消える。
+`shared/helpers.sh` の `state_files_for_tool()`（`links_for_tool()` と同じ一元化の作法）が
+対象ファイルの一覧を返し、`detect_state_writeback()` が `current` の世代とソースツリーの間で
+`cmp -s` により差分を検知する。デプロイ時の検知・`--status` での表示・`--adopt-state` による
+取り込みは、いずれもこの2関数が一次情報源。詳細と却下案は ADR DOC-2608040229 §4.9 を参照。
 
 ### 単体 `<tool>/deploy.sh` 実行時の規約
 
@@ -281,6 +297,11 @@ PR を作る前に
   ままループが継続するため）。この場合、警告なしに `_links` 側の symlink だけが撤去されずに
   残る。`deploy-all.sh --status` のリンク健全性スキャンには arm 忘れに対する警告経路が無く、
   その分の `$HOME` リンクが静かにレポートから抜け落ちる点にも注意する。
+- ツールが `$HOME` 側の symlink 経由で世代ディレクトリへ書き戻すファイル（`nvim/lazy-lock.json`
+  のような状態ファイル。詳細は「状態ファイル」節）を持つ場合は、`shared/helpers.sh` の
+  `state_files_for_tool()` にも arm を追加する。ここに追加し忘れると、デプロイ時の検知・
+  `--status` での表示・`--adopt-state` のいずれからも静かに漏れる（`links_for_tool()` と同じ
+  一元化の作法）。
 - README は「ルート `README.md`（全体）」と「各ツールの `README.md`（詳細）」の二層構造。
   片方だけ更新しない。
 - `docs/` の文書に地の文で言及するときは、説明的ファイル名だけで呼ばず、その文書の DOC-ID を明示する

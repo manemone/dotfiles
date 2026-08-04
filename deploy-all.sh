@@ -12,14 +12,16 @@
 #   ./deploy-all.sh --status       Show current generation, manifest, GC state
 #   ./deploy-all.sh --rollback [id]  Switch current to the previous (or given) generation
 #   ./deploy-all.sh --dev          Point current at this working tree (no generation)
+#   ./deploy-all.sh --adopt-state  Copy back state file writeback into the source tree
 #
 # Options can be combined:
 #   ./deploy-all.sh --dry-run --only tmux
 #   ./deploy-all.sh --force --only zsh,nvim
 #
-# --status/--rollback/--dev are operations on the `current` symlink itself
-# (see ADR DOC-2608040229) and cannot be combined with each other or with
-# --only/--force/--backup — --dry-run is the only modifier they honour.
+# --status/--rollback/--dev/--adopt-state are operations that bypass the
+# normal generation-build/deploy flow (see ADR DOC-2608040229) and cannot be
+# combined with each other or with --only/--force/--backup — --dry-run is
+# the only modifier they honour.
 
 set -u
 
@@ -30,20 +32,23 @@ SCRIPT_DIR=$(
 
 # shared/helpers.sh fires a one-shot "Deploying from a linked git worktree"
 # notice the moment it's sourced (its source-time guard runs before this
-# script has parsed any arguments). It is suppressed for three of our modes,
+# script has parsed any arguments). It is suppressed for four of our modes,
 # for reasons independent of the notice's wording: --status is documented as
 # read-only/safe against a real $HOME and shouldn't print anything unrelated
 # to the status report, --rollback only ever points current at an existing
 # generation directory (never at $SCRIPT_DIR) so the worktree it's invoked
-# from is irrelevant to what it does, and --dev prints its own dev-flavored
-# warning below instead (cmd_dev). Pre-set the "already warned" flag the
-# guard checks (shared/helpers.sh's DOTFILES_WORKTREE_WARNED, not
+# from is irrelevant to what it does, --dev prints its own dev-flavored
+# warning below instead (cmd_dev), and --adopt-state only copies files from
+# the running generation into $SCRIPT_DIR — it never touches $HOME symlinks,
+# so the notice's "removing this worktree won't break $HOME" wording doesn't
+# apply to what it does either. Pre-set the "already warned" flag the guard
+# checks (shared/helpers.sh's DOTFILES_WORKTREE_WARNED, not
 # DOTFILES_QUIET_WORKTREE_WARNING — that one is the user's own explicit
 # silence switch and must stay untouched here) so it never fires for these
-# three, before we even know MODE (argument parsing hasn't happened yet).
+# four, before we even know MODE (argument parsing hasn't happened yet).
 for _dsa_arg in "$@"; do
   case "$_dsa_arg" in
-    --status | --rollback | --dev)
+    --status | --rollback | --dev | --adopt-state)
       DOTFILES_WORKTREE_WARNED=1
       export DOTFILES_WORKTREE_WARNED
       break
@@ -97,7 +102,24 @@ Options:
                     of a generation (no generation is created; edits to
                     this checkout take effect immediately). Combine with
                     --dry-run to preview.
+  --adopt-state     Copy state files that a running tool wrote back into
+                    the current generation (e.g. lazy.nvim's \`:Lazy update\`
+                    rewriting nvim/lazy-lock.json through its \$HOME symlink)
+                    into this source tree, so a normal deploy afterwards
+                    won't silently discard them. Copies only — it does not
+                    create a generation or touch \$HOME symlinks; run a
+                    normal deploy afterwards (after reviewing/committing
+                    the adopted changes) to continue. A no-op if nothing
+                    differs. Combine with --dry-run to preview.
   --help, -h        Show this help message.
+
+A normal deploy (no mode flag) refuses to create a new generation if the
+generation \`current\` points at has state file changes not yet adopted into
+this source tree (they would otherwise be silently discarded — see
+--adopt-state above). Run --adopt-state first, or re-run with --force to
+discard them. This check is skipped while \`current\` is in dev mode (there
+is nothing to lose — dev mode's \`current\` already IS the source tree) and
+still runs (report-only) under --dry-run.
 
 Examples:
   $0                           # Interactive, all tools
@@ -107,6 +129,7 @@ Examples:
   $0 --status                  # Inspect what's currently deployed
   $0 --rollback                # Roll back to the previous generation
   $0 --dev                     # Switch to live-edit (dev) mode
+  $0 --adopt-state             # Copy back unadopted state file writeback
 EOF
 }
 
@@ -121,13 +144,17 @@ EOF
 # Read-only. Prints what current points at (a generation, dev-mode source
 # tree, or nothing yet), that generation's manifest (or, in dev mode, the
 # same fields read live from the source tree's own git state — dev mode
-# never writes a manifest, see cmd_dev), the list of kept generations, and
-# a $HOME symlink health scan (via links_for_tool() + claude_skill_links(),
-# shared/helpers.sh) that flags broken symlinks. Returns 1 if current is
-# broken (points at something that no longer exists or isn't a symlink) or
-# any $HOME symlink is broken. Returns 0 otherwise, including when nothing
-# has been deployed yet (current does not exist — that is not an error
-# state) — callers that want a machine-readable health check can rely on
+# never writes a manifest, see cmd_dev), the list of kept generations,
+# any state file writeback (detect_state_writeback, shared/helpers.sh) not
+# yet adopted into this source tree, and a $HOME symlink health scan (via
+# links_for_tool() + claude_skill_links(), shared/helpers.sh) that flags
+# broken symlinks. Returns 1 if current is broken (points at something that
+# no longer exists or isn't a symlink) or any $HOME symlink is broken.
+# Returns 0 otherwise, including when nothing has been deployed yet
+# (current does not exist — that is not an error state) or when unadopted
+# state file writeback exists (that's a thing to know, not itself a broken
+# state — --adopt-state is the actionable follow-up, not a failing
+# --status) — callers that want a machine-readable health check can rely on
 # the exit code.
 cmd_status() {
   _cs_prefix="$(dotfiles_prefix)"
@@ -218,6 +245,24 @@ cmd_status() {
   fi
   printf '\n'
 
+  # State file writeback: only meaningful in generation mode. In dev mode
+  # `current` already IS the source tree (SCRIPT_DIR), so the diff would
+  # always be zero — same reasoning as the pre-generation check below.
+  case "$_cs_target" in
+    "$_cs_gens_dir"/*)
+      if [ -d "$_cs_target" ]; then
+        _cs_state_diff="$(detect_state_writeback "$_cs_target" "$SCRIPT_DIR")"
+        if [ -n "$_cs_state_diff" ]; then
+          log_warn "Unadopted state file writeback (written into the running"
+          log_warn "generation, not yet copied back into this source tree):"
+          printf '%s\n' "$_cs_state_diff" | sed 's/^/  /'
+          log_info "Run '$0 --adopt-state' to bring these into the repo."
+          printf '\n'
+        fi
+      fi
+      ;;
+  esac
+
   log_info "Link health (\$HOME):"
   _cs_broken=0
   for _cs_tool in $AVAILABLE_TOOLS; do
@@ -283,7 +328,10 @@ cmd_status() {
 # path traversal), otherwise to the generation immediately before the one
 # current points at. $HOME symlinks are never re-created here: they already
 # resolve through the literal `current` path (see ADR §4.1), so swapping
-# what current points at is the entire operation.
+# what current points at is the entire operation. Warns (but does not
+# block) if the generation being left has state file writeback not yet
+# adopted into the source tree — see the comment above the
+# detect_state_writeback call below and ADR DOC-2608040229 §4.9.
 cmd_rollback() {
   _rb_target_arg="$1"
   _rb_prefix="$(dotfiles_prefix)"
@@ -363,6 +411,25 @@ cmd_rollback() {
   fi
 
   _rb_target_dir="$_rb_gens_dir/$_rb_target_name"
+
+  # Once we switch away from it, the generation we're leaving stops being
+  # `current` and loses gc_generations' "never remove the generation
+  # current points at" protection — a later deploy's GC can delete it like
+  # any other old generation. Any state file writeback it holds (e.g. a
+  # `:Lazy update` that rewrote nvim/lazy-lock.json through the $HOME
+  # symlink) would be lost with it if it was never adopted into the source
+  # tree. Warn here, before switching, while --adopt-state on the
+  # generation we're about to leave is still possible (see ADR
+  # DOC-2608040229 §4.9 — this is a documented, not auto-protected, gap).
+  if [ -n "$_rb_cur_target" ] && [ -d "$_rb_cur_target" ]; then
+    _rb_state_diff="$(detect_state_writeback "$_rb_cur_target" "$SCRIPT_DIR")"
+    if [ -n "$_rb_state_diff" ]; then
+      log_warn "The generation you're leaving has unadopted state file writeback:"
+      printf '%s\n' "$_rb_state_diff" | sed 's/^/  /'
+      log_warn "Once it's no longer current, it can be GC'd on a later deploy."
+      log_warn "Ctrl-C now and run '$0 --adopt-state' first if you want to keep it."
+    fi
+  fi
 
   log_info "Rolling back current -> $_rb_target_dir"
   switch_current "$_rb_target_dir" || {
@@ -445,6 +512,94 @@ cmd_dev() {
   return 0
 }
 
+# cmd_adopt_state
+# Copies every state file that differs between the generation `current`
+# points at and this source tree (detect_state_writeback, shared/helpers.sh)
+# back into the source tree — the opposite direction of a normal deploy.
+# This is what makes a $HOME-side rewrite (e.g. lazy.nvim's `:Lazy update`
+# writing through the nvim/lazy-lock.json symlink into the generation
+# directory, invisible to `git status` because the generation directory
+# isn't part of the repo) show up in the repo again.
+#
+# Copies only: it does not create a generation, switch current, or touch
+# any $HOME symlink. Run a normal deploy afterwards (after reviewing/
+# committing what got adopted, so a half-reviewed change doesn't
+# immediately become the next generation) to continue — see usage().
+#
+# A no-op (not an error) if nothing differs, or if current isn't in
+# generation mode: dev mode's current already IS the source tree (nothing
+# to adopt from a place that already is here), and "nothing deployed yet"
+# has no generation to adopt from either.
+cmd_adopt_state() {
+  _as_prefix="$(dotfiles_prefix)"
+  _as_link="$(dotfiles_current_link)"
+  _as_gens_dir="$_as_prefix/generations"
+  _as_target=""
+
+  [ -L "$_as_link" ] && _as_target="$(readlink "$_as_link")"
+
+  case "$_as_target" in
+    "$_as_gens_dir"/*) ;;
+    "")
+      log_warn "current does not exist yet — nothing has been deployed, so there is nothing to adopt."
+      return 0
+      ;;
+    *)
+      log_warn "current is in dev mode — it already points at a source tree, so there is nothing to adopt."
+      return 0
+      ;;
+  esac
+
+  if [ ! -d "$_as_target" ]; then
+    log_error "current points at a generation directory that no longer exists: $_as_target"
+    return 1
+  fi
+
+  _as_diff="$(detect_state_writeback "$_as_target" "$SCRIPT_DIR")"
+  if [ -z "$_as_diff" ]; then
+    log_info "No state file differs from the source tree. Nothing to adopt."
+    return 0
+  fi
+
+  log_hr
+  log_info "Adopting state file writeback from: $_as_target"
+  printf '\n'
+
+  _as_fail=0
+  _as_oldifs="$IFS"
+  IFS='
+'
+  for _as_rel in $_as_diff; do
+    IFS="$_as_oldifs"
+    [ -n "$_as_rel" ] || continue
+    _as_gen_file="$_as_target/$_as_rel"
+    _as_src_file="$SCRIPT_DIR/$_as_rel"
+
+    if [ "${DRY_RUN:-0}" -eq 1 ]; then
+      printf '[DRY-RUN] cp %s %s\n' "$_as_gen_file" "$_as_src_file"
+    elif cp "$_as_gen_file" "$_as_src_file"; then
+      log_ok "Adopted: $_as_rel"
+    else
+      log_error "Failed to adopt: $_as_rel"
+      _as_fail=1
+    fi
+    IFS='
+'
+  done
+  IFS="$_as_oldifs"
+
+  [ "$_as_fail" -eq 0 ] || return 1
+
+  printf '\n'
+  if [ "${DRY_RUN:-0}" -eq 1 ]; then
+    log_info "[DRY-RUN] Would adopt the file(s) above. Nothing was written."
+  else
+    log_ok "Adopted state file writeback into the source tree."
+    log_info "Review with 'git diff', commit, then run './deploy-all.sh' to deploy normally."
+  fi
+  return 0
+}
+
 # ── Parse arguments ───────────────────────────────────────────────────
 
 while [ $# -gt 0 ]; do
@@ -475,14 +630,14 @@ while [ $# -gt 0 ]; do
       ;;
     --status)
       if [ "$MODE" != "deploy" ]; then
-        log_error "Cannot combine --status with --rollback/--dev."
+        log_error "Cannot combine --status with --rollback/--dev/--adopt-state."
         exit 1
       fi
       MODE="status"
       ;;
     --rollback)
       if [ "$MODE" != "deploy" ]; then
-        log_error "Cannot combine --rollback with --status/--dev."
+        log_error "Cannot combine --rollback with --status/--dev/--adopt-state."
         exit 1
       fi
       MODE="rollback"
@@ -504,10 +659,17 @@ while [ $# -gt 0 ]; do
       ;;
     --dev)
       if [ "$MODE" != "deploy" ]; then
-        log_error "Cannot combine --dev with --status/--rollback."
+        log_error "Cannot combine --dev with --status/--rollback/--adopt-state."
         exit 1
       fi
       MODE="dev"
+      ;;
+    --adopt-state)
+      if [ "$MODE" != "deploy" ]; then
+        log_error "Cannot combine --adopt-state with --status/--rollback/--dev."
+        exit 1
+      fi
+      MODE="adopt-state"
       ;;
     --help | -h)
       usage
@@ -524,11 +686,12 @@ done
 
 # ── Dispatch current-symlink operations ─────────────────────────────────
 # These bypass the generation-build / per-tool-deploy / GC flow below
-# entirely (see the cmd_status/cmd_rollback/cmd_dev definitions above).
+# entirely (see the cmd_status/cmd_rollback/cmd_dev/cmd_adopt_state
+# definitions above).
 
 if [ "$MODE" != "deploy" ]; then
   if [ "$ONLY_SEEN" -eq 1 ] || [ "$FORCE_SEEN" -eq 1 ] || [ "$BACKUP_SEEN" -eq 1 ]; then
-    log_error "--status/--rollback/--dev cannot be combined with --only/--force/--backup/--no-backup."
+    log_error "--status/--rollback/--dev/--adopt-state cannot be combined with --only/--force/--backup/--no-backup."
     exit 1
   fi
 fi
@@ -544,6 +707,10 @@ case "$MODE" in
     ;;
   dev)
     cmd_dev
+    exit $?
+    ;;
+  adopt-state)
+    cmd_adopt_state
     exit $?
     ;;
 esac
@@ -565,6 +732,56 @@ if is_wsl; then
 fi
 log_info "Tools:   $TOOLS"
 printf '\n'
+
+# ── Detect unadopted state file writeback before building a new generation ──
+#
+# A running tool (e.g. lazy.nvim's `:Lazy update`) writes back through its
+# $HOME symlink into the *generation* directory, not the source tree —
+# every $HOME symlink resolves through `current`, never through the source
+# tree directly (ADR §4.1). create_generation (below) copies from the
+# source tree, so without this check that writeback is silently discarded
+# the moment a new generation replaces the one that holds it — exactly the
+# regression this check exists to close (ADR §4.9).
+#
+# Runs before the confirmation prompt below (not just before
+# create_generation) on purpose: there is no point asking "proceed?" when
+# the answer is about to be "no, not until you deal with this", and a
+# non-interactive run (--force or otherwise) shouldn't have to get past a
+# stdin check first to hit this. Skipped while `current` is in dev mode:
+# there, `current` already IS the source tree, so the diff would always be
+# zero and this would just spin its wheels. Runs under --dry-run too
+# (report-only there — skipping it would make a --dry-run preview miss the
+# one thing a real run would actually stop over).
+_deploy_cur_link="$(dotfiles_current_link)"
+_deploy_cur_target=""
+[ -L "$_deploy_cur_link" ] && _deploy_cur_target="$(readlink "$_deploy_cur_link")"
+case "$_deploy_cur_target" in
+  "$(dotfiles_prefix)/generations"/*)
+    if [ -d "$_deploy_cur_target" ]; then
+      _deploy_state_diff="$(detect_state_writeback "$_deploy_cur_target" "$SCRIPT_DIR")"
+      if [ -n "$_deploy_state_diff" ]; then
+        if [ "$FORCE" -eq 1 ]; then
+          log_warn "State file writeback not in the source tree (discarding via --force):"
+          printf '%s\n' "$_deploy_state_diff" | sed 's/^/  /'
+        elif [ "$DRY_RUN" -eq 1 ]; then
+          log_warn "[DRY-RUN] State file writeback not in the source tree (a real run would stop here):"
+          printf '%s\n' "$_deploy_state_diff" | sed 's/^/  /'
+          log_warn "       Adopt with: $0 --adopt-state"
+          log_warn "       or discard with --force."
+        else
+          log_error "Plugin/state lockfile changed since last deploy:"
+          printf '%s\n' "$_deploy_state_diff" | sed 's/^/         /'
+          log_error "       The running generation has updates that are not in your"
+          log_error "       source tree (e.g. a :Lazy update wrote through the symlink)."
+          log_error "       Adopt them into the repo first:"
+          log_error "         $0 --adopt-state"
+          log_error "       or discard with --force."
+          exit 1
+        fi
+      fi
+    fi
+    ;;
+esac
 
 # ── Confirmation (only in interactive mode, never in dry-run) ─────────
 

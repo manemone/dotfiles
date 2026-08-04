@@ -230,6 +230,79 @@ links_for_tool() {
   esac
 }
 
+# ── State files ($HOME-side writeback into the running generation) ─────
+#
+# state_files_for_tool <tool>
+# Print (one per line) the tool-relative paths of files that a running
+# tool writes back through its $HOME symlink into the generation directory
+# it resolves through (e.g. lazy.nvim's `:Lazy update` rewrites
+# nvim/lazy-lock.json in place). Because $HOME symlinks always resolve
+# through `current` (never the generation directly — see
+# dotfiles_current_link), such a write lands inside the *generation*
+# directory, not the source tree, and is silently lost the next time a new
+# generation is created (create_generation copies from the source tree,
+# not from the outgoing generation). detect_state_writeback (below) is
+# what catches this before it happens.
+#
+# Same "one arm per tool, single source of truth" shape as links_for_tool
+# (see its comment for why: avoiding the drift that let uninstall.sh's
+# KNOWN_LINKS_bin go stale). Paths are relative to the tool's own
+# directory (e.g. "lazy-lock.json", not "nvim/lazy-lock.json") because
+# callers already know which tool they're checking and need to join it
+# against two different roots (a generation directory and the source
+# tree), not just $HOME.
+#
+# zsh/.zsh_plugins.txt is deliberately absent: it's antidote's *input*
+# file (human-edited), never written by the tool itself. claude/settings.json
+# is a generated real file (ADR §4.8), not a $HOME-side writeback into the
+# generation, and is out of scope here (see AGENTS.md / the task that added
+# this function).
+state_files_for_tool() {
+  case "$1" in
+    nvim)
+      printf '%s\n' \
+        "lazy-lock.json"
+      ;;
+  esac
+}
+
+# detect_state_writeback <generation_dir> <src_tree>
+# Compares every known state file (state_files_for_tool, across
+# AVAILABLE_TOOLS) between generation_dir (typically the generation
+# `current` still points at) and src_tree (typically the source tree about
+# to become the next generation). Prints, one per line, "<tool>/<relpath>"
+# for every file that differs. Uses cmp -s rather than diff — the same
+# reasoning as ADR DOC-2608040229 §4.7 avoiding rsync: a minimal Linux
+# install may not have diff, but cmp is POSIX baseline.
+#
+# A file missing on either side is not a diff worth reporting: missing in
+# the generation means nothing has been written back yet (e.g. a fresh
+# generation), and missing in src_tree would be a repo-structure question
+# unrelated to writeback, not something --adopt-state or --force should
+# have an opinion on.
+detect_state_writeback() {
+  _dsw_gen="$1"
+  _dsw_src="$2"
+
+  for _dsw_tool in $AVAILABLE_TOOLS; do
+    _dsw_oldifs="$IFS"
+    IFS='
+'
+    for _dsw_rel in $(state_files_for_tool "$_dsw_tool"); do
+      IFS="$_dsw_oldifs"
+      [ -n "$_dsw_rel" ] || continue
+      _dsw_gen_file="$_dsw_gen/$_dsw_tool/$_dsw_rel"
+      _dsw_src_file="$_dsw_src/$_dsw_tool/$_dsw_rel"
+      if [ -f "$_dsw_gen_file" ] && [ -f "$_dsw_src_file" ]; then
+        cmp -s "$_dsw_gen_file" "$_dsw_src_file" || printf '%s/%s\n' "$_dsw_tool" "$_dsw_rel"
+      fi
+      IFS='
+'
+    done
+    IFS="$_dsw_oldifs"
+  done
+}
+
 # claude_skill_links [repo_root]
 # Print (one per line) the paths under $HOME/.claude/skills/ that are
 # symlinks owned by this repo's distribution. Recognizes three schemes:
@@ -238,7 +311,7 @@ links_for_tool() {
 # e.g. when DOTFILES_DEPLOY_SRC was pointed at one directly), and the
 # pre-migration direct-to-worktree scheme (target under
 # repo_root/claude/skills/, if repo_root is given — see ADR
-# DOC-2608040229 §4.8/§4.9). Deliberately narrower than
+# DOC-2608040229 §4.8/§4.10). Deliberately narrower than
 # _dotfiles_symlink_is_repo_owned's generic "anywhere under repo_root"
 # check: a user's own symlink into some other part of the working tree
 # (e.g. a scratch directory) is not a skill this repo distributed, and
