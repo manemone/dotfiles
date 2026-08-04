@@ -99,6 +99,7 @@ realpath_m() {
   local target="$1"
   local dir=""
   local base=""
+  local parent=""
 
   if [ -d "$target" ]; then
     (cd -P -- "$target" && pwd -P)
@@ -111,7 +112,10 @@ realpath_m() {
   [ -d "$dir" ] ||
     die "cannot resolve path: $target"
 
-  printf '%s/%s\n' "$(cd -P -- "$dir" && pwd -P)" "$base"
+  parent="$(cd -P -- "$dir" && pwd -P)" ||
+    die "cannot resolve parent directory: $dir"
+
+  printf '%s/%s\n' "$parent" "$base"
 }
 
 json_nested_field() {
@@ -690,6 +694,8 @@ remove_worktree() {
   local slug=""
   local branch=""
   local worktree_dir=""
+  local invocation_real=""
+  local worktree_real=""
 
   slug="$(normalize_name "$task_name")"
 
@@ -704,7 +710,10 @@ remove_worktree() {
   echo "branch:    ${branch}"
   echo "force:     ${force}"
 
-  if [[ "$(realpath_m "$invocation_root")" == "$(realpath_m "$worktree_dir")" ]]; then
+  invocation_real="$(realpath_m "$invocation_root")"
+  worktree_real="$(realpath_m "$worktree_dir")"
+
+  if [[ "$invocation_real" == "$worktree_real" ]]; then
     echo "error: do not remove the current worktree" >&2
     echo "move to main first:" >&2
     echo "  cd ${repo_root}" >&2

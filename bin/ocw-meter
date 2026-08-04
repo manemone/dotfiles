@@ -333,11 +333,22 @@ fi
 # so fd 0 stays untouched) — but bash 3.2 (macOS's shipped /bin/bash)
 # cannot parse a heredoc nested inside a process substitution and
 # fails with a parse-time syntax error (bash 5, e.g. CI, has no such
-# issue). Writing the program text to a temp file first sidesteps that
-# parser bug while keeping fd 0 untouched for the same reason.
+# issue). `python3 /dev/fd/3 ... 3<<'PY'` (heredoc attached to fd 3,
+# python reads its program from that fd's path) parses fine on both
+# bash versions, but was rejected after testing: whenever this script
+# is invoked via PATH lookup (`command -v ocw-meter && ocw-meter ...`
+# — the exact shape bin/ocw's ocw_meter_event() uses) rather than by
+# an absolute/relative path, fd 3's heredoc content came back empty on
+# this machine (bash silently ran an empty program, exit 0, no error).
+# Confirmed reproducible outside this file too, with a trivial script
+# in the same two shapes — so it isn't specific to this codebase, but
+# it's a real failure mode for exactly the callers that matter here.
+# Writing the program text to a temp file sidesteps that: the write
+# happens before python3 is invoked at all, so PATH lookup vs direct
+# path makes no difference to what python3 ends up reading.
 _ocw_meter_py="$(mktemp)" || die "mktemp failed"
 trap 'rm -f "$_ocw_meter_py"' EXIT
-cat >"$_ocw_meter_py" <<'PY'
+cat >"$_ocw_meter_py" <<'PY' || die "failed to write the embedded program to $_ocw_meter_py"
 # PERFORMANCE NOTE (why `ingest`, below, has its own write path instead
 # of calling `record`/`write_event` once per message): this CLI resolves
 # git metadata (repo slug, worktree root, branch, HEAD SHA, plus the
