@@ -252,14 +252,14 @@ export OCW_METER_RAW="${OCW_METER_RAW:-0}"
 # relative link target against the directory of the link being read.
 _ocw_meter_src="${BASH_SOURCE[0]}"
 while [ -L "$_ocw_meter_src" ]; do
-  _ocw_meter_link_dir="$(cd "$(dirname "$_ocw_meter_src")" && pwd)"
+  _ocw_meter_link_dir="$(CDPATH='' cd -- "$(dirname "$_ocw_meter_src")" && pwd)"
   _ocw_meter_src="$(readlink "$_ocw_meter_src")"
   case "$_ocw_meter_src" in
     /*) ;;
     *) _ocw_meter_src="$_ocw_meter_link_dir/$_ocw_meter_src" ;;
   esac
 done
-OCW_METER_SCRIPT_DIR="$(cd "$(dirname "$_ocw_meter_src")" && pwd)"
+OCW_METER_SCRIPT_DIR="$(CDPATH='' cd -- "$(dirname "$_ocw_meter_src")" && pwd)"
 export OCW_METER_SCRIPT_DIR
 unset _ocw_meter_src _ocw_meter_link_dir
 

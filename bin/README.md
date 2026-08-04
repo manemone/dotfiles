@@ -295,7 +295,7 @@ PR番号はリポジトリ**内**でしか一意でない。`--pr`とstandalone�
 | `OCW_METER_HOME` | `~/.local/state/ocw-meter` | 保存先ルート。**git worktree内を指すと拒否される**（誤commit防止）。`event`/`bind-pr`は書き込みをスキップして exit 0（設定ミスが誰にも気づかれないままにならないよう、既定の保存先へ `meter.error` を1件/日で記録し、fallbackした旨をstderrに警告する）、`validate`/`report`/`ingest`は非ゼロで停止する |
 | `OCW_METER_RAW` | `0` | `1`にすると `snapshot-quota` がredaction済みのstatusLine生JSONを `raw/YYYY-MM-DD/` へ保存する（既定オフ） |
 | `OCW_METER_CLAUDE_PROJECTS_DIR` | `~/.claude/projects` | `ingest` がtranscriptを探すディレクトリ |
-| `OCW_METER_PRICE_DIR` | `<このファイルのあるディレクトリ>/prices` | `ingest` が価格表(`*.json`)を探すディレクトリ |
+| `OCW_METER_PRICE_DIR` | `<symlink を解決した先にある ocw-meter の実体のディレクトリ>/prices` | `ingest` が価格表(`*.json`)を探すディレクトリ |
 | `OCW_METER_INGEST_USE_GH` | `0` | `1` にすると、PR番号未解決時に `gh pr list --head <branch>` へフォールバックする（既定オフ = ネットワークを一切叩かない） |
 | `OCW_METER_QUOTA_INTERVAL` | `60`（秒） | `snapshot-quota` が実際に `quota.sample` を書き込む最短間隔。数値でない値・負値は既定値にフォールバックする |
 
