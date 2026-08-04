@@ -241,9 +241,27 @@ export OCW_METER_HOME="${OCW_METER_HOME:-}"
 export OCW_METER_RAW="${OCW_METER_RAW:-0}"
 # Lets `ingest` find bin/prices/*.json relative to this file regardless
 # of the caller's cwd, without hardcoding a path (OCW_METER_PRICE_DIR
-# still overrides this for tests/customization).
-OCW_METER_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# still overrides this for tests/customization). Resolves the
+# BASH_SOURCE[0] symlink chain by hand first: deploy.sh installs this
+# script as a symlink (e.g. ~/bin/ocw-meter), and `dirname` on an
+# unresolved symlink path yields the symlink's OWN directory rather than
+# the real script's — `ingest` would then look for a nonexistent
+# ~/bin/prices and silently find zero price tables (ADR
+# DOC-2608040229 §2.6). `readlink -f` is GNU-only and unavailable on
+# macOS, so this walks the chain one hop at a time instead, resolving a
+# relative link target against the directory of the link being read.
+_ocw_meter_src="${BASH_SOURCE[0]}"
+while [ -L "$_ocw_meter_src" ]; do
+  _ocw_meter_link_dir="$(CDPATH='' cd -- "$(dirname "$_ocw_meter_src")" && pwd)"
+  _ocw_meter_src="$(readlink "$_ocw_meter_src")"
+  case "$_ocw_meter_src" in
+    /*) ;;
+    *) _ocw_meter_src="$_ocw_meter_link_dir/$_ocw_meter_src" ;;
+  esac
+done
+OCW_METER_SCRIPT_DIR="$(CDPATH='' cd -- "$(dirname "$_ocw_meter_src")" && pwd)"
 export OCW_METER_SCRIPT_DIR
+unset _ocw_meter_src _ocw_meter_link_dir
 
 cmd="${1:-}"
 if [ -z "$cmd" ]; then
