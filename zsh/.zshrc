@@ -4,16 +4,47 @@
 # Use %x prompt expansion to get the sourced file path.
 # This works regardless of FUNCTION_ARGZERO / POSIX_ARGZERO settings,
 # unlike $0 which depends on those options.
-_ZSHRC_PATH="${${(%):-%x}:A}"
+#
+# ~/.zshrc -> .../dotfiles/current/zsh/.zshrc, where `current` is itself a
+# symlink to a dated generation directory that gets garbage-collected once
+# older than DOTFILES_KEEP_GENERATIONS deploys ago. `:A` (full realpath)
+# would resolve straight through `current` to that generation directory, so
+# DOTFILES_DIR would end up pointing at a path that can vanish out from
+# under an already-running shell after a later re-deploy's GC. Resolve only
+# the ~/.zshrc symlink itself (one hop, via readlink) so DOTFILES_DIR stops
+# at the stable `current` path instead.
+_ZSHRC_SOURCE="${(%):-%x}"
+if [ -L "$_ZSHRC_SOURCE" ]; then
+  # readlink returns the link's raw target text, which is relative when the
+  # symlink itself is relative (deploy.sh always writes absolute targets,
+  # but a hand-made or third-party-tool link might not). Anchor a relative
+  # target to the symlink's own directory so DOTFILES_DIR is always absolute.
+  _ZSHRC_TARGET="$(readlink "$_ZSHRC_SOURCE")"
+  case "$_ZSHRC_TARGET" in
+    /*) _ZSHRC_PATH="$_ZSHRC_TARGET" ;;
+    *) _ZSHRC_PATH="${_ZSHRC_SOURCE:h}/$_ZSHRC_TARGET" ;;
+  esac
+else
+  _ZSHRC_PATH="${_ZSHRC_SOURCE:A}"
+fi
 DOTFILES_DIR="${_ZSHRC_PATH:h:h}"
-unset _ZSHRC_PATH
+unset _ZSHRC_SOURCE _ZSHRC_TARGET _ZSHRC_PATH
 
 # =============================================================================
 # Source shared helpers (CURRENT_PLATFORM, is_macos, is_linux, is_wsl, etc.)
 # =============================================================================
+# helpers.sh's linked-worktree guard reads dirname -- "$0" to find the
+# checkout being deployed. In an interactive shell $0 is "zsh" (no slash),
+# so dirname resolves to "." — the shell's cwd, not this checkout — and the
+# guard would warn based on whatever git repo the shell happens to be
+# sitting in. Suppress it here (unexported, so it does not survive into a
+# later ./deploy-all.sh run from this same shell): sourcing helpers.sh for
+# its shell functions is not a deploy.
+DOTFILES_WORKTREE_WARNED=1
 if [ -f "$DOTFILES_DIR/shared/helpers.sh" ]; then
   source "$DOTFILES_DIR/shared/helpers.sh"
 fi
+unset DOTFILES_WORKTREE_WARNED
 
 # Fallback platform detection and helpers if shared/helpers.sh is unavailable.
 if [ -z "${CURRENT_PLATFORM:-}" ]; then

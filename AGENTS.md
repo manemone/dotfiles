@@ -3,7 +3,8 @@
 ## 概要
 
 クロスプラットフォーム（macOS / Linux / WSL2）対応の dotfiles。mise でランタイムを固定し、
-各ツールディレクトリ（`zsh/` `nvim/` `tmux/` `bin/` `claude/`）の `deploy.sh` が
+各ツールディレクトリ（`zsh/` `nvim/` `tmux/` `bin/` `claude/`）の `deploy.sh` が、配布実体
+（世代ディレクトリ + `current` シンボリックリンク。詳細は「デプロイの仕組み」節）を経由して
 ユーザーの `$HOME` に symlink を張ることで設定を配布する。
 
 ## 最重要ルール
@@ -12,15 +13,24 @@
   `git push --force` / `gh pr merge` を実行しない。例外はない。**
   すべての不可逆操作の前にこのルールを照合すること。
 - **deploy スクリプト（`deploy-all.sh` / `uninstall.sh` / `*/deploy.sh`）を実オペレーションで
-  実行しない。** symlink 先はユーザーの実 `$HOME` であり、`~/.zshrc` `~/.tmux.conf`
-  `~/.claude/settings.json` `~/bin/*` を実際に置き換える。動作確認は `deploy-all.sh --dry-run`
-  （全ツール対象）で行うのを基本とする。`HOME` を一時ディレクトリに差し替えるサンドボックス実行が
-  許されるツールの範囲は無条件ではない。副作用が `$HOME` の外（システムパッケージのインストール）や
-  外部ネットワークに及ぶツール（`tmux` `zsh` `nvim`）は対象外であり、詳細と対象ツールの分類は
-  `docs/design/` の「テスト方針（DOC-2608020715-b）」に従うこと。
+  実行しない。** `$HOME` 側のシンボリックリンクは配布実体
+  （`${XDG_DATA_HOME:-$HOME/.local/share}/dotfiles/` 配下の世代ディレクトリ + `current`）を
+  経由し、リンクの**向き先**（symlink のターゲット）自体はこの prefix 配下を指す。危険なのは
+  向き先ではなく、**リンクを張る先（dst）がユーザーの実 `$HOME`** であることで、`~/.zshrc`
+  `~/.tmux.conf` `~/.claude/settings.json` `~/bin/*` という実在のパスを実際に置き換える。世代の
+  作成・`current` の切り替え・古い世代の削除も同じ prefix 配下で実際に行われる。動作確認は
+  `deploy-all.sh --dry-run`（全ツール対象）で行うのを基本とする。**`deploy-all.sh --status` は
+  副作用が無いため実 `$HOME` に対して実行してよいが、`--rollback` と `--dev` は `current` を
+  実際に付け替えるため、`--dry-run` を付けずに実 `$HOME` に対して実行しない。**
+  `HOME` を一時ディレクトリに差し替えるサンドボックス実行が許されるツールの範囲は無条件ではない。
+  副作用が `$HOME` の外（システムパッケージのインストール）や外部ネットワークに及ぶツール
+  （`tmux` `zsh` `nvim`）は対象外であり、詳細と対象ツールの分類は `docs/design/` の
+  「テスト方針（DOC-2608020715-b）」に従うこと。
   **個別の `<tool>/deploy.sh` は `--dry-run` 引数を解釈しない**（環境変数 `DRY_RUN=1` のみ見る）。
   `sh zsh/deploy.sh --dry-run` のように直接引数を渡しても無視され実際に書き換えが起きるため、
   個別スクリプトを dry-run するときは `DRY_RUN=1 sh zsh/deploy.sh` のように環境変数で渡すこと。
+  単体実行時、配布元は環境変数 `DOTFILES_DEPLOY_SRC` が未設定なら `current` を自動的に使う
+  （`current` も無ければエラーで `./deploy-all.sh` を案内して終了する）。
 - 指示された範囲外の機能を先回りして実装しない。
 - **shellcheck / shfmt を含む linter の抑制ディレクティブ（`# shellcheck disable=...` 等）や、
   `.pre-commit-config.yaml` の `exclude` / `exclude_types` 追加・`shfmt` のオプション緩和などの
@@ -68,18 +78,92 @@
 
 ## デプロイの仕組み
 
-- `deploy-all.sh` が `shared/helpers.sh` を source し、`AVAILABLE_TOOLS` を解決した上で
-  各 `<tool>/deploy.sh` を呼び出す。
-- オプション: `--dry-run` / `--force` / `--only <tools>` / `--backup` / `--no-backup`。
-- symlink は `shared/helpers.sh` の `symlink_backup` 経由で張る。既存ファイルは `.backup`
-  （既に存在する場合はタイムスタンプ+PID 付きの別名）に退避される。`symlink_restore` が
-  uninstall 側の対応関数。ただし退避の前提は次の2点で崩れる:
-  - `--no-backup`（`BACKUP=0`）指定時は退避されず `rm -f` される
-  - `claude/skills/` は `symlink_backup` を通らない。`claude/deploy.sh` がスキルごとに
-    個別に symlink を張り、退避先も `~/.claude/skills-backup/<名前>.<日時>.<PID>` になる
-- `claude/settings.json` だけは symlink ではなく、ベース設定と `settings.machine.json`
-  （マシン固有・非追跡）をマージした**実ファイル**として生成される。マシンごとの上書き設定を
-  git 管理下に置かずに反映するため。
+`$HOME` はリポジトリの作業ツリーへ直接リンクしない。`deploy-all.sh` は作業ツリーを
+**配布実体**（世代ディレクトリ）へコピーし、`current` というシンボリックリンクをそこへ向け、
+各 `<tool>/deploy.sh` は `current` 経由で `$HOME` からリンクする（Capistrano の `releases/` +
+`current` と同じ構造）。採用理由と却下案は ADR
+[DOC-2608040229](docs/adr/DOC-2608040229_deploy-distribution-method.md) を参照。
+
+### 配布実体レイヤ
+
+- canonical prefix: `${XDG_DATA_HOME:-$HOME/.local/share}/dotfiles`
+- 世代ディレクトリ: `<prefix>/generations/<date +%Y%m%dT%H%M%S>-<short sha>`（作業ツリーから
+  `cp -a`。**`AVAILABLE_TOOLS` の各ディレクトリと `shared/` のみ**が対象で、`docs/` `tools/`
+  `templates/` `tests/` `.git` はコピーされない）
+- `current`: `<prefix>/current`。`ln -sfn` で切り替える（原子性は追わない。ADR §4.7）
+- 世代直下の `.dotfiles-manifest` にデプロイ日時・ソースツリーの絶対パス・コミット SHA・
+  ブランチ名・dirty だったか・リンクされた git ワークツリーからのデプロイか・モード（常に
+  `generation`。dev モードは manifest を書かない。dev モード中の `--status` はソースツリーの
+  git 状態をその場で読んで代わりに表示する）・ホスト名を平文で記録する
+- 保持世代数は既定3（`DOTFILES_KEEP_GENERATIONS` で上書き可）。GC は `current` が指す世代を
+  決して削除せず、dev モード中は何も削除しない
+- **`--only <tools>` は `$HOME` のどのリンクを張るかだけを制御し、世代の内容には影響しない。**
+  世代は常に全ツール分をコピーする（部分的な世代を作ると、他ツールのリンクが新世代に
+  存在しないパスを指してリンク切れになるため）
+
+### デプロイの流れ
+
+1. `deploy-all.sh` が `shared/helpers.sh` を source し、`AVAILABLE_TOOLS` を解決する
+2. 新しい世代ディレクトリを作り、`.dotfiles-manifest` を書く
+3. `current` を新世代へ切り替える
+4. 各 `<tool>/deploy.sh` を、配布元を環境変数 `DOTFILES_DEPLOY_SRC`（= `current` を指す
+   固定パス）として export した状態で呼び出す。symlink は `shared/helpers.sh` の
+   `symlink_backup` 経由で `$DOTFILES_DEPLOY_SRC/<tool>/...` へ張る
+5. 古い世代を GC する
+
+オプション: `--dry-run` / `--force` / `--only <tools>` / `--backup` / `--no-backup` /
+`--status` / `--rollback [世代ID]` / `--dev`。後者3つは `current` シンボリックリンク自体を
+操作するコマンドで、互いに組み合わせられず、`--only` / `--force` / `--backup` / `--no-backup`
+とも組み合わせられない（`--dry-run` のみ併用可）。
+
+- `--status`: 副作用なし。`current` の向き先（世代か dev モードか）・その manifest の内容
+  （dev モードでは manifest が無いためソースツリーの git 状態をその場で読んで代わりに表示する）・
+  保持世代一覧・`$HOME` 側リンクの健全性（リンク切れ検出）を表示する
+- `--rollback [世代ID]`: `current` を1つ前（または指定した）世代へ付け替える。`$HOME` 側の
+  symlink は張り直さない（`current` の付け替えだけで全リンクの向き先が変わるのが世代方式の要）
+- `--dev`: `current` を作業ツリーそのものへ向ける（世代は作らない。編集が即座に `$HOME` へ
+  反映される）。dev モード中は GC を行わない
+
+`$HOME` 側の配布先一覧は `shared/helpers.sh` の `links_for_tool()`（symlink 系のツール）と
+`claude_skill_links()`（`claude/skills/` の個別 symlink）に一元化されており、`uninstall.sh` と
+`deploy-all.sh --status` の両方がここを参照する。リストを二重管理すると片方だけ更新される
+事故が起きる（`uninstall.sh` 側から `ocw-meter` が漏れていた過去の不具合がまさにこれ）。
+
+### 単体 `<tool>/deploy.sh` 実行時の規約
+
+`DOTFILES_DEPLOY_SRC` が未設定なら `current` を自動的に使う（`shared/helpers.sh` の
+`resolve_deploy_src`）。`current` も無ければ、エラーメッセージで `./deploy-all.sh` を案内して
+終了する。単体実行が自分で世代を作ることはない（世代は常に全ツール分でなければならないため）。
+
+### symlink の退避
+
+symlink は `shared/helpers.sh` の `symlink_backup` 経由で張る。既存ファイルは `.backup`
+（既に存在する場合はタイムスタンプ+PID 付きの別名）に退避される。`symlink_restore` が
+uninstall 側の対応関数。ただし退避の前提は次の3点で崩れる:
+
+- `--no-backup`（`BACKUP=0`）指定時は退避されず `rm -f` される
+- dst が既にこのリポジトリ由来の symlink（リンク先が canonical prefix 配下、またはソースツリー
+  配下）であれば、退避せず張り替える。旧方式（作業ツリー直リンク）の symlink がそのまま
+  `.backup` として残り、後日 `uninstall.sh` がそれを「ユーザーの元設定」として誤って復元するのを
+  防ぐための判定
+- `claude/skills/` は `symlink_backup` を通らない。`claude/deploy.sh` がスキルごとに
+  個別に symlink を張り、退避先も `~/.claude/skills-backup/<名前>.<日時>.<PID>` になる
+
+### claude の例外
+
+`claude/settings.json` だけは symlink ではなく、`current` 経由の `claude/settings.json` と
+`claude/settings.machine.json`（マシン固有・非追跡だが `cp -a` で世代内にコピーされる）を
+マージした**実ファイル**として生成される。マシンごとの上書き設定を git 管理下に置かずに
+反映するため。
+
+### uninstall.sh の後片付け
+
+`uninstall.sh` は `$HOME` 側の symlink・生成ファイルを撤去したあと、配布実体
+（`<prefix>/generations/` `<prefix>/.tmp/` と `current`、空になった `<prefix>` 自体）も
+片付ける。撤去対象に含まれないツールの symlink がまだ配布実体を参照している場合は片付けを
+行わず安全側に倒す。dev モード中（`current` が人間の作業ツリーを指している）でも
+`generations/` `.tmp/` と `current` 自体は通常どおり片付けられる。保護されるのは
+**`current` が指す作業ツリーの実体だけ**であり、そちらには一切触れない。
 
 ## クロスプラットフォーム制約
 
@@ -126,7 +210,9 @@ tests/deploy_smoke.sh
 
 `HOME` を一時ディレクトリへ差し替えたサンドボックス上で実際に deploy /
 uninstall を行い、symlink・既存ファイルの退避・冪等性・
-`claude/settings.json` の実ファイル生成を検証する（既定の対象は
+`claude/settings.json` の実ファイル生成に加えて、世代の作成と GC・
+ソースツリー消失耐性・編集分離・`--rollback`・`--dev`・
+配布実体（世代 + `current`）の後片付けを検証する（既定の対象は
 `bin,claude`。デプロイの検証は必ずこのサンドボックス経由で行い、
 人間の実 `$HOME` に対して直接実行しない。詳細は
 [docs/design/DOC-2608020715-b_テスト方針.md](docs/design/DOC-2608020715-b_テスト方針.md)
@@ -179,13 +265,22 @@ PR を作る前に
 ## 実装時の注意
 
 - 新しいツールディレクトリを足すときは `shared/helpers.sh` の `AVAILABLE_TOOLS` に加えて、
-  `uninstall.sh` の `KNOWN_LINKS_<tool>`（生成ファイルがあれば `KNOWN_GENERATED_<tool>` も）にも
-  追加する。**さらに、`uninstall.sh` 内の `_links` / `_generated` / `_skills_src` を求める
-  3つの `case "$_tool" in ... esac` にも、新しいツール名の arm を追加する。** `KNOWN_LINKS_<tool>`
-  変数を定義しただけで case 文に arm を足し忘れると、`_links` が空のまま扱われ「No link list
-  defined」で静かにスキップされる（変数の存在だけでは case 文の arm は自動生成されない）。
-  これを忘れると `uninstall.sh` は該当ツールを静かにスキップし、張った symlink が
-  ユーザーの `$HOME` に残り続ける。
+  同じく `shared/helpers.sh` の `links_for_tool()` に `$HOME` 側リンク先を返す `case` の arm を
+  追加する。**`uninstall.sh` と `deploy-all.sh --status` の両方がここを一次情報源として参照する**
+  ため、二重管理を避けるためにここへ一元化されている（過去に `uninstall.sh` 側だけ
+  `KNOWN_LINKS_bin` に `ocw-meter` が無く撤去漏れが起きた不具合の再発防止）。
+  生成ファイル（symlink ではなく実ファイルを生成するツール。例: `claude/settings.json`）が
+  あれば `uninstall.sh` の `KNOWN_GENERATED_<tool>` を定義し、`_generated` を求める
+  `case "$_tool" in ... esac` にも arm を追加する。スキルの個別 symlink のように
+  「リポジトリ由来判定」が別途必要な場合は `_skills_src` を求める `case` にも arm を追加する。
+  **`uninstall.sh` に残る `case` 文はこの2つ（`_generated` / `_skills_src`）のみで、
+  `_links` に相当する分岐は `shared/helpers.sh` の `links_for_tool()` へ移っている。**
+  `links_for_tool()` に arm を足し忘れると、`uninstall.sh` 側の `_links` が空のまま扱われ
+  「No link list defined」で静かにスキップされる。**ただし `KNOWN_GENERATED_<tool>` を
+  定義済みのツール（`claude` 等）はこのスキップ自体が発生しない**（`_generated` が非空の
+  ままループが継続するため）。この場合、警告なしに `_links` 側の symlink だけが撤去されずに
+  残る。`deploy-all.sh --status` のリンク健全性スキャンには arm 忘れに対する警告経路が無く、
+  その分の `$HOME` リンクが静かにレポートから抜け落ちる点にも注意する。
 - README は「ルート `README.md`（全体）」と「各ツールの `README.md`（詳細）」の二層構造。
   片方だけ更新しない。
 - `docs/` の文書に地の文で言及するときは、説明的ファイル名だけで呼ばず、その文書の DOC-ID を明示する

@@ -38,11 +38,20 @@ chsh -s "$(which zsh)"
 
 ## 2. Quick Start
 
+On a fresh machine, run the top-level `deploy-all.sh` (not `zsh/deploy.sh` directly) —
+`$HOME` links through a distribution artifact under `${XDG_DATA_HOME:-$HOME/.local/share}/dotfiles/`
+that only `deploy-all.sh` creates. Running `zsh/deploy.sh` standalone before that
+exists fails with an error pointing you back here.
+
 ```bash
-cd ~/.dotfiles/zsh
-./deploy.sh
+cd ~/.dotfiles
+./deploy-all.sh --only zsh
 exec zsh
 ```
+
+Once `deploy-all.sh` has run at least once, you can re-run `zsh/deploy.sh` directly
+to re-link `zsh` alone (it reuses the existing distribution artifact rather than
+creating a new one).
 
 The deploy script:
 - Symlinks `.zshrc` → `~/.zshrc`
@@ -165,11 +174,13 @@ antidote update
 
 ### Custom Antidote Install Location
 
-Set `ANTIDOTE_HOME` **before** running `deploy.sh`:
+Set `ANTIDOTE_HOME` **before the first deploy** (this is usually done on a fresh
+machine, before `current` exists — use the top-level `deploy-all.sh`, not
+`zsh/deploy.sh` directly; see Quick Start above):
 
 ```bash
 export ANTIDOTE_HOME="$HOME/.local/share/antidote"
-./deploy.sh
+cd ~/.dotfiles && ./deploy-all.sh --only zsh
 ```
 
 To make it permanent, add to `~/.zshenv` (sourced before `.zshrc`):
