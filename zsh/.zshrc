@@ -33,9 +33,18 @@ unset _ZSHRC_SOURCE _ZSHRC_TARGET _ZSHRC_PATH
 # =============================================================================
 # Source shared helpers (CURRENT_PLATFORM, is_macos, is_linux, is_wsl, etc.)
 # =============================================================================
+# helpers.sh's linked-worktree guard reads dirname -- "$0" to find the
+# checkout being deployed. In an interactive shell $0 is "zsh" (no slash),
+# so dirname resolves to "." — the shell's cwd, not this checkout — and the
+# guard would warn based on whatever git repo the shell happens to be
+# sitting in. Suppress it here (unexported, so it does not survive into a
+# later ./deploy-all.sh run from this same shell): sourcing helpers.sh for
+# its shell functions is not a deploy.
+DOTFILES_WORKTREE_WARNED=1
 if [ -f "$DOTFILES_DIR/shared/helpers.sh" ]; then
   source "$DOTFILES_DIR/shared/helpers.sh"
 fi
+unset DOTFILES_WORKTREE_WARNED
 
 # Fallback platform detection and helpers if shared/helpers.sh is unavailable.
 if [ -z "${CURRENT_PLATFORM:-}" ]; then

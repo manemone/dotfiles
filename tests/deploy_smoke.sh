@@ -1598,6 +1598,24 @@ scenario_status() {
     fail "devモードの--statusはmanifestの代わりに実ソースツリーのgit状態を表示する"
   fi
 
+  # --- 何もdeployしていない(currentが存在しない)状態は異常ではなく0で終了する ---
+  new_sandbox
+  sbx="$SANDBOX_DIR"
+
+  out="$(run_deploy "$sbx" --status 2>&1)"
+  rc=$?
+  if [ "$rc" -eq 0 ]; then
+    pass "未デプロイ状態の--statusは0で終了する(currentが無いこと自体は異常ではない)"
+  else
+    fail "未デプロイ状態の--statusは0で終了する (exit=$rc になった)"
+    log "$out"
+  fi
+  if printf '%s' "$out" | grep -q "current does not exist yet"; then
+    pass "未デプロイ状態の--statusはその旨を表示する"
+  else
+    fail "未デプロイ状態の--statusはその旨を表示する"
+  fi
+
   # --- currentが消えた世代を指しているとエラーとして報告される ---
   new_sandbox
   sbx="$SANDBOX_DIR"

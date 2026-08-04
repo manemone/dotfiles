@@ -6,14 +6,19 @@
 
 # ── Linked-worktree guard ─────────────────────────────────────────────
 #
-# Every deploy script symlinks files from THIS checkout into $HOME.  If the
-# checkout is a linked git worktree (created by `git worktree add`, e.g. by
-# `ocw`), those symlinks point into a directory that disappears when the
-# worktree is removed — silently breaking ~/.zshrc, ~/.claude/skills/*,
-# ~/bin/* and friends long after the deploy succeeded.
+# Every deploy script sources this file. If the checkout it lives in is a
+# linked git worktree (created by `git worktree add`, e.g. by `ocw`), this
+# fires a one-time informational warning naming the worktree.
 #
-# Deploying from a worktree is legitimate while testing a change, so this is
-# a warning, not an error.  Set DOTFILES_QUIET_WORKTREE_WARNING=1 to silence.
+# Since the move to generation-based distribution (ADR DOC-2608040229), an
+# ordinary deploy copies the checkout into a generation snapshot, so $HOME
+# symlinks resolve through that snapshot rather than through this worktree
+# — removing the worktree afterward does NOT break them. The one exception
+# is dev mode (`--dev`), which points `current` directly at a worktree;
+# cmd_dev in deploy-all.sh prints its own, more specific warning for that
+# case.
+#
+# Set DOTFILES_QUIET_WORKTREE_WARNING=1 to silence.
 
 # is_linked_worktree <dir>
 # Returns 0 if dir is inside a *linked* git worktree (not the main one).
@@ -44,10 +49,15 @@ warn_if_linked_worktree() {
 
   log_warn "Deploying from a linked git worktree:"
   log_warn "  $(cd "${1:-.}" && pwd)"
-  log_warn "Symlinks will point INTO this worktree and will break when it is"
-  log_warn "removed (e.g. by 'ocw rm')."
+  log_warn "This deploy copies the checkout into a generation snapshot, so"
+  log_warn "\$HOME symlinks resolve through that snapshot, not through this"
+  log_warn "worktree — removing the worktree afterward will NOT break them."
+  log_warn "(The exception is dev mode: '--dev' points \$HOME directly at"
+  log_warn "whichever tree is current, and prints its own warning for that.)"
 
-  # The main worktree is the parent of the common git dir.
+  # The main worktree is the parent of the common git dir. Named here for
+  # reference only (e.g. to know where to deploy from once this worktree is
+  # gone), not as a required follow-up step.
   _wilw_main=$(
     git -C "${1:-.}" rev-parse --path-format=absolute --git-common-dir 2>/dev/null
   )
@@ -55,10 +65,7 @@ warn_if_linked_worktree() {
     _wilw_main=$(cd "$_wilw_main/.." 2>/dev/null && pwd)
   fi
   if [ -n "$_wilw_main" ]; then
-    log_warn "After merging, re-run the deploy from the main worktree:"
-    log_warn "  cd $_wilw_main && ./deploy-all.sh"
-  else
-    log_warn "After merging, re-run the deploy from the main worktree."
+    log_warn "Main worktree: $_wilw_main"
   fi
 
   log_warn "Silence this with DOTFILES_QUIET_WORKTREE_WARNING=1."
@@ -518,6 +525,9 @@ create_generation() {
     # .../bin/bin/ocw), silently distributing stale content while reporting
     # success. Refuse instead of nesting.
     log_error "Generation already exists (id collision): $_cg_dir"
+    log_error "Generation IDs are second-precision; wait a second and re-run, or"
+    log_error "use --dev if you want changes to take effect without creating a"
+    log_error "new generation at all."
     printf 'exit 1\n'
     return 1
   fi
@@ -610,6 +620,9 @@ create_generation() {
 
   if [ -e "$_cg_dir" ]; then
     log_error "Generation already exists (id collision): $_cg_dir"
+    log_error "Generation IDs are second-precision; wait a second and re-run, or"
+    log_error "use --dev if you want changes to take effect without creating a"
+    log_error "new generation at all."
     _dotfiles_safe_rmdir "$_cg_scratch" "$_cg_prefix/.tmp"
     printf 'exit 1\n'
     return 1

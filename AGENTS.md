@@ -15,9 +15,10 @@
 - **deploy スクリプト（`deploy-all.sh` / `uninstall.sh` / `*/deploy.sh`）を実オペレーションで
   実行しない。** `$HOME` 側のシンボリックリンクは配布実体
   （`${XDG_DATA_HOME:-$HOME/.local/share}/dotfiles/` 配下の世代ディレクトリ + `current`）を
-  経由するが、リンクの向き先が指す実体は結局ユーザーの実 `$HOME` であり、`~/.zshrc`
-  `~/.tmux.conf` `~/.claude/settings.json` `~/bin/*` を実際に置き換える。世代の作成・`current`
-  の切り替え・古い世代の削除も同じ prefix 配下で実際に行われる。動作確認は
+  経由し、リンクの**向き先**（symlink のターゲット）自体はこの prefix 配下を指す。危険なのは
+  向き先ではなく、**リンクを張る先（dst）がユーザーの実 `$HOME`** であることで、`~/.zshrc`
+  `~/.tmux.conf` `~/.claude/settings.json` `~/bin/*` という実在のパスを実際に置き換える。世代の
+  作成・`current` の切り替え・古い世代の削除も同じ prefix 配下で実際に行われる。動作確認は
   `deploy-all.sh --dry-run`（全ツール対象）で行うのを基本とする。**`deploy-all.sh --status` は
   副作用が無いため実 `$HOME` に対して実行してよいが、`--rollback` と `--dev` は `current` を
   実際に付け替えるため、`--dry-run` を付けずに実 `$HOME` に対して実行しない。**
@@ -91,8 +92,9 @@
   `templates/` `tests/` `.git` はコピーされない）
 - `current`: `<prefix>/current`。`ln -sfn` で切り替える（原子性は追わない。ADR §4.7）
 - 世代直下の `.dotfiles-manifest` にデプロイ日時・ソースツリーの絶対パス・コミット SHA・
-  ブランチ名・dirty だったか・リンクされた git ワークツリーからのデプロイか・モード（世代 or
-  dev）・ホスト名を平文で記録する
+  ブランチ名・dirty だったか・リンクされた git ワークツリーからのデプロイか・モード（常に
+  `generation`。dev モードは manifest を書かない。dev モード中の `--status` はソースツリーの
+  git 状態をその場で読んで代わりに表示する）・ホスト名を平文で記録する
 - 保持世代数は既定3（`DOTFILES_KEEP_GENERATIONS` で上書き可）。GC は `current` が指す世代を
   決して削除せず、dev モード中は何も削除しない
 - **`--only <tools>` は `$HOME` のどのリンクを張るかだけを制御し、世代の内容には影響しない。**

@@ -84,8 +84,10 @@ Options:
   --status          Show what current points at, its manifest, the kept
                     generations, and whether any \$HOME symlink is broken.
                     Read-only; safe to run against a real \$HOME. Exits 0
-                    if current and every \$HOME symlink are healthy, 1
-                    otherwise (broken/missing current, broken symlink).
+                    if current and every \$HOME symlink are healthy, or if
+                    nothing has been deployed yet. Exits 1 if current is
+                    broken (points at something that no longer exists or
+                    isn't a symlink) or any \$HOME symlink is broken.
   --rollback [id]   Switch current to the generation before it, or to
                     <id> if given. \$HOME symlinks are not re-created —
                     they already resolve through current. Combine with
@@ -121,8 +123,11 @@ EOF
 # never writes a manifest, see cmd_dev), the list of kept generations, and
 # a $HOME symlink health scan (via links_for_tool() + claude_skill_links(),
 # shared/helpers.sh) that flags broken symlinks. Returns 1 if current is
-# broken/missing or any $HOME symlink is broken, 0 otherwise — callers that
-# want a machine-readable health check can rely on the exit code.
+# broken (points at something that no longer exists or isn't a symlink) or
+# any $HOME symlink is broken. Returns 0 otherwise, including when nothing
+# has been deployed yet (current does not exist — that is not an error
+# state) — callers that want a machine-readable health check can rely on
+# the exit code.
 cmd_status() {
   _cs_prefix="$(dotfiles_prefix)"
   _cs_link="$(dotfiles_current_link)"

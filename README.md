@@ -203,20 +203,25 @@ worktree and that worktree is removed (`ocw rm`, `git worktree remove`), every
 [WARN] back to generation mode.
 ```
 
-A related but separate warning can show up during an ordinary (non-`--dev`) deploy
-too: running `./deploy-all.sh` itself from a linked worktree still prints the
-"Deploying from a linked git worktree" warning below, left over from the pre-generation
-direct-link scheme. In generation mode this warning is misleading — the
-generation this deploy creates is a `cp -a` snapshot, so `$HOME` symlinks resolve
-through it rather than through the worktree, and removing the worktree afterward
-does **not** break them. Only dev mode actually makes the worktree's removal
-break `$HOME` symlinks, as described above.
+A related but separate, purely informational notice can show up during an
+ordinary (non-`--dev`) deploy too: running `./deploy-all.sh` itself from a
+linked worktree prints a "Deploying from a linked git worktree" notice naming
+the worktree. In generation mode this is just FYI — the generation this
+deploy creates is a `cp -a` snapshot, so `$HOME` symlinks resolve through it
+rather than through the worktree, and removing the worktree afterward does
+**not** break them. Only dev mode actually makes the worktree's removal break
+`$HOME` symlinks, as described above.
 
 ```
 [WARN] Deploying from a linked git worktree:
 [WARN]   /path/to/dotfiles/my-feature
-[WARN] Symlinks will point INTO this worktree and will break when it is
-[WARN] removed (e.g. by 'ocw rm').
+[WARN] This deploy copies the checkout into a generation snapshot, so
+[WARN] $HOME symlinks resolve through that snapshot, not through this
+[WARN] worktree — removing the worktree afterward will NOT break them.
+[WARN] (The exception is dev mode: '--dev' points $HOME directly at
+[WARN] whichever tree is current, and prints its own warning for that.)
+[WARN] Main worktree: /path/to/dotfiles/master
+[WARN] Silence this with DOTFILES_QUIET_WORKTREE_WARNING=1.
 ```
 
 Re-run `./deploy-all.sh` (without `--dev`) to leave dev mode and go back to the
@@ -245,7 +250,6 @@ directory, the `current` symlink, and the canonical prefix itself once empty). I
 `current` is in dev mode (pointing at a working tree), `generations/` / `.tmp/` /
 `current` are still cleaned up as usual; only the working tree `current` points at
 is protected and never touched.
-Note: `--only nvim` currently removes legacy dein.vim symlinks; lazy.nvim symlinks (`init.lua`, `lua/`, `lazy-lock.json`) are not yet tracked.
 See each tool's deploy script for the full list of files it creates.
 
 ## Next Steps
