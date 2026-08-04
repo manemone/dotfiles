@@ -2109,9 +2109,9 @@ scenario_state_writeback() {
 
   # --- --dry-runでも検知は出るが、停止はしない(report-only) ---
   # create_generationのDRY_RUN分岐も世代ID(秒精度)の既存判定を行うため、
-  # 2073行目で実際に作られた世代と同一秒内に実行すると「Generation already
-  # exists」で衝突しdry-run自体がexit 1になる。他の新世代作成前と同様に
-  # wait_for_next_secondを挟む。
+  # 直前の「事前準備」デプロイで実際に作られた世代と同一秒内に実行すると
+  # 「Generation already exists」で衝突しdry-run自体がexit 1になる。他の
+  # 新世代作成前と同様にwait_for_next_secondを挟む。
   wait_for_next_second
   out="$(run_deploy_from "$copy_dir/deploy-all.sh" "$sbx" --dry-run --only bin 2>&1)"
   rc=$?
