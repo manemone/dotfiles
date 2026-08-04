@@ -387,7 +387,7 @@ EOF
     fi
     if [ -n "$existing_skill" ]; then
       # 孫3で uninstall.sh の由来判定が両対応になり、current 経由で張られた
-      # 新方式の skill symlink も認識・撤去できるようになった(ADR §4.8/§4.9
+      # 新方式の skill symlink も認識・撤去できるようになった(ADR §4.8/§4.10
       # / DOC-2608040229)。撤去後は deploy 時に skills-backup へ退避して
       # おいた元のスキルが復元される。
       if [ -d "$sbx/.claude/skills/$existing_skill" ] && [ ! -L "$sbx/.claude/skills/$existing_skill" ] && [ -f "$sbx/.claude/skills/$existing_skill/DUMMY_MARKER" ]; then
@@ -850,7 +850,7 @@ scenario_claude_skill_migration() {
 
   # 旧方式(作業ツリー直リンク)の skill symlink を再現する。current 経由へ
   # 配布元が変わったことで、claude/deploy.sh の「Already correct symlink?」
-  # の判定に一致しなくなり、バックアップ処理へ落ちる経路を通る(ADR §4.9)。
+  # の判定に一致しなくなり、バックアップ処理へ落ちる経路を通る(ADR §4.10)。
   ln -s "$REPO_ROOT/claude/skills/$skill_name" "$sbx/.claude/skills/$skill_name"
   # 存在しないスキルを指す旧方式リンク(stale)も再現する。
   ln -s "$REPO_ROOT/claude/skills/smoke-test-gone-skill" "$sbx/.claude/skills/smoke-test-gone-skill"
@@ -2108,6 +2108,11 @@ scenario_state_writeback() {
   fi
 
   # --- --dry-runでも検知は出るが、停止はしない(report-only) ---
+  # create_generationのDRY_RUN分岐も世代ID(秒精度)の既存判定を行うため、
+  # 2073行目で実際に作られた世代と同一秒内に実行すると「Generation already
+  # exists」で衝突しdry-run自体がexit 1になる。他の新世代作成前と同様に
+  # wait_for_next_secondを挟む。
+  wait_for_next_second
   out="$(run_deploy_from "$copy_dir/deploy-all.sh" "$sbx" --dry-run --only bin 2>&1)"
   rc=$?
   if [ "$rc" -eq 0 ]; then

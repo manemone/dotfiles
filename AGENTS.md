@@ -130,6 +130,11 @@
   世代を作らず `current` も `$HOME` symlink も一切触らない。コピーバックのみで終了するので、
   `git diff` で確認・コミットしたうえで改めて通常の deploy を実行する
 
+`$HOME` 側の配布先一覧は `shared/helpers.sh` の `links_for_tool()`（symlink 系のツール）と
+`claude_skill_links()`（`claude/skills/` の個別 symlink）に一元化されており、`uninstall.sh` と
+`deploy-all.sh --status` の両方がここを参照する。リストを二重管理すると片方だけ更新される
+事故が起きる（`uninstall.sh` 側から `ocw-meter` が漏れていた過去の不具合がまさにこれ）。
+
 ### 状態ファイル（$HOME 側からの書き戻し）
 
 `nvim/lazy-lock.json` のように、`$HOME` 側から symlink 経由でツール自身が書き戻すファイルがある
@@ -139,11 +144,6 @@
 対象ファイルの一覧を返し、`detect_state_writeback()` が `current` の世代とソースツリーの間で
 `cmp -s` により差分を検知する。デプロイ時の検知・`--status` での表示・`--adopt-state` による
 取り込みは、いずれもこの2関数が一次情報源。詳細と却下案は ADR DOC-2608040229 §4.9 を参照。
-
-`$HOME` 側の配布先一覧は `shared/helpers.sh` の `links_for_tool()`（symlink 系のツール）と
-`claude_skill_links()`（`claude/skills/` の個別 symlink）に一元化されており、`uninstall.sh` と
-`deploy-all.sh --status` の両方がここを参照する。リストを二重管理すると片方だけ更新される
-事故が起きる（`uninstall.sh` 側から `ocw-meter` が漏れていた過去の不具合がまさにこれ）。
 
 ### 単体 `<tool>/deploy.sh` 実行時の規約
 
