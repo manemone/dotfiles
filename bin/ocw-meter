@@ -328,12 +328,29 @@ fi
 # program, leaving sys.stdin at EOF, so snapshot-quota would ALWAYS see
 # empty input no matter what the caller piped in (caught by manual
 # testing while implementing 孫4 — every sample silently reported
-# rate_limits absent). Process substitution (`<(...)`) hands python a
-# FILE to read its program from instead of stdin, so fd 0 is never
-# touched here and passes through to the embedded script exactly as
-# the caller of `ocw-meter snapshot-quota` provided it.
-python3 <(
-  cat <<'PY'
+# rate_limits absent). This then became `python3 <(cat <<'PY' ... PY)`
+# (process substitution hands python a FILE to read its program from,
+# so fd 0 stays untouched) — but bash 3.2 (macOS's shipped /bin/bash)
+# cannot parse a heredoc nested inside a process substitution and
+# fails with a parse-time syntax error (bash 5, e.g. CI, has no such
+# issue). `python3 /dev/fd/3 ... 3<<'PY'` (heredoc attached to fd 3,
+# python reads its program from that fd's path) parses fine on both
+# bash versions, but was rejected after testing: with this embedded
+# program's real size (173KB), bash always backs fd 3 with a regular
+# temp file rather than a pipe (bash 3.2 always does; bash 5 does too
+# once the heredoc exceeds the pipe buffer, which 173KB does) — and
+# Apple's /usr/bin/python3 (3.9.6) cannot read a program from
+# /dev/fd/N when that fd is a regular file: it silently runs an empty
+# program and exits 0, no error. (PATH lookup vs an absolute/relative
+# path is NOT the deciding factor here — that's a red herring from an
+# earlier, confounded test that changed PATH and the python3 binary at
+# the same time; a pyenv/Homebrew python3 handles the same fd fine.)
+# Writing the program text to a temp file sidesteps that: python3
+# reads an ordinary file path instead of /dev/fd/N, so which python3
+# binary answers to `python3` makes no difference.
+_ocw_meter_py="$(mktemp)" || die "mktemp failed"
+trap 'rm -f "$_ocw_meter_py"' EXIT
+cat >"$_ocw_meter_py" <<'PY' || die "failed to write the embedded program to $_ocw_meter_py"
 # PERFORMANCE NOTE (why `ingest`, below, has its own write path instead
 # of calling `record`/`write_event` once per message): this CLI resolves
 # git metadata (repo slug, worktree root, branch, HEAD SHA, plus the
@@ -4236,7 +4253,7 @@ def main():
 
 sys.exit(main())
 PY
-) "$cmd" "$@"
+python3 "$_ocw_meter_py" "$cmd" "$@"
 py_status=$?
 
 case "$cmd" in

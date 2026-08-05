@@ -1842,7 +1842,15 @@ class SymlinkInvocationTests(OcwMeterTestCase):
         hop1_dir.mkdir()
         hop2_dir.mkdir()
         hop1_link = hop1_dir / "ocw-meter"
-        hop1_link.symlink_to(os.path.relpath(OCW_METER, hop1_dir))
+        # `os.path.relpath` must be computed against hop1_dir's
+        # symlink-resolved physical location, not its as-given path:
+        # on macOS `$TMPDIR` sits under `/var/...`, itself a symlink to
+        # `/private/var/...`, so the two differ by one path component.
+        # The kernel resolves a relative symlink target against the
+        # physical directory it lives in, so an unresolved hop1_dir
+        # yields a target one `../` short and this link ends up
+        # pointing nowhere.
+        hop1_link.symlink_to(os.path.relpath(OCW_METER, hop1_dir.resolve()))
         hop2_link = hop2_dir / "ocw-meter"
         hop2_link.symlink_to(hop1_link)
 

@@ -514,6 +514,28 @@ class ExistingBehaviorRegressionTests(OcwTestCase):
         force_remove = run_ocw(["rm", "-f", "widget-maker"], self.repo_root)
         self.assertEqual(force_remove.returncode, 0, force_remove.stderr)
 
+    def test_remove_current_worktree_is_guarded(self):
+        create = run_ocw(["widget-maker"], self.repo_root)
+        self.assertEqual(create.returncode, 0, create.stderr)
+
+        worktree_dir = self.repo_root.parent / "widget-maker"
+        result = run_ocw(["rm", "widget-maker"], worktree_dir)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("do not remove the current worktree", result.stderr)
+
+        # The worktree is still there (removal was refused) — force-remove
+        # from main so this test doesn't leak a dangling worktree.
+        force_remove = run_ocw(["rm", "-f", "widget-maker"], self.repo_root)
+        self.assertEqual(force_remove.returncode, 0, force_remove.stderr)
+
+    def test_remove_other_worktree_from_main_is_not_guarded(self):
+        create = run_ocw(["widget-maker"], self.repo_root)
+        self.assertEqual(create.returncode, 0, create.stderr)
+
+        result = run_ocw(["rm", "widget-maker"], self.repo_root)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("do not remove the current worktree", result.stderr)
+
 
 class VscodeAutoLaunchRegressionTests(OcwTestCase):
     """Regression coverage for the incident where bin/ocw's open_vscode()
