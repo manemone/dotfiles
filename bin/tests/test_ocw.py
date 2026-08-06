@@ -162,6 +162,23 @@ def set_config(repo_dir, key, value):
     _git(["config", key, value], repo_dir)
 
 
+def make_repo_without_origin(root, dir_name="main"):
+    """A minimal git repo at <root>/<dir_name> with one commit and no
+    `origin` remote at all -- exercises repo_name's third resolution step
+    (ADR DOC-2608062258 §3.6, the path-based guess), which make_repo()
+    can never reach since it always configures an origin remote.
+    """
+    repo_dir = pathlib.Path(root) / dir_name
+    repo_dir.mkdir(parents=True)
+    _git(["init", "-q", "-b", "main"], repo_dir)
+    _git(["config", "user.email", "test@example.invalid"], repo_dir)
+    _git(["config", "user.name", "Test"], repo_dir)
+    (repo_dir / "README.md").write_text("test\n", encoding="utf-8")
+    _git(["add", "README.md"], repo_dir)
+    _git(["commit", "-q", "-m", "initial"], repo_dir)
+    return repo_dir
+
+
 def run_ocw(args, cwd, meter_on_path=False, meter_home=None, extra_env=None, path_prepend=None, timeout=30):
     # _CODE_SHIM_DIR goes ahead of BASE_PATH_DIRS (see its module-level
     # comment) so the no-op `code` always wins over a real one that might
@@ -188,6 +205,20 @@ def run_ocw(args, cwd, meter_on_path=False, meter_home=None, extra_env=None, pat
     # `code`, and ocw refusing to invoke it at all) mean a regression in
     # either one alone still can't launch a real VS Code window.
     env["OCW_NO_VSCODE"] = "1"
+    # Also unconditional and after extra_env: bin/ocw now reads git config
+    # `ocw.*` (ocw_config_get()), which resolves through the normal
+    # system/global/local layering. Without this, a developer's own
+    # `~/.gitconfig` (a real, plausible place to put `ocw.worktreeDir` per
+    # ADR DOC-2608062258 §3.4's own "put a personal default in --global"
+    # rationale) would leak into every test in this file and change where
+    # worktrees get created — verified by reproducing a `[ocw]
+    # worktreeDir = ...` block in a throwaway $HOME and watching
+    # test_default_template_matches_current_layout fail. This is
+    # independent of HOME: the tilde-expansion test overrides HOME via
+    # extra_env, and GIT_CONFIG_GLOBAL/SYSTEM are what git actually reads
+    # for global/system config regardless of $HOME.
+    env["GIT_CONFIG_GLOBAL"] = "/dev/null"
+    env["GIT_CONFIG_SYSTEM"] = "/dev/null"
     return subprocess.run(
         [str(OCW), *args],
         cwd=str(cwd),
@@ -717,6 +748,21 @@ class BareRepoTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(extract_repo_name(result.stdout), "proj")
 
+    def test_rm_works_from_bare_repo(self):
+        # A bare repo is the only place invocation_root comes back empty
+        # (ADR §2.1/§3.10) -- this is the one black-box path that actually
+        # exercises remove_worktree()'s guard-skip for that case, not just
+        # create_worktree()'s bare handling covered above.
+        create = run_ocw(["widget-maker"], self.bare_dir)
+        self.assertEqual(create.returncode, 0, create.stderr)
+
+        worktree_dir = self.bare_dir.parent / "widget-maker"
+        self.assertTrue(worktree_dir.is_dir())
+
+        remove = run_ocw(["rm", "widget-maker"], self.bare_dir)
+        self.assertEqual(remove.returncode, 0, remove.stderr)
+        self.assertFalse(worktree_dir.exists())
+
 
 class RepoNameResolutionTests(OcwTestCase):
     """repo_name 解決順 (ADR DOC-2608062258 §3.6): ocw.repoName > origin URL
@@ -735,6 +781,28 @@ class RepoNameResolutionTests(OcwTestCase):
         result = run_ocw(["widget-maker"], self.repo_root)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(extract_repo_name(result.stdout), "origin")
+
+
+class RepoNamePathGuessTests(unittest.TestCase):
+    """repo_name 解決順の第3段（パスからの推測、ADR DOC-2608062258 §3.6）の
+    非 bare 側2分岐。make_repo() は常に origin remote を張るためどちらの
+    分岐にも到達できず、専用に origin 無しリポジトリを使う。"""
+
+    def test_main_named_dir_uses_parent_dir_name(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo_dir = make_repo_without_origin(tmp, dir_name="main")
+
+            result = run_ocw(["widget-maker"], repo_dir)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(extract_repo_name(result.stdout), pathlib.Path(tmp).name)
+
+    def test_non_special_dir_name_is_used_as_is(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo_dir = make_repo_without_origin(tmp, dir_name="myrepo")
+
+            result = run_ocw(["widget-maker"], repo_dir)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(extract_repo_name(result.stdout), "myrepo")
 
 
 class WorktreeDirTemplateTests(OcwTestCase):
@@ -761,6 +829,37 @@ class WorktreeDirTemplateTests(OcwTestCase):
         worktree_dir = self.repo_root / ".worktrees" / "widget-maker"
         self.assertTrue(worktree_dir.is_dir())
         self.assertFalse((self.repo_root.parent / "widget-maker").exists())
+
+    def test_nested_template_round_trips_through_remove(self):
+        # remove_worktree() computes worktree_dir through the same template
+        # expansion as create_worktree() (孫1 プロンプト項目5) -- this is
+        # the one black-box test that would fail if that wiring were
+        # reverted back to a hardcoded {repo_parent}/{name} path while
+        # create_worktree() kept using the template.
+        set_config(self.repo_root, "ocw.worktreeDir", "{repo_root}/.worktrees/{name}")
+
+        create = run_ocw(["widget-maker"], self.repo_root)
+        self.assertEqual(create.returncode, 0, create.stderr)
+
+        worktree_dir = self.repo_root / ".worktrees" / "widget-maker"
+        self.assertTrue(worktree_dir.is_dir())
+
+        remove = run_ocw(["rm", "widget-maker"], self.repo_root)
+        self.assertEqual(remove.returncode, 0, remove.stderr)
+        self.assertFalse(worktree_dir.exists())
+
+    def test_prefixed_name_template_places_worktree_correctly(self):
+        # {name} isn't its own path component here -- exercises the
+        # non-trivial cleanup-boundary recompute for this exact ADR §2.9
+        # table row ({repo_parent}/{repo}-{name} -> boundary {repo_parent}).
+        set_config(self.repo_root, "ocw.worktreeDir", "{repo_parent}/{repo}-{name}")
+
+        result = run_ocw(["widget-maker"], self.repo_root)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+        # repo_name derives from make_repo()'s origin remote (origin.git).
+        worktree_dir = self.repo_root.parent / "origin-widget-maker"
+        self.assertTrue(worktree_dir.is_dir())
 
     def test_tilde_expansion(self):
         # HOME is swapped to a tempdir for this one process invocation
@@ -797,6 +896,27 @@ class WorktreeDirTemplateTests(OcwTestCase):
         result = run_ocw(["widget-maker"], self.repo_root)
         self.assertNotEqual(result.returncode, 0)
         self.assertFalse((self.repo_root.parent / "relative").exists())
+
+    def test_name_alone_dies_with_no_boundary_message(self):
+        # Distinct die branch from test_relative_template_dies above: with
+        # no '/' anywhere before {name}, the cleanup boundary can't be
+        # computed at all (ADR §2.9's "{name}" row) -- a different failure
+        # than "expands to a relative path".
+        set_config(self.repo_root, "ocw.worktreeDir", "{name}")
+
+        result = run_ocw(["widget-maker"], self.repo_root)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("no '/' before {name}", result.stderr)
+
+    def test_root_boundary_template_dies_with_specific_message(self):
+        # "/{name}" is itself an absolute path, but its cleanup boundary
+        # collapses to the filesystem root -- a different failure than
+        # "not absolute", and must say so.
+        set_config(self.repo_root, "ocw.worktreeDir", "/{name}")
+
+        result = run_ocw(["widget-maker"], self.repo_root)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("filesystem root", result.stderr)
 
 
 if __name__ == "__main__":
