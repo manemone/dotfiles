@@ -78,6 +78,7 @@ _code_shim_path.chmod(0o755)
 
 RUN_LINE_RE = re.compile(r"^run:\s+(\S+)$", re.MULTILINE)
 REPO_LINE_RE = re.compile(r"^repo:\s+(\S+)$", re.MULTILINE)
+BRANCH_LINE_RE = re.compile(r"^branch:\s+(\S+)$", re.MULTILINE)
 
 
 def _git(args, cwd):
@@ -250,6 +251,12 @@ def extract_run_id(stdout):
 def extract_repo_name(stdout):
     match = REPO_LINE_RE.search(stdout)
     assert match, f"no 'repo:' line found in stdout:\n{stdout}"
+    return match.group(1)
+
+
+def extract_branch(stdout):
+    match = BRANCH_LINE_RE.search(stdout)
+    assert match, f"no 'branch:' line found in stdout:\n{stdout}"
     return match.group(1)
 
 
@@ -917,6 +924,105 @@ class WorktreeDirTemplateTests(OcwTestCase):
         result = run_ocw(["widget-maker"], self.repo_root)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("filesystem root", result.stderr)
+
+
+class BranchNamingTests(OcwTestCase):
+    """`ai/` 接頭辞の廃止とスラッシュ対応 (ADR DOC-2608062258 §3.1/§3.2/§3.3,
+    孫2 プロンプト §1/§2/§4)."""
+
+    def test_slash_branch_name_creates_nested_worktree(self):
+        result = run_ocw(["feature/foo"], self.repo_root)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(extract_branch(result.stdout), "feature/foo")
+
+        worktree_dir = self.repo_root.parent / "feature" / "foo"
+        self.assertTrue(worktree_dir.is_dir())
+        self.assertIn(str(worktree_dir), result.stdout)
+
+        branch_list = _git(["branch", "--list", "feature/foo"], self.repo_root).stdout
+        self.assertIn("feature/foo", branch_list)
+
+    def test_sibling_slash_branches_can_coexist(self):
+        # git worktree add auto-creates the shared "feature/" parent (ADR
+        # §2.4); the D/F conflict git itself enforces on refs is what makes
+        # the two directories/branches non-colliding (ADR §2.5).
+        first = run_ocw(["feature/foo"], self.repo_root)
+        self.assertEqual(first.returncode, 0, first.stderr)
+
+        second = run_ocw(["feature/bar"], self.repo_root)
+        self.assertEqual(second.returncode, 0, second.stderr)
+
+        self.assertTrue((self.repo_root.parent / "feature" / "foo").is_dir())
+        self.assertTrue((self.repo_root.parent / "feature" / "bar").is_dir())
+
+    def test_branch_has_no_ai_prefix(self):
+        result = run_ocw(["widget-maker"], self.repo_root)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(extract_branch(result.stdout), "widget-maker")
+
+    def test_uppercase_and_spaces_are_normalized_as_before(self):
+        # Pre-孫2 normalize_name() behavior, preserved by normalize_branch_name().
+        result = run_ocw(["Fix The Thing"], self.repo_root)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(extract_branch(result.stdout), "fix-the-thing")
+
+
+class InvalidBranchNameRegressionTests(OcwTestCase):
+    """ブランチ名検証の check-ref-format への委譲 (ADR DOC-2608062258
+    §3.2/§2.6, 孫2 プロンプト §3)。
+
+    ADR §2.6 の実測表に挙がる `feature//foo` / `-x`（先頭ハイフン）/ `HEAD`
+    は、このリポジトリの normalize_branch_name()（連続スラッシュの1本化・
+    前後の `/` `-` の除去・小文字化）を通過した時点でそれぞれ
+    `feature/foo` / `x` / `head` という**有効な**ブランチ名になり、
+    check-ref-format まで到達しない。これは意図した挙動（友好的な
+    自動修正の対象であって拒否対象ではない）であり、下の
+    test_friendly_* 系がそれを裏付ける。normalize_branch_name を通過しても
+    なお残る無効パターン（`.lock` 終端・`..` を含むパス）で、
+    check-ref-format への委譲そのものを検証する。
+    """
+
+    def test_dot_lock_suffix_dies_with_git_fatal_message(self):
+        result = run_ocw(["foo.lock"], self.repo_root)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("foo.lock", result.stderr)
+        self.assertIn("fatal:", result.stderr)
+        self.assertFalse((self.repo_root.parent / "foo.lock").exists())
+
+    def test_dotdot_path_traversal_dies_and_creates_nothing(self):
+        parent = self.repo_root.parent
+        before = set(os.listdir(parent))
+
+        result = run_ocw(["../escaped-worktree"], self.repo_root)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("fatal:", result.stderr)
+
+        after = set(os.listdir(parent))
+        self.assertEqual(before, after)
+        self.assertFalse((parent.parent / "escaped-worktree").exists())
+
+    def test_empty_after_normalization_dies(self):
+        # "---" normalizes to "" via normalize_branch_name()'s
+        # leading/trailing '/'-'-' trim, before check-ref-format is ever
+        # invoked.
+        result = run_ocw(["---"], self.repo_root)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("worktree name became empty", result.stderr)
+
+    def test_friendly_double_slash_is_sanitized_not_rejected(self):
+        result = run_ocw(["feature//foo"], self.repo_root)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(extract_branch(result.stdout), "feature/foo")
+
+    def test_friendly_leading_hyphen_is_sanitized_not_rejected(self):
+        result = run_ocw(["-x"], self.repo_root)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(extract_branch(result.stdout), "x")
+
+    def test_friendly_head_is_sanitized_not_rejected(self):
+        result = run_ocw(["HEAD"], self.repo_root)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(extract_branch(result.stdout), "head")
 
 
 if __name__ == "__main__":
