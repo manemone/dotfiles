@@ -191,13 +191,17 @@ worktree_cleanup_boundary=""
 # `git config --get <key>` exits 1 for an unset key, which `set -e` would
 # otherwise treat as a script-ending failure — the `|| value="$default"`
 # is what stops that from killing the script. It is intentionally broader
-# than "unset key" alone: ANY non-zero exit (a malformed `.git/config`, a
-# key with multiple values) falls back to the default the same way, and
-# `2>/dev/null` suppresses git's own diagnostic either way. This keeps an
+# than "unset key" alone: ANY non-zero exit (e.g. a malformed
+# `.git/config` — NOT a key with multiple values, which `git config --get`
+# resolves to its own last value at exit 0, bypassing this fallback
+# entirely) falls back to the default the same way, and `2>/dev/null`
+# suppresses git's own diagnostic either way. This keeps an
 # optional-config lookup from ever being fatal on its own — a broken
 # `.git/config` still surfaces to the caller, just via whichever *other*,
-# unsuppressed git invocation (e.g. `rev-parse --is-bare-repository` in
-# init_repo_context) hits it first, not via this function.
+# unsuppressed git invocation (e.g. `git worktree list --porcelain` in
+# init_repo_context, which runs — and would die on this — before
+# resolve_repo_name/resolve_worktree_layout ever call this function)
+# hits it first, not via this function.
 ocw_config_get() {
   local key="$1"
   local default="${2:-}"
@@ -344,12 +348,12 @@ resolve_worktree_layout() {
     die "ocw.worktreeDir has no '/' before {name}, cannot determine a cleanup boundary: ${tmpl}"
 
   # A leading '/' right before {name} (e.g. "/{name}") strips down to an
-  # empty boundary here, not a relative one -- that's the filesystem root,
-  # which the "must expand to an absolute path" check below wouldn't
-  # catch (an empty boundary that expands to "" still isn't a path at
-  # all, absolute or otherwise) and shouldn't be treated as interchangeable
-  # with it: the real problem is the cleanup boundary itself is undefined,
-  # not that the template is relative.
+  # empty boundary here, not a relative one -- that's the filesystem root.
+  # Left alone, an empty boundary would still get caught below by the
+  # "must expand to an absolute path" check (an empty string doesn't match
+  # the /* pattern either), but with the wrong label: it isn't relative,
+  # it's undefined. This dedicated check exists to die with the accurate
+  # reason before that mislabeled one would otherwise fire.
   [ -n "$boundary_tmpl" ] ||
     die "ocw.worktreeDir's cleanup boundary would be the filesystem root, which is not allowed: ${tmpl}"
 
