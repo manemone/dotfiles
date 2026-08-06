@@ -84,11 +84,44 @@ require_command() {
     die "required command not found: $1"
 }
 
-normalize_name() {
+# Branch-name normalization (ADR DOC-2608062258 §3.2). Lowercases, collapses
+# runs of anything outside [a-z0-9._/-] into a single '-', collapses runs of
+# '/' into a single '/', and trims leading/trailing '/' and '-'. Unlike the
+# pre-孫2 normalize_name(), '/' is preserved rather than folded into '-':
+# branch namespaces (feature/, hotfix/) survive normalization, and the
+# resulting name doubles as the worktree's directory path (nested; ADR §3.3)
+# without a separate directory-name sanitizer.
+#
+# This step happens to neutralize several of the invalid inputs ADR §2.6
+# measured directly against check-ref-format ("feature//foo", "-x", "HEAD",
+# "@{-1}"): each is built entirely out of characters this normalization
+# allows through, so it comes out the other end as a *valid* name
+# ("feature/foo", "x", "head", ...) instead of ever reaching
+# validate_branch_name below. That's intentional -- a friendly auto-fix, not
+# a bug -- and is what InvalidBranchNameRegressionTests's test_friendly_*
+# cases in bin/tests/test_ocw.py assert. What still reaches
+# check-ref-format is whatever normalization can't neutralize (a trailing
+# ".lock", a ".." path segment, ...) plus git's other ref-name rules this
+# normalization doesn't attempt to replicate.
+normalize_branch_name() {
   printf '%s\n' "$1" |
     tr '[:upper:]' '[:lower:]' |
-    sed -E 's/[^a-z0-9._-]+/-/g' |
-    sed -E 's/^-+|-+$//g'
+    sed -E 's#[^a-z0-9._/-]+#-#g' |
+    sed -E 's#/+#/#g' |
+    sed -E 's#^[/-]+|[/-]+$##g'
+}
+
+# Delegates branch-name validity to git itself (ADR §3.2/§2.6) instead of
+# reimplementing its rules as a regex, for whatever normalize_branch_name()
+# above didn't already resolve. Also the sole guard against path traversal
+# when $name is later embedded into worktree_dir, since check-ref-format
+# rejects ".." and a leading "/" on its own.
+validate_branch_name() {
+  local name="$1"
+  local check_output=""
+
+  check_output="$(git -C "$repo_root" check-ref-format --branch "$name" 2>&1)" ||
+    die "invalid branch name '${name}': ${check_output}"
 }
 
 # GNU realpath の `-m`（存在しないパスでも解決する）相当。BSD 版
@@ -645,14 +678,19 @@ create_worktree() {
   local worktree_dir=""
   local workspace_label=""
 
-  slug="$(normalize_name "$task_name")"
+  slug="$(normalize_branch_name "$task_name")"
 
   [ -n "$slug" ] ||
     die "worktree name became empty"
 
-  branch="ai/${slug}"
+  validate_branch_name "$slug"
+
+  branch="$slug"
   worktree_dir="$(expand_worktree_dir_template "$worktree_dir_template" "$slug")"
-  workspace_label="${repo_name} / ${slug}"
+  # ' :: ' rather than ' / ' -- $slug can itself contain '/' (ADR §3.3), and
+  # a lone '/' as the repo/slug separator would be visually indistinguishable
+  # from a '/' inside the slug (e.g. "myrepo / feature/foo").
+  workspace_label="${repo_name} :: ${slug}"
 
   echo "repo:        ${repo_name}"
   echo "main dir:    ${repo_root}"
@@ -904,12 +942,12 @@ remove_worktree() {
   local invocation_real=""
   local worktree_real=""
 
-  slug="$(normalize_name "$task_name")"
+  slug="$(normalize_branch_name "$task_name")"
 
   [ -n "$slug" ] ||
     die "worktree name became empty"
 
-  branch="ai/${slug}"
+  branch="$slug"
   worktree_dir="$(expand_worktree_dir_template "$worktree_dir_template" "$slug")"
 
   echo "repo:      ${repo_name}"
