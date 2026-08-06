@@ -178,16 +178,211 @@ require_herdr_ready() {
 
 invocation_root=""
 repo_root=""
-project_dir=""
+repo_parent=""
 repo_name=""
+is_bare="false"
+worktree_dir_template=""
+worktree_cleanup_boundary=""
+
+# git config `ocw.*` reader. `.git/config` is shared by every worktree of a
+# repo (including bare), so whichever worktree ocw is invoked from sees the
+# same values. Must be called after repo_root is known.
+#
+# `git config --get <key>` exits 1 for an unset key, which `set -e` would
+# otherwise treat as a script-ending failure — the `|| value="$default"`
+# is what stops that from killing the script. It is intentionally broader
+# than "unset key" alone: ANY non-zero exit (e.g. a malformed
+# `.git/config` — NOT a key with multiple values, which `git config --get`
+# resolves to its own last value at exit 0, bypassing this fallback
+# entirely) falls back to the default the same way, and `2>/dev/null`
+# suppresses git's own diagnostic either way. This keeps an
+# optional-config lookup from ever being fatal on its own — a broken
+# `.git/config` still surfaces to the caller, just via whichever *other*,
+# unsuppressed git invocation (e.g. `git worktree list --porcelain` in
+# init_repo_context, which runs — and would die on this — before
+# resolve_repo_name/resolve_worktree_layout ever call this function)
+# hits it first, not via this function.
+ocw_config_get() {
+  local key="$1"
+  local default="${2:-}"
+  local value=""
+
+  value="$(git -C "$repo_root" config --get "$key" 2>/dev/null)" || value="$default"
+
+  printf '%s\n' "$value"
+}
+
+# Bool variant: `--type=bool --default=...` always exits 0, even for an
+# unset key (it prints the default instead), so no `|| true` is needed here
+# the way it is in ocw_config_get above.
+ocw_config_get_bool() {
+  local key="$1"
+  local default="$2"
+
+  git -C "$repo_root" config --get --type=bool --default="$default" "$key"
+}
+
+# repo_name resolution order (ADR DOC-2608062258 §3.6):
+#   1. ocw.repoName (explicit override)
+#   2. basename of remote.origin.url with a trailing .git stripped
+#   3. path-based guess: bare -> basename(repo_root) with .git stripped;
+#      basename(repo_root) in {main,master,trunk} -> basename(repo_parent)
+#      (current behavior, preserved); otherwise basename(repo_root)
+resolve_repo_name() {
+  local configured=""
+  local origin_url=""
+  local origin_base=""
+  local root_base=""
+
+  configured="$(ocw_config_get ocw.repoName "")"
+
+  if [ -n "$configured" ]; then
+    repo_name="$configured"
+    return
+  fi
+
+  origin_url="$(git -C "$repo_root" config --get remote.origin.url 2>/dev/null)" || origin_url=""
+
+  if [ -n "$origin_url" ]; then
+    origin_base="$(basename -- "$origin_url")"
+    origin_base="${origin_base%.git}"
+
+    if [ -n "$origin_base" ]; then
+      repo_name="$origin_base"
+      return
+    fi
+  fi
+
+  root_base="$(basename -- "$repo_root")"
+
+  if [ "$is_bare" = "true" ]; then
+    repo_name="${root_base%.git}"
+    return
+  fi
+
+  case "$root_base" in
+    main | master | trunk)
+      repo_name="$(basename -- "$repo_parent")"
+      ;;
+    *)
+      repo_name="$root_base"
+      ;;
+  esac
+}
+
+# Substitutes the known ocw.worktreeDir placeholders. `name` is passed
+# separately (rather than always pulled from a global) so the cleanup
+# boundary can be expanded with it left blank (ADR §2.9/§3.5).
+expand_worktree_dir_template() {
+  local tmpl="$1"
+  local name="${2:-}"
+  local result="$tmpl"
+
+  result="${result//\{repo_root\}/$repo_root}"
+  result="${result//\{repo_parent\}/$repo_parent}"
+  result="${result//\{repo\}/$repo_name}"
+  result="${result//\{name\}/$name}"
+
+  printf '%s\n' "$result"
+}
+
+# Reads, validates, and expands ocw.worktreeDir (ADR DOC-2608062258 §3.4 /
+# §3.5 / §2.9). Populates worktree_dir_template (raw, still containing
+# {name}) and worktree_cleanup_boundary (fully expanded, the path
+# `ocw rm`'s empty-directory cleanup must never delete past).
+resolve_worktree_layout() {
+  local tmpl=""
+  local rest=""
+  local placeholder=""
+  local token=""
+  local prefix=""
+  local boundary_tmpl=""
+
+  tmpl="$(ocw_config_get ocw.worktreeDir '{repo_parent}/{name}')"
+
+  # Leading `~` expands to $HOME. Matched via parameter expansion (not a
+  # case pattern) so the literal, unexpanded tilde in $tmpl is what's
+  # being compared -- shellcheck's SC2088 flags a quoted '~/'* case
+  # pattern as if it were a failed expansion attempt, which isn't what
+  # this is: the tilde here is user-supplied config text being tested,
+  # never a path bash itself should expand.
+  if [ "$tmpl" = '~' ]; then
+    tmpl="$HOME"
+  elif [ "${tmpl#\~/}" != "$tmpl" ]; then
+    tmpl="${HOME}/${tmpl#\~/}"
+  fi
+
+  # Reject unknown {placeholders} instead of leaving them as literal
+  # directory-name text — a typo like {rep_root} would otherwise silently
+  # create a directory literally named "{rep_root}".
+  rest="$tmpl"
+
+  while [[ "$rest" == *"{"*"}"* ]]; do
+    placeholder="${rest#*\{}"
+    placeholder="${placeholder%%\}*}"
+
+    case "$placeholder" in
+      repo_root | repo_parent | repo | name) ;;
+      *)
+        die "unknown placeholder {${placeholder}} in ocw.worktreeDir: ${tmpl}"
+        ;;
+    esac
+
+    token="{${placeholder}}"
+    rest="${rest#*"$token"}"
+  done
+
+  case "$tmpl" in
+    *'{name}'*) ;;
+    *)
+      die "ocw.worktreeDir must contain {name}: ${tmpl}"
+      ;;
+  esac
+
+  # The cleanup boundary is everything up to the last '/' before {name} —
+  # the longest prefix of the expanded path that doesn't depend on {name}.
+  prefix="${tmpl%%\{name\}*}"
+  boundary_tmpl="${prefix%/*}"
+
+  [ "$boundary_tmpl" != "$prefix" ] ||
+    die "ocw.worktreeDir has no '/' before {name}, cannot determine a cleanup boundary: ${tmpl}"
+
+  # A leading '/' right before {name} (e.g. "/{name}") strips down to an
+  # empty boundary here, not a relative one -- that's the filesystem root.
+  # Left alone, an empty boundary would still get caught below by the
+  # "must expand to an absolute path" check (an empty string doesn't match
+  # the /* pattern either), but with the wrong label: it isn't relative,
+  # it's undefined. This dedicated check exists to die with the accurate
+  # reason before that mislabeled one would otherwise fire.
+  [ -n "$boundary_tmpl" ] ||
+    die "ocw.worktreeDir's cleanup boundary would be the filesystem root, which is not allowed: ${tmpl}"
+
+  worktree_dir_template="$tmpl"
+  worktree_cleanup_boundary="$(expand_worktree_dir_template "$boundary_tmpl" "")"
+
+  case "$worktree_cleanup_boundary" in
+    /*) ;;
+    *)
+      die "ocw.worktreeDir must expand to an absolute path: ${tmpl}"
+      ;;
+  esac
+}
 
 init_repo_context() {
-  invocation_root="$(
-    git rev-parse --show-toplevel 2>/dev/null
-  )" || die "run ocw from inside a Git worktree"
+  # Unlike repo_root below, invocation_root is allowed to come back empty:
+  # `git rev-parse --show-toplevel` always fails inside a bare repository
+  # (ADR DOC-2608062258 §2.1), and its only consumer (remove_worktree's
+  # "don't remove the worktree you're standing in" guard) can simply skip
+  # itself when there's no worktree to be standing in.
+  invocation_root="$(git rev-parse --show-toplevel 2>/dev/null)" || invocation_root=""
 
+  # Unlike invocation_root above, this failure is NOT expected in normal
+  # use (it means "not in a git repo" or something worse, like a broken
+  # `.git/config`) and always ends in die() below -- so stderr is left
+  # unsuppressed here, on purpose, so git's own diagnostic reaches the
+  # user instead of being replaced by our more generic message alone.
   repo_root="$(
-    git -C "$invocation_root" worktree list --porcelain |
+    git worktree list --porcelain |
       awk '
         /^worktree / {
           sub(/^worktree /, "")
@@ -195,13 +390,17 @@ init_repo_context() {
           exit
         }
       '
-  )"
+  )" || repo_root=""
 
   [ -n "$repo_root" ] ||
-    die "could not determine the main worktree"
+    die "run ocw from inside a Git repository"
 
-  project_dir="$(dirname "$repo_root")"
-  repo_name="$(basename "$project_dir")"
+  is_bare="$(git -C "$repo_root" rev-parse --is-bare-repository)"
+
+  repo_parent="$(dirname -- "$repo_root")"
+
+  resolve_repo_name
+  resolve_worktree_layout
 }
 
 open_vscode() {
@@ -421,7 +620,15 @@ create_worktree() {
     base_ref="$(
       git -C "$repo_root" symbolic-ref refs/remotes/origin/HEAD 2>/dev/null |
         sed 's|.*/||'
-    )"
+    )" || base_ref=""
+
+    # origin/HEAD is unset/unresolvable (no remote, or a remote without a
+    # HEAD symref) -> fall back to repo_root's own HEAD, which resolves in
+    # bare repos too (ADR DOC-2608062258 §3.10 / §2.3).
+    if [ -z "$base_ref" ]; then
+      base_ref="$(git -C "$repo_root" symbolic-ref --short HEAD 2>/dev/null)" || base_ref=""
+    fi
+
     [ -n "$base_ref" ] || base_ref="main"
   fi
 
@@ -444,7 +651,7 @@ create_worktree() {
     die "worktree name became empty"
 
   branch="ai/${slug}"
-  worktree_dir="${project_dir}/${slug}"
+  worktree_dir="$(expand_worktree_dir_template "$worktree_dir_template" "$slug")"
   workspace_label="${repo_name} / ${slug}"
 
   echo "repo:        ${repo_name}"
@@ -703,22 +910,28 @@ remove_worktree() {
     die "worktree name became empty"
 
   branch="ai/${slug}"
-  worktree_dir="${project_dir}/${slug}"
+  worktree_dir="$(expand_worktree_dir_template "$worktree_dir_template" "$slug")"
 
   echo "repo:      ${repo_name}"
   echo "remove:    ${worktree_dir}"
   echo "branch:    ${branch}"
   echo "force:     ${force}"
 
-  invocation_real="$(realpath_m "$invocation_root")"
-  worktree_real="$(realpath_m "$worktree_dir")"
+  # invocation_root is empty when ocw was invoked from inside a bare
+  # repository (ADR DOC-2608062258 §2.1/§3.10) -- there's no worktree to
+  # be "standing in", so the guard below has nothing to compare against
+  # and must be skipped rather than compared against an empty path.
+  if [ -n "$invocation_root" ]; then
+    invocation_real="$(realpath_m "$invocation_root")"
+    worktree_real="$(realpath_m "$worktree_dir")"
 
-  if [[ "$invocation_real" == "$worktree_real" ]]; then
-    echo "error: do not remove the current worktree" >&2
-    echo "move to main first:" >&2
-    echo "  cd ${repo_root}" >&2
-    echo "  ocw rm ${slug}" >&2
-    exit 1
+    if [[ "$invocation_real" == "$worktree_real" ]]; then
+      echo "error: do not remove the current worktree" >&2
+      echo "move to main first:" >&2
+      echo "  cd ${repo_root}" >&2
+      echo "  ocw rm ${slug}" >&2
+      exit 1
+    fi
   fi
 
   [ -d "$worktree_dir" ] ||
