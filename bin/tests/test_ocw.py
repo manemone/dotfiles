@@ -77,6 +77,7 @@ _code_shim_path.write_text(
 _code_shim_path.chmod(0o755)
 
 RUN_LINE_RE = re.compile(r"^run:\s+(\S+)$", re.MULTILINE)
+REPO_LINE_RE = re.compile(r"^repo:\s+(\S+)$", re.MULTILINE)
 
 
 def _git(args, cwd):
@@ -124,6 +125,41 @@ def make_repo(root):
     _git(["push", "-q", "-u", "origin", "main"], main_dir)
     _git(["remote", "set-head", "origin", "main"], main_dir)
     return main_dir
+
+
+def make_bare_repo(root, name="proj.git"):
+    """A bare repo at <root>/<name> with one commit on branch `main`, and
+    (deliberately) no `origin` remote of its own — this mirrors what a
+    real bare repo used as *someone else's* origin looks like from the
+    inside (ADR DOC-2608062258 §2.2/§2.3): `git worktree list --porcelain`
+    has exactly one entry (the bare dir itself, with a `bare` line instead
+    of `branch`), and `git symbolic-ref HEAD` resolves to the default
+    branch. With no `ocw.worktreeDir` override, ocw's default template
+    (`{repo_parent}/{name}`) puts worktrees at dirname(repo_root)/<name> —
+    i.e. right next to the bare directory, exercising the same "no
+    `origin/HEAD` to fall back to" base_ref path bin/ocw's create_worktree
+    has to survive (ADR §3.10).
+    """
+    bare_dir = pathlib.Path(root) / name
+    _git(["init", "-q", "--bare", "-b", "main", str(bare_dir)], root)
+
+    with tempfile.TemporaryDirectory() as scratch_root:
+        scratch_dir = pathlib.Path(scratch_root) / "scratch"
+        scratch_dir.mkdir()
+        _git(["init", "-q", "-b", "main"], scratch_dir)
+        _git(["config", "user.email", "test@example.invalid"], scratch_dir)
+        _git(["config", "user.name", "Test"], scratch_dir)
+        (scratch_dir / "README.md").write_text("test\n", encoding="utf-8")
+        _git(["add", "README.md"], scratch_dir)
+        _git(["commit", "-q", "-m", "initial"], scratch_dir)
+        _git(["remote", "add", "origin", str(bare_dir)], scratch_dir)
+        _git(["push", "-q", "-u", "origin", "main"], scratch_dir)
+
+    return bare_dir
+
+
+def set_config(repo_dir, key, value):
+    _git(["config", key, value], repo_dir)
 
 
 def run_ocw(args, cwd, meter_on_path=False, meter_home=None, extra_env=None, path_prepend=None, timeout=30):
@@ -177,6 +213,12 @@ def read_events(home):
 def extract_run_id(stdout):
     match = RUN_LINE_RE.search(stdout)
     assert match, f"no 'run:' line found in stdout:\n{stdout}"
+    return match.group(1)
+
+
+def extract_repo_name(stdout):
+    match = REPO_LINE_RE.search(stdout)
+    assert match, f"no 'repo:' line found in stdout:\n{stdout}"
     return match.group(1)
 
 
@@ -634,6 +676,127 @@ class VscodeAutoLaunchRegressionTests(OcwTestCase):
             text=True,
             timeout=30,
         )
+
+
+class BareRepoTests(unittest.TestCase):
+    """bare リポジトリ対応 (ADR DOC-2608062258 §2.1/§2.2/§2.3, 孫1 プロンプト項目2)."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.bare_dir = make_bare_repo(self.tmpdir.name)
+
+    def tearDown(self):
+        self.tmpdir.cleanup()
+
+    def test_create_from_bare_repo_creates_sibling_worktree(self):
+        result = run_ocw(["widget-maker"], self.bare_dir)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+        worktree_dir = self.bare_dir.parent / "widget-maker"
+        self.assertTrue(worktree_dir.is_dir())
+        # make_bare_repo() deliberately configures no origin remote of its
+        # own, so there's no origin/HEAD to resolve base_ref from -- it
+        # must fall back to repo_root's own HEAD (ADR §3.10) instead of
+        # blowing up under set -euo pipefail.
+        self.assertIn("base:        main", result.stdout)
+
+    def test_ls_works_from_bare_repo(self):
+        create = run_ocw(["widget-maker"], self.bare_dir)
+        self.assertEqual(create.returncode, 0, create.stderr)
+
+        result = run_ocw(["ls"], self.bare_dir)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("(bare)", result.stdout)
+        self.assertIn("widget-maker", result.stdout)
+
+    def test_repo_name_strips_dot_git_suffix_for_bare_repo(self):
+        # No ocw.repoName and no origin remote -> falls all the way to the
+        # path-based guess, which for a bare repo strips ".git" off the
+        # directory's own basename (ADR §3.6 step 3).
+        result = run_ocw(["widget-maker"], self.bare_dir)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(extract_repo_name(result.stdout), "proj")
+
+
+class RepoNameResolutionTests(OcwTestCase):
+    """repo_name 解決順 (ADR DOC-2608062258 §3.6): ocw.repoName > origin URL
+    の basename > パス推測。"""
+
+    def test_ocw_repo_name_config_wins(self):
+        set_config(self.repo_root, "ocw.repoName", "custom-name")
+
+        result = run_ocw(["widget-maker"], self.repo_root)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(extract_repo_name(result.stdout), "custom-name")
+
+    def test_repo_name_derives_from_origin_url_when_unset(self):
+        # make_repo()'s origin remote is <root>/origin.git -> basename with
+        # ".git" stripped is "origin".
+        result = run_ocw(["widget-maker"], self.repo_root)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(extract_repo_name(result.stdout), "origin")
+
+
+class WorktreeDirTemplateTests(OcwTestCase):
+    """ocw.worktreeDir の雛形展開・検証・掃除境界の逆算 (ADR DOC-2608062258
+    §3.4 / §3.5 / §2.9)."""
+
+    def test_default_template_matches_current_layout(self):
+        # No ocw.worktreeDir set: the default `{repo_parent}/{name}` must
+        # produce exactly the pre-孫1 hardcoded dirname(repo_root)/<slug>
+        # path -- the completion condition's "unchanged default behavior"
+        # made into its own explicit assertion.
+        result = run_ocw(["widget-maker"], self.repo_root)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+        worktree_dir = self.repo_root.parent / "widget-maker"
+        self.assertTrue(worktree_dir.is_dir())
+
+    def test_nested_template_changes_creation_location(self):
+        set_config(self.repo_root, "ocw.worktreeDir", "{repo_root}/.worktrees/{name}")
+
+        result = run_ocw(["widget-maker"], self.repo_root)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+        worktree_dir = self.repo_root / ".worktrees" / "widget-maker"
+        self.assertTrue(worktree_dir.is_dir())
+        self.assertFalse((self.repo_root.parent / "widget-maker").exists())
+
+    def test_tilde_expansion(self):
+        # HOME is swapped to a tempdir for this one process invocation
+        # only -- the real $HOME is never touched.
+        fake_home = pathlib.Path(self.tmpdir.name) / "fake-home"
+        fake_home.mkdir()
+        set_config(self.repo_root, "ocw.worktreeDir", "~/.cache/ocw/{repo}/{name}")
+
+        result = run_ocw(["widget-maker"], self.repo_root, extra_env={"HOME": str(fake_home)})
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+        # repo_name derives from make_repo()'s origin remote (origin.git).
+        worktree_dir = fake_home / ".cache" / "ocw" / "origin" / "widget-maker"
+        self.assertTrue(worktree_dir.is_dir())
+
+    def test_unknown_placeholder_dies_naming_the_key(self):
+        set_config(self.repo_root, "ocw.worktreeDir", "{nope}/{name}")
+
+        result = run_ocw(["widget-maker"], self.repo_root)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("{nope}", result.stderr)
+        self.assertFalse((self.repo_root.parent / "widget-maker").exists())
+
+    def test_template_without_name_placeholder_dies(self):
+        set_config(self.repo_root, "ocw.worktreeDir", "{repo_parent}/fixed")
+
+        result = run_ocw(["widget-maker"], self.repo_root)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("{name}", result.stderr)
+
+    def test_relative_template_dies(self):
+        set_config(self.repo_root, "ocw.worktreeDir", "relative/{name}")
+
+        result = run_ocw(["widget-maker"], self.repo_root)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse((self.repo_root.parent / "relative").exists())
 
 
 if __name__ == "__main__":
