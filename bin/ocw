@@ -1303,15 +1303,24 @@ remove_worktree() {
     # doesn't disappear with it. `git -C "$worktree_dir" status` against a
     # nonexistent directory fails with a raw `fatal:` on stderr, and its
     # empty stdout is otherwise indistinguishable from "clean": guard on
-    # -d first so a stale registration is reported plainly and cleaned up
-    # (worktree remove below, no branch/file changes to lose) instead of
+    # -d first so a missing directory is reported plainly instead of
     # leaking git's own diagnostic and reading a failure as "no changes".
+    # This only decides whether the status check itself runs -- whether
+    # the worktree's registration actually gets removed is still decided
+    # by the merge-check gate right below, same as when the directory is
+    # present.
     if [ -d "$worktree_dir" ]; then
       if [ -n "$(git -C "$worktree_dir" status --porcelain)" ]; then
         die "worktree has uncommitted or untracked changes: ${worktree_dir}"
       fi
     else
-      warn "worktree directory is already gone; cleaning up its registration: ${worktree_dir}"
+      # States only what is true right now (the directory is gone, so
+      # there is nothing to run `status` against) rather than promising
+      # the registration will be cleaned up -- the case below can still
+      # `die` on the merge-check result before that ever happens, and a
+      # message describing a future action that didn't occur would be a
+      # lie about the actual outcome.
+      warn "worktree directory is already gone; skipping the local-changes check: ${worktree_dir}"
     fi
 
     case "$MERGE_CHECK_RESULT" in

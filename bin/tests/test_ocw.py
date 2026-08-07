@@ -1338,26 +1338,48 @@ class DetachedWorktreeTests(unittest.TestCase):
         self.assertFalse(worktree_dir.exists())
 
 
-class RmEdgeCaseRegressionTests(OcwTestCase):
-    """ラウンド1レビューで実測された異常系の回帰テスト（指摘1・指摘5）。"""
+class UnbornBranchWorktreeRegressionTests(unittest.TestCase):
+    """unborn ブランチのワークツリー（ラウンド1レビュー指摘1・ラウンド2レビュー
+    新規指摘2）。
+
+    `git worktree add --orphan` は Git 2.42 以降専用（macOS 同梱の git は
+    2.39系）であり、これを使うと macOS では RuntimeError で落ちる（CI は
+    Linux で新しい git を積んでいるため気づけない）。unborn ブランチは
+    バージョン非依存の経路（コミット0件のbareリポジトリへの1本目の
+    `worktree add`）でも作れるため、そちらを使う。
+    """
+
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+
+    def tearDown(self):
+        self.tmpdir.cleanup()
 
     def test_unborn_branch_worktree_is_removable_with_force_without_aborting(self):
-        # A worktree whose branch was created via `--orphan` (or against an
-        # empty bare repo) reports a real `branch refs/heads/<name>` line
-        # in porcelain output even though that ref doesn't exist yet --
-        # `git branch -D` on it fails with "not found", which under
-        # `set -e` used to abort remove_worktree between `worktree remove`
-        # succeeding and run.end ever firing (round-1 finding 1).
-        _git(["worktree", "add", "-q", "-b", "gh-pages", "--orphan", str(self.repo_root.parent / "gh-pages")], self.repo_root)
-        worktree_dir = self.repo_root.parent / "gh-pages"
+        # A worktree whose branch has never been committed to reports a
+        # real `branch refs/heads/<name>` line in porcelain output even
+        # though that ref doesn't exist yet -- `git branch -D` on it fails
+        # with "not found" (or "used by worktree" before the worktree
+        # itself is removed), which under `set -e` used to abort
+        # remove_worktree between `worktree remove` succeeding and
+        # run.end ever firing (round-1 finding 1).
+        bare_dir = pathlib.Path(self.tmpdir.name) / "proj.git"
+        _git(["init", "-q", "--bare", "--initial-branch=main", str(bare_dir)], self.tmpdir.name)
+        _git(["worktree", "add", "-q", "-b", "work", str(bare_dir.parent / "work")], bare_dir)
+
+        worktree_dir = bare_dir.parent / "work"
         self.assertTrue(worktree_dir.is_dir())
 
-        remove = run_ocw(["rm", "-f", "gh-pages"], self.repo_root)
+        remove = run_ocw(["rm", "-f", "work"], bare_dir)
         self.assertEqual(remove.returncode, 0, remove.stderr)
         self.assertFalse(worktree_dir.exists())
 
-        branch_list = _git(["branch", "--list", "gh-pages"], self.repo_root).stdout
-        self.assertNotIn("gh-pages", branch_list)
+        branch_list = _git(["branch", "--list", "work"], bare_dir).stdout
+        self.assertNotIn("work", branch_list)
+
+
+class RmEdgeCaseRegressionTests(OcwTestCase):
+    """ラウンド1レビューで実測された異常系の回帰テスト（指摘5）。"""
 
     def test_missing_worktree_directory_does_not_leak_a_raw_git_fatal(self):
         create = run_ocw(["widget-maker"], self.repo_root)
@@ -1371,11 +1393,15 @@ class RmEdgeCaseRegressionTests(OcwTestCase):
 
         remove = run_ocw(["rm", "widget-maker"], self.repo_root)
         # Still correctly rejected (genuinely unmerged) -- a missing
-        # directory must not be misread as "clean" and let through.
+        # directory must not be misread as "clean" and let through. The
+        # warning must describe only what actually happened (the status
+        # check was skipped), not promise a cleanup this same run then
+        # doesn't perform (round-2 review finding: the die below means the
+        # registration is NOT cleaned up here).
         self.assertNotEqual(remove.returncode, 0)
         self.assertIn("branch is not merged", remove.stderr)
         self.assertNotIn("fatal:", remove.stderr)
-        self.assertIn("already gone", remove.stderr)
+        self.assertIn("skipping the local-changes check", remove.stderr)
 
     def test_missing_worktree_directory_still_completes_removal_when_merged(self):
         create = run_ocw(["widget-maker"], self.repo_root)
