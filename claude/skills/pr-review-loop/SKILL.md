@@ -341,13 +341,13 @@ REVIEW_EOF
 **すべての `herdr pane run` の前にこの手順を実行すること。`agent_status=None` を「Claude未起動」と思い込むな。**
 
 ```bash
-STATUS=$(herdr pane get "$REVIEWER_PANE" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('agent_status',''))")
+STATUS=$(herdr pane get "$REVIEWER_PANE" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['result']['pane'].get('agent_status',''))")
 ```
 
 | status | 意味 | 取るべき行動 |
 |--------|------|-------------|
 | `idle` | Claude起動中、待機状態 | Step 3へ |
-| `working` | Claudeが処理中 | `herdr wait agent-status "$REVIEWER_PANE" --status idle --timeout 600000` で完了を待ってからStep 3へ |
+| `working` | Claudeが処理中 | Phase 3a と同じループ（`--status done` を60秒刻みで待ち、`idle`/`blocked` も完了として拾う）で完了を待ってからStep 3へ。無人の背面ペインは完了しても `done` で止まり自動では `idle` にならないため、単発の `--status idle` 待ちは10分空転する |
 | `None` または空 | 要確認。ClaudeがINSERTモードで動いている可能性がある | 以下の「None時の確認手順」を実行 |
 
 **None時の確認手順:**
@@ -409,10 +409,11 @@ herdr wait agent-status "$REVIEWER_PANE" --status working --timeout 30000
 ```
 
 タイムアウトしたら `herdr pane get "$REVIEWER_PANE"` と `herdr pane read "$REVIEWER_PANE" --source detection --lines 10` で確認。
-INSERTモードで止まっている場合は空行で確定:
+本文が届いたまま Enter だけが送られていない状態（Step 4 と同一の症状）なら、
+Step 4 と同じ手段で確定させる:
 
 ```bash
-herdr pane run "$REVIEWER_PANE" ""
+herdr pane send-keys "$REVIEWER_PANE" Enter
 ```
 
 その後、再度workingを待つ。
@@ -427,20 +428,31 @@ herdr pane run "$REVIEWER_PANE" ""
 **実際にそのタブをフォーカスするまで自動では `idle` に変わらない**。フォーカスされた
 状態で完了すれば直接 `idle` になる。
 
-`REVIEWER_PANE` は基本的に無人（誰もそのタブを見に行かない）で完了することが多いため、
-**`idle` ではなく `done` を待つ**のが効率がよい。人間がたまたまそのタブを見ていて
-直接 `idle` になった場合は、以下の `done` 待機がタイムアウトしたあとの確認で
-`idle` として拾われる（`それ以外 → Phase 3bへ` の分岐）ので、どちらの経路でも
-Phase 3b には進める:
+`REVIEWER_PANE` は無人（誰もそのタブを見に行かない）で完了することが多いが、
+**端末クライアントが繋がっていないヘッドレス実行（cron 等）では、globally active
+tab にいるペインは完了時に直接 `idle` になる**（herdr 公式ドキュメントの記述。
+`/autopilot` から回すときはこちらが標準的な条件）。`herdr wait agent-status` は
+`--status` を1つしか取れず「`done` か `idle` のどちらか」を1回の待機では
+表現できないため、**短く区切って両方を見るループにする**。`done` を待たずに
+`idle` へ直行するケースでフルタイムアウトを浪費しないための工夫である:
 
 ```bash
-herdr wait agent-status "$REVIEWER_PANE" --status done --timeout 600000
+# herdr wait は --status を1つしか取れないため、短く待って両方を見る
+for _ in $(seq 1 10); do
+  herdr wait agent-status "$REVIEWER_PANE" --status done --timeout 60000 && break
+  STATUS=$(herdr pane get "$REVIEWER_PANE" | python3 -c "import json,sys; print(json.load(sys.stdin)['result']['pane'].get('agent_status',''))")
+  case "$STATUS" in idle|blocked) break ;; esac
+done
 ```
 
-タイムアウト（10分以内に `done` に達しなかった）時の確認:
+（合計タイムアウトは 60000ms × 10 = 600000ms＝10分。`done` に到達すれば即座に
+`break`、`idle`/`blocked` になっていればそこで `break`、どちらでもなければ次の
+60秒枠へ）
+
+10分以内に `done` にも `idle` にも達しなかった場合の確認:
 
 ```bash
-STATUS=$(herdr pane get "$REVIEWER_PANE" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('agent_status',''))")
+STATUS=$(herdr pane get "$REVIEWER_PANE" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['result']['pane'].get('agent_status',''))")
 ```
 
 - `blocked` → 出力を読んで可能なら回答。人手が必要なら停止してユーザーに伝える。

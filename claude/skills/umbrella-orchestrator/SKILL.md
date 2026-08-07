@@ -619,8 +619,14 @@ reviewer:    w1:p3
 # implementer の状態を見る
 herdr pane get <implementer-id>  # agent_status: idle/working/blocked/done
 
-# 完了を待つ
-herdr wait agent-status <implementer-id> --status done --timeout 120000
+# 完了を待つ（--status は1つしか取れないため、短く区切ってdone/idle両方を見る。
+# 端末クライアントが繋がっていないヘッドレス実行では globally active tab のペインは
+# 完了時に直接 idle になりうるため、done 単独で120000msフル待機すると空転する）
+for _ in $(seq 1 6); do
+  herdr wait agent-status <implementer-id> --status done --timeout 20000 && break
+  STATUS=$(herdr pane get <implementer-id> | python3 -c "import json,sys; print(json.load(sys.stdin)['result']['pane'].get('agent_status',''))")
+  case "$STATUS" in idle|blocked) break ;; esac
+done
 
 # PR 番号を検出（出力から抽出）
 herdr pane read <implementer-id> --source recent-unwrapped --lines 40
