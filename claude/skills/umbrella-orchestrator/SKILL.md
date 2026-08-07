@@ -85,15 +85,23 @@ GitHub が `APPROVE` / `REQUEST_CHANGES` を受け付けないため、レビュ
 
 ```python
 plain = re.sub(r'[*`]', '', body)
+lines = plain.strip().splitlines()
 m = re.search(r'判定\s*[:：]\s*(\S+)', plain)
 if m:                                   # 通常形: 本文に 判定: がある
     verdict = '承認' if m.group(1).startswith('承認') else '変更要求'
-else:                                   # 見出しだけの形へフォールバック
-    head = plain.strip().splitlines()[0]
-    verdict = '承認' if '承認' in head else '変更要求'
+elif lines and re.search(r'承認|レビュー指摘', lines[0]):  # 見出しだけの形
+    verdict = '承認' if '承認' in lines[0] else '変更要求'
+else:                                   # どちらの形でも読めない
+    verdict = None
 m = re.search(r'HEAD\s*[:：]\s*([0-9a-f]{7,40})', plain)
 ok = m and (latest_sha.startswith(m.group(1)) or m.group(1).startswith(latest_sha))
 ```
+
+`body` が空文字列（本文なしのインラインコメント）の場合、`lines` は空リストになる。
+`lines[0]` にそのまま添字アクセスすると `IndexError` になる（本文なしは
+17件中13件という**最頻出のケース**なので、ここで落ちると全件走査が止まる）。
+`elif lines and ...` の短絡評価で空リストを弾き、`verdict = None`（＝次段落の
+「どちらの形でも読めなかった」状態）へ落とす。
 
 **どちらの形でも読めなかったら、本文末尾の結論を人間の目で読む。**
 「上記N件は必ず修正してください」で終わっていれば変更要求、
@@ -194,7 +202,7 @@ ok = m and (latest_sha.startswith(m.group(1)) or m.group(1).startswith(latest_sh
    ```
 
    **末尾の1文を削らないこと。** これが §5「レビュー待ちデッドロック」の**予防**である。
-   この1文の有無で実測がはっきり分かれた（同一の傘・同一のモデル構成）:
+   この1文の有無で実測がはっきり分かれた（同一の傘での実測。内訳は §5 を参照）:
 
    | 孫 | 末尾の1文 | デッドロック発生 |
    |---|---|---|
@@ -273,27 +281,30 @@ ok = m and (latest_sha.startswith(m.group(1)) or m.group(1).startswith(latest_sh
    - 例: `ph-00 のワークツリーが残っています。ocw rm --force ph-00-must-keep しますか？`
    - `ocw rm` は worktree + Herdr ワークスペース + ブランチをまとめて削除する
    - 未マージの孫は削除しない（`ocw rm` が未マージを拒否するため安全）
-   - **`--force` が要るかは `ocw` の版による**:
-     - **作成時のベースブランチを記録しない版**（`<worktree の git dir>/ocw-base-ref` が
-       無い）では **`--force` が必要**。孫ブランチは main ではなく傘ブランチへ
-       マージされており、マージチェックの基準が main 側になるため必ず失敗する
-     - **記録する版**なら `--force` は不要。作成時のベース（＝傘ブランチ）が判定の基準に
-       入り、squash マージも検出される。**判定基準を明示して `--force` を避けることもできる**
-       （例: `git config ocw.mergedInto <傘ブランチ>`）
-     - 判定に迷ったら `ocw rm <名前>` を `--force` なしで一度叩く。拒否されたら
-       `--force` を付け直せばよい（拒否は副作用を残さない）
-   - **`--force` を使うと計測上の `outcome` が `failure` として記録される版がある。**
-     マージ済みの孫を片付けただけなのに失敗として集計されるため、
-     `--force` なしで消せるならそちらを優先する
+   - **`--force` は事実上必須。** `ocw rm` の非 `--force` 経路は
+     `git merge-base --is-ancestor <branch> HEAD` でしか判定しない（`bin/ocw` の
+     実装。ベースブランチの記録や `mergedInto` のような設定は無い）。孫は GitHub 上で
+     squash マージされるため、実際にマージ済みでも祖先関係にはならず、素の
+     `ocw rm` は必ず失敗する。判定に迷ったら `ocw rm <名前>` を `--force` なしで
+     一度叩く。拒否されたら `--force` を付け直せばよい（拒否は副作用を残さない）
+   - **`--force` を使うと `outcome: failure` として計測される。**
+     マージ済みの孫を片付けただけでも失敗として集計される。これは `bin/ocw`
+     の現行実装の決め打ちで（`--force` は「マージ未確認のまま強制的に破棄した実行」
+     として記録する設計）、避ける方法は無い
 
    **`gh pr merge --delete-branch` はブランチを消し残すことがある。**
    孫のワークツリーがそのブランチを掴んでいるとローカル削除が失敗し、
-   **その時点で処理が止まってリモートブランチも消えない**。ワークツリーを片付けたあとに
-   明示的に消すこと（実測: 4本中4本で発生した）:
+   **その時点で処理が止まってリモートブランチも消えない**。ワークツリーを片付けたあとに、
+   リモートにまだ残っていれば明示的に消すこと（実測: 4本中4本で発生した）:
 
    ```bash
-   git push origin --delete <孫ブランチ名>
+   git ls-remote --exit-code --heads origin <孫ブランチ名> >/dev/null 2>&1 &&
+     git push origin --delete <孫ブランチ名>
    ```
+
+   既にリモートも消えている場合はこのチェックで何もしない。存在確認なしに
+   `git push origin --delete` だけを叩くと、リモートに無い場合
+   `remote ref does not exist` でエラー終了する。
 
 **補足**:
 - 検証失敗時は人間に報告。計画書は更新しない
@@ -346,11 +357,15 @@ ok = m and (latest_sha.startswith(m.group(1)) or m.group(1).startswith(latest_sh
    ```
 
 3. **implementer の起動を確認**
+
+   §3.2 注意点3と同じ手順を踏む（本文とEnterは別送信。届いていないのは
+   大抵Enterだけで、本文自体は届いている）:
    ```bash
    herdr pane get <implementer-id>
    ```
-   `agent_status: working` になれば成功。`idle` のままならプロンプトが届いていないので再送する。
-   （長すぎるのが原因なら短くする。届かない場合は Enter だけ先に送ってからプロンプトを送る。）
+   `agent_status: working` になれば成功。`idle` のままなら
+   `herdr pane send-keys <implementer-id> Enter` を撃って再確認する。
+   **同じ本文を `herdr pane run` で再送しない**（プロンプト欄に2重に積まれる）。
 
 4. **以降は自律運転**
    - implementer が PR を作成し、`/pr-review-loop` を起動
@@ -412,13 +427,19 @@ main へのマージは人間が手動で行う。
    7. 検証通過後、計画書を「✅ PR #XX マージ済」に更新してcommit+push
    8. 次の未着手の孫があれば spawn:
       ocw -H <次の孫ブランチ名> <傘ブランチ>
-      implementerにプロンプト送信
+      implementerにプロンプト送信（末尾に「reviewerはdone状態で完了し完了通知は
+        来ないので、待機して停止せず gh pr view をポーリングしてレビューの有無を
+        確認してください」を必ず含める。§3.2 注意点3参照）
+      送信後 herdr pane get で agent_status を確認し、idle のままなら
+        herdr pane send-keys <implementer-id> Enter で確定させる
       計画書を「🔄 実装中」に更新してcommit+push
    9. 全孫マージ済みなら finalize:
       司令官自身のworkspaceを特定:
         herdr pane list | python3 -c "import sys,json; [print(p['workspace_id']) for p in json.load(sys.stdin)['result']['panes'] if p.get('agent_status')=='working']"
       そのworkspaceのimplementerに送信:
         herdr pane run <impl-pane-id> "最終PRを作成。base:main head:<傘ブランチ>。pr-review-loop起動。reviewerは<同workspaceのreviewer>。mainマージは人間手動。計画書 <計画書の絶対パス> 参照。"
+      送信後 herdr pane get で agent_status を確認し、idle のままなら
+        herdr pane send-keys <impl-pane-id> Enter で確定させる
       CronDelete でこのcronを停止
       PushNotification でユーザーに「全工程完了。mainへのPR作成済み。手動マージしてください」と通知
 
@@ -533,7 +554,9 @@ reviewer:    w1:p3
 1. `ocw -H <孫ブランチ> <傘ブランチ>` を実行
 2. 出力から `implementer:` 行の pane ID を拾う
 3. `herdr pane run <implementer-id> "<prompt>"` でプロンプト送信
-4. 以上。reviewer は `/pr-review-loop` が勝手に使うので司令官は触らない
+4. `herdr pane get <implementer-id>` で `agent_status` を確認し、`idle` のままなら
+   `herdr pane send-keys <implementer-id> Enter` を撃って再確認する（§3.2 注意点3）
+5. 以上。reviewer は `/pr-review-loop` が勝手に使うので司令官は触らない
 
 ### 状態確認（`/check` から使う）
 
@@ -557,11 +580,18 @@ herdr pane read <implementer-id> --source recent-unwrapped --lines 40
 以下は**予防し損ねたときの検知と復旧**である。
 
 **エージェントは完了時に `done` になり `idle` にはならない。**
+
+**注記**: `pr-review-loop` スキル自身は「`done` は一過性でちらつくだけ、`idle` が
+最終安定状態」と逆のことを書いている（§3.2 の孫が使う `pr-review-loop` 側の記述）。
+本スキルの文脈（司令官が孫の implementer 越しに reviewer の完了を監視する場面）では
+ここに書いた通りに観測された。どちらが実態に近いかの切り分けと `pr-review-loop`
+側の記述の要否は本ファイルの変更範囲外とし、判断は人間に委ねる。
+
 実装AIが reviewer の完了を待つとき `herdr wait agent-status <reviewer> --status idle`
 を使うことがあり、この待機は**成立せずタイムアウトまで空回りする**。
-1つの傘で2回発生した（各10分ロス）。
+孫1で1回発生した（約10分ロス。§3.2 実測表と同じ事例）。
 
-**待ち方は1種類ではない。** 別の傘では `herdr wait` を使わず
+**待ち方は1種類ではない。** 孫3では `herdr wait` を使わず
 「バックグラウンドで再度待機中です。通知を待ちます」と称して**バックグラウンドシェルを
 走らせたまま止まる**形が3回出た。このとき pane の `agent_status` は
 `working` ではなく **`done`** になる。つまり
