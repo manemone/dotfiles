@@ -19,7 +19,7 @@
 |---|---|---|---|
 | 1 | `ai/ocw-01-config-context` | 設定リーダ（git config `ocw.*`）と `init_repo_context()` の再構築（bare 対応・パス雛形の展開と検証・掃除境界の逆算・`repo_name` の解決） | ✅ PR #50 マージ済 |
 | 2 | `ai/ocw-02-naming` | 命名（`ai/` 接頭辞の廃止・ブランチ名／ディレクトリ名のサニタイズ分離・`git check-ref-format --branch` による検証・ネストディレクトリでの作成） | ✅ PR #51 マージ済 |
-| 3 | `ai/ocw-03-rm-resolution` | `ocw rm` の porcelain 逆引き解決・曖昧時の停止・空ディレクトリ掃除・マージ済み判定の再定義（squash 検出・基準 ref 候補・`gh` opt-in）・`outcome` の決定方法の修正 | 🔄 実装中 |
+| 3 | `ai/ocw-03-rm-resolution` | `ocw rm` の porcelain 逆引き解決・曖昧時の停止・空ディレクトリ掃除・マージ済み判定の再定義（squash 検出・基準 ref 候補・`gh` opt-in）・`outcome` の決定方法の修正 | ✅ PR #52 マージ済 |
 | 4 | `ai/ocw-04-docs` | 文書（`bin/README.md` §3.1 の全面改訂・ルート `README.md` の追随） | ⬜ 待機中 |
 
 ## 依存関係と実行順序
