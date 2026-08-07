@@ -217,6 +217,16 @@ is_bare="false"
 worktree_dir_template=""
 worktree_cleanup_boundary=""
 
+# Set by resolve_removal_target() / check_branch_merged() below and read by
+# their callers in remove_worktree() -- kept here with the rest of this
+# file's cross-function globals rather than left to spring into existence
+# on first assignment.
+RESOLVED_WORKTREE_DIR=""
+RESOLVED_BRANCH=""
+BASE_REF_CANDIDATES=""
+BASE_REF_CANDIDATE_SHAS=""
+MERGE_CHECK_RESULT=""
+
 # git config `ocw.*` reader. `.git/config` is shared by every worktree of a
 # repo (including bare), so whichever worktree ocw is invoked from sees the
 # same values. Must be called after repo_root is known.
@@ -742,6 +752,12 @@ create_worktree() {
     # raw bash error onto ocw's real stderr despite the trailing `|| true`
     # protecting the exit code.
     printf '%s\n' "$run_id" 2>/dev/null >"${worktree_git_dir}/ocw-run-id" || true
+
+    # Persisted so `ocw rm` can use it as a merge-check candidate (ADR
+    # DOC-2608062258 §3.7 candidate 2): a worktree branched off an umbrella
+    # branch is never an ancestor of `main`, only of the umbrella it was
+    # actually created from. Same fail-open rationale as ocw-run-id above.
+    printf '%s\n' "$base_ref" 2>/dev/null >"${worktree_git_dir}/ocw-base-ref" || true
   fi
 
   echo "run:         ${run_id}"
@@ -917,6 +933,302 @@ close_herdr_workspaces_for_checkout() {
   done <<<"$workspace_ids"
 }
 
+# Reverse-lookup source for `ocw rm` (ADR DOC-2608062258 §3.9). Emits
+# `path<TAB>branch` for every worktree except the main worktree and any
+# `bare` entry -- neither is ever a removal candidate. `branch` comes out
+# empty for a `detached` entry (no `branch` line in porcelain output).
+worktree_entries() {
+  local line="" path="" branch="" bare="false"
+
+  while IFS= read -r line; do
+    case "$line" in
+      "worktree "*)
+        if [ -n "$path" ] && [ "$bare" != "true" ] && [ "$path" != "$repo_root" ]; then
+          printf '%s\t%s\n' "$path" "$branch"
+        fi
+        path="${line#worktree }"
+        branch=""
+        bare="false"
+        ;;
+      "branch refs/heads/"*)
+        branch="${line#branch refs/heads/}"
+        ;;
+      "bare")
+        bare="true"
+        ;;
+      *) ;;
+    esac
+  done < <(git -C "$repo_root" worktree list --porcelain)
+
+  if [ -n "$path" ] && [ "$bare" != "true" ] && [ "$path" != "$repo_root" ]; then
+    printf '%s\t%s\n' "$path" "$branch"
+  fi
+}
+
+# Resolves `ocw rm`'s input against worktree_entries() via 3 staged match
+# rules (ADR §3.9), taking the first stage that produces >=1 hit. Never
+# guesses among multiple hits in the same stage -- `rm` is destructive, so
+# ambiguity is reported and the caller must be more specific. On success,
+# sets the globals RESOLVED_WORKTREE_DIR / RESOLVED_BRANCH. Input is matched
+# literally (not normalized) -- the caller typed a name that already exists.
+#
+# Candidates accumulate as newline-separated "path<TAB>branch" strings
+# rather than bash arrays: this file must stay bash-3.2-compatible (macOS
+# stock /bin/bash -- see docs/design/DOC-2608020715-a_.../シェルスクリプト
+# コーディング方針.md and PR #49), and under `set -u` bash <4.4 raises
+# "unbound variable" merely from expanding a *zero-element* array
+# (`"${arr[@]}"`/`"${#arr[@]}"`), which stage counts of 0 are the normal
+# case here.
+resolve_removal_target() {
+  local task_name="$1"
+  local entries="" path="" branch="" rel=""
+  local stage1="" stage2="" stage3=""
+  local stage1_count=0 stage2_count=0 stage3_count=0
+
+  entries="$(worktree_entries)"
+
+  while IFS=$'\t' read -r path branch; do
+    [ -n "$path" ] || continue
+
+    rel=""
+    case "$path" in
+      "$worktree_cleanup_boundary"/*)
+        rel="${path#"$worktree_cleanup_boundary"/}"
+        ;;
+    esac
+
+    # Stage 1: exact branch name, exact absolute path, or path relative to
+    # the worktreeDir template's cleanup boundary (ADR §2.9).
+    if { [ -n "$branch" ] && [ "$branch" = "$task_name" ]; } ||
+      [ "$path" = "$task_name" ] ||
+      { [ -n "$rel" ] && [ "$rel" = "$task_name" ]; }; then
+      stage1="${stage1}${path}"$'\t'"${branch}"$'\n'
+      stage1_count=$((stage1_count + 1))
+    fi
+
+    # Stage 2: directory basename.
+    if [ "$(basename -- "$path")" = "$task_name" ]; then
+      stage2="${stage2}${path}"$'\t'"${branch}"$'\n'
+      stage2_count=$((stage2_count + 1))
+    fi
+
+    # Stage 3: branch ends with "/<input>" -- the pre-孫2 `ai/` prefix
+    # migration rescue (ADR §3.1/§3.9): `ocw rm foo` must still find a
+    # worktree still on a legacy `ai/foo` branch.
+    case "$branch" in
+      *"/${task_name}")
+        stage3="${stage3}${path}"$'\t'"${branch}"$'\n'
+        stage3_count=$((stage3_count + 1))
+        ;;
+    esac
+  done <<<"$entries"
+
+  local candidates="" candidate_count=0
+
+  if [ "$stage1_count" -gt 0 ]; then
+    candidates="$stage1"
+    candidate_count="$stage1_count"
+  elif [ "$stage2_count" -gt 0 ]; then
+    candidates="$stage2"
+    candidate_count="$stage2_count"
+  elif [ "$stage3_count" -gt 0 ]; then
+    candidates="$stage3"
+    candidate_count="$stage3_count"
+  fi
+
+  [ "$candidate_count" -gt 0 ] ||
+    die "no worktree found matching '${task_name}'"
+
+  if [ "$candidate_count" -gt 1 ]; then
+    {
+      echo "error: '${task_name}' matches multiple worktrees:"
+      while IFS=$'\t' read -r path branch; do
+        [ -n "$path" ] || continue
+        printf '  %s (branch: %s)\n' "$path" "${branch:-<detached>}"
+      done <<<"$candidates"
+    } >&2
+    exit 1
+  fi
+
+  IFS=$'\t' read -r RESOLVED_WORKTREE_DIR RESOLVED_BRANCH <<<"$candidates"
+}
+
+# Appends $1 to BASE_REF_CANDIDATES (a newline-separated string, not a bash
+# array -- see resolve_removal_target's comment on why) iff it resolves to a
+# real commit, silently skipping unset/unresolvable candidates (ADR §3.7's
+# "解決できない候補は黙って飛ばす"). Also skips it if some earlier candidate
+# already resolved to the same commit (tracked via BASE_REF_CANDIDATE_SHAS,
+# keyed by the resolved SHA rather than the ref string) -- `ocw.mergedInto`,
+# the persisted base_ref, HEAD, and origin/HEAD commonly all point at the
+# same commit, and without this check_branch_merged's per-candidate work
+# (an `is-ancestor` call plus the 4-subprocess squash_merged recipe, times
+# however many gh calls were still folded into that loop) ran once per
+# duplicate for no additional information.
+add_merge_candidate_if_resolvable() {
+  local candidate="$1"
+  local sha=""
+
+  [ -n "$candidate" ] || return 0
+
+  sha="$(git -C "$repo_root" rev-parse --verify --quiet "${candidate}^{commit}" 2>/dev/null)" ||
+    return 0
+
+  case "$BASE_REF_CANDIDATE_SHAS" in
+    *"${sha}"$'\n'*) return 0 ;;
+  esac
+
+  BASE_REF_CANDIDATE_SHAS="${BASE_REF_CANDIDATE_SHAS}${sha}"$'\n'
+  BASE_REF_CANDIDATES="${BASE_REF_CANDIDATES}${candidate}"$'\n'
+}
+
+# Builds the integration-ref candidate list, in priority order (ADR
+# DOC-2608062258 §3.7): configured override, the worktree's own creation-time
+# base, the "current checkout" default this replaces, then origin/HEAD as a
+# last resort for a stale local checkout.
+collect_merge_candidates() {
+  local branch="$1"
+  local worktree_git_dir="$2"
+  local configured="" base_ref_file="" head_candidate="" origin_head=""
+
+  BASE_REF_CANDIDATES=""
+  BASE_REF_CANDIDATE_SHAS=""
+
+  configured="$(ocw_config_get ocw.mergedInto "")"
+  add_merge_candidate_if_resolvable "$configured"
+
+  if [ -n "$worktree_git_dir" ] && [ -f "${worktree_git_dir}/ocw-base-ref" ]; then
+    base_ref_file="$(cat "${worktree_git_dir}/ocw-base-ref")"
+  fi
+  add_merge_candidate_if_resolvable "$base_ref_file"
+
+  if [ "$is_bare" = "true" ]; then
+    head_candidate="$(git -C "$repo_root" symbolic-ref --short HEAD 2>/dev/null)" || head_candidate=""
+  else
+    # Literal "HEAD", resolved via `-C "$repo_root"` below -- this preserves
+    # the pre-孫3 behavior of comparing against whatever the main worktree
+    # currently has checked out (ADR §3.10).
+    head_candidate="HEAD"
+  fi
+  add_merge_candidate_if_resolvable "$head_candidate"
+
+  origin_head="$(git -C "$repo_root" symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null)" || origin_head=""
+  add_merge_candidate_if_resolvable "$origin_head"
+}
+
+# ADR §2.7's squash-detection recipe: a squash merge never lands $branch's
+# commits in $candidate's history, so ancestry can't see it, but the tree it
+# would have produced as one commit still shows up as an already-applied
+# patch-id via `git cherry`. Each step is guarded individually with its own
+# `|| return 1` -- under `set -e`, a mid-function failure would otherwise
+# abort the whole script even though the caller only tests this function's
+# final exit status (`if squash_merged ...`). Any failure here means "could
+# not detect", not "not merged" -- callers must keep trying other candidates
+# rather than concluding unmerged from this alone.
+squash_merged() {
+  local branch="$1"
+  local candidate="$2"
+  local base="" tree="" dangling="" cherry_output=""
+
+  base="$(git -C "$repo_root" merge-base "$candidate" "$branch" 2>/dev/null)" || return 1
+  tree="$(git -C "$repo_root" rev-parse "${branch}^{tree}" 2>/dev/null)" || return 1
+  dangling="$(
+    GIT_AUTHOR_NAME=ocw GIT_AUTHOR_EMAIL=ocw@invalid \
+      GIT_COMMITTER_NAME=ocw GIT_COMMITTER_EMAIL=ocw@invalid \
+      git -C "$repo_root" commit-tree "$tree" -p "$base" -m _ 2>/dev/null
+  )" || return 1
+  cherry_output="$(git -C "$repo_root" cherry "$candidate" "$dangling" 2>/dev/null)" || return 1
+
+  case "$cherry_output" in
+    -*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# `ocw.githubMergeCheck` opt-in (ADR §3.7c). Fail-open: any `gh` failure
+# (unauthenticated, no network, not a GitHub remote) is "could not
+# determine", never a reason to abort `ocw rm` itself.
+gh_merge_check() {
+  local branch="$1"
+  local output=""
+
+  output="$(gh pr list --head "$branch" --state merged 2>/dev/null)" || return 1
+
+  [ -n "$output" ]
+}
+
+# Sets the global MERGE_CHECK_RESULT to one of `merged` / `not_merged` /
+# `no_candidates` / `no_branch`. Runs unconditionally (even under -f, ADR
+# §3.8) since the result feeds run.end's `outcome` regardless of whether -f
+# bypassed the rejection this same result would otherwise cause.
+check_branch_merged() {
+  local branch="$1"
+  local worktree_git_dir="$2"
+  local candidate=""
+
+  # A detached worktree has no branch to check against anything -- distinct
+  # from `not_merged` (there is no unmerged *thing*, there is nothing to
+  # check at all), so remove_worktree's die message can say so accurately
+  # instead of naming an empty branch.
+  if [ -z "$branch" ]; then
+    MERGE_CHECK_RESULT="no_branch"
+    return
+  fi
+
+  collect_merge_candidates "$branch" "$worktree_git_dir"
+
+  if [ -z "$BASE_REF_CANDIDATES" ]; then
+    MERGE_CHECK_RESULT="no_candidates"
+    return
+  fi
+
+  while IFS= read -r candidate; do
+    [ -n "$candidate" ] || continue
+
+    if git -C "$repo_root" merge-base --is-ancestor "$branch" "$candidate" 2>/dev/null; then
+      MERGE_CHECK_RESULT="merged"
+      return
+    fi
+
+    if squash_merged "$branch" "$candidate"; then
+      MERGE_CHECK_RESULT="merged"
+      return
+    fi
+  done <<<"$BASE_REF_CANDIDATES"
+
+  # `gh_merge_check` takes only $branch, never $candidate (a PR's merged
+  # state doesn't depend on which integration ref we're comparing against)
+  # -- so unlike ancestry/squash above, it belongs outside the per-candidate
+  # loop. Evaluated once, after every candidate has already failed
+  # ancestry/squash, not once per candidate (which duplicated the same `gh`
+  # network round-trip candidate_count times, including under -f).
+  if [ "$(ocw_config_get_bool ocw.githubMergeCheck false)" = "true" ] &&
+    command -v gh >/dev/null 2>&1 &&
+    gh_merge_check "$branch"; then
+    MERGE_CHECK_RESULT="merged"
+    return
+  fi
+
+  MERGE_CHECK_RESULT="not_merged"
+}
+
+# Walks up from dirname($dir), rmdir-ing each now-possibly-empty parent
+# until $boundary is reached (never removed itself) or a non-empty
+# directory stops the climb (ADR §3.5). rmdir fails on a non-empty
+# directory, so a sibling worktree still present under the same parent
+# naturally halts the climb without any explicit "is it empty" check.
+cleanup_empty_parents() {
+  local dir="$1"
+  local boundary="$2"
+  local parent=""
+
+  parent="$(dirname -- "$dir")"
+
+  while [ "$parent" != "$boundary" ] && [ "$parent" != "/" ]; do
+    rmdir -- "$parent" 2>/dev/null || break
+    parent="$(dirname -- "$parent")"
+  done
+}
+
 remove_worktree() {
   local force="false"
 
@@ -936,24 +1248,23 @@ remove_worktree() {
   [ "$#" -le 1 ] ||
     die "too many arguments for remove"
 
-  local slug=""
-  local branch=""
   local worktree_dir=""
+  local branch=""
+  local display_name=""
   local invocation_real=""
   local worktree_real=""
 
-  slug="$(normalize_branch_name "$task_name")"
-
-  [ -n "$slug" ] ||
-    die "worktree name became empty"
-
-  branch="$slug"
-  worktree_dir="$(expand_worktree_dir_template "$worktree_dir_template" "$slug")"
+  resolve_removal_target "$task_name"
+  worktree_dir="$RESOLVED_WORKTREE_DIR"
+  branch="$RESOLVED_BRANCH"
 
   echo "repo:      ${repo_name}"
   echo "remove:    ${worktree_dir}"
-  echo "branch:    ${branch}"
+  echo "branch:    ${branch:-<detached>}"
   echo "force:     ${force}"
+
+  display_name="$branch"
+  [ -n "$display_name" ] || display_name="$(basename -- "$worktree_dir")"
 
   # invocation_root is empty when ocw was invoked from inside a bare
   # repository (ADR DOC-2608062258 §2.1/§3.10) -- there's no worktree to
@@ -967,13 +1278,10 @@ remove_worktree() {
       echo "error: do not remove the current worktree" >&2
       echo "move to main first:" >&2
       echo "  cd ${repo_root}" >&2
-      echo "  ocw rm ${slug}" >&2
+      echo "  ocw rm ${display_name}" >&2
       exit 1
     fi
   fi
-
-  [ -d "$worktree_dir" ] ||
-    die "worktree dir does not exist: ${worktree_dir}"
 
   local run_id=""
   local worktree_git_dir=""
@@ -984,41 +1292,106 @@ remove_worktree() {
     run_id="$(cat "${worktree_git_dir}/ocw-run-id")"
   fi
 
+  # Runs even under -f (ADR §3.8): -f only bypasses the rejection below, it
+  # never skips the determination itself, since the result also decides
+  # run.end's outcome further down.
+  check_branch_merged "$branch" "$worktree_git_dir"
+
   if [ "$force" = "false" ]; then
-    if [ -n "$(git -C "$worktree_dir" status --porcelain)" ]; then
-      die "worktree has uncommitted or untracked changes: ${worktree_dir}"
+    # A worktree whose directory was removed out from under git (`rm -rf`
+    # instead of `ocw rm`) still resolves here -- git worktree metadata
+    # doesn't disappear with it. `git -C "$worktree_dir" status` against a
+    # nonexistent directory fails with a raw `fatal:` on stderr, and its
+    # empty stdout is otherwise indistinguishable from "clean": guard on
+    # -d first so a missing directory is reported plainly instead of
+    # leaking git's own diagnostic and reading a failure as "no changes".
+    # This only decides whether the status check itself runs -- whether
+    # the worktree's registration actually gets removed is still decided
+    # by the merge-check gate right below, same as when the directory is
+    # present.
+    if [ -d "$worktree_dir" ]; then
+      if [ -n "$(git -C "$worktree_dir" status --porcelain)" ]; then
+        die "worktree has uncommitted or untracked changes: ${worktree_dir}"
+      fi
+    else
+      # States only what is true right now (the directory is gone, so
+      # there is nothing to run `status` against) rather than promising
+      # the registration will be cleaned up -- the case below can still
+      # `die` on the merge-check result before that ever happens, and a
+      # message describing a future action that didn't occur would be a
+      # lie about the actual outcome.
+      warn "worktree directory is already gone; skipping the local-changes check: ${worktree_dir}"
     fi
 
-    if ! git -C "$repo_root" \
-      merge-base --is-ancestor "$branch" HEAD; then
-      die "branch is not merged into the current main checkout: ${branch}"
-    fi
+    case "$MERGE_CHECK_RESULT" in
+      merged) ;;
+      no_candidates)
+        die "cannot determine an integration ref to check '${branch}' against; set ocw.mergedInto or use -f"
+        ;;
+      no_branch)
+        die "detached worktree has no branch to check for a merge; use -f: ${display_name}"
+        ;;
+      not_merged)
+        die "branch is not merged into any known integration ref: ${branch}"
+        ;;
+    esac
   fi
 
   close_herdr_workspaces_for_checkout "$worktree_dir"
 
-  # -f discards a worktree without requiring it merged or clean (usage's own
-  # "ocw rm -f failed-experiment" example) — that's a run that didn't reach
-  # a mergeable result, so record it as failure rather than success. A
-  # plain `rm` only ever gets here after the merged+clean checks above pass,
-  # so it's always a successful run.end.
-  local run_end_outcome="success"
+  # outcome now follows the merge determination above, not the presence of
+  # -f (ADR §3.8) -- -f is "bypass the rejection", not "declare failure".
+  local run_end_outcome="failure"
+  [ "$MERGE_CHECK_RESULT" = "merged" ] && run_end_outcome="success"
 
   if [ "$force" = "true" ]; then
-    run_end_outcome="failure"
-
     git -C "$repo_root" \
       worktree remove --force "$worktree_dir"
-
-    git -C "$repo_root" \
-      branch -D "$branch"
   else
+    # Plain (non---force) `worktree remove` still refuses on uncommitted
+    # changes -- redundant with the status --porcelain check above, but
+    # left as a second independent guard rather than routed through
+    # --force here too.
     git -C "$repo_root" \
       worktree remove "$worktree_dir"
-
-    git -C "$repo_root" \
-      branch -d "$branch"
   fi
+
+  # show-ref first: an unborn-branch worktree (`git worktree add -b <name>
+  # --orphan`, or one created against an empty bare repo) reports a real
+  # `branch refs/heads/<name>` line in porcelain output -- HEAD is a
+  # symbolic ref to that name -- even though `refs/heads/<name>` doesn't
+  # exist as an actual ref yet. `git branch -D` on a ref that was never
+  # created exits non-zero ("not found"), and under `set -e` that would
+  # abort remove_worktree here: after `worktree remove` already succeeded
+  # above, but before the empty-parent cleanup and run.end below ever run,
+  # leaving a run that opened with run.start and never closes. There is
+  # nothing to delete in that case, so skip rather than attempt it.
+  if [ -n "$branch" ] && git -C "$repo_root" show-ref --verify --quiet "refs/heads/${branch}"; then
+    # Always -D, never -d: `git branch -d`'s own "is this merged" check is
+    # ancestry-only (the exact limitation ADR §3.7/§2.7 exists to work
+    # around) and would refuse a squash-detected or gh-detected merge that
+    # check_branch_merged above already vetted more thoroughly. By this
+    # point the branch is leaving either way -- via -f, or because
+    # MERGE_CHECK_RESULT was "merged" -- so there is nothing left for -d's
+    # own safety check to usefully add.
+    #
+    # Fail-open on the delete itself too: the worktree is already gone at
+    # this point, so a `branch -D` failure for some other reason (a lock
+    # file, a hook) shouldn't cost the empty-parent cleanup or run.end that
+    # still need to happen below.
+    git -C "$repo_root" \
+      branch -D "$branch" ||
+      warn "failed to delete branch: ${branch}"
+  fi
+
+  # Only climb inside the configured layout's own boundary (ADR §3.5) --
+  # a legacy worktree resolved via stage 3 (ai/* migration rescue) may sit
+  # entirely outside it, in which case there is nothing of ours to clean up.
+  case "$worktree_dir" in
+    "$worktree_cleanup_boundary"/*)
+      cleanup_empty_parents "$worktree_dir" "$worktree_cleanup_boundary"
+      ;;
+  esac
 
   if [ -n "$run_id" ]; then
     ocw_meter_event run.end \
