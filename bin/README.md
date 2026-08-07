@@ -210,10 +210,14 @@ outcome = マージ済みと判定できた → success
 
 worktree作成のたびに `run_id` を採番し、標準出力に `run:` 行として表示する。
 `run_id` は worktree の git管理領域（`git -C <worktree> rev-parse --absolute-git-dir` が指す
-`.git/worktrees/<worktree ディレクトリの basename>/ocw-run-id`。`<slug>` に `/` が含まれる場合（例:
-`feature/foo`）でも git はここを worktree パスの basename（`foo`）で作るため、フルパスの `<slug>`
-そのものではない。git worktreeの削除時に自動で掃除される、リポジトリには一切入らない場所）
-に保存され、`ocw rm` 実行時にそこから読み戻されて `run.end` イベントの記録に使われる。
+`ocw-run-id` というファイル）に保存され、`ocw rm` 実行時にそこから読み戻されて `run.end` イベントの
+記録に使われる。この管理領域は `.git/worktrees/<worktree ディレクトリの basename>/` を基本形に
+git が内部的に名付けるが、**同じ basename のワークツリーが複数あると `foo1` のような連番付きの別名
+になる**（`feature/foo` と `hotfix/foo` はどちらも basename が `foo` だが、ネスト方針上は両方同時に
+存在できる）。したがって `<slug>` や basename からパスを自分で組み立てて読みにいってはならず、
+常に `git -C <worktree> rev-parse --absolute-git-dir` で解決すること。`bin/ocw` 自身もこの規則には
+依存せず、常に `rev-parse --absolute-git-dir` 経由で読み書きしている。この領域は git worktree の
+削除時に自動で掃除される、リポジトリには一切入らない場所である。
 
 Herdrモードでは、commander/implementer/reviewer の各ペイン起動時に環境変数
 `OCW_ROLE`（`commander`/`implementer`/`reviewer`）と `OCW_RUN_ID` が `herdr workspace create --env` /
