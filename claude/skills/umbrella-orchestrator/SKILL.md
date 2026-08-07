@@ -89,8 +89,9 @@ lines = plain.strip().splitlines()
 m = re.search(r'判定\s*[:：]\s*(\S+)', plain)
 if m:                                   # 通常形: 本文に 判定: がある
     verdict = '承認' if m.group(1).startswith('承認') else '変更要求'
-elif lines and re.search(r'承認|レビュー指摘', lines[0]):  # 見出しだけの形
-    verdict = '承認' if '承認' in lines[0] else '変更要求'
+elif lines and re.search(r'✅|🔍|承認|レビュー指摘', lines[0]):  # 見出しだけの形
+    head = lines[0]
+    verdict = '変更要求' if ('🔍' in head or 'レビュー指摘' in head) else '承認'
 else:                                   # どちらの形でも読めない
     verdict = None
 m = re.search(r'HEAD\s*[:：]\s*([0-9a-f]{7,40})', plain)
@@ -102,6 +103,12 @@ ok = m and (latest_sha.startswith(m.group(1)) or m.group(1).startswith(latest_sh
 17件中13件という**最頻出のケース**なので、ここで落ちると全件走査が止まる）。
 `elif lines and ...` の短絡評価で空リストを弾き、`verdict = None`（＝次段落の
 「どちらの形でも読めなかった」状態）へ落とす。
+
+`'承認' in head` のような部分一致だけで判定すると、「前回の承認を取り消します」
+のような**変更要求の見出しに「承認」という字面が混ざるケース**を誤って承認判定
+してしまう（`re.sub(r'[*`]', '', body)` は絵文字を落とさないため、`✅`/`🔍` の
+マーカーは見出しに残っている）。**変更要求を示す `🔍` / `レビュー指摘` を先に
+判定してから承認に倒す**ことで、変更要求のPRを誤って承認扱いする向きの事故を防ぐ。
 
 **どちらの形でも読めなかったら、本文末尾の結論を人間の目で読む。**
 「上記N件は必ず修正してください」で終わっていれば変更要求、
@@ -210,6 +217,11 @@ ok = m and (latest_sha.startswith(m.group(1)) or m.group(1).startswith(latest_sh
    | 孫3 | なし | **3回**（司令官が毎回拾いに行った） |
    | 孫4 | **あり** | **0回** |
 
+   孫2 はこの表に含めていない。デッドロック発生の有無を個別に記録していないため、
+   憶測で0回や1回と書き足すと表そのものの信頼性を損なう。この表が支える主張は
+   「末尾の1文があれば発生しない」であり、孫1・孫3（なし）と孫4（あり）の対比だけで
+   十分に示せる。
+
    デッドロックは司令官が拾えば復旧できるが、**拾えるのは次の巡回まで待ってから**である。
    予防はプロンプトに1文足すだけなので、検知・復旧より常に安い。
 
@@ -277,20 +289,25 @@ ok = m and (latest_sha.startswith(m.group(1)) or m.group(1).startswith(latest_sh
 4. **未着手の孫を列挙**
 
 5. **クリーンアップ提案**
-   - マージ済み＋検証済みの孫のうち、まだワークツリーが残っているものがあれば `ocw rm --force <slug>` を提案
-   - 例: `ph-00 のワークツリーが残っています。ocw rm --force ph-00-must-keep しますか？`
+   - マージ済み＋検証済みの孫のうち、まだワークツリーが残っているものがあれば `ocw rm <slug>` を提案（**まず `--force` なしで**）
+   - 例: `ph-00 のワークツリーが残っています。ocw rm ph-00-must-keep しますか？`
    - `ocw rm` は worktree + Herdr ワークスペース + ブランチをまとめて削除する
    - 未マージの孫は削除しない（`ocw rm` が未マージを拒否するため安全）
-   - **`--force` は事実上必須。** `ocw rm` の非 `--force` 経路は
-     `git merge-base --is-ancestor <branch> HEAD` でしか判定しない（`bin/ocw` の
-     実装。ベースブランチの記録や `mergedInto` のような設定は無い）。孫は GitHub 上で
-     squash マージされるため、実際にマージ済みでも祖先関係にはならず、素の
-     `ocw rm` は必ず失敗する。判定に迷ったら `ocw rm <名前>` を `--force` なしで
-     一度叩く。拒否されたら `--force` を付け直せばよい（拒否は副作用を残さない）
-   - **`--force` を使うと `outcome: failure` として計測される。**
-     マージ済みの孫を片付けただけでも失敗として集計される。これは `bin/ocw`
-     の現行実装の決め打ちで（`--force` は「マージ未確認のまま強制的に破棄した実行」
-     として記録する設計）、避ける方法は無い
+   - **`--force` は基本的に不要。** `ocw rm`（`bin/ocw`）のマージ済み判定は
+     `ocw.mergedInto`（設定） → 作成時のベース（`<worktree の git dir>/ocw-base-ref`
+     に永続化される） → `HEAD` → `origin/HEAD` の順に候補を集め、各候補について
+     `git merge-base --is-ancestor` に加えて squash マージ検出（`commit-tree` +
+     `git cherry` によるパッチID比較）も試す。孫は傘ブランチへ squash マージされることが
+     多いが、作成時のベース（＝傘ブランチ）が候補に入り squash 検出も効くため、
+     **`--force` なしの `ocw rm` が普通に通る**
+   - 判定できない場合（`ocw rm` が `cannot determine an integration ref ...:
+     set ocw.mergedInto or use -f` で拒否した場合）だけ `--force` を検討する。
+     ありうる原因は squash 後に統合先で rebase・amend されて patch-id が変わった、
+     マージ時の衝突解決で diff が変わった等（`bin/ocw` 自身が検出できないと
+     明記している限界）
+   - **`outcome`（計測用）は `--force` の有無ではなくマージ判定の結果で決まる。**
+     マージ済みと判定できれば `success`、できなければ `failure`。squash マージ済みの
+     孫を `--force` で消しても、マージ済みと判定できていれば `success` になる
 
    **`gh pr merge --delete-branch` はブランチを消し残すことがある。**
    孫のワークツリーがそのブランチを掴んでいるとローカル削除が失敗し、
@@ -310,6 +327,13 @@ ok = m and (latest_sha.startswith(m.group(1)) or m.group(1).startswith(latest_sh
 - 検証失敗時は人間に報告。計画書は更新しない
 - 実装中の孫はスキップ
 - クリーンアップは確認を取ってから実行。無言で `ocw rm` しない
+- `ocw rm` は入力が複数のワークツリーに曖昧一致すると、候補を列挙して自動選択せずに
+  停止する（`bin/ocw` の設計。破壊的操作のため）。`/check` `/autopilot` の無人巡回中に
+  これが起きたら、そのクリーンアップだけをスキップして人間に完全な名前の指定を仰ぐ。
+  他の孫の処理は止めない
+- 傘運用で `ocw.mergedInto` を明示設定する必要は無い。作成時のベース（傘ブランチ）が
+  自動的にマージ判定の候補へ入るため（本節冒頭を参照）、squash 検出との組み合わせで
+  素の `ocw rm` が通常どおり通る
 
 ### 3.4 `/finalize`
 
@@ -526,11 +550,18 @@ for p in json.load(sys.stdin)['result']['panes']:
 ocw -H <孫ブランチ名> <傘ブランチ名>
 ```
 
+**`<孫ブランチ名>` は `ai/xxx` を含む完全なブランチ名をそのまま渡すこと。**
+`ocw` はブランチ名に `ai/` 接頭辞を自動で付けない（正規化した入力そのものが
+ブランチ名になる）。計画書の進捗テーブルの「ブランチ」列（§2.1）には元々
+`` `ai/xxx` `` の形で完全名を書く規約なので、そこから取得した値をそのまま渡せば
+一致する。
+
 これだけで以下が**全部**できる:
 
 ```
-git worktree 作成（ai/<slug> ブランチ）
-  → herdr workspace 作成（<repo>/<slug>）
+git worktree 作成（<孫ブランチ名> がそのままブランチ名になる。`/` はディレクトリの
+  ネストとして温存される）
+  → herdr workspace 作成（ラベルは `<repo_name> :: <slug>`。区切りは `::`）
   → 3ペーン構成:
      ┌────────────┬──────────────┬──────────┐
      │ commander  │ implementer  │ reviewer │
@@ -580,16 +611,15 @@ herdr pane read <implementer-id> --source recent-unwrapped --lines 40
 以下は**予防し損ねたときの検知と復旧**である。
 
 **エージェントは完了時に `done` になり `idle` にはならない。**
-
-**注記**: `pr-review-loop` スキル自身は「`done` は一過性でちらつくだけ、`idle` が
-最終安定状態」と逆のことを書いている（§3.2 の孫が使う `pr-review-loop` 側の記述）。
-本スキルの文脈（司令官が孫の implementer 越しに reviewer の完了を監視する場面）では
-ここに書いた通りに観測された。どちらが実態に近いかの切り分けと `pr-review-loop`
-側の記述の要否は本ファイルの変更範囲外とし、判断は人間に委ねる。
-
 実装AIが reviewer の完了を待つとき `herdr wait agent-status <reviewer> --status idle`
 を使うことがあり、この待機は**成立せずタイムアウトまで空回りする**。
 孫1で1回発生した（約10分ロス。§3.2 実測表と同じ事例）。
+
+**注記**: `pr-review-loop` スキル（`claude/skills/pr-review-loop/SKILL.md:415`）は
+「`done` は一過性でちらつくだけ、`idle` が最終安定状態」と逆のことを書いている。
+本スキルの文脈（司令官が孫の implementer 越しに reviewer の完了を監視する場面）では
+ここに書いた通りに観測された。どちらが実態に近いかの切り分けと `pr-review-loop`
+側の記述の要否は本ファイルの変更範囲外とし、判断は人間に委ねる。
 
 **待ち方は1種類ではない。** 孫3では `herdr wait` を使わず
 「バックグラウンドで再度待機中です。通知を待ちます」と称して**バックグラウンドシェルを
