@@ -573,9 +573,13 @@ class ExistingBehaviorRegressionTests(OcwTestCase):
         self.assertIn("widget-maker", result.stdout)
 
     def test_remove_nonexistent_worktree_dies(self):
+        # Message changed by 孫3's porcelain reverse-lookup rewrite
+        # (ADR DOC-2608062258 §3.9): there's no longer a single
+        # pre-computed dir path to report as missing, since resolution
+        # now works backwards from `git worktree list --porcelain`.
         result = run_ocw(["rm", "does-not-exist"], self.repo_root)
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("worktree dir does not exist", result.stderr)
+        self.assertIn("no worktree found", result.stderr)
 
     def test_remove_unmerged_branch_without_force_dies(self):
         create = run_ocw(["widget-maker"], self.repo_root)
@@ -1023,6 +1027,334 @@ class InvalidBranchNameRegressionTests(OcwTestCase):
         result = run_ocw(["HEAD"], self.repo_root)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(extract_branch(result.stdout), "head")
+
+
+class RmResolutionTests(OcwTestCase):
+    """`ocw rm` の porcelain 逆引き解決 (ADR DOC-2608062258 §3.9, 孫3 プロンプト §1)."""
+
+    def test_removes_by_branch_name(self):
+        create = run_ocw(["feature/foo"], self.repo_root)
+        self.assertEqual(create.returncode, 0, create.stderr)
+        worktree_dir = self.repo_root.parent / "feature" / "foo"
+        self.assertTrue(worktree_dir.is_dir())
+
+        remove = run_ocw(["rm", "feature/foo"], self.repo_root)
+        self.assertEqual(remove.returncode, 0, remove.stderr)
+        self.assertFalse(worktree_dir.exists())
+
+    def test_removes_by_directory_basename(self):
+        create = run_ocw(["feature/foo"], self.repo_root)
+        self.assertEqual(create.returncode, 0, create.stderr)
+        worktree_dir = self.repo_root.parent / "feature" / "foo"
+
+        # "foo" isn't the branch name ("feature/foo") or an absolute path --
+        # only stage 2 (directory basename) can resolve it.
+        remove = run_ocw(["rm", "foo"], self.repo_root)
+        self.assertEqual(remove.returncode, 0, remove.stderr)
+        self.assertFalse(worktree_dir.exists())
+
+    def test_removes_by_absolute_path(self):
+        create = run_ocw(["widget-maker"], self.repo_root)
+        self.assertEqual(create.returncode, 0, create.stderr)
+        worktree_dir = self.repo_root.parent / "widget-maker"
+
+        remove = run_ocw(["rm", str(worktree_dir)], self.repo_root)
+        self.assertEqual(remove.returncode, 0, remove.stderr)
+        self.assertFalse(worktree_dir.exists())
+
+    def test_legacy_ai_prefixed_worktree_is_removable_by_bare_slug(self):
+        # Migration rescue (ADR §3.1/§3.9): a worktree still on a pre-孫2
+        # `ai/<slug>` branch (created directly via `git worktree add`, the
+        # way it would have existed before this umbrella, not through ocw
+        # itself) must still resolve for `ocw rm <slug>`.
+        legacy_dir = self.repo_root.parent / "legacy"
+        _git(["worktree", "add", "-b", "ai/legacy", str(legacy_dir), "main"], self.repo_root)
+
+        remove = run_ocw(["rm", "legacy"], self.repo_root)
+        self.assertEqual(remove.returncode, 0, remove.stderr)
+        self.assertFalse(legacy_dir.exists())
+
+    def test_ambiguous_basename_dies_listing_both_candidates_and_removes_neither(self):
+        first = run_ocw(["feature/foo"], self.repo_root)
+        self.assertEqual(first.returncode, 0, first.stderr)
+        second = run_ocw(["hotfix/foo"], self.repo_root)
+        self.assertEqual(second.returncode, 0, second.stderr)
+
+        feature_dir = self.repo_root.parent / "feature" / "foo"
+        hotfix_dir = self.repo_root.parent / "hotfix" / "foo"
+
+        remove = run_ocw(["rm", "foo"], self.repo_root)
+        self.assertNotEqual(remove.returncode, 0)
+        self.assertIn(str(feature_dir), remove.stderr)
+        self.assertIn(str(hotfix_dir), remove.stderr)
+        self.assertTrue(feature_dir.is_dir())
+        self.assertTrue(hotfix_dir.is_dir())
+
+    def test_main_worktree_is_never_a_removal_candidate(self):
+        result = run_ocw(["rm", "main"], self.repo_root)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("no worktree found", result.stderr)
+        self.assertTrue(self.repo_root.is_dir())
+
+    def test_nonexistent_name_dies(self):
+        result = run_ocw(["rm", "does-not-exist"], self.repo_root)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("no worktree found", result.stderr)
+
+
+class MergeDeterminationTests(OcwTestCase):
+    """マージ済み判定の再定義 (ADR DOC-2608062258 §3.7, 孫3 プロンプト §2)."""
+
+    def test_squash_merged_branch_is_removable_without_force(self):
+        create = run_ocw(["feature/foo"], self.repo_root)
+        self.assertEqual(create.returncode, 0, create.stderr)
+
+        worktree_dir = self.repo_root.parent / "feature" / "foo"
+        (worktree_dir / "extra.txt").write_text("extra\n", encoding="utf-8")
+        _git(["add", "extra.txt"], worktree_dir)
+        _git(["commit", "-q", "-m", "extra commit"], worktree_dir)
+
+        _git(["merge", "--squash", "feature/foo"], self.repo_root)
+        _git(["commit", "-q", "-m", "squash merge feature/foo"], self.repo_root)
+
+        remove = run_ocw(["rm", "feature/foo"], self.repo_root)
+        self.assertEqual(remove.returncode, 0, remove.stderr)
+        self.assertFalse(worktree_dir.exists())
+
+    def test_unmerged_branch_still_requires_force(self):
+        create = run_ocw(["widget-maker"], self.repo_root)
+        self.assertEqual(create.returncode, 0, create.stderr)
+
+        worktree_dir = self.repo_root.parent / "widget-maker"
+        (worktree_dir / "extra.txt").write_text("unmerged\n", encoding="utf-8")
+        _git(["add", "extra.txt"], worktree_dir)
+        _git(["commit", "-q", "-m", "unmerged commit"], worktree_dir)
+
+        remove = run_ocw(["rm", "widget-maker"], self.repo_root)
+        self.assertNotEqual(remove.returncode, 0)
+        self.assertIn("branch is not merged", remove.stderr)
+
+        force_remove = run_ocw(["rm", "-f", "widget-maker"], self.repo_root)
+        self.assertEqual(force_remove.returncode, 0, force_remove.stderr)
+
+    def test_ordinary_ancestor_merge_is_still_removable(self):
+        # The other existing tests' branches are trivial ancestors of main
+        # (tip == base, no new commits) -- this one adds a real commit and
+        # fast-forward merges it, exercising plain ancestry detection (not
+        # squash detection) explicitly.
+        create = run_ocw(["widget-maker"], self.repo_root)
+        self.assertEqual(create.returncode, 0, create.stderr)
+
+        worktree_dir = self.repo_root.parent / "widget-maker"
+        (worktree_dir / "extra.txt").write_text("extra\n", encoding="utf-8")
+        _git(["add", "extra.txt"], worktree_dir)
+        _git(["commit", "-q", "-m", "extra commit"], worktree_dir)
+
+        _git(["merge", "--ff-only", "widget-maker"], self.repo_root)
+
+        remove = run_ocw(["rm", "widget-maker"], self.repo_root)
+        self.assertEqual(remove.returncode, 0, remove.stderr)
+
+    def test_ocw_merged_into_config_widens_the_candidate_set(self):
+        set_config(self.repo_root, "ocw.mergedInto", "alt-target")
+        _git(["branch", "alt-target"], self.repo_root)
+
+        create = run_ocw(["widget-maker"], self.repo_root)
+        self.assertEqual(create.returncode, 0, create.stderr)
+
+        worktree_dir = self.repo_root.parent / "widget-maker"
+        (worktree_dir / "extra.txt").write_text("extra\n", encoding="utf-8")
+        _git(["add", "extra.txt"], worktree_dir)
+        _git(["commit", "-q", "-m", "extra commit"], worktree_dir)
+
+        # Merged only into alt-target, never into main.
+        _git(["checkout", "-q", "alt-target"], self.repo_root)
+        _git(["merge", "-q", "--ff-only", "widget-maker"], self.repo_root)
+        _git(["checkout", "-q", "main"], self.repo_root)
+
+        remove = run_ocw(["rm", "widget-maker"], self.repo_root)
+        self.assertEqual(remove.returncode, 0, remove.stderr)
+
+    def test_umbrella_style_base_ref_is_a_merge_candidate(self):
+        # ADR §3.7 candidate 2: a worktree branched off an umbrella branch
+        # (not main) is only ever an ancestor of that umbrella -- exactly
+        # the shape umbrella-orchestrator worktrees have. Without the
+        # creation-time base_ref persisted to ocw-base-ref, this would
+        # require -f even though it's genuinely merged (into its actual
+        # target, just not main).
+        _git(["branch", "umbrella"], self.repo_root)
+
+        create = run_ocw(["child", "umbrella"], self.repo_root)
+        self.assertEqual(create.returncode, 0, create.stderr)
+        self.assertIn("base:        umbrella", create.stdout)
+
+        worktree_dir = self.repo_root.parent / "child"
+        (worktree_dir / "extra.txt").write_text("extra\n", encoding="utf-8")
+        _git(["add", "extra.txt"], worktree_dir)
+        _git(["commit", "-q", "-m", "child work"], worktree_dir)
+
+        _git(["checkout", "-q", "umbrella"], self.repo_root)
+        _git(["merge", "-q", "--no-ff", "child"], self.repo_root)
+        _git(["checkout", "-q", "main"], self.repo_root)
+
+        remove = run_ocw(["rm", "child"], self.repo_root)
+        self.assertEqual(remove.returncode, 0, remove.stderr)
+
+    def test_github_merge_check_opt_in_fails_open_without_gh_on_path(self):
+        set_config(self.repo_root, "ocw.githubMergeCheck", "true")
+
+        create = run_ocw(["widget-maker"], self.repo_root)
+        self.assertEqual(create.returncode, 0, create.stderr)
+
+        worktree_dir = self.repo_root.parent / "widget-maker"
+        (worktree_dir / "extra.txt").write_text("unmerged\n", encoding="utf-8")
+        _git(["add", "extra.txt"], worktree_dir)
+        _git(["commit", "-q", "-m", "unmerged commit"], worktree_dir)
+
+        # gh is absent from run_ocw()'s PATH (BASE_PATH_DIRS) -- this must
+        # not crash or hang ocw, just fail to additionally confirm a merge,
+        # leaving the branch correctly rejected as still unmerged.
+        remove = run_ocw(["rm", "widget-maker"], self.repo_root)
+        self.assertNotEqual(remove.returncode, 0)
+        self.assertIn("branch is not merged", remove.stderr)
+        self.assertNotIn("gh: command not found", remove.stderr)
+
+        force_remove = run_ocw(["rm", "-f", "widget-maker"], self.repo_root)
+        self.assertEqual(force_remove.returncode, 0, force_remove.stderr)
+
+
+class OutcomeFromMergeDeterminationTests(OcwTestCase):
+    """`run.end` の `outcome` がマージ判定の結果から決まること、`-f` の有無から
+    決まるのではないこと (ADR DOC-2608062258 §3.8, 孫3 プロンプト §3)."""
+
+    def test_squash_merged_force_remove_still_records_success_outcome(self):
+        create = run_ocw(
+            ["feature/foo"], self.repo_root, meter_on_path=True, meter_home=self.meter_home
+        )
+        self.assertEqual(create.returncode, 0, create.stderr)
+        run_id = extract_run_id(create.stdout)
+
+        worktree_dir = self.repo_root.parent / "feature" / "foo"
+        (worktree_dir / "extra.txt").write_text("extra\n", encoding="utf-8")
+        _git(["add", "extra.txt"], worktree_dir)
+        _git(["commit", "-q", "-m", "extra commit"], worktree_dir)
+
+        _git(["merge", "--squash", "feature/foo"], self.repo_root)
+        _git(["commit", "-q", "-m", "squash merge feature/foo"], self.repo_root)
+
+        # -f isn't required here (squash detection alone lets a plain `rm`
+        # through), but this is the exact regression ADR §3.8 fixes: even
+        # when -f *is* supplied, the outcome must follow the merge
+        # determination, not -f's mere presence.
+        remove = run_ocw(
+            ["rm", "-f", "feature/foo"],
+            self.repo_root,
+            meter_on_path=True,
+            meter_home=self.meter_home,
+        )
+        self.assertEqual(remove.returncode, 0, remove.stderr)
+
+        events = read_events(self.meter_home)
+        ends = [e for e in events if e["event_type"] == "run.end" and e["run_id"] == run_id]
+        self.assertEqual(len(ends), 1, events)
+        self.assertEqual(ends[0]["outcome"], "success")
+
+    def test_truly_unmerged_force_remove_records_failure_outcome(self):
+        create = run_ocw(
+            ["widget-maker"], self.repo_root, meter_on_path=True, meter_home=self.meter_home
+        )
+        self.assertEqual(create.returncode, 0, create.stderr)
+        run_id = extract_run_id(create.stdout)
+
+        worktree_dir = self.repo_root.parent / "widget-maker"
+        (worktree_dir / "extra.txt").write_text("unmerged\n", encoding="utf-8")
+        _git(["add", "extra.txt"], worktree_dir)
+        _git(["commit", "-q", "-m", "unmerged commit"], worktree_dir)
+
+        remove = run_ocw(
+            ["rm", "-f", "widget-maker"],
+            self.repo_root,
+            meter_on_path=True,
+            meter_home=self.meter_home,
+        )
+        self.assertEqual(remove.returncode, 0, remove.stderr)
+
+        events = read_events(self.meter_home)
+        ends = [e for e in events if e["event_type"] == "run.end" and e["run_id"] == run_id]
+        self.assertEqual(len(ends), 1, events)
+        self.assertEqual(ends[0]["outcome"], "failure")
+
+
+class EmptyDirectoryCleanupTests(OcwTestCase):
+    """`ocw rm` 後の空ディレクトリ掃除 (ADR DOC-2608062258 §3.5, 孫3 プロンプト §4)."""
+
+    def test_removing_last_nested_worktree_cleans_up_empty_parent(self):
+        create = run_ocw(["feature/foo"], self.repo_root)
+        self.assertEqual(create.returncode, 0, create.stderr)
+
+        feature_parent = self.repo_root.parent / "feature"
+        self.assertTrue(feature_parent.is_dir())
+
+        remove = run_ocw(["rm", "feature/foo"], self.repo_root)
+        self.assertEqual(remove.returncode, 0, remove.stderr)
+        self.assertFalse(feature_parent.exists())
+
+    def test_sibling_nested_worktree_prevents_parent_cleanup(self):
+        first = run_ocw(["feature/foo"], self.repo_root)
+        self.assertEqual(first.returncode, 0, first.stderr)
+        second = run_ocw(["feature/bar"], self.repo_root)
+        self.assertEqual(second.returncode, 0, second.stderr)
+
+        feature_parent = self.repo_root.parent / "feature"
+
+        remove = run_ocw(["rm", "feature/foo"], self.repo_root)
+        self.assertEqual(remove.returncode, 0, remove.stderr)
+        self.assertFalse((feature_parent / "foo").exists())
+        self.assertTrue(feature_parent.is_dir())
+        self.assertTrue((feature_parent / "bar").is_dir())
+
+    def test_cleanup_boundary_itself_is_never_removed(self):
+        create = run_ocw(["widget-maker"], self.repo_root)
+        self.assertEqual(create.returncode, 0, create.stderr)
+
+        remove = run_ocw(["rm", "widget-maker"], self.repo_root)
+        self.assertEqual(remove.returncode, 0, remove.stderr)
+        # The cleanup boundary for the default template is repo_parent,
+        # which also holds the still-live main worktree -- if cleanup ever
+        # climbed past its own boundary this would delete it.
+        self.assertTrue(self.repo_root.parent.is_dir())
+        self.assertTrue(self.repo_root.is_dir())
+
+
+class BareRepoMergeDeterminationTests(unittest.TestCase):
+    """bare リポジトリでのマージ判定 (ADR DOC-2608062258 §3.7 候補3, 孫3 プロンプト §2)."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.bare_dir = make_bare_repo(self.tmpdir.name)
+
+    def tearDown(self):
+        self.tmpdir.cleanup()
+
+    def test_rm_merge_check_works_from_bare_repo(self):
+        create = run_ocw(["widget-maker"], self.bare_dir)
+        self.assertEqual(create.returncode, 0, create.stderr)
+
+        worktree_dir = self.bare_dir.parent / "widget-maker"
+        _git(["config", "user.email", "test@example.invalid"], worktree_dir)
+        _git(["config", "user.name", "Test"], worktree_dir)
+        (worktree_dir / "extra.txt").write_text("extra\n", encoding="utf-8")
+        _git(["add", "extra.txt"], worktree_dir)
+        _git(["commit", "-q", "-m", "extra commit"], worktree_dir)
+
+        # No working tree to run `git merge` in for a bare repo -- refs are
+        # shared storage across all its linked worktrees, so fast-forwarding
+        # main directly onto widget-maker's tip *is* "merging" it here.
+        _git(["update-ref", "refs/heads/main", "refs/heads/widget-maker"], self.bare_dir)
+
+        remove = run_ocw(["rm", "widget-maker"], self.bare_dir)
+        self.assertEqual(remove.returncode, 0, remove.stderr)
+        self.assertFalse(worktree_dir.exists())
 
 
 if __name__ == "__main__":
