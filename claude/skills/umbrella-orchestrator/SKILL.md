@@ -181,10 +181,17 @@ ok = m and (latest_sha.startswith(m.group(1)) or m.group(1).startswith(latest_sh
       送信されずペーストされただけの状態で放置される（Enterが送られない）。
    2. **絶対に「〜とだけ返事してください」「〜だけ確認してください」のようなメタ指示を付けない。**
       実装AIはそれを実行して返事だけして停止する。
-   3. **`herdr pane run` は本文だけ打ち込んで Enter を送らない。送信後に必ず
+   3. **`herdr pane run` は本文だけ打ち込んで Enter を送らないことがある。送信後に必ず
       `herdr pane send-keys <pane-id> Enter` を撃つこと。**
       1つの傘で **8回送って8回とも** これだった（spawn 4回・復帰指示 4回）。
       「たまに届かない」ではなく**届かないのが既定**だと思って手順に組み込む。
+
+      **herdr 自身の公式ドキュメント（`herdr` skill）は「`pane run` sends the text
+      and Enter together」（テキストとEnterをまとめて送る）と説明しており、この
+      実測とは食い違う。** 原因は特定できていない（herdr のバージョン差か、長文・
+      複数行プロンプト特有の条件かは不明）。ドキュメント通りに動くと信じて確認を
+      省略しないこと — このPRのレビュー往復自体でも、送信後に確認したところ
+      `idle` のままだったケースが複数回発生している（実測）。
 
       送信 → `herdr pane get <pane-id>` で `agent_status` を確認 → `idle` のままなら
       `send-keys Enter` → 再確認、を `working` になるまで繰り返す。
@@ -627,16 +634,21 @@ herdr pane read <implementer-id> --source recent-unwrapped --lines 40
 （§3.2 の推奨フォーマット参照。実測: 入れなかった孫で計4回発生、入れた孫で0回）。
 以下は**予防し損ねたときの検知と復旧**である。
 
-**エージェントは完了時に `done` になり `idle` にはならない。**
-実装AIが reviewer の完了を待つとき `herdr wait agent-status <reviewer> --status idle`
-を使うことがあり、この待機は**成立せずタイムアウトまで空回りする**。
-孫1で1回発生した（約10分ロス。§3.2 実測表と同じ事例）。
+**無人監視しているペインは、完了しても `done` のままで `idle` にはならない。**
+herdr 自身の公式ドキュメント（`herdr` skill）によれば、`idle` と `done` は
+別の状態への遷移ではなく、**同じ「完了」状態を「見られたか」で呼び分けているだけ**
+である: ペインのタブ／ワークスペースが背面（誰にもフォーカスされていない）の
+まま完了すると `done` になり、**そのタブを実際にフォーカスするまで自動では
+`idle` に変わらない**。司令官が孫の implementer 越しに reviewer の完了を
+無人監視する場面では、そのペインを誰も見に行かないため `done` のまま張り付く
+（herdr の不具合ではなく仕様どおりの挙動）。
 
-**注記**: `pr-review-loop` スキル（`claude/skills/pr-review-loop/SKILL.md:415`）は
-「`done` は一過性でちらつくだけ、`idle` が最終安定状態」と逆のことを書いている。
-本スキルの文脈（司令官が孫の implementer 越しに reviewer の完了を監視する場面）では
-ここに書いた通りに観測された。どちらが実態に近いかの切り分けと `pr-review-loop`
-側の記述の要否は本ファイルの変更範囲外とし、判断は人間に委ねる。
+実装AIが reviewer の完了を待つとき `herdr wait agent-status <reviewer> --status idle`
+を使うことがあり、この待機は**（そのペインをフォーカスしない限り）成立せずタイムアウトまで
+空回りする**。孫1で1回発生した（約10分ロス。§3.2 実測表と同じ事例）。
+
+**注記**: `pr-review-loop` スキル（`claude/skills/pr-review-loop/SKILL.md` Phase 3a）も
+同じ仕組みに基づき、`idle` ではなく `done` を待つ形に修正済み（本PRで対応）。
 
 **待ち方は1種類ではない。** 孫3では `herdr wait` を使わず
 「バックグラウンドで再度待機中です。通知を待ちます」と称して**バックグラウンドシェルを

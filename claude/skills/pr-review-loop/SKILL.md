@@ -372,12 +372,21 @@ herdr pane run "$REVIEWER_PANE" "以下を読んでPRレビューを実行して
 
 ### Step 4: 配信確認
 
+**herdr 自身の公式ドキュメント（`herdr` skill）は「`pane run` sends the text and
+Enter together」（テキストとEnterをまとめて送る）としているが、実際にはこの
+実装がプロンプトを打ち込むだけで Enter を送らないことがある。** ドキュメント通りに
+動くと信じて確認を省略しないこと:
+
 ```bash
 sleep 2
-herdr pane read "$REVIEWER_PANE" --source detection --lines 3
+herdr pane get "$REVIEWER_PANE"
 ```
 
-依頼テキストが表示されていなければ、`herdr pane get "$REVIEWER_PANE"` で状態を確認。
+`agent_status` が `working` になっていれば送信成功。**`idle` のままなら
+`herdr pane send-keys "$REVIEWER_PANE" Enter` を撃って再確認する。** 同じ本文を
+`herdr pane run` で再送してはいけない（本文自体は届いており、再送するとプロンプト欄に
+2重に積まれる）。それでも届いていなければ `herdr pane read "$REVIEWER_PANE"
+--source detection --lines 3` で画面を確認する。
 
 工程計測:
 
@@ -412,13 +421,23 @@ herdr pane run "$REVIEWER_PANE" ""
 
 `herdr wait` はイベント駆動で、状態遷移までブロックする。正しい対象状態を選ぶのが重要。
 
-**`done` ではなく `idle` を待つ。** `done` はミリ秒単位でちらつく一過性の状態。`idle` がエージェントの最終安定状態。状態遷移: `working` → `done`(ちらつき) → `idle`。
+**`done` と `idle` は別の状態への遷移ではなく、同じ「完了」状態を「見られたか」で
+呼び分けているだけ**（herdr 自身の公式ドキュメント、`herdr` skill）。ペインの
+タブ／ワークスペースが背面（フォーカスされていない）のまま完了すると `done` になり、
+**実際にそのタブをフォーカスするまで自動では `idle` に変わらない**。フォーカスされた
+状態で完了すれば直接 `idle` になる。
+
+`REVIEWER_PANE` は基本的に無人（誰もそのタブを見に行かない）で完了することが多いため、
+**`idle` ではなく `done` を待つ**のが効率がよい。人間がたまたまそのタブを見ていて
+直接 `idle` になった場合は、以下の `done` 待機がタイムアウトしたあとの確認で
+`idle` として拾われる（`それ以外 → Phase 3bへ` の分岐）ので、どちらの経路でも
+Phase 3b には進める:
 
 ```bash
-herdr wait agent-status "$REVIEWER_PANE" --status idle --timeout 600000
+herdr wait agent-status "$REVIEWER_PANE" --status done --timeout 600000
 ```
 
-タイムアウト（10分以内にidleに達しなかった）時の確認:
+タイムアウト（10分以内に `done` に達しなかった）時の確認:
 
 ```bash
 STATUS=$(herdr pane get "$REVIEWER_PANE" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('agent_status',''))")
@@ -426,7 +445,7 @@ STATUS=$(herdr pane get "$REVIEWER_PANE" | python3 -c "import json,sys; d=json.l
 
 - `blocked` → 出力を読んで可能なら回答。人手が必要なら停止してユーザーに伝える。
 - `working`（継続中）→ レビューに時間がかかっている。ペイン出力を読む。
-- それ以外 → Phase 3bへ。
+- それ以外（`idle` を含む） → Phase 3bへ。
 
 工程計測:
 
@@ -442,7 +461,7 @@ command -v ocw-meter >/dev/null && ocw-meter event phase.end --phase review_wait
 command -v ocw-meter >/dev/null && ocw-meter event phase.start --phase review_collect --source pr-review-loop --round "$ROUND" || true
 ```
 
-エージェントがidleに達したらレビュー完了。全内容（レビュー本文＋インラインコメント）はGitHubに投稿済み。以下両方で確認:
+エージェントが `done`（または `idle`）に達したらレビュー完了。全内容（レビュー本文＋インラインコメント）はGitHubに投稿済み。以下両方で確認:
 
 1. GitHub（真実の源）:
 
@@ -589,7 +608,8 @@ command -v ocw-meter >/dev/null && ocw-meter event phase.start --phase rereview_
 herdr pane run "$REVIEWER_PANE" "PR #$PR 再レビュー依頼。全指摘に対応コメント書きました。HEAD: $NEW_HEAD_SHA"
 ```
 
-5. 配信確認（Phase 2 Step 3と同様）。
+5. 配信確認（Phase 2 Step 4と同様。`agent_status` が `working` にならなければ
+   `herdr pane send-keys "$REVIEWER_PANE" Enter`）。
 
 工程計測:
 
