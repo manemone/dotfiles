@@ -1222,6 +1222,174 @@ class MergeDeterminationTests(OcwTestCase):
         force_remove = run_ocw(["rm", "-f", "widget-maker"], self.repo_root)
         self.assertEqual(force_remove.returncode, 0, force_remove.stderr)
 
+    def test_github_merge_check_is_evaluated_once_not_once_per_candidate(self):
+        # Round-1 review finding: gh_merge_check() only takes $branch, never
+        # $candidate, so it must run at most once regardless of how many
+        # integration-ref candidates resolve -- looping it per candidate
+        # was pure duplicated network round-trips with no new information.
+        set_config(self.repo_root, "ocw.githubMergeCheck", "true")
+        set_config(self.repo_root, "ocw.mergedInto", "alt-target")
+        _git(["branch", "alt-target"], self.repo_root)
+
+        create = run_ocw(["widget-maker"], self.repo_root)
+        self.assertEqual(create.returncode, 0, create.stderr)
+
+        worktree_dir = self.repo_root.parent / "widget-maker"
+        (worktree_dir / "extra.txt").write_text("unmerged\n", encoding="utf-8")
+        _git(["add", "extra.txt"], worktree_dir)
+        _git(["commit", "-q", "-m", "unmerged commit"], worktree_dir)
+
+        gh_shim_dir = pathlib.Path(self.tmpdir.name) / "gh-call-count-shim"
+        gh_shim_dir.mkdir()
+        gh_log = gh_shim_dir / "calls.log"
+        gh_shim = gh_shim_dir / "gh"
+        gh_shim.write_text(
+            f"#!/bin/sh\necho \"$@\" >> {shlex.quote(str(gh_log))}\nexit 1\n",
+            encoding="utf-8",
+        )
+        gh_shim.chmod(0o755)
+
+        # ocw.mergedInto=alt-target, the persisted base_ref (main), HEAD,
+        # and origin/HEAD are 4 distinct-looking candidates here (alt-target
+        # is a separate branch from main, so this isn't exercising dedup --
+        # see MergeDeterminationTests for that), all unmerged.
+        remove = run_ocw(["rm", "widget-maker"], self.repo_root, path_prepend=[str(gh_shim_dir)])
+        self.assertNotEqual(remove.returncode, 0)
+        self.assertIn("branch is not merged", remove.stderr)
+
+        calls = gh_log.read_text(encoding="utf-8").splitlines() if gh_log.exists() else []
+        self.assertEqual(len(calls), 1, calls)
+
+
+class NoResolvableCandidateRegressionTests(unittest.TestCase):
+    """基準refが1つも解決できない経路 (ADR DOC-2608062258 §3.7, ラウンド1レビュー指摘7a)."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+
+    def tearDown(self):
+        self.tmpdir.cleanup()
+
+    def test_dies_without_force_and_dash_f_still_records_failure_outcome(self):
+        bare_dir = make_bare_repo(self.tmpdir.name)
+
+        create = run_ocw(["widget-maker"], bare_dir)
+        self.assertEqual(create.returncode, 0, create.stderr)
+        run_id = extract_run_id(create.stdout)
+
+        # Delete the branch that create_worktree() resolved and persisted as
+        # base_ref (candidate 2), and that `symbolic-ref --short HEAD`
+        # (candidate 3, this repo is bare) also names -- HEAD's symref
+        # still points at refs/heads/main afterwards, but that ref no
+        # longer resolves to anything. ocw.mergedInto is unset (candidate
+        # 1) and there's no origin for this repo to fall back to
+        # (candidate 4), so all 4 candidates end up unresolvable.
+        _git(["update-ref", "-d", "refs/heads/main"], bare_dir)
+
+        without_force = run_ocw(["rm", "widget-maker"], bare_dir)
+        self.assertNotEqual(without_force.returncode, 0)
+        self.assertIn("cannot determine an integration ref", without_force.stderr)
+        self.assertIn("-f", without_force.stderr)
+
+        meter_home = pathlib.Path(self.tmpdir.name) / "ocw-meter-home"
+        force_remove = run_ocw(
+            ["rm", "-f", "widget-maker"], bare_dir, meter_on_path=True, meter_home=meter_home
+        )
+        self.assertEqual(force_remove.returncode, 0, force_remove.stderr)
+
+        events = read_events(meter_home)
+        ends = [e for e in events if e["event_type"] == "run.end" and e["run_id"] == run_id]
+        self.assertEqual(len(ends), 1, events)
+        self.assertEqual(ends[0]["outcome"], "failure")
+
+
+class DetachedWorktreeTests(unittest.TestCase):
+    """detached ワークツリー (ラウンド1レビュー指摘7b・指摘3)."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.repo_root = make_repo(self.tmpdir.name)
+
+    def tearDown(self):
+        self.tmpdir.cleanup()
+
+    def _add_detached_worktree(self, name):
+        worktree_dir = self.repo_root.parent / name
+        _git(["worktree", "add", "-q", "--detach", str(worktree_dir), "main"], self.repo_root)
+        return worktree_dir
+
+    def test_dies_with_a_detached_specific_message_without_force(self):
+        worktree_dir = self._add_detached_worktree("detachedwt")
+
+        result = run_ocw(["rm", "detachedwt"], self.repo_root)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("detached", result.stderr)
+        self.assertIn("-f", result.stderr)
+        # The branch: line must name the worktree, not trail off after
+        # "branch: " with nothing (round-1 finding 3's exact repro).
+        self.assertNotIn("branch:    \n", result.stdout)
+        self.assertTrue(worktree_dir.is_dir())
+
+    def test_is_removable_with_force(self):
+        worktree_dir = self._add_detached_worktree("detachedwt")
+
+        result = run_ocw(["rm", "-f", "detachedwt"], self.repo_root)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(worktree_dir.exists())
+
+
+class RmEdgeCaseRegressionTests(OcwTestCase):
+    """ラウンド1レビューで実測された異常系の回帰テスト（指摘1・指摘5）。"""
+
+    def test_unborn_branch_worktree_is_removable_with_force_without_aborting(self):
+        # A worktree whose branch was created via `--orphan` (or against an
+        # empty bare repo) reports a real `branch refs/heads/<name>` line
+        # in porcelain output even though that ref doesn't exist yet --
+        # `git branch -D` on it fails with "not found", which under
+        # `set -e` used to abort remove_worktree between `worktree remove`
+        # succeeding and run.end ever firing (round-1 finding 1).
+        _git(["worktree", "add", "-q", "-b", "gh-pages", "--orphan", str(self.repo_root.parent / "gh-pages")], self.repo_root)
+        worktree_dir = self.repo_root.parent / "gh-pages"
+        self.assertTrue(worktree_dir.is_dir())
+
+        remove = run_ocw(["rm", "-f", "gh-pages"], self.repo_root)
+        self.assertEqual(remove.returncode, 0, remove.stderr)
+        self.assertFalse(worktree_dir.exists())
+
+        branch_list = _git(["branch", "--list", "gh-pages"], self.repo_root).stdout
+        self.assertNotIn("gh-pages", branch_list)
+
+    def test_missing_worktree_directory_does_not_leak_a_raw_git_fatal(self):
+        create = run_ocw(["widget-maker"], self.repo_root)
+        self.assertEqual(create.returncode, 0, create.stderr)
+
+        worktree_dir = self.repo_root.parent / "widget-maker"
+        (worktree_dir / "extra.txt").write_text("unmerged\n", encoding="utf-8")
+        _git(["add", "extra.txt"], worktree_dir)
+        _git(["commit", "-q", "-m", "unmerged commit"], worktree_dir)
+        shutil.rmtree(worktree_dir)
+
+        remove = run_ocw(["rm", "widget-maker"], self.repo_root)
+        # Still correctly rejected (genuinely unmerged) -- a missing
+        # directory must not be misread as "clean" and let through.
+        self.assertNotEqual(remove.returncode, 0)
+        self.assertIn("branch is not merged", remove.stderr)
+        self.assertNotIn("fatal:", remove.stderr)
+        self.assertIn("already gone", remove.stderr)
+
+    def test_missing_worktree_directory_still_completes_removal_when_merged(self):
+        create = run_ocw(["widget-maker"], self.repo_root)
+        self.assertEqual(create.returncode, 0, create.stderr)
+
+        worktree_dir = self.repo_root.parent / "widget-maker"
+        shutil.rmtree(worktree_dir)
+
+        remove = run_ocw(["rm", "widget-maker"], self.repo_root)
+        self.assertEqual(remove.returncode, 0, remove.stderr)
+        self.assertNotIn("fatal:", remove.stderr)
+        branch_list = _git(["branch", "--list", "widget-maker"], self.repo_root).stdout
+        self.assertNotIn("widget-maker", branch_list)
+
 
 class OutcomeFromMergeDeterminationTests(OcwTestCase):
     """`run.end` の `outcome` がマージ判定の結果から決まること、`-f` の有無から
