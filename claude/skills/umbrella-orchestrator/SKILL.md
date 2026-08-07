@@ -267,7 +267,11 @@ ok = m and (latest_sha.startswith(m.group(1)) or m.group(1).startswith(latest_sh
    ```bash
    gh pr list --head <孫ブランチ名> --state merged --json number,title
    ```
-   または `git branch -r --merged origin/<傘ブランチ>` で一括検出
+   **これが一次手段。** `git branch -r --merged origin/<傘ブランチ>` は
+   squash マージされた孫を検出できない（ブランチ tip の祖先関係しか見ないため。
+   §3.3 後述のとおり孫は squash マージされることが多く、GitHub の squash merge
+   でリモートブランチごと消えていれば `git branch -r` の一覧にも載らない）ので、
+   一括検出の代替としては使わない
 
 2. **マージ済み孫を検証**
    - 傘ブランチに checkout
@@ -289,8 +293,8 @@ ok = m and (latest_sha.startswith(m.group(1)) or m.group(1).startswith(latest_sh
 4. **未着手の孫を列挙**
 
 5. **クリーンアップ提案**
-   - マージ済み＋検証済みの孫のうち、まだワークツリーが残っているものがあれば `ocw rm <slug>` を提案（**まず `--force` なしで**）
-   - 例: `ph-00 のワークツリーが残っています。ocw rm ph-00-must-keep しますか？`
+   - マージ済み＋検証済みの孫のうち、まだワークツリーが残っているものがあれば `ocw rm <孫ブランチ名>` を提案（**まず `--force` なしで**。§5 L562 と同じく `ai/xxx` を含む完全なブランチ名を渡す。短縮形は複数一致で停止しうる — 後述の補足を参照）
+   - 例: `ph-00 のワークツリーが残っています。ocw rm ai/ph-00-must-keep しますか？`
    - `ocw rm` は worktree + Herdr ワークスペース + ブランチをまとめて削除する
    - 未マージの孫は削除しない（`ocw rm` が未マージを拒否するため安全）
    - **`--force` は基本的に不要。** `ocw rm`（`bin/ocw`）のマージ済み判定は
@@ -372,7 +376,7 @@ ok = m and (latest_sha.startswith(m.group(1)) or m.group(1).startswith(latest_sh
    - commander（司令官自身）、implementer、reviewer の3ペーンが揃っていることを確認
    - 足りなければ `herdr pane split` で追加
 
-2. **implementer に最終PR作成プロンプトを送信**
+3. **implementer に最終PR作成プロンプトを送信**
    - implementer が `idle` であることを確認
    - 以下の情報を含むプロンプトを `herdr pane run` で送信:
      - base: `<ベースブランチ>`、head: `<傘ブランチ名>`（ベースブランチは傘ブランチが追跡するリモートブランチから判定。`main`/`master` 等リポジトリごとに異なる）
@@ -389,7 +393,7 @@ ok = m and (latest_sha.startswith(m.group(1)) or m.group(1).startswith(latest_sh
    herdr pane run <implementer-id> "最終PRを作成してください。base:<ベースブランチ> head:<傘ブランチ>。完了したらpr-review-loopを起動。reviewerは<reviewer-id>。計画書 docs/planning/DOC-XXXX_計画.md も参照。"
    ```
 
-3. **implementer の起動を確認**
+4. **implementer の起動を確認**
 
    §3.2 注意点3と同じ手順を踏む（本文とEnterは別送信。届いていないのは
    大抵Enterだけで、本文自体は届いている）:
@@ -400,7 +404,7 @@ ok = m and (latest_sha.startswith(m.group(1)) or m.group(1).startswith(latest_sh
    `herdr pane send-keys <implementer-id> Enter` を撃って再確認する。
    **同じ本文を `herdr pane run` で再送しない**（プロンプト欄に2重に積まれる）。
 
-4. **以降は自律運転**
+5. **以降は自律運転**
    - implementer が PR を作成し、`/pr-review-loop` を起動
    - reviewer がレビューし、指摘があれば implementer が修正
    - 承認されたら implementer が人間に「マージしてください」と依頼する
@@ -456,7 +460,8 @@ main へのマージは人間が手動で行う。
       gh pr merge <PR番号> --squash --delete-branch
    6. マージ後、傘ブランチで検証:
       git pull --rebase origin <傘ブランチ>
-      bundle exec rubocop && bundle exec rspec && bin/doc-id verify
+      §3.3 手順2 と同じ方式で検証（.claude/pr-review.yml の lint_cmd/test_cmd を
+      最優先、無ければ言語自動検出。Ruby 固定ではない）
    7. 検証通過後、計画書を「✅ PR #XX マージ済」に更新してcommit+push
    8. 次の未着手の孫があれば spawn:
       ocw -H <次の孫ブランチ名> <傘ブランチ>
