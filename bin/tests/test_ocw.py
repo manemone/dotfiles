@@ -894,6 +894,15 @@ class WorktreeDirTemplateTests(OcwTestCase):
         self.assertIn("{nope}", result.stderr)
         self.assertFalse((self.repo_root.parent / "widget-maker").exists())
 
+    def test_ls_succeeds_despite_broken_worktree_dir_template(self):
+        # `ocw ls` never reads worktree_dir_template or worktree_cleanup_boundary,
+        # so a typo'd placeholder that would `die` on `new`/`rm` must not block
+        # the one command someone would use to check state while fixing it.
+        set_config(self.repo_root, "ocw.worktreeDir", "{nope}/{name}")
+
+        result = run_ocw(["ls"], self.repo_root)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_template_without_name_placeholder_dies(self):
         set_config(self.repo_root, "ocw.worktreeDir", "{repo_parent}/fixed")
 

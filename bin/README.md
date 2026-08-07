@@ -84,7 +84,7 @@ ocw ls
 
 #### 設定（`git config ocw.*`）
 
-`git config` の通常の優先順位（local > global > system）で読む4つのキーで、ワークツリーの作成先やマージ済み判定をカスタマイズできる。**無設定なら現行どおりの挙動になる**（`<project>/main` + 兄弟ワークツリーの構成、bare リポジトリ + 同階層の構成のどちらも無設定で動く）。リポジトリの `.git/config`（local）に置けばそのリポジトリだけに、`~/.gitconfig`（global）に置けば全リポジトリ共通の既定値にできる。**リポジトリローカルに設定した場合**、`.git/config` は全ワークツリーで共有されるため、bare を含むどのワークツリーから設定・参照しても同じ値が効く。
+`git config` の通常の優先順位（local > global > system）で読む4つのキーで、ワークツリーの作成先やマージ済み判定をカスタマイズできる。**ワークツリーの作成先パスは、無設定なら現行どおりの挙動になる**（`<project>/main` + 兄弟ワークツリーの構成、bare リポジトリ + 同階層の構成のどちらも無設定で動く）。ただし作成先パス以外にも、`ai/` 接頭辞の廃止・`repo_name` の解決順・Herdr ワークスペースラベルの区切り・`ocw rm` の一部挙動など、設定の有無に関わらず現行から変わる点がある（詳細は各節を参照）。リポジトリの `.git/config`（local）に置けばそのリポジトリだけに、`~/.gitconfig`（global）に置けば全リポジトリ共通の既定値にできる。**リポジトリローカルに設定した場合**、`.git/config` は全ワークツリーで共有されるため、bare を含むどのワークツリーから設定・参照しても同じ値が効く。
 
 | キー | 既定 | 意味 |
 |---|---|---|
@@ -92,6 +92,8 @@ ocw ls
 | `ocw.repoName` | 自動解決（後述） | 表示用のリポジトリ名。`repo:` 行・Herdr ワークスペースラベル・`ocw.worktreeDir` の `{repo}` に使う |
 | `ocw.mergedInto` | 自動解決（後述） | `ocw rm` のマージ済み判定で最優先される基準 ref |
 | `ocw.githubMergeCheck` | `false` | `true` にすると、マージ済み判定に `gh pr list --head <branch> --state merged` の問い合わせを追加する（opt-in・fail-open） |
+
+Herdr ワークスペースラベルの書式は `<repo_name> :: <slug>` である（区切りは `/` ではなく `::`）。`slug` 自体がスラッシュを含みうる（ネスト方針）ため、`/` のままでは `repo_name` と `slug` の境界が視覚的に区別できなくなることへの対策。
 
 設定例:
 
@@ -138,6 +140,8 @@ git config ocw.githubMergeCheck true
 | 普通の clone の隣に接頭辞付きで置く | `git config ocw.worktreeDir '{repo_parent}/{repo}-{name}'` |
 
 `repo_name`（`{repo}` の展開値）の解決順: 1. `ocw.repoName` が設定されていればそれ。2. `remote.origin.url` の basename から `.git` を剥がしたもの。3. パスからの推測（bare なら `basename(repo_root)` の `.git` 剥がし／`basename(repo_root)` が `main` `master` `trunk` のいずれかなら `basename(repo_parent)`／それ以外は `basename(repo_root)`）。
+
+**「リポジトリ内に隠す」レイアウトの注意**: `{repo_root}/.worktrees/{name}` のように worktree をメインワークツリーの内側に作ると、git はそのディレクトリを自動では無視しない。メインワークツリーの `git status` が常に汚れ、`git clean -fdx` が他のワークツリーごと削除してしまう。このレイアウトを使う場合は、メインワークツリーの `.gitignore` か `.git/info/exclude` に `.worktrees/` を追加すること。
 
 #### ブランチ名・ディレクトリ名
 

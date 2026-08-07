@@ -443,7 +443,6 @@ init_repo_context() {
   repo_parent="$(dirname -- "$repo_root")"
 
   resolve_repo_name
-  resolve_worktree_layout
 }
 
 open_vscode() {
@@ -1435,12 +1434,14 @@ case "$cmd" in
     done
 
     init_repo_context
+    resolve_worktree_layout
     create_worktree "$@"
     ;;
 
   rm | remove)
     shift
     init_repo_context
+    resolve_worktree_layout
     remove_worktree "$@"
     ;;
 
@@ -1450,6 +1451,7 @@ case "$cmd" in
 
   *)
     init_repo_context
+    resolve_worktree_layout
     create_worktree "$@"
     ;;
 esac
