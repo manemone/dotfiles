@@ -300,11 +300,20 @@ ok = m and (latest_sha.startswith(m.group(1)) or m.group(1).startswith(latest_sh
      `git cherry` によるパッチID比較）も試す。孫は傘ブランチへ squash マージされることが
      多いが、作成時のベース（＝傘ブランチ）が候補に入り squash 検出も効くため、
      **`--force` なしの `ocw rm` が普通に通る**
-   - 判定できない場合（`ocw rm` が `cannot determine an integration ref ...:
-     set ocw.mergedInto or use -f` で拒否した場合）だけ `--force` を検討する。
-     ありうる原因は squash 後に統合先で rebase・amend されて patch-id が変わった、
-     マージ時の衝突解決で diff が変わった等（`bin/ocw` 自身が検出できないと
-     明記している限界）
+   - 判定できない場合の拒否は2種類あり、原因も対処も異なる:
+     - **`branch is not merged into any known integration ref: <branch>`** —
+       候補 ref は解決できたが、is-ancestor でも squash 検出でも「マージ済み」と
+       判定できなかった場合。**傘運用で実際に遭遇するのはほぼこちら**。ありうる
+       原因は squash 後に統合先で rebase・amend されて patch-id が変わった、
+       マージ時の衝突解決で diff が変わった等（`bin/ocw` 自身が検出できないと
+       明記している限界）。この場合だけ `--force` を検討する。飛ぶ前に、
+       `ocw.githubMergeCheck`（opt-in）を有効にして `gh pr list --head <branch>
+       --state merged` によるマージ判定を試す手もある。司令官は `/check` の時点で
+       PR番号とマージ状態を既に握っているので、この運用ではマージチェックを
+       丸ごと迂回する `--force` より素直
+     - **`cannot determine an integration ref ...: set ocw.mergedInto or
+       use -f`** — 候補 ref が1つも解決できなかった場合。非 bare リポジトリでは
+       `HEAD` が必ず解決するため、**通常の傘運用ではまず出ない**
    - **`outcome`（計測用）は `--force` の有無ではなくマージ判定の結果で決まる。**
      マージ済みと判定できれば `success`、できなければ `failure`。squash マージ済みの
      孫を `--force` で消しても、マージ済みと判定できていれば `success` になる
@@ -565,12 +574,15 @@ git worktree 作成（<孫ブランチ名> がそのままブランチ名にな�
   → 3ペーン構成:
      ┌────────────┬──────────────┬──────────┐
      │ commander  │ implementer  │ reviewer │
-     │ claude-ds  │ claude-ds    │ claude   │
+     │ claude     │ claude       │ claude   │
      │ (予備)     │ 実装+PR      │ レビュー │
      └────────────┴──────────────┴──────────┘
   → 全ペーンでエージェント起動済み
   → 標準出力に pane ID が出力される
 ```
+
+3ペーンとも既定の起動コマンドは `claude`（`bin/ocw` の `OCW_COMMANDER_COMMAND` /
+`OCW_IMPLEMENTER_COMMAND` / `OCW_REVIEWER_COMMAND` で個別に上書き可能。§3.2 注意点4）。
 
 出力例:
 ```
