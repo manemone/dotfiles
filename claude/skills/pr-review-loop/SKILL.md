@@ -347,8 +347,10 @@ STATUS=$(herdr pane get "$REVIEWER_PANE" | python3 -c "import json,sys; d=json.l
 | status | 意味 | 取るべき行動 |
 |--------|------|-------------|
 | `idle` | Claude起動中、待機状態 | Step 3へ |
+| `done` | 前ラウンドの完了結果が未読のまま。待機状態であることは `idle` と同じ | Step 3へ |
 | `working` | Claudeが処理中 | Phase 3a と同じループ（`--status done` を60秒刻みで待ち、`idle`/`blocked` も完了として拾う）で完了を待ってからStep 3へ。無人の背面ペインは完了しても `done` で止まり自動では `idle` にならないため、単発の `--status idle` 待ちは10分空転する |
-| `None` または空 | 要確認。ClaudeがINSERTモードで動いている可能性がある | 以下の「None時の確認手順」を実行 |
+| `blocked` | 判断待ちで停止 | ペイン出力を読んで可能なら回答。人手が必要ならユーザーに伝える |
+| `unknown` / `None` または空 | 要確認。ClaudeがINSERTモードで動いている可能性がある | 以下の「None時の確認手順」を実行 |
 
 **None時の確認手順:**
 
@@ -358,7 +360,7 @@ STATUS=$(herdr pane get "$REVIEWER_PANE" | python3 -c "import json,sys; d=json.l
 herdr pane read "$REVIEWER_PANE" --source detection --lines 3
 ```
 
-- **INSERTモード表示**（`-- INSERT --`、`accept edits on`、`← for agents`）→ Claudeは起動済みでペースト確認待ち。空行を送って確定させ、idle になってから Step 3 へ。
+- **INSERTモード表示**（`-- INSERT --`、`accept edits on`、`← for agents`）→ Claudeは起動済みでペースト確認待ち。`herdr pane send-keys "$REVIEWER_PANE" Enter` で確定させ、idle になってから Step 3 へ。
 - **シェルプロンプト**（`$` や `❯` で終わる行、Claudeの応答がない）→ Claudeは終了している。`herdr pane run "$REVIEWER_PANE" "claude"` で起動し、`herdr wait agent-status "$REVIEWER_PANE" --status idle --timeout 30000` で起動完了を待つ。
 - **Claudeの応答が表示されている**（`●` や `✻` で始まる行）→ 実は起動中。`herdr pane get` を再実行して状態を再確認。
 
