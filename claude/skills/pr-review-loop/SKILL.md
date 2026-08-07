@@ -360,13 +360,13 @@ STATUS=$(herdr pane get "$REVIEWER_PANE" | python3 -c "import json,sys; d=json.l
 herdr pane read "$REVIEWER_PANE" --source detection --lines 3
 ```
 
-- **INSERTモード表示**（`-- INSERT --`、`accept edits on`、`← for agents`）→ Claudeは起動済みでペースト確認待ち。`herdr pane send-keys "$REVIEWER_PANE" Enter` で確定させ、idle になってから Step 3 へ。
+- **INSERTモード表示**（`-- INSERT --`、`accept edits on`、`← for agents`）→ Claudeは起動済みでペースト確認待ち。`herdr pane send-keys "$REVIEWER_PANE" Enter` で確定させ、`idle` または `done` になってから Step 3 へ。
 - **シェルプロンプト**（`$` や `❯` で終わる行、Claudeの応答がない）→ Claudeは終了している。`herdr pane run "$REVIEWER_PANE" "claude"` で起動し、`herdr wait agent-status "$REVIEWER_PANE" --status idle --timeout 30000` で起動完了を待つ。
 - **Claudeの応答が表示されている**（`●` や `✻` で始まる行）→ 実は起動中。`herdr pane get` を再実行して状態を再確認。
 
 ### Step 3: 依頼を送信
 
-Claude が idle であることを確認した上で、短いコマンドで依頼を送信する:
+Claude が `idle` または `done`（どちらも待機状態）であることを確認した上で、短いコマンドで依頼を送信する:
 
 ```bash
 herdr pane run "$REVIEWER_PANE" "以下を読んでPRレビューを実行してください。レビュー指示: /tmp/review-request-$PR.md"
