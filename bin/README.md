@@ -60,6 +60,9 @@ Git worktree を作成し、オプションで Herdr マルチペイン環境を
 # 基本的な worktree 作成（VS Code で開く）
 ocw my-feature
 
+# スラッシュ入りの名前（ブランチ名の名前空間をそのまま使える）
+ocw feature/foo
+
 # Herdr 連携（commander/implementer/reviewer の3ペイン）
 ocw --herdr my-feature
 
@@ -68,7 +71,7 @@ ocw new --herdr my-feature origin/main
 
 # worktree 削除
 ocw rm my-feature
-ocw rm -f my-feature  # 強制削除
+ocw rm -f my-feature  # 強制削除（マージ済み判定・未コミット変更のチェックを迂回する）
 
 # worktree 一覧
 ocw ls
@@ -78,6 +81,121 @@ ocw ls
 - **commander**: 司令塔（デフォルト: `claude`）
 - **implementer**: 実装担当（デフォルト: `claude`）
 - **reviewer**: レビュー担当（デフォルト: `claude`）
+
+#### 設定（`git config ocw.*`）
+
+`.git/config` から読む4つのキーで、ワークツリーの作成先やマージ済み判定をリポジトリごとにカスタマイズできる。**無設定なら現行どおりの挙動になる**（`<project>/main` + 兄弟ワークツリーの構成、bare リポジトリ + 同階層の構成のどちらも無設定で動く）。`.git/config` は全ワークツリーで共有されるため、bare を含むどのワークツリーから設定・参照しても同じ値が効く。
+
+| キー | 既定 | 意味 |
+|---|---|---|
+| `ocw.worktreeDir` | `{repo_parent}/{name}` | ワークツリーの作成先を表すフルパス雛形（プレースホルダは次項） |
+| `ocw.repoName` | 自動解決（後述） | 表示用のリポジトリ名。`repo:` 行・Herdr ワークスペースラベル・`ocw.worktreeDir` の `{repo}` に使う |
+| `ocw.mergedInto` | 自動解決（後述） | `ocw rm` のマージ済み判定で最優先される基準 ref |
+| `ocw.githubMergeCheck` | `false` | `true` にすると、マージ済み判定に `gh pr list --head <branch> --state merged` の問い合わせを追加する（opt-in・fail-open） |
+
+設定例:
+
+```bash
+git config ocw.worktreeDir '{repo_root}/.worktrees/{name}'
+git config ocw.repoName myrepo
+git config ocw.mergedInto develop
+git config ocw.githubMergeCheck true
+```
+
+#### `ocw.worktreeDir` のプレースホルダ
+
+| プレースホルダ | 意味 |
+|---|---|
+| `{repo_root}` | メインワークツリーのパス（bare リポジトリの場合はリポジトリ本体のパス） |
+| `{repo_parent}` | `dirname({repo_root})` |
+| `{repo}` | 解決済みの `repo_name`（下記「レイアウトの実例」の `repo_name` 解決順を参照） |
+| `{name}` | ディレクトリ側の名前。ネスト方針（後述）により**ブランチ名そのもの**（`/` を含みうる） |
+
+先頭の `~` は `$HOME` へ展開される。**未知のプレースホルダ**（`{rep_root}` のようなタイプミス）を含む雛形は、黙って literal なディレクトリ名にせず `die` する。`{name}` を含まない雛形も `die` する。展開結果が絶対パスにならない雛形（相対パス、あるいは `{name}` の直前に `/` が無く境界が定義できない雛形）も `die` する。
+
+`ocw rm` はワークツリー削除後、そのディレクトリの親から**掃除境界**（雛形中の `{name}` の直前にある最後の `/` までを展開したパス）に達するまで、空になった親ディレクトリを `rmdir` で遡って削除する。境界そのものは削除しない。同じ親を共有する他のワークツリーが残っていれば `rmdir` が失敗するため、そちらは自然に残る。
+
+| 雛形 | 掃除境界 |
+|---|---|
+| `{repo_parent}/{name}` | `{repo_parent}` |
+| `{repo_root}/.worktrees/{name}` | `{repo_root}/.worktrees` |
+| `~/.cache/ocw/{repo}/{name}` | `~/.cache/ocw/{repo}` |
+
+#### レイアウトの実例
+
+| レイアウト | 設定 |
+|---|---|
+| 現行の兄弟構成（`<proj>/main` + `<proj>/<name>`） | **無設定**（既定 `{repo_parent}/{name}`） |
+| bare + 同階層（`<proj>/foo.git` + `<proj>/<name>`） | **無設定**（`dirname(bare リポジトリのパス)` が `{repo_parent}` になるため） |
+| リポジトリ内に隠す | `git config ocw.worktreeDir '{repo_root}/.worktrees/{name}'` |
+| 中央プールに集める | `git config ocw.worktreeDir '~/.cache/ocw/{repo}/{name}'` |
+| 普通の clone の隣に接頭辞付きで置く | `git config ocw.worktreeDir '{repo_parent}/{repo}-{name}'` |
+
+`repo_name`（`{repo}` の展開値）の解決順: 1. `ocw.repoName` が設定されていればそれ。2. `remote.origin.url` の basename から `.git` を剥がしたもの。3. パスからの推測（bare なら `basename(repo_root)` の `.git` 剥がし／`basename(repo_root)` が `main` `master` `trunk` のいずれかなら `basename(repo_parent)`／それ以外は `basename(repo_root)`）。
+
+#### ブランチ名・ディレクトリ名
+
+`ocw <入力>` は次の順で処理される。
+
+1. **正規化**（小文字化 → `[a-z0-9._/-]` 以外の並びを `-` に潰す → 連続する `/` を1つに潰す → 先頭・末尾の `/` `-` を除去）。**`/` は潰されず温存される**ため、`feature/foo` のようなブランチ名の名前空間がそのまま使える。正規化だけでも多くの「一見不正な入力」はエラーにならず変換されて通る:
+   - `Fix The Thing` → `fix-the-thing`
+   - `feature//foo` → `feature/foo`
+   - `HEAD` → `head`
+   - `-x` → `x`
+2. **検証**（`git check-ref-format --branch`。自前の正規表現ではなく git 自身のルールに委ねている）。正規化で中和できなかったものだけがここで弾かれる。例: `foo.lock`（末尾 `.lock`）、`..` を含むもの。拒否されると git 自身の `fatal:` メッセージを添えて `die` する。`..` や先頭 `/` もここで弾かれるため、`{name}` をパスへ埋め込む際のパストラバーサル対策もこの検証が兼ねている。
+3. 正規化した結果が空文字列になった入力（記号だけの入力等）は `die` する。
+
+**「不正な名前は全部エラーになる」わけではない。** 正規化で救えるものは変換されて通る。エラーになるのは、正規化を素通りしてなお git のブランチ名ルールに違反するものだけである。
+
+**ブランチ名に `ai/` 接頭辞は付かない。** 既定のブランチ名は正規化した入力そのものであり、`ocw.branchPrefix` のような接頭辞専用の設定も存在しない。接頭辞が欲しい場合は `ocw ai/foo` のように入力側にスラッシュを含めればよい。
+
+ディレクトリはブランチ名の階層をそのまま写す（**ネスト**）: `feature/foo` というブランチは `<ocw.worktreeDir 展開>/feature/foo` に作られる。`git worktree add` が親ディレクトリを自動生成するため、`feature/bar` を後から作っても衝突しない（ディレクトリ名の衝突自体、git 自身の ref のディレクトリ/ファイル衝突チェックにより原理的に起こり得ない）。
+
+**移行**: `ai/` 接頭辞の廃止より前に作成した `ai/foo` ブランチの既存ワークツリーも、`ocw rm foo`（接頭辞なし）で削除できる（後述の `ocw rm` 解決規則の3段目）。
+
+#### `ocw rm` の解決規則
+
+`ocw rm <入力>` は `git worktree list --porcelain` の出力から `(パス, ブランチ)` の対を作り、次の3段で入力に一致するワークツリーを探す。**入力は正規化せずそのまま照合する**（実在する名前を打っている前提のため）。
+
+| 段 | 条件 |
+|---|---|
+| 1 | ブランチ名の完全一致 / ワークツリーの絶対パスの完全一致 / 掃除境界からの相対パス一致 |
+| 2 | ワークツリーディレクトリの `basename` 一致 |
+| 3 | ブランチ名が `*/<入力>` で終わる（旧 `ai/*` 接頭辞からの移行救済） |
+
+**先に非空になった段の結果を採用する。同一段で複数ヒットした場合は、候補（パスとブランチ）を全て標準エラー出力に並べて `die` する**（自動選択はしない。破壊的操作なので、曖昧なら利用者に完全な名前を打たせる）。メインワークツリーと bare エントリは常に削除候補から除外される。
+
+#### マージ済み判定の意味論
+
+`ocw rm`（`-f` 無し）は、ブランチが「マージ済み」と判定できない限り拒否される。
+
+**基準 ref（integration ref）の候補**を次の順で集め、解決できない候補は黙って読み飛ばす。1つも解決できなければ「基準が決まらない」として `die` し、`ocw.mergedInto` の設定か `-f` の使用を案内する。
+
+| 順 | 候補 |
+|---|---|
+| 1 | `ocw.mergedInto`（設定） |
+| 2 | **作成時の base ref**（`ocw <name> [base-ref]` で指定・解決されたベース。worktree の git 管理領域に保存され、`ocw rm` 側で読み戻す） |
+| 3 | bare なら `git symbolic-ref --short HEAD` / 非 bare なら `repo_root` の現在の `HEAD` |
+| 4 | `git symbolic-ref --short refs/remotes/origin/HEAD` |
+
+**各候補に対して次を順に試し、いずれか1つでも真ならマージ済みと判定する**（最初に判定が付いた時点で打ち切る）:
+
+a. `git merge-base --is-ancestor <branch> <candidate>`（通常の ancestry 判定）
+b. **squash マージ検出**（`commit-tree` + `git cherry` によるパッチID比較のレシピ。GitHub の squash merge のようにコミット履歴に痕跡が残らないマージも検出できる）
+c. `ocw.githubMergeCheck` が `true` かつ `gh` が PATH にある場合のみ、`gh pr list --head <branch> --state merged` を問い合わせる（**opt-in**。既定は `false` — ネットワーク・認証への依存を既定経路に持ち込まないため。`gh` の失敗・未認証・ネットワーク不通は「判定できなかった」として無視され、`ocw` 自体は落ちない）
+
+候補2（作成時の base ref）は傘ブランチ運用を直接救う: 孫ブランチは `main` ではなく傘ブランチにマージされることが多く、これが無いと ancestry・squash のどちらの判定も傘ブランチ自身を基準にできず、`ocw rm` は常に失敗していた。
+
+**検出できない限界**（正直に書いておく）: squash マージ後に統合先で rebase・amend されて patch-id が変わった場合や、マージ時の衝突解決で diff が変わった場合は、squash 検出も見逃す。この場合はマージ済みであっても `-f` が必要になる。
+
+**`run.end` の `outcome` は `-f` の有無ではなく、上記の判定結果から決まる**:
+
+```
+outcome = マージ済みと判定できた → success
+          そうでない             → failure
+```
+
+`-f` は「未マージ・未コミット変更が残っていても拒否をスキップする」フラグであり、判定そのものはスキップしない。squash マージ済みのブランチを `-f` で消しても `outcome` は `success` になる（`ai/` 接頭辞廃止・マージ判定再定義より前は、`-f` を使った時点で無条件に `failure` として記録されていた）。
 
 **工程計測（`ocw-meter` 連携。fail-open）:**
 
@@ -109,10 +227,12 @@ export OCW_RUN_ID="$(cat "$(git rev-parse --absolute-git-dir)/ocw-run-id" 2>/dev
 設計（`bin/ocw-meter` 自身の既知の限界。誤りを隠さない方針のため）であり、これは `ocw` の出力への追加として
 現れうる。
 
-**`run.end` が記録されない run が存在しうる**（best-effort の限界）: `ocw rm` は「未マージ」「未コミット
-変更あり」等で `die` して停止する経路が複数あり、そこに到達する前に停止した場合は `run.end` が一切
-記録されない。`ocw rm -f` は完了時に必ず記録するが、その `outcome` は `failure`（`-f` は「未マージ・未コミット
-のまま強制的に捨てる」経路であり、通常の `rm` の `success` と区別する）になる。
+**`run.end` が記録されない run が存在しうる**（best-effort の限界）: `ocw rm` は「マージ済みと
+判定できない」「未コミット・未追跡の変更がある」等で `die` して停止する経路が複数あり、そこに
+到達する前に停止した場合は `run.end` が一切記録されない。`-f` はこれらの拒否をスキップして最後まで
+完了させるため、`-f` 実行時は `run.end` が必ず記録される。その `outcome` は前述のとおり `-f` の
+有無ではなくマージ判定の結果から決まる（マージ済みと判定できれば `success`、できなければ
+`failure`）。
 
 ### 3.2 claude-ds — Claude Code via DeepSeek API
 
@@ -454,9 +574,9 @@ chmod 600 ~/.config/deepseek/api_key
 
 別のパスにキーを置く場合は `DEEPSEEK_API_KEY_FILE` 環境変数で指定してください。
 
-### `error: run ocw from inside a Git worktree`
+### `error: run ocw from inside a Git repository`
 
-`ocw` は Git リポジトリの worktree 内で実行する必要があります。カレントディレクトリが Git worktree であることを確認してください。
+`ocw` は Git リポジトリ（bare を含む）の中で実行する必要があります。カレントディレクトリが Git リポジトリのワークツリーか、bare リポジトリ自体であることを確認してください。
 
 ### `warning: VS Code CLI 'code' was not found`
 
