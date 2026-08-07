@@ -384,7 +384,7 @@ ok = m and (latest_sha.startswith(m.group(1)) or m.group(1).startswith(latest_sh
    - 足りなければ `herdr pane split` で追加
 
 3. **implementer に最終PR作成プロンプトを送信**
-   - implementer が `idle` であることを確認
+   - implementer が `idle` または `done`（どちらも待機状態）であることを確認
    - 以下の情報を含むプロンプトを `herdr pane run` で送信:
      - base: `<ベースブランチ>`、head: `<傘ブランチ名>`（ベースブランチは傘ブランチが追跡するリモートブランチから判定。`main`/`master` 等リポジトリごとに異なる）
      - 変更概要（孫PR番号、変更ファイル数、テスト結果）
@@ -407,9 +407,9 @@ ok = m and (latest_sha.startswith(m.group(1)) or m.group(1).startswith(latest_sh
    ```bash
    herdr pane get <implementer-id>
    ```
-   `agent_status: working` になれば成功。`idle` のままなら
-   `herdr pane send-keys <implementer-id> Enter` を撃って再確認する。
-   **同じ本文を `herdr pane run` で再送しない**（プロンプト欄に2重に積まれる）。
+   `agent_status: working` になれば成功。**`working` にならない（`idle` または
+   `done` のまま）なら** `herdr pane send-keys <implementer-id> Enter` を撃って
+   再確認する。**同じ本文を `herdr pane run` で再送しない**（プロンプト欄に2重に積まれる）。
 
 5. **以降は自律運転**
    - implementer が PR を作成し、`/pr-review-loop` を起動
@@ -483,8 +483,10 @@ main へのマージは人間が手動で行う。
         herdr pane list | python3 -c "import sys,json; [print(p['workspace_id']) for p in json.load(sys.stdin)['result']['panes'] if p.get('agent_status')=='working']"
       そのworkspaceのimplementerに送信:
         herdr pane run <impl-pane-id> "最終PRを作成。base:main head:<傘ブランチ>。pr-review-loop起動。reviewerは<同workspaceのreviewer>。mainマージは人間手動。計画書 <計画書の絶対パス> 参照。"
-      送信後 herdr pane get で agent_status を確認し、idle のままなら
-        herdr pane send-keys <impl-pane-id> Enter で確定させる
+      送信後 herdr pane get で agent_status を確認し、working にならない
+        （idle または done のまま）なら herdr pane send-keys <impl-pane-id> Enter
+        で確定させる（このimplementerは以前に作業を終えている可能性があり、
+        フォーカスされていなければ done のまま張り付く）
       CronDelete でこのcronを停止
       PushNotification でユーザーに「全工程完了。mainへのPR作成済み。手動マージしてください」と通知
 

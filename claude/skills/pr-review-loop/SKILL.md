@@ -384,8 +384,10 @@ sleep 2
 herdr pane get "$REVIEWER_PANE"
 ```
 
-`agent_status` が `working` になっていれば送信成功。**`idle` のままなら
-`herdr pane send-keys "$REVIEWER_PANE" Enter` を撃って再確認する。** 同じ本文を
+`agent_status` が `working` になっていれば送信成功。**`working` にならない
+（`idle` または `done` のまま）なら `herdr pane send-keys "$REVIEWER_PANE" Enter`
+を撃って再確認する。** `done` は Step 2 の表が「Step 3へ」に振る待機状態であり、
+Enter が送られず `done` のまま止まっているケースも同じ手当てが要る。同じ本文を
 `herdr pane run` で再送してはいけない（本文自体は届いており、再送するとプロンプト欄に
 2重に積まれる）。それでも届いていなければ `herdr pane read "$REVIEWER_PANE"
 --source detection --lines 3` で画面を確認する。
