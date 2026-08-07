@@ -155,7 +155,7 @@ git config ocw.githubMergeCheck true
 
 **ブランチ名に `ai/` 接頭辞は付かない。** 既定のブランチ名は正規化した入力そのものであり、`ocw.branchPrefix` のような接頭辞専用の設定も存在しない。接頭辞が欲しい場合は `ocw ai/foo` のように入力側にスラッシュを含めればよい。
 
-ディレクトリはブランチ名の階層をそのまま写す（**ネスト**）: `feature/foo` というブランチは `<ocw.worktreeDir 展開>/feature/foo` に作られる。`git worktree add` が親ディレクトリを自動生成するため、`feature/bar` を後から作っても衝突しない（ディレクトリ名の衝突自体、git 自身の ref のディレクトリ/ファイル衝突チェックにより原理的に起こり得ない）。
+ディレクトリはブランチ名の階層をそのまま写す（**ネスト**）: `feature/foo` というブランチは `<ocw.worktreeDir 展開>/feature/foo` に作られる。`git worktree add` が親ディレクトリを自動生成するため、`feature/bar` を後から作っても衝突しない。**`ocw` が作ったワークツリー同士が入れ子で衝突することは、git 自身の ref のディレクトリ/ファイル衝突チェックにより原理的に起こり得ない**（ブランチ `feature` と `feature/foo` は共存できないため、両者のワークツリーディレクトリが互いの祖先になることもない）。ただし `ocw` 管理外の既存ディレクトリとの衝突は普通に起こりうる。その場合は展開先パスの存在チェック（`[ ! -e "$worktree_dir" ]`）が `worktree dir already exists: <path>` で停止する。
 
 **移行**: `ai/` 接頭辞の廃止より前に作成した `ai/foo` ブランチの既存ワークツリーも、`ocw rm foo`（接頭辞なし）で削除できる（後述の `ocw rm` 解決規則の3段目）。
 
