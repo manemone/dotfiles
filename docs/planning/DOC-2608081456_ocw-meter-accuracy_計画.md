@@ -20,7 +20,7 @@
 
 | 孫 | ブランチ | 内容 | 状況 |
 |---|---|---|---|
-| 1 | `ocw-meter-01-store-hygiene` | 【4】【6】テストによる実ストア汚染の停止・`quota-worktree-refusal.json` のプルーニング片手落ち修正・診断ファイル専用の掃除サブコマンド新設 | ⬜ 待機中 |
+| 1 | `ocw-meter-01-store-hygiene` | 【4】【6】テストによる実ストア汚染の停止・`quota-worktree-refusal.json` のプルーニング片手落ち修正・診断ファイル専用の掃除サブコマンド新設 | 🔄 実装中 |
 | 2 | `ocw-meter-02-ingest-freshness` | 【1】`report` からの ingest 自動実行と、最終 ingest 時刻・鮮度のフッター表示 | ⬜ 待機中 |
 | 3 | `ocw-meter-03-price-tables` | 【5】価格表スキーマの時間帯（peak/off-peak）対応・フォールバック時の警告・適用期間ミスマッチの可視化 | ⬜ 待機中 |
 | 4 | `ocw-meter-04-list-price-equiv` | 【2】`quota.sample` の `session_cost_usd` から `list_price_equiv_usd` を集計して `report` に出す | ⬜ 待機中 |
