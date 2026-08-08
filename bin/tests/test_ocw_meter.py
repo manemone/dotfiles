@@ -1982,9 +1982,21 @@ class ReportAutoIngestTests(OcwMeterTestCase):
 
     def test_freshness_warning_only_appears_past_the_staleness_threshold(self):
         # PR #57 review round 1 finding 4: the threshold comparison is
-        # `>=` (inclusive — see ingest_freshness_footer's comment), so
-        # the boundary itself, not just comfortably-inside/outside
-        # samples, must be pinned down here.
+        # `>=` (inclusive — see ingest_freshness_footer's comment, chosen
+        # because the plan's own wording "一定時間以上経っていたら" is
+        # inclusive). This test cannot pin the literal single-instant
+        # edge (age_seconds == INGEST_STALE_THRESHOLD_SECONDS exactly):
+        # this is a black-box subprocess test built on real wall-clock
+        # `datetime.now()`, and the round trip between writing the
+        # fixture timestamp here and `ingest_freshness_footer` reading
+        # "now" always adds strictly positive latency — so any nominal
+        # age computed here always reads back slightly HIGHER once the
+        # subprocess evaluates it, which makes `>` and `>=` behave
+        # identically in practice (verified: reverting to `>` still
+        # passes every case below). Matches this file's existing
+        # precedent for other 24h-based staleness checks
+        # (WorktreeRefusalPruningTests uses a 1h/25h margin, not an
+        # exact-instant one, for the same reason).
         state_dir = self.home / "state"
         state_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1999,14 +2011,14 @@ class ReportAutoIngestTests(OcwMeterTestCase):
         self.assertEqual(fresh_result.returncode, 0, fresh_result.stderr)
         self.assertIn("ingest_freshness_warning: (none)", fresh_result.stdout)
 
-        just_under_result = cursor_at_age(hours=24, seconds=-5)
+        just_under_result = cursor_at_age(hours=23, minutes=59)
         self.assertEqual(just_under_result.returncode, 0, just_under_result.stderr)
         self.assertIn("ingest_freshness_warning: (none)", just_under_result.stdout)
 
-        exactly_at_result = cursor_at_age(hours=24, seconds=1)
-        self.assertEqual(exactly_at_result.returncode, 0, exactly_at_result.stderr)
-        self.assertNotIn("ingest_freshness_warning: (none)", exactly_at_result.stdout)
-        self.assertIn("経過しています", exactly_at_result.stdout)
+        just_over_result = cursor_at_age(hours=24, minutes=1)
+        self.assertEqual(just_over_result.returncode, 0, just_over_result.stderr)
+        self.assertNotIn("ingest_freshness_warning: (none)", just_over_result.stdout)
+        self.assertIn("経過しています", just_over_result.stdout)
 
         stale_result = cursor_at_age(hours=25)
         self.assertEqual(stale_result.returncode, 0, stale_result.stderr)
