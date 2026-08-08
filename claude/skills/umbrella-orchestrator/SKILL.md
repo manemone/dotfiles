@@ -78,13 +78,43 @@ GitHub が `APPROVE` / `REQUEST_CHANGES` を受け付けないため、レビュ
    （`判定: 承認` のことも `**判定**: **承認**` のこともある）
 3. **SHA は前方一致で比較する。** 対象HEADは短縮7桁のことも
    フル40桁のこともあり、単純な文字列一致では取りこぼす
+4. **`判定:` 行が無い形式がある。** 承認が見出しにしか現れず
+   （`🤖✅ 承認` / `🤖🔍 レビュー指摘` のような1行目だけ）、本文に `判定:` が
+   1つも出てこないことがある。`判定:` だけを探す実装は**承認を丸ごと取りこぼす**
+   （実測: 同一の傘の中で、`判定:` 付きの回と無しの回が混在した）
 
 ```python
 plain = re.sub(r'[*`]', '', body)
-verdict = '承認' if re.search(r'判定\s*[:：]\s*承認', plain) else '変更要求'
+lines = plain.strip().splitlines()
+m = re.search(r'判定\s*[:：]\s*(\S+)', plain)
+if m:                                   # 通常形: 本文に 判定: がある
+    verdict = '承認' if m.group(1).startswith('承認') else '変更要求'
+elif lines and re.search(r'✅|🔍|承認|レビュー指摘', lines[0]):  # 見出しだけの形
+    head = lines[0]
+    verdict = '変更要求' if ('🔍' in head or 'レビュー指摘' in head) else '承認'
+else:                                   # どちらの形でも読めない
+    verdict = None
 m = re.search(r'HEAD\s*[:：]\s*([0-9a-f]{7,40})', plain)
 ok = m and (latest_sha.startswith(m.group(1)) or m.group(1).startswith(latest_sha))
 ```
+
+`body` が空文字列（本文なしのインラインコメント）の場合、`lines` は空リストになる。
+`lines[0]` にそのまま添字アクセスすると `IndexError` になる（本文なしは
+17件中13件という**最頻出のケース**なので、ここで落ちると全件走査が止まる）。
+`elif lines and ...` の短絡評価で空リストを弾き、`verdict = None`（＝次段落の
+「どちらの形でも読めなかった」状態）へ落とす。
+
+`'承認' in head` のような部分一致だけで判定すると、「前回の承認を取り消します」
+のような**変更要求の見出しに「承認」という字面が混ざるケース**を誤って承認判定
+してしまう（`re.sub(r'[*`]', '', body)` は絵文字を落とさないため、`✅`/`🔍` の
+マーカーは見出しに残っている）。**変更要求を示す `🔍` / `レビュー指摘` を先に
+判定してから承認に倒す**ことで、変更要求のPRを誤って承認扱いする向きの事故を防ぐ。
+
+**どちらの形でも読めなかったら、本文末尾の結論を人間の目で読む。**
+「上記N件は必ず修正してください」で終わっていれば変更要求、
+「未解決の指摘なし。承認します」で終わっていれば承認である。
+**読めなかったことを「承認されていない」と同一視して黙って待つのが最悪の分岐**で、
+承認済みのPRが誰にも拾われないまま止まる。
 
 **マージしてよいのは次をすべて満たすときだけ**:
 
@@ -151,9 +181,25 @@ ok = m and (latest_sha.startswith(m.group(1)) or m.group(1).startswith(latest_sh
       送信されずペーストされただけの状態で放置される（Enterが送られない）。
    2. **絶対に「〜とだけ返事してください」「〜だけ確認してください」のようなメタ指示を付けない。**
       実装AIはそれを実行して返事だけして停止する。
-   3. **送信後は必ず `herdr pane get <pane-id>` で `agent_status: working` を確認する。**
-      `idle` のままなら送信失敗。再送する。**実際に1回で届かないことがある**ので、
-      確認を省略しないこと（省略すると孫が起動しないまま巡回だけが進む）。
+   3. **`herdr pane run` は本文だけ打ち込んで Enter を送らないことがある。送信後に必ず
+      `herdr pane send-keys <pane-id> Enter` を撃つこと。**
+      1つの傘で **8回送って8回とも** これだった（spawn 4回・復帰指示 4回）。
+      「たまに届かない」ではなく**届かないのが既定**だと思って手順に組み込む。
+
+      **herdr 自身の公式ドキュメント（`herdr` skill）は「`pane run` sends the text
+      and Enter together」（テキストとEnterをまとめて送る）と説明しており、この
+      実測とは食い違う。** 原因は特定できていない（herdr のバージョン差か、長文・
+      複数行プロンプト特有の条件かは不明）。ドキュメント通りに動くと信じて確認を
+      省略しないこと — このPRのレビュー往復自体でも、送信後に確認したところ
+      `idle` のままだったケースが複数回発生している（実測）。
+
+      送信 → `herdr pane get <pane-id>` で `agent_status` を確認 → `idle` のままなら
+      `send-keys Enter` → 再確認、を `working` になるまで繰り返す。
+
+      **`herdr pane run` で同じ本文を再送してはいけない。** 本文自体は届いており
+      Enter だけが送られていないので、再送するとプロンプト欄に**2重に積まれる**。
+      画面上は `Press up to edit queued messages` のような表示になり、送信済みに見えて
+      実際には走っていない状態が続く。確認を省略すると孫が起動しないまま巡回だけが進む。
    4. **spawn したコマンドが意図どおりか `ps` で確認する。**
       implementer / reviewer のモデルや権限モードを環境変数
       （`OCW_IMPLEMENTER_COMMAND` / `OCW_REVIEWER_COMMAND`）で指定している場合、
@@ -166,8 +212,25 @@ ok = m and (latest_sha.startswith(m.group(1)) or m.group(1).startswith(latest_sh
 
    **推奨フォーマット（これだけ送ればよい）**:
    ```
-   herdr pane run <pane-id> "計画書 <計画書の絶対パス> の「## 孫N用プロンプト」セクションのコードブロック内の指示に従って実装してください。実装が完了したら計画書末尾の指示に従ってPR作成・レビューまで自律的に進めてください。"
+   herdr pane run <pane-id> "計画書 <計画書の絶対パス> の「## 孫N用プロンプト」セクションのコードブロック内の指示に従って実装してください。実装が完了したら計画書末尾の指示に従ってPR作成・レビューまで自律的に進めてください。reviewerはdone状態で完了し完了通知は来ないので、待機して停止せず gh pr view をポーリングしてレビューの有無を確認してください。"
    ```
+
+   **末尾の1文を削らないこと。** これが §5「レビュー待ちデッドロック」の**予防**である。
+   この1文の有無で実測がはっきり分かれた（同一の傘での実測。内訳は §5 を参照）:
+
+   | 孫 | 末尾の1文 | デッドロック発生 |
+   |---|---|---|
+   | 孫1 | なし | 1回（約10分ロス） |
+   | 孫3 | なし | **3回**（司令官が毎回拾いに行った） |
+   | 孫4 | **あり** | **0回** |
+
+   孫2 はこの表に含めていない。デッドロック発生の有無を個別に記録していないため、
+   憶測で0回や1回と書き足すと表そのものの信頼性を損なう。この表が支える主張は
+   「末尾の1文があれば発生しない」であり、孫1・孫3（なし）と孫4（あり）の対比だけで
+   十分に示せる。
+
+   デッドロックは司令官が拾えば復旧できるが、**拾えるのは次の巡回まで待ってから**である。
+   予防はプロンプトに1文足すだけなので、検知・復旧より常に安い。
 
    - **プロンプト末尾には必ず以下の指示を自動付与すること**:
 
@@ -211,7 +274,11 @@ ok = m and (latest_sha.startswith(m.group(1)) or m.group(1).startswith(latest_sh
    ```bash
    gh pr list --head <孫ブランチ名> --state merged --json number,title
    ```
-   または `git branch -r --merged origin/<傘ブランチ>` で一括検出
+   **これが一次手段。** `git branch -r --merged origin/<傘ブランチ>` は
+   squash マージされた孫を検出できない（ブランチ tip の祖先関係しか見ないため。
+   §3.3 後述のとおり孫は squash マージされることが多く、GitHub の squash merge
+   でリモートブランチごと消えていれば `git branch -r` の一覧にも載らない）ので、
+   一括検出の代替としては使わない
 
 2. **マージ済み孫を検証**
    - 傘ブランチに checkout
@@ -233,17 +300,60 @@ ok = m and (latest_sha.startswith(m.group(1)) or m.group(1).startswith(latest_sh
 4. **未着手の孫を列挙**
 
 5. **クリーンアップ提案**
-   - マージ済み＋検証済みの孫のうち、まだワークツリーが残っているものがあれば `ocw rm --force <slug>` を提案
-   - 例: `ph-00 のワークツリーが残っています。ocw rm --force ph-00-must-keep しますか？`
+   - マージ済み＋検証済みの孫のうち、まだワークツリーが残っているものがあれば `ocw rm <孫ブランチ名>` を提案（**まず `--force` なしで**。§5「`ocw -H` が作るもの」と同じく `ai/xxx` を含む完全なブランチ名を渡す。短縮形は複数一致で停止しうる — 後述の補足を参照）
+   - 例: `ph-00 のワークツリーが残っています。ocw rm ai/ph-00-must-keep しますか？`
    - `ocw rm` は worktree + Herdr ワークスペース + ブランチをまとめて削除する
    - 未マージの孫は削除しない（`ocw rm` が未マージを拒否するため安全）
-   - **`--force` が必要**: 孫ブランチは main ではなく傘ブランチにマージされているため、
-     `ocw rm` のマージチェックが失敗する。`--force` でマージチェックをスキップする
+   - **`--force` は基本的に不要。** `ocw rm`（`bin/ocw`）のマージ済み判定は
+     `ocw.mergedInto`（設定） → 作成時のベース（`<worktree の git dir>/ocw-base-ref`
+     に永続化される） → `HEAD` → `origin/HEAD` の順に候補を集め、各候補について
+     `git merge-base --is-ancestor` に加えて squash マージ検出（`commit-tree` +
+     `git cherry` によるパッチID比較）も試す。孫は傘ブランチへ squash マージされることが
+     多いが、作成時のベース（＝傘ブランチ）が候補に入り squash 検出も効くため、
+     **`--force` なしの `ocw rm` が普通に通る**
+   - 判定できない場合の拒否は2種類あり、原因も対処も異なる:
+     - **`branch is not merged into any known integration ref: <branch>`** —
+       候補 ref は解決できたが、is-ancestor でも squash 検出でも「マージ済み」と
+       判定できなかった場合。**傘運用で実際に遭遇するのはほぼこちら**。ありうる
+       原因は squash 後に統合先で rebase・amend されて patch-id が変わった、
+       マージ時の衝突解決で diff が変わった等（`bin/ocw` 自身が検出できないと
+       明記している限界）。この場合だけ `--force` を検討する。飛ぶ前に、
+       `ocw.githubMergeCheck`（opt-in）を有効にして `gh pr list --head <branch>
+       --state merged` によるマージ判定を試す手もある。司令官は `/check` の時点で
+       PR番号とマージ状態を既に握っているので、この運用ではマージチェックを
+       丸ごと迂回する `--force` より素直
+     - **`cannot determine an integration ref ...: set ocw.mergedInto or
+       use -f`** — 候補 ref が1つも解決できなかった場合。非 bare リポジトリでは
+       `HEAD` が必ず解決するため、**通常の傘運用ではまず出ない**
+   - **`outcome`（計測用）は `--force` の有無ではなくマージ判定の結果で決まる。**
+     マージ済みと判定できれば `success`、できなければ `failure`。squash マージ済みの
+     孫を `--force` で消しても、マージ済みと判定できていれば `success` になる
+
+   **`gh pr merge --delete-branch` はブランチを消し残すことがある。**
+   孫のワークツリーがそのブランチを掴んでいるとローカル削除が失敗し、
+   **その時点で処理が止まってリモートブランチも消えない**。ワークツリーを片付けたあとに、
+   リモートにまだ残っていれば明示的に消すこと（実測: 4本中4本で発生した）:
+
+   ```bash
+   git ls-remote --exit-code --heads origin <孫ブランチ名> >/dev/null 2>&1 &&
+     git push origin --delete <孫ブランチ名>
+   ```
+
+   既にリモートも消えている場合はこのチェックで何もしない。存在確認なしに
+   `git push origin --delete` だけを叩くと、リモートに無い場合
+   `remote ref does not exist` でエラー終了する。
 
 **補足**:
 - 検証失敗時は人間に報告。計画書は更新しない
 - 実装中の孫はスキップ
 - クリーンアップは確認を取ってから実行。無言で `ocw rm` しない
+- `ocw rm` は入力が複数のワークツリーに曖昧一致すると、候補を列挙して自動選択せずに
+  停止する（`bin/ocw` の設計。破壊的操作のため）。`/check` `/autopilot` の無人巡回中に
+  これが起きたら、そのクリーンアップだけをスキップして人間に完全な名前の指定を仰ぐ。
+  他の孫の処理は止めない
+- 傘運用で `ocw.mergedInto` を明示設定する必要は無い。作成時のベース（傘ブランチ）が
+  自動的にマージ判定の候補へ入るため（本節冒頭を参照）、squash 検出との組み合わせで
+  素の `ocw rm` が通常どおり通る
 
 ### 3.4 `/finalize`
 
@@ -273,8 +383,8 @@ ok = m and (latest_sha.startswith(m.group(1)) or m.group(1).startswith(latest_sh
    - commander（司令官自身）、implementer、reviewer の3ペーンが揃っていることを確認
    - 足りなければ `herdr pane split` で追加
 
-2. **implementer に最終PR作成プロンプトを送信**
-   - implementer が `idle` であることを確認
+3. **implementer に最終PR作成プロンプトを送信**
+   - implementer が `idle` または `done`（どちらも待機状態）であることを確認
    - 以下の情報を含むプロンプトを `herdr pane run` で送信:
      - base: `<ベースブランチ>`、head: `<傘ブランチ名>`（ベースブランチは傘ブランチが追跡するリモートブランチから判定。`main`/`master` 等リポジトリごとに異なる）
      - 変更概要（孫PR番号、変更ファイル数、テスト結果）
@@ -290,14 +400,18 @@ ok = m and (latest_sha.startswith(m.group(1)) or m.group(1).startswith(latest_sh
    herdr pane run <implementer-id> "最終PRを作成してください。base:<ベースブランチ> head:<傘ブランチ>。完了したらpr-review-loopを起動。reviewerは<reviewer-id>。計画書 docs/planning/DOC-XXXX_計画.md も参照。"
    ```
 
-3. **implementer の起動を確認**
+4. **implementer の起動を確認**
+
+   §3.2 注意点3と同じ手順を踏む（本文とEnterは別送信。届いていないのは
+   大抵Enterだけで、本文自体は届いている）:
    ```bash
    herdr pane get <implementer-id>
    ```
-   `agent_status: working` になれば成功。`idle` のままならプロンプトが届いていないので再送する。
-   （長すぎるのが原因なら短くする。届かない場合は Enter だけ先に送ってからプロンプトを送る。）
+   `agent_status: working` になれば成功。**`working` にならない（`idle` または
+   `done` のまま）なら** `herdr pane send-keys <implementer-id> Enter` を撃って
+   再確認する。**同じ本文を `herdr pane run` で再送しない**（プロンプト欄に2重に積まれる）。
 
-4. **以降は自律運転**
+5. **以降は自律運転**
    - implementer が PR を作成し、`/pr-review-loop` を起動
    - reviewer がレビューし、指摘があれば implementer が修正
    - 承認されたら implementer が人間に「マージしてください」と依頼する
@@ -353,17 +467,26 @@ main へのマージは人間が手動で行う。
       gh pr merge <PR番号> --squash --delete-branch
    6. マージ後、傘ブランチで検証:
       git pull --rebase origin <傘ブランチ>
-      bundle exec rubocop && bundle exec rspec && bin/doc-id verify
+      §3.3 手順2 と同じ方式で検証（.claude/pr-review.yml の lint_cmd/test_cmd を
+      最優先、無ければ言語自動検出。Ruby 固定ではない）
    7. 検証通過後、計画書を「✅ PR #XX マージ済」に更新してcommit+push
    8. 次の未着手の孫があれば spawn:
       ocw -H <次の孫ブランチ名> <傘ブランチ>
-      implementerにプロンプト送信
+      implementerにプロンプト送信（末尾に「reviewerはdone状態で完了し完了通知は
+        来ないので、待機して停止せず gh pr view をポーリングしてレビューの有無を
+        確認してください」を必ず含める。§3.2 注意点3参照）
+      送信後 herdr pane get で agent_status を確認し、idle のままなら
+        herdr pane send-keys <implementer-id> Enter で確定させる
       計画書を「🔄 実装中」に更新してcommit+push
    9. 全孫マージ済みなら finalize:
       司令官自身のworkspaceを特定:
         herdr pane list | python3 -c "import sys,json; [print(p['workspace_id']) for p in json.load(sys.stdin)['result']['panes'] if p.get('agent_status')=='working']"
       そのworkspaceのimplementerに送信:
         herdr pane run <impl-pane-id> "最終PRを作成。base:main head:<傘ブランチ>。pr-review-loop起動。reviewerは<同workspaceのreviewer>。mainマージは人間手動。計画書 <計画書の絶対パス> 参照。"
+      送信後 herdr pane get で agent_status を確認し、working にならない
+        （idle または done のまま）なら herdr pane send-keys <impl-pane-id> Enter
+        で確定させる（このimplementerは以前に作業を終えている可能性があり、
+        フォーカスされていなければ done のまま張り付く）
       CronDelete でこのcronを停止
       PushNotification でユーザーに「全工程完了。mainへのPR作成済み。手動マージしてください」と通知
 
@@ -450,20 +573,30 @@ for p in json.load(sys.stdin)['result']['panes']:
 ocw -H <孫ブランチ名> <傘ブランチ名>
 ```
 
+**`<孫ブランチ名>` は `ai/xxx` を含む完全なブランチ名をそのまま渡すこと。**
+`ocw` はブランチ名に `ai/` 接頭辞を自動で付けない（正規化した入力そのものが
+ブランチ名になる）。計画書の進捗テーブルの「ブランチ」列（§2.1）には元々
+`` `ai/xxx` `` の形で完全名を書く規約なので、そこから取得した値をそのまま渡せば
+一致する。
+
 これだけで以下が**全部**できる:
 
 ```
-git worktree 作成（ai/<slug> ブランチ）
-  → herdr workspace 作成（<repo>/<slug>）
+git worktree 作成（<孫ブランチ名> がそのままブランチ名になる。`/` はディレクトリの
+  ネストとして温存される）
+  → herdr workspace 作成（ラベルは `<repo_name> :: <slug>`。区切りは `::`）
   → 3ペーン構成:
      ┌────────────┬──────────────┬──────────┐
      │ commander  │ implementer  │ reviewer │
-     │ claude-ds  │ claude-ds    │ claude   │
+     │ claude     │ claude       │ claude   │
      │ (予備)     │ 実装+PR      │ レビュー │
      └────────────┴──────────────┴──────────┘
   → 全ペーンでエージェント起動済み
   → 標準出力に pane ID が出力される
 ```
+
+3ペーンとも既定の起動コマンドは `claude`（`bin/ocw` の `OCW_COMMANDER_COMMAND` /
+`OCW_IMPLEMENTER_COMMAND` / `OCW_REVIEWER_COMMAND` で個別に上書き可能。§3.2 注意点4）。
 
 出力例:
 ```
@@ -478,7 +611,9 @@ reviewer:    w1:p3
 1. `ocw -H <孫ブランチ> <傘ブランチ>` を実行
 2. 出力から `implementer:` 行の pane ID を拾う
 3. `herdr pane run <implementer-id> "<prompt>"` でプロンプト送信
-4. 以上。reviewer は `/pr-review-loop` が勝手に使うので司令官は触らない
+4. `herdr pane get <implementer-id>` で `agent_status` を確認し、`idle` のままなら
+   `herdr pane send-keys <implementer-id> Enter` を撃って再確認する（§3.2 注意点3）
+5. 以上。reviewer は `/pr-review-loop` が勝手に使うので司令官は触らない
 
 ### 状態確認（`/check` から使う）
 
@@ -486,8 +621,14 @@ reviewer:    w1:p3
 # implementer の状態を見る
 herdr pane get <implementer-id>  # agent_status: idle/working/blocked/done
 
-# 完了を待つ
-herdr wait agent-status <implementer-id> --status done --timeout 120000
+# 完了を待つ（--status は1つしか取れないため、短く区切ってdone/idle両方を見る。
+# 端末クライアントが繋がっていないヘッドレス実行では globally active tab のペインは
+# 完了時に直接 idle になりうるため、done 単独で120000msフル待機すると空転する）
+for _ in $(seq 1 6); do
+  herdr wait agent-status <implementer-id> --status done --timeout 20000 && break
+  STATUS=$(herdr pane get <implementer-id> | python3 -c "import json,sys; print(json.load(sys.stdin)['result']['pane'].get('agent_status',''))")
+  case "$STATUS" in idle|blocked) break ;; esac
+done
 
 # PR 番号を検出（出力から抽出）
 herdr pane read <implementer-id> --source recent-unwrapped --lines 40
@@ -495,12 +636,38 @@ herdr pane read <implementer-id> --source recent-unwrapped --lines 40
 
 ### レビュー待ちデッドロック（頻出。司令官が拾わないと止まったまま）
 
-**エージェントは完了時に `done` になり `idle` にはならない。**
-実装AIが reviewer の完了を待つとき `herdr wait agent-status <reviewer> --status idle`
-を使うことがあり、この待機は**成立せずタイムアウトまで空回りする**。
-1つの傘で2回発生した（各10分ロス）。
+**まず予防する。** spawn 時のプロンプト末尾に
+「reviewerはdone状態で完了し完了通知は来ないので、待機して停止せず gh pr view を
+ポーリングしてレビューの有無を確認してください」を入れるだけで発生しなくなる
+（§3.2 の推奨フォーマット参照。実測: 入れなかった孫で計4回発生、入れた孫で0回）。
+以下は**予防し損ねたときの検知と復旧**である。
 
-`agent_status` だけでは検知できない（implementer は待機コマンド実行中なので `working` に見える）。
+**無人監視しているペインは、完了しても `done` のままで `idle` にはならない。**
+herdr 自身の公式ドキュメント（`herdr` skill）によれば、`idle` と `done` は
+別の状態への遷移ではなく、**同じ「完了」状態を「見られたか」で呼び分けているだけ**
+である: ペインのタブ／ワークスペースが背面（誰にもフォーカスされていない）の
+まま完了すると `done` になり、**そのタブを実際にフォーカスするまで自動では
+`idle` に変わらない**。司令官が孫の implementer 越しに reviewer の完了を
+無人監視する場面では、そのペインを誰も見に行かないため `done` のまま張り付く
+（herdr の不具合ではなく仕様どおりの挙動）。
+
+実装AIが reviewer の完了を待つとき `herdr wait agent-status <reviewer> --status idle`
+を使うことがあり、この待機は**（そのペインをフォーカスしない限り）成立せずタイムアウトまで
+空回りする**。孫1で1回発生した（約10分ロス。§3.2 実測表と同じ事例）。
+
+**注記**: `pr-review-loop` スキル（`claude/skills/pr-review-loop/SKILL.md` Phase 3a）も
+同じ仕組みに基づき、`idle` ではなく `done` を待つ形に修正済み（本PRで対応）。
+
+**待ち方は1種類ではない。** 孫3では `herdr wait` を使わず
+「バックグラウンドで再度待機中です。通知を待ちます」と称して**バックグラウンドシェルを
+走らせたまま止まる**形が3回出た。このとき pane の `agent_status` は
+`working` ではなく **`done`** になる。つまり
+**`agent_status` が `working` でも `done` でもデッドロックはありうる**ので、
+状態だけで判定しようとしないこと。共通しているのは
+「**PR の最新HEADに対するレビューが既に投稿されているのに、実装側が次の行動に移らない**」
+という一点だけである。
+
+`agent_status` だけでは検知できない（上記のとおり `working` にも `done` にもなりうる）。
 **次の3条件のANDで疑う**:
 
 - 判定つきレビューが投稿済み
@@ -514,11 +681,21 @@ herdr pane read <implementer-id> --source recent-unwrapped --lines 40
 herdr pane read <implementer-id> --source recent-unwrapped --lines 20
 ```
 
-`herdr wait agent-status` が走っていることを確認してから、短く送って復帰させる:
+`herdr wait agent-status` が走っている、または「通知を待ちます」と言ったまま
+バックグラウンドシェルが残っていることを確認してから、短く送って復帰させる:
 
 ```bash
 herdr pane run <implementer-id> "reviewerは完了済みで最新レビューが投稿されています。待機をやめて gh pr view <PR番号> --json reviews で最新レビューを読み、指摘に対応してpushし、再レビューを依頼してください。"
+herdr pane send-keys <implementer-id> Enter
 ```
+
+**`send-keys Enter` を忘れない**（§3.2 の注意点3）。復帰指示も他の送信と同じく
+Enter が送られないため、これを撃たないと「復帰させたつもりで止まったまま」になる。
+
+**同じ孫で2回目以降の復帰になったら、対症療法ではなく待ち方そのものを変えさせる。**
+復帰指示の末尾に「以後も push 後に完了通知を待つ形で停止しないでください。
+レビューの有無は必ず `gh pr view` をポーリングして確認してください」を足す。
+1つの孫で3回同じ穴に落ちた実績があり、3回目にこれを足して止まった。
 
 ### Herdr なし
 

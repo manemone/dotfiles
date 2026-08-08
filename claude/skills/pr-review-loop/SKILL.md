@@ -341,14 +341,16 @@ REVIEW_EOF
 **すべての `herdr pane run` の前にこの手順を実行すること。`agent_status=None` を「Claude未起動」と思い込むな。**
 
 ```bash
-STATUS=$(herdr pane get "$REVIEWER_PANE" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('agent_status',''))")
+STATUS=$(herdr pane get "$REVIEWER_PANE" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['result']['pane'].get('agent_status',''))")
 ```
 
 | status | 意味 | 取るべき行動 |
 |--------|------|-------------|
 | `idle` | Claude起動中、待機状態 | Step 3へ |
-| `working` | Claudeが処理中 | `herdr wait agent-status "$REVIEWER_PANE" --status idle --timeout 600000` で完了を待ってからStep 3へ |
-| `None` または空 | 要確認。ClaudeがINSERTモードで動いている可能性がある | 以下の「None時の確認手順」を実行 |
+| `done` | 前ラウンドの完了結果が未読のまま。待機状態であることは `idle` と同じ | Step 3へ |
+| `working` | Claudeが処理中 | Phase 3a と同じループ（`--status done` を60秒刻みで待ち、`idle`/`blocked` も完了として拾う）で完了を待ってからStep 3へ。無人の背面ペインは完了しても `done` で止まり自動では `idle` にならないため、単発の `--status idle` 待ちは10分空転する |
+| `blocked` | 判断待ちで停止 | ペイン出力を読んで可能なら回答。人手が必要ならユーザーに伝える |
+| `unknown` / `None` または空 | 要確認。ClaudeがINSERTモードで動いている可能性がある | 以下の「None時の確認手順」を実行 |
 
 **None時の確認手順:**
 
@@ -358,13 +360,13 @@ STATUS=$(herdr pane get "$REVIEWER_PANE" | python3 -c "import json,sys; d=json.l
 herdr pane read "$REVIEWER_PANE" --source detection --lines 3
 ```
 
-- **INSERTモード表示**（`-- INSERT --`、`accept edits on`、`← for agents`）→ Claudeは起動済みでペースト確認待ち。空行を送って確定させ、idle になってから Step 3 へ。
+- **INSERTモード表示**（`-- INSERT --`、`accept edits on`、`← for agents`）→ Claudeは起動済みでペースト確認待ち。`herdr pane send-keys "$REVIEWER_PANE" Enter` で確定させ、`idle` または `done` になってから Step 3 へ。
 - **シェルプロンプト**（`$` や `❯` で終わる行、Claudeの応答がない）→ Claudeは終了している。`herdr pane run "$REVIEWER_PANE" "claude"` で起動し、`herdr wait agent-status "$REVIEWER_PANE" --status idle --timeout 30000` で起動完了を待つ。
 - **Claudeの応答が表示されている**（`●` や `✻` で始まる行）→ 実は起動中。`herdr pane get` を再実行して状態を再確認。
 
 ### Step 3: 依頼を送信
 
-Claude が idle であることを確認した上で、短いコマンドで依頼を送信する:
+Claude が `idle` または `done`（どちらも待機状態）であることを確認した上で、短いコマンドで依頼を送信する:
 
 ```bash
 herdr pane run "$REVIEWER_PANE" "以下を読んでPRレビューを実行してください。レビュー指示: /tmp/review-request-$PR.md"
@@ -372,12 +374,23 @@ herdr pane run "$REVIEWER_PANE" "以下を読んでPRレビューを実行して
 
 ### Step 4: 配信確認
 
+**herdr 自身の公式ドキュメント（`herdr` skill）は「`pane run` sends the text and
+Enter together」（テキストとEnterをまとめて送る）としているが、実際にはこの
+実装がプロンプトを打ち込むだけで Enter を送らないことがある。** ドキュメント通りに
+動くと信じて確認を省略しないこと:
+
 ```bash
 sleep 2
-herdr pane read "$REVIEWER_PANE" --source detection --lines 3
+herdr pane get "$REVIEWER_PANE"
 ```
 
-依頼テキストが表示されていなければ、`herdr pane get "$REVIEWER_PANE"` で状態を確認。
+`agent_status` が `working` になっていれば送信成功。**`working` にならない
+（`idle` または `done` のまま）なら `herdr pane send-keys "$REVIEWER_PANE" Enter`
+を撃って再確認する。** `done` は Step 2 の表が「Step 3へ」に振る待機状態であり、
+Enter が送られず `done` のまま止まっているケースも同じ手当てが要る。同じ本文を
+`herdr pane run` で再送してはいけない（本文自体は届いており、再送するとプロンプト欄に
+2重に積まれる）。それでも届いていなければ `herdr pane read "$REVIEWER_PANE"
+--source detection --lines 3` で画面を確認する。
 
 工程計測:
 
@@ -400,10 +413,11 @@ herdr wait agent-status "$REVIEWER_PANE" --status working --timeout 30000
 ```
 
 タイムアウトしたら `herdr pane get "$REVIEWER_PANE"` と `herdr pane read "$REVIEWER_PANE" --source detection --lines 10` で確認。
-INSERTモードで止まっている場合は空行で確定:
+本文が届いたまま Enter だけが送られていない状態（Step 4 と同一の症状）なら、
+Step 4 と同じ手段で確定させる:
 
 ```bash
-herdr pane run "$REVIEWER_PANE" ""
+herdr pane send-keys "$REVIEWER_PANE" Enter
 ```
 
 その後、再度workingを待つ。
@@ -412,21 +426,42 @@ herdr pane run "$REVIEWER_PANE" ""
 
 `herdr wait` はイベント駆動で、状態遷移までブロックする。正しい対象状態を選ぶのが重要。
 
-**`done` ではなく `idle` を待つ。** `done` はミリ秒単位でちらつく一過性の状態。`idle` がエージェントの最終安定状態。状態遷移: `working` → `done`(ちらつき) → `idle`。
+**`done` と `idle` は別の状態への遷移ではなく、同じ「完了」状態を「見られたか」で
+呼び分けているだけ**（herdr 自身の公式ドキュメント、`herdr` skill）。ペインの
+タブ／ワークスペースが背面（フォーカスされていない）のまま完了すると `done` になり、
+**実際にそのタブをフォーカスするまで自動では `idle` に変わらない**。フォーカスされた
+状態で完了すれば直接 `idle` になる。
+
+`REVIEWER_PANE` は無人（誰もそのタブを見に行かない）で完了することが多いが、
+**端末クライアントが繋がっていないヘッドレス実行（cron 等）では、globally active
+tab にいるペインは完了時に直接 `idle` になる**（herdr 公式ドキュメントの記述。
+`/autopilot` から回すときはこちらが標準的な条件）。`herdr wait agent-status` は
+`--status` を1つしか取れず「`done` か `idle` のどちらか」を1回の待機では
+表現できないため、**短く区切って両方を見るループにする**。`done` を待たずに
+`idle` へ直行するケースでフルタイムアウトを浪費しないための工夫である:
 
 ```bash
-herdr wait agent-status "$REVIEWER_PANE" --status idle --timeout 600000
+# herdr wait は --status を1つしか取れないため、短く待って両方を見る
+for _ in $(seq 1 10); do
+  herdr wait agent-status "$REVIEWER_PANE" --status done --timeout 60000 && break
+  STATUS=$(herdr pane get "$REVIEWER_PANE" | python3 -c "import json,sys; print(json.load(sys.stdin)['result']['pane'].get('agent_status',''))")
+  case "$STATUS" in idle|blocked) break ;; esac
+done
 ```
 
-タイムアウト（10分以内にidleに達しなかった）時の確認:
+（合計タイムアウトは 60000ms × 10 = 600000ms＝10分。`done` に到達すれば即座に
+`break`、`idle`/`blocked` になっていればそこで `break`、どちらでもなければ次の
+60秒枠へ）
+
+10分以内に `done` にも `idle` にも達しなかった場合の確認:
 
 ```bash
-STATUS=$(herdr pane get "$REVIEWER_PANE" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('agent_status',''))")
+STATUS=$(herdr pane get "$REVIEWER_PANE" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['result']['pane'].get('agent_status',''))")
 ```
 
 - `blocked` → 出力を読んで可能なら回答。人手が必要なら停止してユーザーに伝える。
 - `working`（継続中）→ レビューに時間がかかっている。ペイン出力を読む。
-- それ以外 → Phase 3bへ。
+- それ以外（`idle` を含む） → Phase 3bへ。
 
 工程計測:
 
@@ -442,7 +477,7 @@ command -v ocw-meter >/dev/null && ocw-meter event phase.end --phase review_wait
 command -v ocw-meter >/dev/null && ocw-meter event phase.start --phase review_collect --source pr-review-loop --round "$ROUND" || true
 ```
 
-エージェントがidleに達したらレビュー完了。全内容（レビュー本文＋インラインコメント）はGitHubに投稿済み。以下両方で確認:
+エージェントが `done`（または `idle`）に達したらレビュー完了。全内容（レビュー本文＋インラインコメント）はGitHubに投稿済み。以下両方で確認:
 
 1. GitHub（真実の源）:
 
@@ -589,7 +624,8 @@ command -v ocw-meter >/dev/null && ocw-meter event phase.start --phase rereview_
 herdr pane run "$REVIEWER_PANE" "PR #$PR 再レビュー依頼。全指摘に対応コメント書きました。HEAD: $NEW_HEAD_SHA"
 ```
 
-5. 配信確認（Phase 2 Step 3と同様）。
+5. 配信確認（Phase 2 Step 4と同様。`agent_status` が `working` にならなければ
+   `herdr pane send-keys "$REVIEWER_PANE" Enter`）。
 
 工程計測:
 
