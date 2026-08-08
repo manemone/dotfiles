@@ -333,6 +333,46 @@ probe結果を踏まえた孫1〜5の実装規模。P1〜P5の結果により計
 
 ---
 
+## 10. 追記: Anthropic自己申告値の採用は本ADRの判断を覆さない
+
+- **Status**: Accepted（本ADRの判断本体は不変。以下は線引きの記録の追記）
+- **Date**: 2026-08-08
+- **Decision by**: 傘ブランチ `ocw-meter-accuracy`（計画書
+  [DOC-2608081456](../planning/DOC-2608081456_ocw-meter-accuracy_計画.md)）孫4・孫6
+
+本ADR §6は「事後読み取り + 軽量イベント刻み」を採用し、Anthropic（`claude-*`）は定額契約のため
+API単価に換算しない（`cost_estimate_usd: null` / `cost_basis: "subscription"`）と判断した。
+本傘の孫4で`quota.sample`の`session_cost_usd`（statusLineの`cost.total_cost_usd`。Claude Code
+自身が申告するセッション累積コスト）を`list_price_equiv_usd`として集計・表示する機能を追加したが、
+**これは本ADRの判断を覆すものではない。** 以下にその線引きを記録する。
+
+> **Anthropic自己申告値（`session_cost_usd`）の採用は「換算」ではない。**
+> 本ADRが却下したのは「ocw-meterが定額契約をAPI単価に換算して推定額を作ること」であって、
+> 「Claude Code自身が申告した値をそのまま記録・集計すること」ではない。
+> 前者はocw-meterの推定であり、後者はAnthropic側の自己申告である。
+> データの出所も信頼レベルも異なるため、別カラム・別行として共存させる。
+
+具体的には:
+
+- `usage.message`の`cost_estimate_usd`（cash cost）は、**ocw-meterが`bin/prices/*.json`の単価表から
+  自分で計算した推定値**。Anthropicモデルはこの式を一切適用せず、常に`null`のままである
+  （本ADR §6・計画書8.4の判断を維持）
+- `quota.sample`の`session_cost_usd`から集計する`list_price_equiv_usd`（capacity側。孫4）は、
+  **Claude Code自身がstatusLineで申告した値をそのまま合計しただけ**であり、ocw-meterは単価計算を
+  一切行っていない。定額契約を従量制の単価へ変換する行為（本ADRが却下したもの）はどこにも無い
+- 両者は`report`上で常に別の行・別のフィールド（`cash_cost_usd`と`list_price_equiv_usd`）として
+  表示され、**絶対に合算しない**（詳細な集計定義は
+  `docs/reference/DOC-2608021229-c_ocw-meterイベントスキーマ.md` §4.1参照）
+
+### 10.1 検討して却下した案（孫4、蒸し返さないこと）
+
+| 案 | 内容 | 不採用理由 |
+|---|---|---|
+| **B. 価格表にanthropicを足して`usage.message`側で自前計算** | 定額契約をAPI単価に換算した推定値を`cost_estimate_usd`として計算する | 本ADR §6・計画書8.4の「定額契約をAPI単価に換算しない」という判断そのものを覆す必要がある。**ただしAの後から共存させることは可能**（Aは「Anthropic自己申告値」、Bは「ocw-meter推定値」で意味の異なるカラムのため）。最初からB込みで設計するとADR改訂が必要になり傘が重くなるため、本傘ではAのみを採用した |
+| **C. サブスク月額を按分** | 月額料金をセッション・PR・工程等で按分する | 実支払額と一致する唯一の方式だが、月末まで確定せず按分の分母（何を基準に割るか）が恣意的になる |
+
+---
+
 ## Appendix A: P1 probe 後始末チェックリスト
 
 - [x] `claude/settings.machine.json` の `statusLine` 削除、`hooks` は保持（probe終了時に実施済み）

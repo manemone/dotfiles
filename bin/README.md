@@ -401,6 +401,17 @@ PR番号はリポジトリ**内**でしか一意でない。`--pr`とstandalone�
 - メッセージの費用は**そのメッセージ自身のtimestampの日付**に対応する価格表で計算する（`ingest`を
   実行した日ではない）。過去に書き込んだイベントの `cost_estimate_usd` は、価格表を追加・更新しても
   **再計算されない**
+- **価格表は時間帯（peak/off-peak）課金を表現できる**（孫3、計画書
+  [DOC-2608081456](../docs/planning/DOC-2608081456_ocw-meter-accuracy_計画.md)【5】）。
+  スキーマの詳細（`time_of_day_pricing`ブロックの書き方・タイムゾーンの扱い・境界の扱い）は
+  [`bin/prices/README.md`](prices/README.md)を参照。現時点で実際に投入されている価格表
+  （`bin/prices/deepseek-2026-08-01.json`）はこのブロックを使っていない（DeepSeekの時間帯課金は
+  発効日未定のため）
+- **該当する価格表が無い期間は黙って概算しない。** `select_price_table()`が対象日以前に有効な
+  テーブルを1枚も見つけられないと、クラッシュせず最も古いテーブルにフォールバックするが、
+  そのイベントの`price_effective_date`は実際のメッセージ日付より後になる。`report`のフッター
+  `price_table:`行の件数・`report --month`の`price_tables_applied[].is_fallback`で、このフォール
+  バックが起きたことを（イベントを書き換えずに読み取り時の突き合わせで）検出・表示する
 - `report --reconcile` の月境界は**UTC固定**。DeepSeek管理画面（北京時間 UTC+8想定）等、provider側の
   集計タイムゾーンと異なる場合、月初・月末で最大±8時間分のずれが突合結果に生じうる（計画書17章 R8）
 
@@ -425,7 +436,9 @@ PR番号はリポジトリ**内**でしか一意でない。`--pr`とstandalone�
   `null`の場合、フォールバック計算できても`ctx`セグメント自体を表示しない）
 - statusLineの`cost.total_cost_usd`（Claude Code自己申告のセッション累積コスト）を`session_cost_usd`
   として記録する。`usage.message`の`cost_estimate_usd`（ocw-meter自身の推定値）とは**別カラム**であり、
-  合算しない
+  合算しない。`ocw-meter report --month`のcapacity cost節・`report --pr`のPR単位費用内訳では、これを
+  `list_price_equiv_usd`として集計・表示する（`provider == "anthropic"`限定・下限値。詳細は後述
+  「`list_price_equiv_usd`の読み方」参照）
 - `report --pr <n>` はPRの最初と最後のイベント時刻の範囲に収まる`quota.sample`の`window_id`を集計し、
   同一5時間窓で完走できたか（`five_hour_window_completion`: `yes`/`no`/`unknown`）を出力する。
   **判定はレビュー待ち等の待機時間を含むPRの実時間レンジで行う**（＝PRが長時間openだと、
@@ -441,6 +454,68 @@ PR番号はリポジトリ**内**でしか一意でない。`--pr`とstandalone�
   `command not found` になり表示が壊れる。必ず先に `./deploy-all.sh --only bin`
   （リポジトリルートから）を実行して `~/bin/ocw-meter` を配置し、`~/bin` が PATH に
   入っていることを確認すること（本ドキュメント §5 参照）
+
+**`list_price_equiv_usd` の読み方（Claude側 list price相当額。孫5、計画書
+[DOC-2608081456](../docs/planning/DOC-2608081456_ocw-meter-accuracy_計画.md)）:**
+
+`quota.sample`に眠っている自己申告`session_cost_usd`を集計し、`report --month`のcapacity cost節・
+`report --pr`のPR単位費用内訳・`report --window`の各窓に出す。読み方の要点:
+
+- **`provider == "anthropic"`のみが対象。** DeepSeekの`session_cost_usd`は、Claude Codeが
+  DeepSeekのモデル名にどの単価を当てているか不明であり、`ocw-meter`自身の推定`cost_estimate_usd`
+  と二重計上になるため混ぜない（除外件数は`list_price_equiv_excluded_deepseek_count`等の各
+  フィールドに出る）
+- **`max()`ではなく「`session_id`ごとの正の差分の総和」。** `session_cost_usd`はセッション累積の
+  はずだが、`/clear`やコンパクションでリセットされる（非単調になる）ケースが実測されており、
+  単純な`max()`ではリセット前の消費分を取りこぼす
+- **常に下限値であり、請求書ではない。** 最後のstatusLine描画以降の消費は含まれない
+  （`list_price_equiv_is_lower_bound: true`がこれを機械可読にも表す）
+- **`usage.message`の`cost_estimate_usd`（cash cost）とは絶対に合算しない。** 出所も信頼レベルも
+  異なる別カラムである（この線引きの記録は
+  `docs/adr/DOC-2608021229_llm-cost-observability-collection-method.md` §10「Anthropic自己申告値の
+  採用は「換算」ではない」を参照）
+- **`quota.sample`は各マシンへのデプロイ日から記録が始まる**ため、それより前の月は`list_price_equiv_usd`
+  が`null`になる（`$0.00`ではなく「データが無い」の意味）
+
+実際の出力例（サンドボックスで実行して確認したもの。`report --month`のcapacity cost節）:
+
+```
+list_price_equiv_usd: $1.50+ (下限 / list price相当 / 請求書ではない)
+list_price_equiv_is_lower_bound: True
+list_price_equiv_session_count: 1
+list_price_equiv_excluded_no_session_id_count: 0
+list_price_equiv_excluded_null_cost_count: 0
+list_price_equiv_excluded_deepseek_count: 0
+list_price_equiv_excluded_other_provider_count: 0
+```
+
+**attribution行の読み方（`run_id`/`role`の帰属解決。孫5、計画書
+[DOC-2608081456](../docs/planning/DOC-2608081456_ocw-meter-accuracy_計画.md)）:**
+
+`usage.message`の`run_id`/`role`は、①ingest実行時点で直接解決できたもの（`ocw-run-id`ファイル /
+Herdr live pane list）に加えて、②`quota.sample`との`session_id` joinで解決したものを合算するように
+なった（ingest側フォールバックと、既存イベントを読み取り時に補完するreport側joinの両方）。
+フッターの`attribution (run_id):`/`attribution (role):`行が全ビュー（既定 / `--phase` / `--model` /
+`--role` / `--window` / `--month`）で内訳を示す:
+
+```
+attribution (run_id): direct 0.0% / via session_id 66.7% / unresolved 33.3%
+attribution (role):   direct 0.0% / via session_id 66.7% / unresolved 33.3%
+```
+
+- `direct`: `ocw-run-id`ファイル / Herdr liveから直接解決できたもの
+- `via session_id`: `quota.sample`との`session_id` joinで解決したもの（ingest側フォールバック・
+  report側joinのどちらで埋まったかは区別せず合算する）
+- `unresolved`: どちらでも解決できなかったもの
+- **`run_id`と`role`は解決手段が異なるため別々の割合になる**（一致するとは限らない。上の例は
+  たまたま同じ値になっている）
+
+**このjoinは`ocw rm`（worktree削除）に一切影響されない**（`quota.sample`は消えないイベントのため。
+`ocw-run-id`ファイルはworktreeと一緒に消えるが、`quota.sample`のsession_idはそうではない）。
+ただし限界は残る。フッターの`attribution_known_limits`行が示す通り: `quota.sample`の記録開始
+（各マシンへのデプロイ日）より前の期間は復元できない。以降の期間でも100%には到達しない
+（`claude-ds`セッションやstatusLineが一度も走らなかったセッションは`run_id`/`role`とも復元不能）。
+`role`の`unknown`の一部はHerdr外で起動したClaudeであり原理的に取得不能（推測で埋めない方針を維持）。
 
 **保存先と環境変数:**
 
@@ -470,7 +545,11 @@ PR番号はリポジトリ**内**でしか一意でない。`--pr`とstandalone�
 
 **`prune`を実装しない決定について（孫5、計画書9.3の積み残し解消）**: 計画書9.3は
 「保存期間: 既定14日、`ocw-meter prune`で削除」と書いていたが、`prune`はどの孫の実装スコープにも
-入っておらず、計画時の書き漏れだった。孫5で以下の理由により**意図的に未実装のまま据え置く**と決定した:
+入っておらず、計画時の書き漏れだった。孫5で以下の理由により**意図的に未実装のまま据え置く**と決定した。
+**`prune-diagnostics`（上記）とは別物である点に注意**: `prune-diagnostics`が消すのは
+`state/meter-errors.jsonl`と`state/quota-worktree-refusal.json`という自己診断・状態ファイルのみで、
+**`events/`（費用履歴そのもの）には一切触れない**。ここで未実装のまま据え置いているのは
+`events/`を消す`prune`の方であり、`prune-diagnostics`の追加によってこの決定が変わったわけではない:
 
 - `events/`（費用履歴そのもの）は数十MB/年〜数百MB/年規模（上記実測）であり、資産として残す価値が
   ディスクコストを上回る。誤って自動削除する仕組みを持ち込むリスクの方が大きい
@@ -537,16 +616,23 @@ GitHub token形式（`ghp_...` 等 / `github_pat_...`）に一致する値、キ
   （1runあたり数十件）には十分だが、**大量イベントをループでこのCLI経由で書き込む用途には向かない**。
   `ingest` はこの制約を踏まえ、Herdr/run/pr情報を1回だけ解決し、seen-key集合と書き込みロックを
   バッチ全体で保持する専用パス（`bulk_write_events`）を持つ
-- **`usage.message`の`run_id`は、`ingest`をworktree削除（`ocw rm`）より後に実行すると解決できない
-  （孫5で実データ検証して判明。実測: このマシンの実ストア44,425件の`usage.message`のうち`run_id`が
-  設定されているものは0件）。** `run_id`解決（`resolve_run_id_via_ocw_run_id_file`）は、その
-  メッセージの`cwd`（worktreeパス）配下の`<git-dir>/ocw-run-id`ファイルを**ingest実行時点**で
-  読む方式であり、`ocw rm`はそのファイルをworktreeごと削除する。一度`run_id`無しで書き込まれた
-  `usage.message`は、後から同じtranscriptを再ingestしても直らない（他のフィールドと同じ
-  「過去は再計算しない」不変条件のため）。`ocw-meter report --phase`（工程別トークン内訳。
+- **`usage.message`の`run_id`は、`ingest`をworktree削除（`ocw rm`）より後に実行すると直接解決できない。**
+  直接解決（`resolve_run_id_via_ocw_run_id_file`）は、そのメッセージの`cwd`（worktreeパス）配下の
+  `<git-dir>/ocw-run-id`ファイルを**ingest実行時点**で読む方式であり、`ocw rm`はそのファイルを
+  worktreeごと削除する。孫5より前の実測ではこの直接解決だけでは**3,043件 / 57,164件（5.3%）**しか
+  `run_id`が埋まっていなかった。
+  **孫5で`quota.sample`との`session_id` joinを追加し、直接解決に失敗した`run_id`/`role`を
+  quota.sample由来の値で補うようになった**（`quota.sample`の記録開始＝2026-08-01以降の実測では
+  `run_id` 61.6%・`role` 72.1%まで上がる。フッターの`attribution`行の読み方は上記
+  「attribution行の読み方」参照）。**ただしこのjoinは`quota.sample`の記録開始より前へは遡れない**
+  ため、100%には到達しない。direct・session_idのどちらでも解決できなかった`run_id`/`role`は、
+  後から同じtranscriptを再ingestしても直らない（他のフィールドと同じ「過去は再計算しない」不変条件
+  のため。ただしreport実行時のsession_id join（読み取り時の補完）は保存ファイル自体を書き換えず、
+  実行のたびに新しく解決できた分が反映される）。`ocw-meter report --phase`（工程別トークン内訳。
   `run_id`でphase.start/endの時間窓と対応付ける — `docs/reference/DOC-2608021229-c_...`§2.3参照）を
-  意味のある形で使うには、**PRの作業中〜マージ直後、worktreeを消す前に`ocw-meter ingest`を
-  実行する運用が必須**（`docs/reference/DOC-2608021229-b_...`§2の計測手順に反映済み）。`--model`/`--role`/
+  より確実に使うには、引き続き**PRの作業中〜マージ直後、worktreeを消す前に`ocw-meter ingest`を
+  実行する運用が望ましい**（`session_id` joinは直接解決の救済策であり、完全な代替ではない。
+  `docs/reference/DOC-2608021229-b_...`§2の計測手順に反映済み）。`--model`/`--role`/
   `--pr`はこの制約の影響を受けない（`run_id`ではなく`model`/`role`/`pr_number`を直接見るため）
 
 ## 4. Customization
@@ -625,3 +711,16 @@ chmod 600 ~/.config/deepseek/api_key
 ```bash
 OCW_NO_VSCODE=1 ocw widget-maker
 ```
+
+### `report` の `meter.error diagnostics` に見慣れない件数が並んでいる（過去のテスト汚染）
+
+`ocw-meter`本傘（計画書
+[DOC-2608081456](../docs/planning/DOC-2608081456_ocw-meter-accuracy_計画.md)）以前は、
+`bin/tests/test_ocw_meter.py`の一部テストが`HOME`を明示的に上書きせずに`snapshot-quota`相当の
+経路を叩いており、実`~/.local/state/ocw-meter`（テスト実行者本人の実ストア）へ
+`state/quota-worktree-refusal.json`のエントリと`state/meter-errors.jsonl`の
+`storage_home_inside_git_worktree`診断を書き込んでしまっていた（孫1で修正済み。テストは常に
+`HOME`をテスト専用tempdirへ上書きするようになった）。もし過去にこのリポジトリでテストを実行した
+実績があり、`report`の`meter.error diagnostics: N lines`にテスト由来と思われる古いエントリが
+残っている場合は、`ocw-meter prune-diagnostics`（既定dry-run。上記参照）で内容を確認してから
+`--apply`で掃除できる。`events/`（費用履歴そのもの）は対象外なので、費用データが失われる心配はない。

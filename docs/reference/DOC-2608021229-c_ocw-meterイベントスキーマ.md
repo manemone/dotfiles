@@ -107,22 +107,35 @@ phase.start/phase.endとして発火されない**:
 `(unassigned)`バケットには「`implement`フェーズ中に生成されたusage.message」が実質的に集約される
 （`implement`という名前のバケットは決して現れない）。
 
-> **⚠️ 孫5で実データ検証して判明した重大な制約（実測）**: このマシンの実ストア
-> （`~/.local/state/ocw-meter/events/`、44,425件の`usage.message`）を集計すると、**`run_id`が
-> 設定されている`usage.message`は0件**だった。`report --phase`のトークン内訳は、この時点の実データでは
-> **全件が`(unassigned)`になる**（実行結果は`docs/reference/DOC-2608021229-b_LLM費用観測ベースライン計測手順.md`
-> §2.2参照）。原因は`ingest`の`run_id`解決ロジック
-> （`resolve_run_id_via_ocw_run_id_file`）が「そのメッセージの`cwd`（＝worktreeパス）の
-> `<git-dir>/ocw-run-id`ファイルを**ingest実行時点**で読む」方式であること: `ocw rm`はworktreeごと
-> このファイルを削除するため、**PRマージ後にworktreeを消してから`ingest`を実行すると、
-> そのworktreeで生成された全メッセージのrun_idが永久に`null`のまま保存される**（§4の
+> **⚠️ 孫5で実データ検証して判明した重大な制約（実測。計画書
+> [DOC-2608081456](../planning/DOC-2608081456_ocw-meter-accuracy_計画.md)【3】）**: このマシンの実ストア
+> （`~/.local/state/ocw-meter/events/`、57,164件の`usage.message`）を集計すると、直接解決だけで
+> `run_id`が設定されている`usage.message`は**3,043件（5.3%）**、`role`が`unknown`のままのものは
+> **51,959件（90.9%）**だった。原因は`ingest`の直接解決ロジック
+> （`run_id`は`resolve_run_id_via_ocw_run_id_file`が「そのメッセージの`cwd`（＝worktreeパス）の
+> `<git-dir>/ocw-run-id`ファイルを**ingest実行時点**で読む」方式、`role`はHerdrの`pane list`を
+> **ingest実行時点**の生きたペイン状態から読む方式）であること: `ocw rm`はworktreeごと
+> `ocw-run-id`ファイルを削除し、ペインを閉じればHerdrの`pane list`からも消えるため、
+> **PRマージ後にworktreeを消してから（あるいはペインを閉じてから）`ingest`を実行すると、
+> そのメッセージのrun_id/roleは直接解決の対象では永久に`null`/`"unknown"`のまま保存される**（§4の
 > 「過去は再計算しない」不変条件により、後から`ingest`し直しても直らない）。
-> `report --phase`を意味のある形で使うには、**PRの作業中〜マージ直後、worktreeを`ocw rm`する前に
-> `ocw-meter ingest`を実行する運用**が必須（`docs/reference/DOC-2608021229-b_...`§2で手順化）。
+>
+> **孫5でこれを緩和する`session_id` joinを追加した**（下記「attributionの解決順」参照）。
+> `quota.sample`がsession_idを100%持つのに対し、`run_id`は78%・`role`は78%（unknown 22%）しか
+> 持たないため、直接解決に失敗した`usage.message`を`quota.sample`とのsession_id joinで補う。
+> `quota.sample`の記録が始まった2026-08-01以降の実測では、`run_id` 17.2% → **61.6%**、
+> `role` 27.2% → **72.1%**まで上がった。**ただしこのjoinは`quota.sample`の記録開始より前へは
+> 遡れない**ため、7月以前（DeepSeek時代）の29,676件の`run_id`/`role`は復元手段が無いままである。
+> `report`の全ビューのフッターに出る`attribution (run_id):`/`attribution (role):`行が、
+> 実行のたびの実測内訳（`direct`/`via session_id`/`unresolved`）を示す。
+> `report --phase`を意味のある形で使うには、引き続き**PRの作業中〜マージ直後、worktreeを
+> `ocw rm`する前に`ocw-meter ingest`を実行する運用**が望ましい（`docs/reference/DOC-2608021229-b_...`
+> §2で手順化。session_id joinは直接解決の救済策であり、完全な代替ではない）。
 
 ### 2.4 `usage.message` のペイロードフィールド（共通エンベロープに加えて）
 
-`~/.local/state/ocw-meter/events/*.jsonl`の実データ（44,425件、2026-08-01時点）で
+`~/.local/state/ocw-meter/events/*.jsonl`の実データ（当初44,425件、2026-08-01時点。本傘
+[DOC-2608081456](../planning/DOC-2608081456_ocw-meter-accuracy_計画.md)の調査時点では57,164件）で
 フィールド名の過不足を確認済み。
 
 | フィールド | 型 | 由来 |
@@ -140,7 +153,10 @@ phase.start/phase.endとして発火されない**:
 | `price_table_version` | string \| null | 適用した価格表のバージョン（再計算されない、§4） |
 | `price_effective_date` | string \| null | 同上の`effective_date` |
 | `cost_basis` | string | `estimated`（DeepSeek等の従量課金） / `subscription`（Anthropic定額契約） |
+| `time_of_day_basis` | string | `not_applicable` / `in_window` / `base_rate` / `unknown_timestamp`（孫3。§4「時間帯課金」参照） |
 | `currency` | string \| null | `USD`。`cost_basis == "subscription"`のときは`null` |
+| `run_id_source` | string \| null | `run_id`をどの経路で解決したか。`"direct"` / `"session_id"` / `null`（未解決、またはこのフィールドが無かった旧バージョンでのingest。孫5。§4.2「attributionの解決順」参照） |
+| `role_source` | string \| null | `role`をどの経路で解決したか。値の意味は`run_id_source`と同じ（孫5） |
 
 ### 2.5 `quota.sample` のペイロードフィールド（共通エンベロープに加えて）
 
@@ -150,7 +166,7 @@ phase.start/phase.endとして発火されない**:
 | `seven_day_used_pct` / `seven_day_resets_at` | number \| null | `rate_limits.seven_day` |
 | `window_id` | string \| null | `five_hour_resets_at`の値そのもの。**未来時刻のときのみ**採用（stale値は`null`にする — 計画書§8.5） |
 | `context_used_pct` | number \| null | `context_window.used_percentage`。`null`のときは`total_input_tokens / context_window_size`からのフォールバック計算値が入る場合がある（表示文字列側は使わない。`bin/README.md`参照） |
-| `session_cost_usd` | number \| null | statusLineの`cost.total_cost_usd`（Claude Code自己申告のセッション累積コスト）。`usage.message`の`cost_estimate_usd`とは別カラムで、合算しない |
+| `session_cost_usd` | number \| null | statusLineの`cost.total_cost_usd`（Claude Code自己申告のセッション累積コスト）。`usage.message`の`cost_estimate_usd`とは別カラムで、合算しない。`report`はこれを`list_price_equiv_usd`として集計・表示する（孫4。§4.1「`list_price_equiv_usd`の集計定義」参照） |
 | `plan_source` | string | 常に`"statusline"` |
 | `raw_ref` | string \| null | `OCW_METER_RAW=1`時のみ、redaction済みraw snapshotのファイル参照。既定`null` |
 | `cwd` | string \| null | statusLine JSONの`cwd`（作業ディレクトリ）。**`ENVELOPE_FIELDS`には含まれない forward-compatible な追加フィールド** — envelope標準の`worktree`とは別に、statusLineが報告した生の`cwd`をそのまま保存する |
@@ -256,6 +272,145 @@ cost = ( cache_read_input_tokens               * price.cache_hit_in
   価格表のバージョン・発効日をそのまま複写したもの。「今の価格表」ではなく「このイベントを
   計算したときの価格表」を指す
 
+### 時間帯（peak/off-peak）課金
+
+孫3、計画書 [DOC-2608081456](../planning/DOC-2608081456_ocw-meter-accuracy_計画.md)【5】。
+
+価格表は`models`（基本単価）に加えて、任意で`time_of_day_pricing`ブロックを持てる:
+
+```jsonc
+"time_of_day_pricing": {
+  "tz_offset": "+08:00",
+  "tz_label": "Beijing time (China Standard Time, UTC+8, no DST)",
+  "boundary": "start_inclusive_end_exclusive",
+  "windows": [
+    {"start": "09:00", "end": "12:00", "models": {"<model名>": {"cache_hit_in": ..., "cache_miss_in": ..., "out": ...}}},
+    {"start": "14:00", "end": "18:00", "models": {"<model名>": {...}}}
+  ]
+}
+```
+
+設計上の決まりごと（詳しい書き方・実例は`bin/prices/README.md`を参照。ここではスキーマの意味だけ
+記す）:
+
+- **`tz_offset`は固定オフセット文字列（`"+08:00"`形式）のみ。** タイムゾーン名（`Asia/Shanghai`等）
+  は使えない — `zoneinfo`はPython 3.9+かつtzdataが必要で、実行環境に無い場合があるため。オフセットは
+  価格表側が持ち、コードにハードコードしない
+- **境界は開始時刻を含み、終了時刻を含まない**（`start <= t < end`）。この規則はコード側に固定されて
+  おり、価格表の`boundary`フィールドはこの規則と一致するかを検査するアサーション専用（別の境界規則
+  を選べるオプションではない）
+- **日を跨ぐ窓は表現できない。** `start >= end`（例`"22:00"`-`"02:00"`）な窓は単に一致しない
+- **窓ごとに単価を直接書く（倍率ではない）。** `models`ブロックと同じ形で窓ごとの単価をそのまま書く
+- **`in_window`/`base_rate`という中立な名前を使い、「どちらが高い時間帯か」は表現しない。**
+  窓が「割高な時間帯」を表すか「割引の時間帯」を表すかはプロバイダごとに違い、`usage.message`に
+  焼き込まれる`time_of_day_basis`は「過去は再計算しない」不変条件のため後から意味を直せないため
+- `time_of_day_pricing`が無い価格表（この機能より前から存在するすべての価格表を含む）は、
+  常に基本`models`の単価がそのまま全時間帯に適用される（後方互換）
+
+`usage.message`の`time_of_day_basis`フィールド（§2.4）は、そのメッセージに実際にどの単価が
+適用されたかを示す:
+
+| 値 | 意味 |
+|---|---|
+| `not_applicable` | 価格表に`time_of_day_pricing`が無い、またはこのモデルがどの窓にも登場しない（時間帯課金の対象外） |
+| `in_window` | メッセージのタイムスタンプがいずれかの窓に一致し、その窓の単価を適用した |
+| `base_rate` | このモデルは時間帯課金の対象だが、タイムスタンプがどの窓にも一致しなかったため基本単価を適用した |
+| `unknown_timestamp` | このモデルは時間帯課金の対象だが、メッセージのタイムスタンプが取得できなかったため基本単価にフォールバックした（**時間帯を推測しない**） |
+
+`time_of_day_pricing`キー自体はあるが形が壊れている（`tz_offset`が不正、`windows`が配列でない、
+`boundary`が上記の規則と食い違う等）価格表は、「`time_of_day_pricing`を最初から持たない」場合と
+同じ扱い（基本単価を適用、クラッシュしない）になるが、`ingest`は`state/meter-errors.jsonl`に
+`price_table_time_of_day_pricing_unusable`という診断を記録し、意図した時間帯課金が黙って無視
+されている状態を検知できるようにしている。
+
+**このスキーマ拡張は既存の価格表と互換であり、`bin/prices/deepseek-2026-08-01.json`は現時点で
+`time_of_day_pricing`を使っていない**（DeepSeekの時間帯課金は本傘の調査時点で発効日未定のため）。
+
+### 価格表フォールバックの検出（孫3、罠5対策）
+
+`select_price_table()`は、対象日以前に有効な価格表が1枚も無いとき、クラッシュせず最も古いテーブル
+（`tables[0]`）にフォールバックする。このとき保存される`price_effective_date`は、実際のメッセージ
+日付より**後**になる — この状態（`price_effective_date`がメッセージ自身の日付より後）を、
+`report`は（イベントを書き換えずに）読み取り時の突き合わせで検出する:
+
+- `report`の全ビューのフッター`price_table:`行に、フォールバックが起きた件数を表示する
+- `report --month`の`price_tables_applied[]`の各エントリに`is_fallback`（そのバージョンで
+  フォールバックが1件でも起きたか）と`fallback_event_count`（そのバージョンの中で実際に
+  フォールバックした件数。1つの価格表が月の前半はフォールバック・後半は正しく適用、という
+  混在も表現できる）を持つ
+
+### 4.1 `list_price_equiv_usd` の集計定義
+
+孫4、計画書 [DOC-2608081456](../planning/DOC-2608081456_ocw-meter-accuracy_計画.md)【2】。
+
+`quota.sample`の`session_cost_usd`（statusLineの`cost.total_cost_usd`。Claude Code自身の
+セッション累積コスト自己申告）を集計し、`report --month`のcapacity cost節・`report --pr`・
+`report --window`に`list_price_equiv_usd`として出す。`usage.message`の`cost_estimate_usd`
+（ocw-meter自身の価格表推定値。cash cost）とは**出所も信頼レベルも異なる別カラム**であり、
+絶対に合算しない。
+
+集計規則:
+
+1. **`provider == "anthropic"`のイベントのみを対象にする。** `deepseek`（`claude-ds`経由の
+   セッション）は除外する。Claude Codeが DeepSeekのモデル名にどの単価を当てて
+   `cost.total_cost_usd`を計算しているか不明であり、含めると`usage.message`側の
+   DeepSeek価格表推定（cash cost）と二重計上になる。`provider`が解決できなかったサンプル
+   （`provider: null`）も対象外だが、他プロバイダとは別カウントで除外件数に計上する
+   （`list_price_equiv_excluded_deepseek_count` / `list_price_equiv_excluded_other_provider_count`）
+2. **`session_id`ごとに時系列でソートし、正の差分だけを合計する（`max()`は使わない）。**
+   `session_cost_usd`はセッション累積のはずだが、実測で214セッション中26セッション（12.1%）が
+   非単調（値が減少する箇所がある）だった。`/clear`やコンパクションでのリセットが原因と推定される。
+   単純な`max()`ではリセット前の消費分を取りこぼすため、隣り合うサンプル間の差分のうち正のものだけ
+   を積算する（負の差分＝リセットは0として扱い、そのサンプル自身の値を新しい系列の起点にする）
+3. `session_id`が無い、または`session_cost_usd`が数値でないサンプルは除外し、
+   `list_price_equiv_excluded_no_session_id_count` / `list_price_equiv_excluded_null_cost_count`
+   としてそれぞれ数える（黙って捨てない）
+4. 対象サンプルが1件も無いスコープ（例: `quota.sample`が始まる2026-08-01より前の月）では
+   `list_price_equiv_usd: null`（`$0.00`ではない）、`list_price_equiv_is_lower_bound: null`
+   になる — データが無いことと、ゼロだったことを区別する
+
+**常に下限値である。** 最後のstatusLine描画以降の消費は含まれないため、`list_price_equiv_usd`が
+`null`でない限り`list_price_equiv_is_lower_bound: true`が付く。請求書ではなく、cash costと
+合算してはならない（線引きの記録は
+`docs/adr/DOC-2608021229_llm-cost-observability-collection-method.md` §10参照）。
+
+### 4.2 attribution の解決順
+
+孫5、計画書 [DOC-2608081456](../planning/DOC-2608081456_ocw-meter-accuracy_計画.md)【3】。
+
+`usage.message`の`run_id`/`role`は、次の優先順で解決される（`run_id_source`/`role_source`が
+実際にどの経路で決まったかを保持する。§2.4参照）:
+
+- `run_id`: **①**`ocw-run-id`ファイル（そのメッセージの`cwd`配下、ingest実行時点で直接読む）
+  → **②**`quota.sample`との`session_id` join（同じ`session_id`を持つ`quota.sample`サンプルの
+  うち、そのメッセージのタイムスタンプに時刻が最も近いものの`run_id`を採用） → **③**`null`
+- `role`: **①**Herdr live（`herdr pane list`をingest実行時点で読む）→ **②**同上の`session_id`
+  join → **③**`"unknown"`
+
+②の`session_id` joinは2箇所で行われる: `ingest`実行時に新規イベントへ書き込む「ingest側
+フォールバック」と、既に保存済みのイベント（`run_id`/`role`が未解決のまま保存されているもの）を
+`report`の読み取り時に補完する「report側join」。**どちらも保存されたイベントファイルそのものは
+書き換えない**（「過去は再計算しない」不変条件の維持）。`report`のフッターの`attribution`行は
+両方を区別せず`via session_id`として合算する。
+
+**⚠️ 重要な設計上の判断**: `quota.sample`由来（②）の`run_id`には、`ocw-run-id`ファイル経由
+（①）にのみ適用される「その`run_id`の`run.start`より前のメッセージなら捨てる」という逆転
+チェックを**適用しない**。このチェックは「worktreeパスは再利用される」ことを前提にしたstale
+path対策であり、`session_id`はworktreeパスと違って再利用されないため、②に適用すると正しい
+帰属まで`null`化してしまう。解決経路ごとにこのチェックの適用を分けている（テストで固定済み）。
+
+1つの`session_id`に複数の`run_id`/`role`が紐づく場合（同じセッションでworktreeを移った等）は、
+「一意でなければ解決しない」ではなく、**そのメッセージのタイムスタンプに時刻が最も近いサンプルの
+値を採用する**方針とした（前後どちらのサンプルが「そのときの状態」かを決める積極的な根拠が無い
+ため、単に時刻近傍則で決定的に1つへ絞る。同点は前方のサンプルを優先する）。
+
+**この解決順・joinはどちらも`ocw rm`（worktree削除）に一切影響されない**（`quota.sample`は
+消えないイベントだが、`ocw-run-id`ファイルはworktreeと一緒に消える）。ただし限界は残る:
+`quota.sample`の記録が始まる前（各マシンへのデプロイ日より前）の期間は、session_id joinによる
+復元ができない。以降の期間でも100%には到達しない — `claude-ds`セッションやstatusLineが一度も
+走らなかったセッションは`run_id`/`role`とも復元不能。`role`の`unknown`の一部はHerdr外で起動
+したClaudeであり原理的に取得不能（推測で埋めない方針を維持）。
+
 ---
 
 ## 5. `completeness` の判定基準
@@ -287,6 +442,13 @@ cost = ( cache_read_input_tokens               * price.cache_hit_in
   少なくとも件数として認識できるようにする）
 - 現時点（v1）でこのルールが実際に発動した例は無い。将来v2を検討する際は、この節を更新し、
   移行時に何が壊れ得たか・どう吸収したかを追記すること
+- **本傘（計画書
+  [DOC-2608081456](../planning/DOC-2608081456_ocw-meter-accuracy_計画.md)）は`schema_version`を
+  変更していない。** 孫3が`time_of_day_basis`、孫5が`run_id_source`/`role_source`をそれぞれ
+  `usage.message`へ新規追加したが、いずれも既存フィールドの意味変更・削除・型変更を伴わない
+  「フィールドの追加」（上記の互換ケース）にあたるため、`v1`のまま据え置いた。`list_price_equiv_usd`
+  はイベントのフィールドではなく`report`が集計時に計算する派生値のため、そもそもスキーマ変更の
+  対象外である
 
 ---
 
@@ -339,11 +501,25 @@ cost = ( cache_read_input_tokens               * price.cache_hit_in
 ```json
 {"schema_version": 1, "event_type": "usage.message", "idempotency_key": "u1", "ts": "2026-08-01T09:06:00.000Z",
  "source": "transcript", "parser_version": 1, "completeness": "complete", "run_id": "run1",
- "role": "implementer", "provider": "deepseek", "model": "deepseek-v4-pro", "phase": null, "round": null,
+ "run_id_source": "direct", "role": "implementer", "role_source": "direct", "provider": "deepseek",
+ "model": "deepseek-v4-pro", "phase": null, "round": null,
  "pr_number": 42, "message_id": "m1", "input_tokens": 1000, "cache_read_input_tokens": 500,
  "cache_creation_input_tokens": 0, "output_tokens": 200, "reasoning_tokens": null,
  "cost_estimate_usd": 0.01, "price_table_version": "deepseek-2026-08-01",
- "price_effective_date": "2026-08-01", "cost_basis": "estimated", "currency": "USD"}
+ "price_effective_date": "2026-08-01", "cost_basis": "estimated", "time_of_day_basis": "not_applicable",
+ "currency": "USD"}
+```
+
+`run_id_source`/`role_source`（孫5追加）は、この例のように`run_id`/`role`が`ocw-run-id`ファイル /
+Herdr liveから直接解決できた場合は`"direct"`、`quota.sample`とのsession_id joinで解決した場合は
+`"session_id"`になる（§4.2参照）。`time_of_day_basis`（孫3追加）はこの例が使う価格表
+（`bin/prices/deepseek-2026-08-01.json`）が`time_of_day_pricing`を持たないため`"not_applicable"`。
+サンドボックス実行で実際に確認した`run_id_source: "session_id"`の例:
+
+```json
+{"run_id": "run-sandbox-1", "run_id_source": "session_id", "role": "implementer",
+ "role_source": "session_id", "provider": "anthropic", "model": "claude-opus-5",
+ "cost_basis": "subscription", "cost_estimate_usd": null, "time_of_day_basis": null, "...": "..."}
 ```
 
 ### `quota.sample`
