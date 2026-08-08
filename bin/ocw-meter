@@ -1474,7 +1474,9 @@ def cmd_validate(args):
 def iter_stored_events(paths):
     """Yield (event_or_None, raw_line, error_or_None) for every stored
     line. Malformed lines are reported here, not moved — moving them is
-    `validate`'s job, so `report` stays read-only.
+    `validate`'s job, so iterating the store never mutates it (unlike
+    `report` as a whole since 計画書 DOC-2608081456孫2, which now writes
+    via its automatic `ingest` call BEFORE this iteration ever starts).
 
     Uses `hard_line_errors` only, not `payload_shape_issues`: a payload
     shape issue is advisory (see `payload_shape_issues`'s docstring), so
@@ -1613,7 +1615,80 @@ def completeness_footer(paths, scoped_events, malformed):
     }
 
 
-def print_footer_text(footer_completeness, footer_cost, total):
+def format_elapsed_seconds(seconds):
+    """`3661` -> `"1h1m"`. Coarse on purpose — this is a freshness
+    indicator for a human glancing at a footer, not a precise duration."""
+    seconds = int(seconds)
+    if seconds < 60:
+        return f"{seconds}s"
+    minutes, seconds = divmod(seconds, 60)
+    if minutes < 60:
+        return f"{minutes}m"
+    hours, minutes = divmod(minutes, 60)
+    if hours < 24:
+        return f"{hours}h{minutes}m"
+    days, hours = divmod(hours, 24)
+    return f"{days}d{hours}h"
+
+
+# 計画書 DOC-2608081456孫2 §3: how stale is too stale before `report`
+# warns about it. 24h, not shorter — the incident this whole grandchild
+# fixes (【1】) took 4 DAYS of silence to reach an 11.4% undercount, so a
+# same-order-of-magnitude threshold (one missed day) catches drift long
+# before it compounds that far, without flagging every routine gap
+# between report runs as an emergency. Matches the existing precedent
+# for "how old is too old" in this file (QUOTA_SESSION_STATE_MAX_AGE_
+# SECONDS, also 24h).
+INGEST_STALE_THRESHOLD_SECONDS = 24 * 60 * 60
+
+
+def ingest_freshness_footer(cursor, ingest_run):
+    """The ingest-freshness portion of the plan §10.4 footer (計画書
+    DOC-2608081456孫2 §3) — see `usage_cost_footer` above for why this
+    kind of thing is factored into its own function instead of being
+    inlined per view. `cursor` is `load_ingest_cursor()`'s return value;
+    `ingest_run` is `auto_ingest_for_report()`'s. Like every other footer
+    piece in this file, the values here are pre-formatted display
+    strings shared verbatim by both the text and `--json` outputs (see
+    `usage_cost_footer`'s `cost_estimate_usd` for the same convention) —
+    not raw types for a JSON consumer to reformat.
+
+    `last_ingest_at` deliberately does NOT fall back to guessing from a
+    file mtime when the cursor predates this field (plan's "推測で埋め
+    ない" principle, §全孫共通の注意5) — an old `ingest-cursor.json`
+    reports "unknown", full stop."""
+    last_ingest_raw = cursor.get("last_ingest_at")
+    last_ingest_dt = parse_ts(last_ingest_raw) if isinstance(last_ingest_raw, str) else None
+    if last_ingest_dt is None:
+        last_ingest_at = "unknown (次回 ingest で記録される)"
+        freshness_warning = "(none — last ingest time unknown)"
+    else:
+        age_seconds = (datetime.now(timezone.utc) - last_ingest_dt).total_seconds()
+        last_ingest_at = f"{last_ingest_raw} ({format_elapsed_seconds(age_seconds)} 経過)"
+        freshness_warning = (
+            f"最終ingestから{format_elapsed_seconds(age_seconds)}経過しています"
+            f"（閾値 {INGEST_STALE_THRESHOLD_SECONDS // 3600}h）。"
+            "自動ingestが失敗し続けていないか確認してください"
+            if age_seconds > INGEST_STALE_THRESHOLD_SECONDS else "(none)"
+        )
+
+    status = ingest_run["status"]
+    if status == "ran":
+        stats = ingest_run["stats"]
+        ingest_this_run = f"ran (written={stats['written']}, replaced={stats['replaced']})"
+    elif status == "skipped":
+        ingest_this_run = "skipped (--no-ingest)"
+    else:
+        ingest_this_run = f"failed: {ingest_run['error']}"
+
+    return {
+        "last_ingest_at": last_ingest_at,
+        "ingest_this_run": ingest_this_run,
+        "ingest_freshness_warning": freshness_warning,
+    }
+
+
+def print_footer_text(footer_completeness, footer_cost, footer_freshness, total):
     def pct(n):
         return (100.0 * n / total) if total else 0.0
 
@@ -1632,6 +1707,9 @@ def print_footer_text(footer_completeness, footer_cost, total):
     print(f"price_table:   {footer_cost['price_table']}")
     print(f"cost_basis:    {footer_cost['cost_basis']}")
     print(f"cost_estimate: {footer_cost['cost_estimate_usd']}")
+    print(f"last_ingest_at: {footer_freshness['last_ingest_at']}")
+    print(f"ingest (this run): {footer_freshness['ingest_this_run']}")
+    print(f"ingest_freshness_warning: {footer_freshness['ingest_freshness_warning']}")
 
 
 def events_for_pr(valid_events, pr_number, repo):
@@ -2095,7 +2173,7 @@ def report_month_cash_and_capacity(valid_events, month):
     }
 
 
-def _report_reconcile(paths, month, provider_totals, as_json):
+def _report_reconcile(paths, month, provider_totals, as_json, footer_freshness):
     """`ocw-meter report --reconcile` (孫3 §3): model別のtranscript由来
     トークン合計・推定費用を出し、`--provider-total model=tokens` で
     人間が渡した管理画面値との coverage 比率を計算する。plan §5.10 /
@@ -2205,6 +2283,7 @@ def _report_reconcile(paths, month, provider_totals, as_json):
             "（計画書17章 R8）"
         ),
         "models": models_out,
+        **footer_freshness,
     }
 
     if as_json:
@@ -2247,6 +2326,7 @@ def _report_reconcile(paths, month, provider_totals, as_json):
                 if any(m["cost_estimate_usd"] is not None for m in models_out.values()) else "null"
             ),
         },
+        footer_freshness,
         total_messages,
     )
     print(f"known_gaps:    {summary['known_gaps']}")
@@ -2297,12 +2377,15 @@ def pr_five_hour_window_completion(pr_events, all_events):
     return ("yes" if len(distinct) == 1 else "no"), distinct
 
 
-def _print_grouped_report(title, group_label, groups, as_json, storage_root_str, footer_completeness, footer_cost, total, extra_top=None):
+def _print_grouped_report(title, group_label, groups, as_json, storage_root_str, footer_completeness, footer_cost, footer_freshness, total, extra_top=None):
     """Shared text/JSON printer for the --model/--role/--phase/--window
     grouped views (孫5 §1): each is "a dict of rows keyed by group name"
     plus the mandatory plan §10.4 footer, so one function renders all of
     them instead of four near-identical print blocks."""
-    summary = {"storage_root": storage_root_str, group_label: groups, **(extra_top or {}), **footer_completeness, **footer_cost}
+    summary = {
+        "storage_root": storage_root_str, group_label: groups, **(extra_top or {}),
+        **footer_completeness, **footer_cost, **footer_freshness,
+    }
     if as_json:
         print(json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True))
         return 0
@@ -2325,8 +2408,38 @@ def _print_grouped_report(title, group_label, groups, as_json, storage_root_str,
             if field == "cost_estimate_usd":
                 value = f"${value:.4f}" if isinstance(value, (int, float)) else "null"
             print(f"    {field}: {value}")
-    print_footer_text(footer_completeness, footer_cost, total)
+    print_footer_text(footer_completeness, footer_cost, footer_freshness, total)
     return 0
+
+
+def auto_ingest_for_report(root, no_ingest):
+    """`report`'s automatic ingest (計画書 DOC-2608081456孫2 §1):
+    DOC-2608021229-a:440 always documented `report` as auto-triggering
+    `ingest`, but `cmd_report` never actually called it, so the last 4
+    days of transcripts (11.4% of all events) silently vanished from
+    every view. Called once at the very top of `cmd_report`, before any
+    view reads stored events, so every view (default / --phase / --model
+    / --role / --window / --month / --reconcile) sees the same freshly-
+    ingested data — missing even one view here would make that one view
+    silently see stale data while the others didn't.
+
+    Never raises: an ingest failure — including the exact same git-
+    worktree refusal `ingest` itself can hit (`perform_ingest` returns
+    `ok: False` for it, not an exception) — must never stop `report`
+    from showing whatever is already in the store; both funnel through
+    the same `{"status": "failed", "error": ...}` shape here so no
+    caller needs a special case for "which kind of failure was it".
+    `--no-ingest` (read-only use, and tests that want to control what
+    `report` sees) skips the call entirely."""
+    if no_ingest:
+        return {"status": "skipped"}
+    try:
+        result = perform_ingest(root)
+    except Exception as exc:  # ingest must never crash `report` (see docstring)
+        return {"status": "failed", "error": redact_text(f"{type(exc).__name__}: {exc}")}
+    if not result["ok"]:
+        return {"status": "failed", "error": result["error"]}
+    return {"status": "ran", "stats": result}
 
 
 def cmd_report(args):
@@ -2338,6 +2451,7 @@ def cmd_report(args):
     view = None
     explicit_repo = None
     provider_totals = {}
+    no_ingest = False
     i = 0
     while i < len(args):
         token = args[i]
@@ -2372,6 +2486,9 @@ def cmd_report(args):
             i += 1
         elif token == "--reconcile":
             reconcile = True
+            i += 1
+        elif token == "--no-ingest":
+            no_ingest = True
             i += 1
         elif token in ("--phase", "--model", "--role", "--window"):
             if view is not None and view != token[2:]:
@@ -2441,17 +2558,27 @@ def cmd_report(args):
         return 1
     paths = ensure_storage(root)
 
+    # 計画書 DOC-2608081456孫2 §1: runs BEFORE any view reads stored
+    # events (`iter_stored_events` below, and the two per-view helpers'
+    # own calls to it), so every view sees the same freshly-ingested
+    # data. `auto_ingest_for_report` never raises and never signals
+    # failure through the return code — an ingest problem only ever
+    # shows up as a footer line (`ingest_freshness_footer` below), never
+    # as `report` itself failing.
+    ingest_run = auto_ingest_for_report(root, no_ingest)
+    footer_freshness = ingest_freshness_footer(load_ingest_cursor(paths), ingest_run)
+
     if reconcile:
         month, err = normalize_month_arg(month)
         if err:
             print(err, file=sys.stderr)
             return 1
-        return _report_reconcile(paths, month, provider_totals, as_json)
+        return _report_reconcile(paths, month, provider_totals, as_json, footer_freshness)
 
     # Round-2 review finding 10 (regression introduced by round-1's own
     # fix for finding 1): `events_for_pr`'s repo scoping only works if a
-    # repo is actually resolved. `report` is a read-only command that
-    # can be run from ANYWHERE (unlike `event`, which is only ever
+    # repo is actually resolved. `report` can be run from ANYWHERE
+    # (unlike `event`, which is only ever
     # called from inside a worktree by `ocw`/`pr-review-loop`) — running
     # it from outside any git repo makes `git_repo_slug()` return None,
     # and `e.get("repo") == None` then matches every repo:null event
@@ -2490,7 +2617,7 @@ def cmd_report(args):
         if err:
             print(err, file=sys.stderr)
             return 1
-        return _report_month_standalone(paths, valid_events, malformed, month, repo, as_json)
+        return _report_month_standalone(paths, valid_events, malformed, month, repo, as_json, footer_freshness)
 
     if filter_pr is not None:
         filtered = events_for_pr(valid_events, filter_pr, repo)
@@ -2513,7 +2640,7 @@ def cmd_report(args):
             groups = report_by_window(valid_events if filter_pr is None else filtered, repo)
         return _print_grouped_report(
             f"by {view}", f"by_{view}", groups, as_json, str(paths.root),
-            footer_completeness, footer_cost, len(filtered), extra_top,
+            footer_completeness, footer_cost, footer_freshness, len(filtered), extra_top,
         )
 
     five_hour_window_completion, five_hour_window_ids_seen = (
@@ -2535,6 +2662,7 @@ def cmd_report(args):
         "by_event_type": by_type,
         **footer_completeness,
         **footer_cost,
+        **footer_freshness,
     }
     if filter_pr is not None:
         # Round-2 review finding 10: which repo `--pr` scoped to must be
@@ -2558,7 +2686,7 @@ def cmd_report(args):
         for event_type, count in sorted(by_type.items(), key=lambda kv: (kv[0] or "")):
             print(f"  {event_type or '(none)'}: {count}")
 
-        print_footer_text(footer_completeness, footer_cost, total)
+        print_footer_text(footer_completeness, footer_cost, footer_freshness, total)
         if filter_pr is not None:
             ids_str = ", ".join(five_hour_window_ids_seen) if five_hour_window_ids_seen else "(none)"
             print(f"five_hour_window_completion: {five_hour_window_completion} (window_ids seen: {ids_str})")
@@ -2579,7 +2707,7 @@ def cmd_report(args):
     return 0
 
 
-def _report_month_standalone(paths, valid_events, malformed, month, repo, as_json):
+def _report_month_standalone(paths, valid_events, malformed, month, repo, as_json, footer_freshness):
     """`ocw-meter report --month [YYYY-MM]` (孫5 §1, NOT --reconcile):
     cash cost / capacity cost / process efficiency for one UTC month,
     always kept in separate top-level keys — see
@@ -2603,6 +2731,7 @@ def _report_month_standalone(paths, valid_events, malformed, month, repo, as_jso
         "quality_guardrail": "未計測 — 第一段階では収集項目が無い（計画書16章）。この行は 'report --month' の出力にのみ現れる（他の report ビューには quality_guardrail キー自体が無い）",
         **footer_completeness,
         **footer_cost,
+        **footer_freshness,
     }
     # cash_cost/capacity are both inside report_month_cash_and_capacity's
     # dict already; split them into their own top-level keys so a reader
@@ -2643,7 +2772,7 @@ def _report_month_standalone(paths, valid_events, malformed, month, repo, as_jso
     print(f"  avg_duration_seconds: {pe['avg_duration_seconds']}")
     print(f"  five_hour_window_completion_breakdown: {pe['five_hour_window_completion_breakdown']}")
     print(f"quality_guardrail: {summary['quality_guardrail']}")
-    print_footer_text(footer_completeness, footer_cost, len(month_events))
+    print_footer_text(footer_completeness, footer_cost, footer_freshness, len(month_events))
     return 0
 
 
@@ -3434,30 +3563,34 @@ def bulk_write_events(paths, events):
 
 # ── subcommand: ingest ──────────────────────────────────────────────────
 
-def cmd_ingest(args):
-    parsed = parse_flags(args, {"--since": "since"}) if args else {}
-    since_str = parsed.get("since")
-    since_dt = None
-    if since_str:
-        since_dt = parse_ts(since_str)
-        if since_dt is None:
-            print(f"error: --since is not a valid RFC3339 timestamp: {since_str!r}", file=sys.stderr)
-            return 1
+def perform_ingest(root, since_dt=None):
+    """Core of `ingest`: scans transcripts for new `usage.message`
+    candidates, writes them, and (for a full non-`--since` run) advances
+    the cursor. Shared by `cmd_ingest` and `report`'s automatic run
+    (計画書 DOC-2608081456孫2: DOC-2608021229-a:440 documented `report`
+    as auto-triggering `ingest`, but `cmd_report` never called it —
+    4 days / 11.4% of events silently missing) so both go through
+    identical logic instead of two implementations drifting apart.
 
-    root = storage_root()
+    Returns `{"ok": True, ...stats}` on success, or `{"ok": False,
+    "error": <str>}` for the one well-understood refusal this function
+    itself detects (storage root resolves inside a Git worktree) —
+    exactly like `event`/`bind-pr`/`validate` refuse the same way.
+    Any OTHER unexpected failure is left to raise so `ocw-meter ingest`
+    itself still fails loud (main()'s existing fail-loud wrapper for
+    `ingest`); a caller that must never fail loud (report's automatic
+    run) wraps this call in its own try/except instead of relying on
+    this function to swallow everything itself."""
     if in_git_worktree(root):
-        print(f"error: OCW_METER_HOME ({root}) resolves inside a Git worktree; refusing to operate", file=sys.stderr)
-        return 1
+        return {"ok": False, "error": f"OCW_METER_HOME ({root}) resolves inside a Git worktree; refusing to operate"}
     paths = ensure_storage(root)
 
     projects_dir = claude_projects_dir()
     if projects_dir is None:
-        print(
-            "error: could not determine the Claude projects directory "
-            "(HOME is not set; set OCW_METER_CLAUDE_PROJECTS_DIR explicitly)",
-            file=sys.stderr,
-        )
-        return 1
+        return {
+            "ok": False,
+            "error": "could not determine the Claude projects directory (HOME is not set; set OCW_METER_CLAUDE_PROJECTS_DIR explicitly)",
+        }
 
     transcript_files = sorted(projects_dir.glob("*/*.jsonl")) if projects_dir.is_dir() else []
 
@@ -3562,16 +3695,56 @@ def cmd_ingest(args):
     # the persisted cursor means it never loses data: the next run
     # (restricted or not) simply re-reads the same unconsumed range from
     # wherever the last UNRESTRICTED run left off.
+    # 計画書 DOC-2608081456孫2 §2: the cursor now also records WHEN the
+    # last full ingest completed and that it completed cleanly — the
+    # freshness footer reads these two fields back (`ingest_freshness_
+    # footer`). Recorded here, not on failure, so a stale timestamp
+    # after this run means exactly what it says: "this is the last time
+    # ingest actually finished", not "the last time it was attempted".
+    # Not recorded under --since either, for the same reason the file
+    # cursor itself isn't: a --since run is deliberately read-only with
+    # respect to persisted ingest state (see the comment above).
     if since_dt is None:
-        save_ingest_cursor(paths, {"files": new_cursor_files})
+        save_ingest_cursor(paths, {
+            "files": new_cursor_files,
+            "last_ingest_at": iso_utc(datetime.now(timezone.utc)),
+            "last_ingest_result": "ok",
+        })
 
-    print(f"transcript files scanned:            {files_scanned}")
-    print(f"transcript files with new data:      {files_with_new_data}")
-    print(f"distinct message.id in this run:     {len(candidates)}")
-    print(f"usage.message written (new):         {write_counts['written']}")
-    print(f"usage.message replaced (re-run/dup):  {write_counts['replaced']}")
-    if since_dt is None:
-        print(f"transcript lines quarantined:         {quarantined_count}")
+    return {
+        "ok": True,
+        "files_scanned": files_scanned,
+        "files_with_new_data": files_with_new_data,
+        "distinct_message_ids": len(candidates),
+        "written": write_counts["written"],
+        "replaced": write_counts["replaced"],
+        "quarantined": quarantined_count,
+        "since_used": since_dt is not None,
+    }
+
+
+def cmd_ingest(args):
+    parsed = parse_flags(args, {"--since": "since"}) if args else {}
+    since_str = parsed.get("since")
+    since_dt = None
+    if since_str:
+        since_dt = parse_ts(since_str)
+        if since_dt is None:
+            print(f"error: --since is not a valid RFC3339 timestamp: {since_str!r}", file=sys.stderr)
+            return 1
+
+    result = perform_ingest(storage_root(), since_dt)
+    if not result["ok"]:
+        print(f"error: {result['error']}", file=sys.stderr)
+        return 1
+
+    print(f"transcript files scanned:            {result['files_scanned']}")
+    print(f"transcript files with new data:      {result['files_with_new_data']}")
+    print(f"distinct message.id in this run:     {result['distinct_message_ids']}")
+    print(f"usage.message written (new):         {result['written']}")
+    print(f"usage.message replaced (re-run/dup):  {result['replaced']}")
+    if not result["since_used"]:
+        print(f"transcript lines quarantined:         {result['quarantined']}")
     else:
         # PR #27 review round 3 finding "新規2": under --since,
         # quarantine writes are skipped (round 2 finding "新規2"), so
@@ -3579,8 +3752,8 @@ def cmd_ingest(args):
         # run — even with the cursor note appended separately — read as
         # "this many were recorded" when zero were. Label matches what
         # actually happened: detected while reading, nothing persisted.
-        print(f"transcript lines with parse errors (detected, NOT persisted — see note below): {quarantined_count}")
-    if since_dt is not None:
+        print(f"transcript lines with parse errors (detected, NOT persisted — see note below): {result['quarantined']}")
+    if result["since_used"]:
         # PR #27 review round 4 finding "新規1": this string is printed
         # to the user's terminal — it must read on its own, not
         # reference an internal PR review round number nobody running
