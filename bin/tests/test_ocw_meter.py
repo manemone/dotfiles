@@ -4459,5 +4459,481 @@ class SnapshotQuotaRoundTwoReviewTests(OcwMeterTestCase):
         self.assertEqual(status.stdout.strip(), "", "suppression cache must not write inside $HOME's own git worktree")
 
 
+class SessionAttributionTests(OcwMeterTestCase):
+    """docs/planning/DOC-2608081456_..._計画.md 孫5プロンプン: session_id
+    joinによるrun_id/roleの帰属解決(B: ingest側フォールバック / A: report
+    側join)と、attribution行。
+
+    quota.sample events here are written directly via `ocw-meter event
+    quota.sample ...` (bypassing `snapshot-quota`'s statusLine-JSON
+    parsing entirely) — this phase's own scope is the session_id join
+    logic itself, not statusLine ingestion (already covered by
+    SnapshotQuotaBasicsTests etc.), and `event` is the same forward-
+    compatible primitive `_seed_full_pr` above already uses for the same
+    reason."""
+
+    def setUp(self):
+        super().setUp()
+        self.projects_dir = pathlib.Path(self.tmpdir.name) / "claude-projects"
+        self.projects_dir.mkdir(parents=True, exist_ok=True)
+
+    # -- B: ingest側フォールバック --
+
+    def test_ingest_run_id_resolved_via_session_id_join_when_ocw_run_id_file_absent(self):
+        session_id = "sess-join-1"
+        run_meter(["event", "quota.sample", "--idempotency-key", "q1", "--plan-source", "statusline",
+                   "--session-id", session_id, "--run-id", "run-from-session",
+                   "--ts", "2026-08-01T09:00:00.000Z"], self.home)
+        write_transcript(self.projects_dir, "proj", session_id, [
+            assistant_line(session_id, "m1", cwd="/nonexistent/not-a-worktree", timestamp="2026-08-01T09:05:00.000Z"),
+        ])
+        result = run_ingest(self.home, self.projects_dir, extra_env={"PATH": "/usr/bin:/bin"})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        event = next(e for e in read_events(self.home) if e["event_type"] == "usage.message")
+        self.assertEqual(event["run_id"], "run-from-session")
+        self.assertEqual(event["run_id_source"], "session_id")
+
+    def test_ingest_run_id_prefers_ocw_run_id_file_over_session_join(self):
+        session_id = "sess-join-2"
+        worktree_dir = make_ocw_style_worktree(self.tmpdir.name, run_id="run-direct")
+        run_meter(["event", "quota.sample", "--idempotency-key", "q2", "--plan-source", "statusline",
+                   "--session-id", session_id, "--run-id", "run-from-session",
+                   "--ts", "2026-08-01T09:00:00.000Z"], self.home)
+        write_transcript(self.projects_dir, "proj", session_id, [
+            assistant_line(session_id, "m1", cwd=str(worktree_dir), timestamp="2026-08-01T09:05:00.000Z"),
+        ])
+        result = run_ingest(self.home, self.projects_dir)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        event = next(e for e in read_events(self.home) if e["event_type"] == "usage.message")
+        self.assertEqual(event["run_id"], "run-direct")
+        self.assertEqual(event["run_id_source"], "direct")
+
+    def test_ingest_role_resolved_via_session_id_join_when_herdr_unavailable(self):
+        session_id = "sess-join-role"
+        run_meter(["event", "quota.sample", "--idempotency-key", "q3", "--plan-source", "statusline",
+                   "--session-id", session_id, "--role", "implementer",
+                   "--ts", "2026-08-01T09:00:00.000Z"], self.home)
+        write_transcript(self.projects_dir, "proj", session_id, [
+            assistant_line(session_id, "m1", timestamp="2026-08-01T09:05:00.000Z"),
+        ])
+        result = run_ingest(self.home, self.projects_dir, extra_env={"PATH": "/usr/bin:/bin"})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        event = next(e for e in read_events(self.home) if e["event_type"] == "usage.message")
+        self.assertEqual(event["role"], "implementer")
+        self.assertEqual(event["role_source"], "session_id")
+
+    def test_ingest_role_prefers_herdr_live_over_session_join(self):
+        session_id = "sess-join-role-2"
+        write_transcript(self.projects_dir, "proj", session_id, [assistant_line(session_id, "m1")])
+        run_meter(["event", "quota.sample", "--idempotency-key", "q4", "--plan-source", "statusline",
+                   "--session-id", session_id, "--role", "reviewer",
+                   "--ts", "2026-08-01T09:00:00.000Z"], self.home)
+
+        pane_json = json.dumps({"panes": [{
+            "pane_id": "w1:p2", "label": "implementer", "workspace_id": "w1",
+            "agent_session": {"agent": "claude", "kind": "id", "value": session_id},
+            "cwd": "/whatever",
+        }]})
+        fake_bin = pathlib.Path(self.tmpdir.name) / "fake-bin"
+        fake_bin.mkdir()
+        herdr_script = fake_bin / "herdr"
+        herdr_script.write_text(
+            "#!/usr/bin/env bash\n"
+            'if [ "$1" = "status" ] && [ "$2" = "server" ]; then exit 0; fi\n'
+            'if [ "$1" = "workspace" ] && [ "$2" = "list" ]; then echo \'{"workspaces":[{"workspace_id":"w1"}]}\'; exit 0; fi\n'
+            f"if [ \"$1\" = \"pane\" ] && [ \"$2\" = \"list\" ]; then echo '{pane_json}'; exit 0; fi\n"
+            "exit 1\n",
+            encoding="utf-8",
+        )
+        herdr_script.chmod(0o755)
+        path_with_fake_herdr_first = f"{fake_bin}:{os.environ.get('PATH', '')}"
+
+        result = run_ingest(self.home, self.projects_dir, extra_env={"PATH": path_with_fake_herdr_first})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        event = next(e for e in read_events(self.home) if e["event_type"] == "usage.message")
+        self.assertEqual(event["role"], "implementer")
+        self.assertEqual(event["role_source"], "direct")
+
+    def test_ingest_role_falls_back_to_session_join_when_herdr_label_is_the_string_unknown(self):
+        # レビュー指摘5: `"unknown"`はこのスキーマ全体で「未解決」を表す
+        # 文字列センチネル。Herdrのペインlabelは`herdr pane rename`で人間が
+        # 自由に付けられるため、labelがたまたま`"unknown"`だった場合に
+        # それを「directで解決済み」と誤認してsession joinへの
+        # フォールバックを飛ばしてはいけない。
+        session_id = "sess-join-role-unknown-label"
+        write_transcript(self.projects_dir, "proj", session_id, [assistant_line(session_id, "m1")])
+        run_meter(["event", "quota.sample", "--idempotency-key", "q5", "--plan-source", "statusline",
+                   "--session-id", session_id, "--role", "reviewer",
+                   "--ts", "2026-08-01T09:00:00.000Z"], self.home)
+
+        pane_json = json.dumps({"panes": [{
+            "pane_id": "w1:p2", "label": "unknown", "workspace_id": "w1",
+            "agent_session": {"agent": "claude", "kind": "id", "value": session_id},
+            "cwd": "/whatever",
+        }]})
+        fake_bin = pathlib.Path(self.tmpdir.name) / "fake-bin-unknown-label"
+        fake_bin.mkdir()
+        herdr_script = fake_bin / "herdr"
+        herdr_script.write_text(
+            "#!/usr/bin/env bash\n"
+            'if [ "$1" = "status" ] && [ "$2" = "server" ]; then exit 0; fi\n'
+            'if [ "$1" = "workspace" ] && [ "$2" = "list" ]; then echo \'{"workspaces":[{"workspace_id":"w1"}]}\'; exit 0; fi\n'
+            f"if [ \"$1\" = \"pane\" ] && [ \"$2\" = \"list\" ]; then echo '{pane_json}'; exit 0; fi\n"
+            "exit 1\n",
+            encoding="utf-8",
+        )
+        herdr_script.chmod(0o755)
+        path_with_fake_herdr_first = f"{fake_bin}:{os.environ.get('PATH', '')}"
+
+        result = run_ingest(self.home, self.projects_dir, extra_env={"PATH": path_with_fake_herdr_first})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        event = next(e for e in read_events(self.home) if e["event_type"] == "usage.message")
+        self.assertEqual(event["role"], "reviewer")
+        self.assertEqual(event["role_source"], "session_id")
+
+    def test_ingest_run_id_and_role_stay_unresolved_without_any_source(self):
+        session_id = "sess-none"
+        write_transcript(self.projects_dir, "proj", session_id, [
+            assistant_line(session_id, "m1", timestamp="2026-08-01T09:05:00.000Z"),
+        ])
+        result = run_ingest(self.home, self.projects_dir, extra_env={"PATH": "/usr/bin:/bin"})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        event = next(e for e in read_events(self.home) if e["event_type"] == "usage.message")
+        self.assertIsNone(event["run_id"])
+        self.assertIsNone(event["run_id_source"])
+        self.assertEqual(event["role"], "unknown")
+        self.assertIsNone(event["role_source"])
+
+    def test_ingest_run_id_and_role_from_session_join_can_come_from_different_samples(self):
+        # quota.sampleはOCW_RUN_ID/OCW_ROLEを独立に持ちうる(片方だけ
+        # 設定されている、あるいは無い場合がある) — run_idとroleを
+        # それぞれ別サンプルの「最も時刻が近いもの」から独立に解決する。
+        session_id = "sess-split-fields"
+        run_meter(["event", "quota.sample", "--idempotency-key", "split-q1", "--plan-source", "statusline",
+                   "--session-id", session_id, "--run-id", "run-split",
+                   "--ts", "2026-08-01T09:00:00.000Z"], self.home)
+        run_meter(["event", "quota.sample", "--idempotency-key", "split-q2", "--plan-source", "statusline",
+                   "--session-id", session_id, "--role", "commander",
+                   "--ts", "2026-08-01T09:01:00.000Z"], self.home)
+        write_transcript(self.projects_dir, "proj", session_id, [
+            assistant_line(session_id, "m1", timestamp="2026-08-01T09:02:00.000Z"),
+        ])
+        result = run_ingest(self.home, self.projects_dir, extra_env={"PATH": "/usr/bin:/bin"})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        event = next(e for e in read_events(self.home) if e["event_type"] == "usage.message")
+        self.assertEqual(event["run_id"], "run-split")
+        self.assertEqual(event["role"], "commander")
+
+    # -- 罠1: session_id由来のrun_idにrun.start逆転チェックを適用しない --
+
+    def test_session_join_run_id_not_subject_to_run_start_reversal_check(self):
+        # ocw-run-idファイル経由なら、メッセージがそのrun_idのrun.startより
+        # 前なら捨てられる(test_ingest_run_id_not_misattributed_when_
+        # worktree_path_is_reusedで確認済み)。session_id由来のrun_idは
+        # worktreeパスのように再利用されることが無いため、同じチェックを
+        # 適用してはいけない(計画書DOC-2608081456 罠1)。
+        session_id = "sess-trap1"
+        run_meter(["event", "run.start", "--idempotency-key", "trap1-start", "--run-id", "run-trap1",
+                   "--ts", "2026-08-01T12:00:00.000Z", "--base-ref", "master", "--command", "claude"],
+                  self.home)
+        run_meter(["event", "quota.sample", "--idempotency-key", "trap1-q", "--plan-source", "statusline",
+                   "--session-id", session_id, "--run-id", "run-trap1",
+                   "--ts", "2026-08-01T09:00:00.000Z"], self.home)
+        # メッセージ(09:05)はrun-trap1のrun.start(12:00)より前。
+        write_transcript(self.projects_dir, "proj", session_id, [
+            assistant_line(session_id, "m1", timestamp="2026-08-01T09:05:00.000Z"),
+        ])
+        result = run_ingest(self.home, self.projects_dir)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        event = next(e for e in read_events(self.home) if e["event_type"] == "usage.message")
+        self.assertEqual(event["run_id"], "run-trap1")
+        self.assertEqual(event["run_id_source"], "session_id")
+
+    def test_direct_run_id_still_subject_to_run_start_reversal_check_regression(self):
+        # 罠1修正の対偶: ocw-run-idファイル経由の逆転チェック自体は
+        # 従来どおり効いたまま — session_id側の除外がdirect側にまで
+        # 波及していないことの回帰確認。
+        worktree_dir = make_ocw_style_worktree(self.tmpdir.name, run_id="run-trap1-direct")
+        run_meter(["event", "run.start", "--idempotency-key", "trap1d-start", "--run-id", "run-trap1-direct",
+                   "--ts", "2026-08-01T12:00:00.000Z", "--base-ref", "master", "--command", "claude"],
+                  self.home)
+        write_transcript(self.projects_dir, "proj", "sess-trap1-direct", [
+            assistant_line("sess-trap1-direct", "m1", cwd=str(worktree_dir), timestamp="2026-08-01T09:05:00.000Z"),
+        ])
+        result = run_ingest(self.home, self.projects_dir)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        event = next(e for e in read_events(self.home) if e["event_type"] == "usage.message")
+        self.assertIsNone(event["run_id"])
+
+    # -- 曖昧なケース: 1つのsession_idに複数のrun_id/roleが紐づく --
+
+    def test_ambiguous_session_run_id_resolves_to_nearest_in_time_sample(self):
+        session_id = "sess-ambiguous"
+        run_meter(["event", "quota.sample", "--idempotency-key", "amb-q1", "--plan-source", "statusline",
+                   "--session-id", session_id, "--run-id", "run-early",
+                   "--ts", "2026-08-01T09:00:00.000Z"], self.home)
+        run_meter(["event", "quota.sample", "--idempotency-key", "amb-q2", "--plan-source", "statusline",
+                   "--session-id", session_id, "--run-id", "run-late",
+                   "--ts", "2026-08-01T11:00:00.000Z"], self.home)
+        run_meter(["event", "phase.start", "--idempotency-key", "amb-ps-early", "--run-id", "run-early",
+                   "--phase", "fix", "--round", "1", "--ts", "2026-08-01T08:00:00.000Z"], self.home)
+        run_meter(["event", "phase.end", "--idempotency-key", "amb-pe-early", "--run-id", "run-early",
+                   "--phase", "fix", "--round", "1", "--ts", "2026-08-01T23:59:00.000Z"], self.home)
+        run_meter(["event", "phase.start", "--idempotency-key", "amb-ps-late", "--run-id", "run-late",
+                   "--phase", "review", "--round", "1", "--ts", "2026-08-01T08:00:00.000Z"], self.home)
+        run_meter(["event", "phase.end", "--idempotency-key", "amb-pe-late", "--run-id", "run-late",
+                   "--phase", "review", "--round", "1", "--ts", "2026-08-01T23:59:00.000Z"], self.home)
+        # メッセージのtsはrun-earlyのサンプル(09:00, 差110分)よりrun-late
+        # のサンプル(11:00, 差10分)に近い — run-lateに解決されるはず。
+        write_transcript(self.projects_dir, "proj", session_id, [
+            assistant_line(session_id, "m1", timestamp="2026-08-01T10:50:00.000Z"),
+        ])
+        result = run_ingest(self.home, self.projects_dir)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        data = json.loads(run_meter(["report", "--phase", "--json"], self.home).stdout)
+        self.assertEqual(data["by_phase"]["review"]["messages"], 1)
+        self.assertEqual(data["by_phase"]["fix"]["messages"], 0)
+
+    def test_ambiguous_session_role_resolves_to_nearest_in_time_sample(self):
+        session_id = "sess-ambiguous-role"
+        run_meter(["event", "quota.sample", "--idempotency-key", "ambr-q1", "--plan-source", "statusline",
+                   "--session-id", session_id, "--role", "commander",
+                   "--ts", "2026-08-01T09:00:00.000Z"], self.home)
+        run_meter(["event", "quota.sample", "--idempotency-key", "ambr-q2", "--plan-source", "statusline",
+                   "--session-id", session_id, "--role", "reviewer",
+                   "--ts", "2026-08-01T11:00:00.000Z"], self.home)
+        run_meter(["event", "usage.message", "--idempotency-key", "ambr-u1", "--message-id", "m-ambiguous-role",
+                   "--session-id", session_id, "--model", "deepseek-v4-pro", "--cost-basis", "estimated",
+                   "--ts", "2026-08-01T10:50:00.000Z"], self.home)
+        data = json.loads(run_meter(["report", "--role", "--json"], self.home).stdout)
+        self.assertEqual(data["by_role"]["reviewer"]["messages"], 1)
+        # "commander"バケット自体はcommanderサンプルのquota.sample自身の
+        # roleフィールドで存在する(total_events)が、usage.messageは
+        # そちら側には計上されない。
+        self.assertEqual(data["by_role"].get("commander", {}).get("messages", 0), 0)
+
+    def test_session_join_tie_break_prefers_earlier_sample(self):
+        session_id = "sess-tie"
+        run_meter(["event", "quota.sample", "--idempotency-key", "tie-q1", "--plan-source", "statusline",
+                   "--session-id", session_id, "--run-id", "run-tie-early",
+                   "--ts", "2026-08-01T09:00:00.000Z"], self.home)
+        run_meter(["event", "quota.sample", "--idempotency-key", "tie-q2", "--plan-source", "statusline",
+                   "--session-id", session_id, "--run-id", "run-tie-late",
+                   "--ts", "2026-08-01T11:00:00.000Z"], self.home)
+        # メッセージは2つのサンプルのちょうど中間 -> 同点。仕様上、前方
+        # (早い方)のサンプルを優先する。
+        write_transcript(self.projects_dir, "proj", session_id, [
+            assistant_line(session_id, "m1", timestamp="2026-08-01T10:00:00.000Z"),
+        ])
+        result = run_ingest(self.home, self.projects_dir)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        event = next(e for e in read_events(self.home) if e["event_type"] == "usage.message")
+        self.assertEqual(event["run_id"], "run-tie-early")
+
+    # -- A: report側join --
+
+    def test_report_backfills_null_run_id_and_unknown_role_without_touching_stored_file(self):
+        session_id = "sess-report-join"
+        run_meter(["event", "quota.sample", "--idempotency-key", "rq1", "--plan-source", "statusline",
+                   "--session-id", session_id, "--run-id", "run-report-1", "--role", "implementer",
+                   "--ts", "2026-08-01T09:00:00.000Z"], self.home)
+        run_meter(["event", "usage.message", "--idempotency-key", "ru1", "--message-id", "m-report-1",
+                   "--session-id", session_id, "--model", "deepseek-v4-pro", "--cost-basis", "estimated",
+                   "--ts", "2026-08-01T09:05:00.000Z"], self.home)
+
+        data = json.loads(run_meter(["report", "--role", "--json"], self.home).stdout)
+        self.assertEqual(data["by_role"]["implementer"]["messages"], 1)
+
+        # 保存済みイベントファイル自体は一切書き換わっていない
+        # (read-time解決のみ)。
+        stored = next(e for e in read_events(self.home) if e["event_type"] == "usage.message")
+        self.assertIsNone(stored["run_id"])
+        self.assertEqual(stored["role"], "unknown")
+
+    def test_report_side_join_feeds_phase_view(self):
+        session_id = "sess-report-phase"
+        run_meter(["event", "quota.sample", "--idempotency-key", "rp-q1", "--plan-source", "statusline",
+                   "--session-id", session_id, "--run-id", "run-report-phase",
+                   "--ts", "2026-08-01T09:00:00.000Z"], self.home)
+        run_meter(["event", "phase.start", "--idempotency-key", "rp-ps", "--run-id", "run-report-phase",
+                   "--phase", "fix", "--round", "1", "--ts", "2026-08-01T09:00:00.000Z"], self.home)
+        run_meter(["event", "phase.end", "--idempotency-key", "rp-pe", "--run-id", "run-report-phase",
+                   "--phase", "fix", "--round", "1", "--ts", "2026-08-01T09:10:00.000Z"], self.home)
+        run_meter(["event", "usage.message", "--idempotency-key", "rp-u1", "--message-id", "m-report-phase",
+                   "--session-id", session_id, "--model", "deepseek-v4-pro", "--cost-basis", "estimated",
+                   "--ts", "2026-08-01T09:05:00.000Z"], self.home)
+        data = json.loads(run_meter(["report", "--phase", "--json"], self.home).stdout)
+        self.assertEqual(data["by_phase"]["fix"]["messages"], 1)
+        self.assertNotIn("(unassigned)", data["by_phase"])
+
+    def test_report_side_join_lets_events_for_pr_and_pr_review_summary_match_backfilled_run_id(self):
+        session_id = "sess-report-pr"
+        run_meter(["event", "quota.sample", "--idempotency-key", "rpr-q1", "--plan-source", "statusline",
+                   "--session-id", session_id, "--run-id", "run-report-pr",
+                   "--ts", "2026-08-01T09:00:00.000Z"], self.home)
+        run_meter(["bind-pr", "--run", "run-report-pr", "--pr", "77"], self.home)
+        run_meter(["event", "usage.message", "--idempotency-key", "rpr-u1", "--message-id", "m-report-pr",
+                   "--session-id", session_id, "--model", "deepseek-v4-pro", "--cost-basis", "estimated",
+                   "--cost-estimate-usd", "0.05",
+                   "--ts", "2026-08-01T09:05:00.000Z"], self.home)
+        data = json.loads(run_meter(["report", "--pr", "77", "--json"], self.home).stdout)
+        self.assertAlmostEqual(data["pr_detail"]["cash_cost_usd"], 0.05)
+
+    def test_report_side_join_backfills_pr_number_symmetric_with_ingest_side(self):
+        # レビュー指摘2: B(ingest側フォールバック)はrun_idが決まると
+        # pr_number/pr_urlも一緒に埋める(build_usage_eventの
+        # `pr_info = binds.get(run_id)`)。A(report側join)がrun_idだけ
+        # 補完してpr_numberを埋めないと、report_by_windowのpr_ranges
+        # (`e.get("pr_number")`が非nullのイベントだけからPRの時刻レンジを
+        # 作る)が「session joinのrun_idを最初から持っていたか
+        # (ingest側で解決済み)、read-timeに初めて解決したか」で
+        # prs_time_overlapの中身が変わってしまう。
+        session_id = "sess-report-pr-window"
+        run_meter(["event", "quota.sample", "--idempotency-key", "rprw-q1", "--plan-source", "statusline",
+                   "--session-id", session_id, "--run-id", "run-report-pr-window",
+                   "--window-id", "win-report-pr-window",
+                   "--ts", "2026-08-01T09:00:00.000Z"], self.home)
+        run_meter(["event", "quota.sample", "--idempotency-key", "rprw-q2", "--plan-source", "statusline",
+                   "--session-id", session_id, "--run-id", "run-report-pr-window",
+                   "--window-id", "win-report-pr-window",
+                   "--ts", "2026-08-01T09:10:00.000Z"], self.home)
+        run_meter(["bind-pr", "--run", "run-report-pr-window", "--pr", "88"], self.home)
+        # session_idのみ(run_id/pr_numberは無し) — Aがrun_idをsession
+        # joinで解決した後、それをbindsに引いてpr_numberも埋める必要が
+        # ある。
+        run_meter(["event", "usage.message", "--idempotency-key", "rprw-u1", "--message-id", "m-report-pr-window",
+                   "--session-id", session_id, "--model", "deepseek-v4-pro", "--cost-basis", "estimated",
+                   "--ts", "2026-08-01T09:05:00.000Z"], self.home)
+        data = json.loads(run_meter(["report", "--window", "--json"], self.home).stdout)
+        self.assertIn(88, data["by_window"]["win-report-pr-window"]["prs_time_overlap"])
+
+    def test_report_side_pr_number_backfill_is_scoped_to_repo(self):
+        # レビュー指摘(ラウンド2 新規1): `pr_binds_from_events()`が`repo`
+        # でスコープしないと、別リポジトリでbindされたPR番号が
+        # read-timeにこのイベントのpr_numberとして焼き込まれ、
+        # `events_for_pr()`の直接マッチ(pr_number一致 + repo一致)を
+        # すり抜けて別リポジトリの費用が混入してしまう。`run_id`は
+        # グローバルに一意な値なので、このセッションのrun_idと別
+        # リポジトリのpr.bindのrun_idを衝突させて再現する。
+        session_id = "sess-cross-repo"
+        run_meter(["event", "pr.bind", "--idempotency-key", "cross-repo-bind",
+                   "--run-id", "run-cross-repo", "--pr-number", "55",
+                   "--repo", "someone/other-repo"], self.home)
+        run_meter(["event", "quota.sample", "--idempotency-key", "cross-repo-q1", "--plan-source", "statusline",
+                   "--session-id", session_id, "--run-id", "run-cross-repo",
+                   "--ts", "2026-08-01T09:00:00.000Z"], self.home)
+        # 自リポジトリ(このテストの実行cwdから自動解決される)の
+        # usage.message。session_idのみでrun_id/pr_numberは無い —
+        # session joinでrun_idを"run-cross-repo"に解決した後、修正前は
+        # そのrun_idを(repoでスコープせず)binds に引いてpr_number=55を
+        # 焼き込んでしまっていた。
+        run_meter(["event", "usage.message", "--idempotency-key", "cross-repo-u1", "--message-id", "m-cross-repo",
+                   "--session-id", session_id, "--model", "deepseek-v4-pro", "--cost-basis", "estimated",
+                   "--cost-estimate-usd", "999.0",
+                   "--ts", "2026-08-01T09:05:00.000Z"], self.home)
+        data = json.loads(run_meter(["report", "--pr", "55", "--json"], self.home).stdout)
+        # このリポジトリにはPR55への直接紐づけも無いはずなので、上の
+        # usage.message(別リポジトリのPR55にbindされたrun_id経由)は
+        # 一切拾われてはいけない。
+        self.assertIsNone(data["pr_detail"]["cash_cost_usd"])
+
+    def test_report_side_join_does_not_overwrite_already_resolved_run_id(self):
+        session_id = "sess-report-nooverwrite"
+        run_meter(["event", "quota.sample", "--idempotency-key", "rno-q1", "--plan-source", "statusline",
+                   "--session-id", session_id, "--run-id", "run-from-session-should-not-be-used",
+                   "--ts", "2026-08-01T09:00:00.000Z"], self.home)
+        run_meter(["event", "usage.message", "--idempotency-key", "rno-u1", "--message-id", "m-noover",
+                   "--session-id", session_id, "--run-id", "run-already-direct",
+                   "--model", "deepseek-v4-pro", "--cost-basis", "estimated",
+                   "--ts", "2026-08-01T09:05:00.000Z"], self.home)
+        data = json.loads(run_meter(["report", "--json"], self.home).stdout)
+        self.assertEqual(data["attribution_run_id_counts"], {"direct": 1, "session_id": 0, "unresolved": 0})
+
+    def test_report_side_join_does_not_overwrite_already_resolved_role(self):
+        session_id = "sess-role-noover"
+        run_meter(["event", "quota.sample", "--idempotency-key", "rrn-q1", "--plan-source", "statusline",
+                   "--session-id", session_id, "--role", "reviewer",
+                   "--ts", "2026-08-01T09:00:00.000Z"], self.home)
+        run_meter(["event", "usage.message", "--idempotency-key", "rrn-u1", "--message-id", "m-role-noover",
+                   "--session-id", session_id, "--role", "implementer",
+                   "--model", "deepseek-v4-pro", "--cost-basis", "estimated",
+                   "--ts", "2026-08-01T09:05:00.000Z"], self.home)
+        data = json.loads(run_meter(["report", "--role", "--json"], self.home).stdout)
+        self.assertEqual(data["by_role"]["implementer"]["messages"], 1)
+        # "reviewer"バケット自体はquota.sample自身のroleフィールドで
+        # 存在する(total_events)が、usage.messageは上書きされずimplementer
+        # のまま — そちら側には計上されない。
+        self.assertEqual(data["by_role"].get("reviewer", {}).get("messages", 0), 0)
+
+    # -- attribution行 --
+
+    def test_attribution_footer_present_on_empty_storage(self):
+        data = json.loads(run_meter(["report", "--json"], self.home).stdout)
+        self.assertEqual(data["attribution_run_id"], "n/a (no usage.message events)")
+        self.assertEqual(data["attribution_role"], "n/a (no usage.message events)")
+
+    def test_attribution_known_limits_present_in_text_and_json(self):
+        # 孫5プロンプト §4「残る限界を出力または文書に書く」/ レビュー
+        # 指摘1: session_id joinを入れても100%解決には到達しない構造的な
+        # 理由を、attribution行と一緒に毎回出す。
+        # レビュー指摘(ラウンド2 新規2): 絶対日付(2026-08-01)はこの
+        # マシン固有の事実であり、`bin/ocw-meter`は各マシンへ個別に
+        # デプロイされるツールの出力として断言してはいけない。ここでは
+        # マシン非依存の構造的な言い回しの一部だけを固定する。
+        data = json.loads(run_meter(["report", "--json"], self.home).stdout)
+        self.assertIn("quota.sampleの記録が始まるより前の期間は", data["attribution_known_limits"])
+        self.assertNotIn("2026-08-01", data["attribution_known_limits"])
+        text = run_meter(["report"], self.home).stdout
+        self.assertIn("attribution_known_limits:", text)
+
+    def test_attribution_footer_counts_direct_session_and_unresolved_and_sums_to_total(self):
+        # direct: run_idが直接設定されている(session join不要)。
+        run_meter(["event", "usage.message", "--idempotency-key", "att-direct", "--message-id", "m-direct",
+                   "--run-id", "run-direct-x", "--model", "deepseek-v4-pro", "--cost-basis", "estimated",
+                   "--ts", "2026-08-01T09:00:00.000Z"], self.home)
+        # via session_id: quota.sampleとのjoinで解決。
+        session_id = "sess-attribution"
+        run_meter(["event", "quota.sample", "--idempotency-key", "att-q1", "--plan-source", "statusline",
+                   "--session-id", session_id, "--run-id", "run-session-x", "--role", "reviewer",
+                   "--ts", "2026-08-01T09:00:00.000Z"], self.home)
+        run_meter(["event", "usage.message", "--idempotency-key", "att-session", "--message-id", "m-session",
+                   "--session-id", session_id, "--model", "deepseek-v4-pro", "--cost-basis", "estimated",
+                   "--ts", "2026-08-01T09:05:00.000Z"], self.home)
+        # unresolved: どちらの手段でも解決できない。
+        run_meter(["event", "usage.message", "--idempotency-key", "att-unresolved", "--message-id", "m-unresolved",
+                   "--model", "deepseek-v4-pro", "--cost-basis", "estimated",
+                   "--ts", "2026-08-01T09:10:00.000Z"], self.home)
+
+        data = json.loads(run_meter(["report", "--json"], self.home).stdout)
+        run_id_counts = data["attribution_run_id_counts"]
+        self.assertEqual(run_id_counts, {"direct": 1, "session_id": 1, "unresolved": 1})
+        self.assertEqual(sum(run_id_counts.values()), 3)
+        self.assertIn("direct 33.3%", data["attribution_run_id"])
+        self.assertIn("via session_id 33.3%", data["attribution_run_id"])
+        self.assertIn("unresolved 33.3%", data["attribution_run_id"])
+
+        # role: session joinで解決したメッセージ(reviewer)のみ埋まる。
+        role_counts = data["attribution_role_counts"]
+        self.assertEqual(role_counts, {"direct": 0, "session_id": 1, "unresolved": 2})
+
+        text = run_meter(["report"], self.home).stdout
+        self.assertIn("attribution (run_id):", text)
+        self.assertIn("attribution (role):", text)
+
+    def test_reconcile_view_omits_attribution_entirely_in_text_and_json(self):
+        # レビュー指摘4: `--reconcile`はvalid_events構築・session_id join
+        # を経由しないためattributionを計算していない。「computeしていない
+        # ものは出さない」をテキスト・--json両方で徹底し、"n/a"のような
+        # フォールバック文字列で欠落をごまかさない。
+        text_result = run_meter(["report", "--reconcile"], self.home)
+        self.assertEqual(text_result.returncode, 0, text_result.stderr)
+        self.assertNotIn("attribution", text_result.stdout)
+
+        json_result = run_meter(["report", "--reconcile", "--json"], self.home)
+        self.assertEqual(json_result.returncode, 0, json_result.stderr)
+        data = json.loads(json_result.stdout)
+        self.assertFalse(any(key.startswith("attribution") for key in data))
+
+
 if __name__ == "__main__":
     unittest.main()

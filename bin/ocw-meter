@@ -425,6 +425,7 @@ cat >"$_ocw_meter_py" <<'PY' || die "failed to write the embedded program to $_o
 # duplicates for one message.id in memory before doing a single write
 # per calendar-day file, rather than writing-then-rewriting through this
 # CLI's per-event primitives.
+import bisect
 import contextlib
 import errno
 import fcntl
@@ -1592,6 +1593,60 @@ def _price_table_predates_message(event):
     return effective > ts[:10]
 
 
+def _attribution_source_counts(usage_events, field, source_field):
+    """孫5プロンプト §3: `field`(run_id/role)がdirect(ingest時にocw-run-id
+    ファイル/Herdr liveから直接解決)/ session_id(quota.sampleとの
+    session_id join。ingest側フォールバックB・report側joinAの両方を
+    区別せず含む)/ unresolvedのどれで埋まったかを数える。`role`は
+    non-nullable フィールドで未解決を"unknown"文字列で表す(plan §8.1)
+    ため、`run_id`(未解決はNone)と判定条件が異なる — 呼び出し側で
+    `field`ごとに揃えた「未解決値」を渡すのではなく、ここで両方を扱う。
+    `source_field`(run_id_source/role_source)が無い、または"direct"の
+    イベントはdirect扱いにする — この機能より前にingestされた
+    イベントは`*_source`フィールド自体が無いが、それらのrun_id/roleは
+    session_id joinがまだ存在しなかった頃に解決されたものなので、
+    実質directと同じ意味である。"""
+    counts = {"direct": 0, "session_id": 0, "unresolved": 0}
+    for e in usage_events:
+        value = e.get(field)
+        if value is None or value == "unknown":
+            counts["unresolved"] += 1
+        elif e.get(source_field) == "session_id":
+            counts["session_id"] += 1
+        else:
+            counts["direct"] += 1
+    return counts
+
+
+def _attribution_line(counts, total):
+    if total == 0:
+        return "n/a (no usage.message events)"
+    return (
+        f"direct {100.0 * counts['direct'] / total:.1f}% / "
+        f"via session_id {100.0 * counts['session_id'] / total:.1f}% / "
+        f"unresolved {100.0 * counts['unresolved'] / total:.1f}%"
+    )
+
+
+# 孫5プロンプト §4「残る限界を出力または文書に書く」/ レビュー指摘1:
+# session_id joinを入れても100%解決には到達しない構造的な理由を、
+# 「直った」と誤読されないよう毎回のattribution行に添える。数値
+# （実測時点のrun_id 61.6%/role 72.1%等）はこの定数に埋め込まない —
+# 母数が変わるたびに嘘になるため、実測値は毎回のattribution行自体に
+# 出る。ここに書くのは変わらない構造的な理由のみ。
+# レビュー指摘(ラウンド2 新規2): 絶対日付(2026-08-01)を埋め込まない —
+# `bin/ocw-meter` は各マシンへ個別にデプロイされ、quota.sampleの記録
+# 開始日はマシンごとのデプロイ日でありこのマシン固有の日付ではない。
+# 断言できるのは「記録開始より前は遡れない」という構造だけ。
+ATTRIBUTION_KNOWN_LIMITS = (
+    "quota.sampleの記録が始まるより前の期間は、session_id joinによる復元が"
+    "できない。以降の期間でも100%には到達しない — claude-dsセッションや"
+    "statusLineが一度も走らなかったセッションはrun_id/roleとも復元不能。"
+    "roleのunknownの一部はHerdr外で起動したClaudeであり原理的に取得不能"
+    "(推測で埋めない方針を維持)。"
+)
+
+
 def usage_cost_footer(usage_events):
     """The cost/coverage/price_table portion of the required per-plan-
     §10.4 footer, shared by every `report` view (孫5 §1: "coverage 併記が
@@ -1612,6 +1667,13 @@ def usage_cost_footer(usage_events):
             cost_bases.add(e["cost_basis"])
         if _price_table_predates_message(e):
             fallback_count += 1
+    # 孫5プロンプト §3: 「run_idとroleは別々の割合になる」— 実測でも
+    # 61.6%/72.1%と異なる(計画書DOC-2608081456)ため、必ず2行に分ける。
+    total_usage = len(usage_events)
+    run_id_counts = _attribution_source_counts(usage_events, "run_id", "run_id_source")
+    role_counts = _attribution_source_counts(usage_events, "role", "role_source")
+    attribution_run_id = _attribution_line(run_id_counts, total_usage)
+    attribution_role = _attribution_line(role_counts, total_usage)
     if usage_events:
         coverage = (
             f"{len(usage_events)} usage.message event(s); run "
@@ -1652,6 +1714,11 @@ def usage_cost_footer(usage_events):
         "cost_basis": cost_basis_summary,
         "cost_estimate_usd": cost_estimate_summary,
         "price_table_fallback_count": fallback_count,
+        "attribution_run_id": attribution_run_id,
+        "attribution_role": attribution_role,
+        "attribution_run_id_counts": run_id_counts,
+        "attribution_role_counts": role_counts,
+        "attribution_known_limits": ATTRIBUTION_KNOWN_LIMITS,
     }
 
 
@@ -1761,7 +1828,17 @@ def ingest_freshness_footer(cursor, ingest_run):
     }
 
 
-def print_footer_text(footer_completeness, footer_cost, footer_freshness, total):
+def print_footer_text(footer_completeness, footer_cost, footer_freshness, total, *, attribution=True):
+    """レビュー指摘4: `attribution`はキーワード専用の明示フラグ
+    (既定True) — 以前は`footer_cost.get('attribution_run_id', 'n/a ...')`
+    で欠落を暗黙に許容していたが、これだと将来 `footer_cost` を手組みする
+    ビューが増えたとき「computed し忘れている」ことに誰も気づけないまま
+    "n/a" が出力され続ける。ここでは逆に、attribution行を出さないビュー
+    （`--reconcile`。孫5のスコープ外で、session_id joinを経由しない）だけ
+    が明示的に`attribution=False`を渡す。`attribution=True`（既定）の
+    ときは`footer_cost['attribution_run_id']`を直接インデックスし、
+    無ければKeyErrorで即座に落ちる — 呼び出し側がこの行を足し忘れたまま
+    サイレントに"n/a"を出し続けることを防ぐ。"""
     def pct(n):
         return (100.0 * n / total) if total else 0.0
 
@@ -1780,6 +1857,10 @@ def print_footer_text(footer_completeness, footer_cost, footer_freshness, total)
     print(f"price_table:   {footer_cost['price_table']}")
     print(f"cost_basis:    {footer_cost['cost_basis']}")
     print(f"cost_estimate: {footer_cost['cost_estimate_usd']}")
+    if attribution:
+        print(f"attribution (run_id): {footer_cost['attribution_run_id']}")
+        print(f"attribution (role):   {footer_cost['attribution_role']}")
+        print(f"attribution_known_limits: {footer_cost['attribution_known_limits']}")
     print(f"last_ingest_at: {footer_freshness['last_ingest_at']}")
     print(f"last_ingest_at_rfc3339: {footer_freshness['last_ingest_at_rfc3339'] or 'unknown'}")
     print(f"ingest (this run): {footer_freshness['ingest_this_run']}")
@@ -2678,6 +2759,13 @@ def _report_reconcile(paths, month, provider_totals, as_json, footer_freshness):
         },
         footer_freshness,
         total_messages,
+        # レビュー指摘4: `--reconcile`（孫5のスコープ外の既存ビュー）は
+        # `valid_events`構築・session_id joinを一切経由しないため
+        # attributionを計算していない。「計算していないので出さない」を
+        # テキスト・--json両方で徹底する — 欠落キーに"n/a"のフォールバック
+        # 文字列を充てると、attributionを計算し忘れた将来のビューが
+        # あっても気づけないまま同じ"n/a"が出続けてしまう。
+        attribution=False,
     )
     print(f"known_gaps:    {summary['known_gaps']}")
     return 0
@@ -2811,6 +2899,102 @@ def auto_ingest_for_report(root, no_ingest):
     if not result["ok"]:
         return {"status": "failed", "error": result["error"]}
     return {"status": "ran", "stats": result}
+
+
+def pr_binds_from_events(events, repo):
+    """report側(A)用: 既にデコード済みのイベント列(`valid_events`)から
+    run_id -> pr.bind情報を組み立てる。ingest側(B)の
+    `load_local_pr_binds_and_run_starts`が返す`binds`と同じ形
+    (`{"pr_number": ..., "pr_url": ...}`) — `backfill_run_id_and_role_
+    via_session`がB側の`build_usage_event`の`pr_info = binds.get(run_id)`
+    と同じ補完をread-time側でも行うために使う(レビュー指摘2)。
+
+    レビュー指摘(ラウンド2 新規1): `repo`でスコープしないと、別repoで
+    bindされた`pr_number`がこの共有ストア（`ocw-meter`は全repo共有）で
+    `usage.message`の`pr_number`に焼き込まれ、`events_for_pr()`の直接
+    マッチ（`e.get("pr_number") == pr_number and e.get("repo") == repo`）
+    をすり抜けて別repoの費用が混入する。`find_approved_pr_numbers_in_
+    month()`の`run_to_pr`と同じ`e.get("repo") == repo`スコープを揃える。
+    `repo`が`None`（PR/window/monthビュー以外でgit repo外から実行された
+    場合）のときは、`repo`が`None`のpr.bindしかマッチしない — 「推測で
+    埋めない」の原則どおり、repoが分からない状況でscopeを緩めない。"""
+    binds = {}
+    for e in events:
+        if e.get("event_type") != "pr.bind":
+            continue
+        if e.get("repo") != repo:
+            continue
+        run_id = e.get("run_id")
+        pr_number = e.get("pr_number")
+        if run_id and isinstance(pr_number, int):
+            binds[run_id] = {"pr_number": pr_number, "pr_url": e.get("pr_url")}
+    return binds
+
+
+def backfill_run_id_and_role_via_session(usage_events, session_attrs, binds):
+    """孫5プロンプト §2 (A: report側join): session_id joinで、まだ
+    run_id/roleが解決できていない`usage.message`だけを読み取り時に補完
+    する。**保存済みイベントファイルは一切書き換えない** — mutates the
+    in-memory dicts `iter_stored_events`/`valid_events` already produced
+    for this one `report` invocation only; nothing here calls
+    `write_event`/`bulk_write_events`. 罠1と同じ理由で、ここでもrun.start
+    逆転チェックは適用しない(session_idはworktreeパスと違って再利用
+    されないため、そもそも対象外)。
+
+    既に値が入っているイベント(ingest側フォールバックで既に解決済み、
+    または旧来のdirect解決)は上書きしない — plan「補完は信頼度の低い
+    方から」の原則どおり、read-time解決はあくまで最後の手段。
+    `run_id_source`/`role_source`はingest側(B)が新規イベントに書き込む
+    のと同じキーで、`usage_cost_footer`のattribution行がingest側/
+    report側どちらのjoinで埋まったかを区別せず「via session_id」として
+    一括で数えられるようにする(古い、この機能より前にingestされた
+    イベントは両フィールドとも欠落しており、run_idが埋まっていれば
+    それは常にdirect解決だったとみなせる)。
+
+    レビュー指摘2: `pr_number`/`pr_url`も、B側の`build_usage_event`が
+    `pr_info = binds.get(run_id)`で行っているのと同じ補完をここでも
+    行う。これをしないと「session joinでrun_idを持つようになったのに、
+    ingestより後に読まれたか先に読まれたかでpr_numberの有無が変わる」
+    という非対称が生じ、`report_by_window`の`pr_ranges`（`e.get(
+    "pr_number")`が非nullのイベントだけからPRの時刻レンジを作る）が
+    ingestタイミング依存になる。run_idがこの関数の対象外（元から埋まっ
+    ていた）イベントも含め、run_idがありpr_numberが無い全usage.message
+    に対して行う。
+
+    レビュー指摘(ラウンド2 新規1): ここで揃えているのは「run_idが決まれば
+    pr_numberも決まる」という**関係**だけであり、bindの絞り方までB側と
+    同じにするという意味ではない。渡ってくる`binds`（`pr_binds_from_
+    events()`が組む）はrepoスコープ付き — `events_for_pr()`の
+    `bound_run_ids`と同じ絞り方に揃えてある。一方B側の`load_local_pr_
+    binds_and_run_starts()`が返す`binds`にはrepoスコープが無く、この点で
+    AとBは意図的に異なる（ラウンド2 新規1: repoスコープ無しの`binds`を
+    read-timeに無条件適用すると、別リポジトリでbindされたpr_numberが
+    このrepoのusage.messageへ焼き込まれ、`events_for_pr()`の直接マッチ
+    をすり抜けて別リポジトリの費用が混入する実測済みの不具合になる）。
+    「Bと揃える」つもりでこの関数へrepoスコープ無しの`binds`を渡さない
+    こと。B側自体のrepoスコープ欠如は本PR以前から存在する別の問題であり、
+    本PRの意図的な対象外。"""
+    for e in usage_events:
+        if e.get("event_type") != "usage.message":
+            continue
+        session_id = e.get("session_id")
+        if session_id:
+            needs_run_id = e.get("run_id") is None
+            needs_role = e.get("role") in (None, "unknown")
+            if needs_run_id or needs_role:
+                ts = parse_ts(e.get("ts"))
+                session_run_id, session_role = resolve_session_attrs(session_attrs, session_id, ts)
+                if needs_run_id and session_run_id is not None:
+                    e["run_id"] = session_run_id
+                    e["run_id_source"] = "session_id"
+                if needs_role and session_role is not None:
+                    e["role"] = session_role
+                    e["role_source"] = "session_id"
+        if e.get("pr_number") is None:
+            pr_info = binds.get(e.get("run_id")) if e.get("run_id") else None
+            if pr_info is not None:
+                e["pr_number"] = pr_info.get("pr_number")
+                e["pr_url"] = pr_info.get("pr_url")
 
 
 def cmd_report(args):
@@ -3007,6 +3191,18 @@ def cmd_report(args):
             malformed += 1
         else:
             valid_events.append(obj)
+
+    # 孫5プロンプト §2 (A: report側join, 計画書「【2】【3】の鍵」): built
+    # ONCE here, from the full unscoped `valid_events` (a session's
+    # quota.sample history must not be cut down to whatever subset a
+    # later --pr/--month filter happens to select — same reasoning as
+    # `_quota_session_contributions`'s own full-store requirement), and
+    # applied before ANY view-specific filtering (`events_for_pr` below
+    # included) so every view — default/--pr/--phase/--role/--model/
+    # --window/--month — sees the same backfilled run_id/role/pr_number.
+    backfill_run_id_and_role_via_session(
+        valid_events, session_attrs_from_events(valid_events), pr_binds_from_events(valid_events, repo)
+    )
 
     if month_flag_present and view is None:
         return _report_month_standalone(paths, valid_events, malformed, month, repo, as_json, footer_freshness)
@@ -3899,17 +4095,127 @@ def resolve_herdr_role_map():
     return role_map
 
 
+# ── session_id join: quota.sample -> usage.message run_id/role ─────────
+# 計画書 DOC-2608081456【3】/「【2】【3】の鍵」/ 孫5プロンプト: quota.sample
+# has session_id 100% and run_id/role ~78% (both captured from OCW_RUN_ID/
+# OCW_ROLE at the moment `snapshot-quota` ran — see build_envelope's
+# defaults and record_quota_sample), while usage.message's OWN run_id/role
+# resolution (resolve_run_id_via_ocw_run_id_file / resolve_herdr_role_map)
+# depends on live state that can vanish (`ocw rm` deletes the git-dir file;
+# closing a Herdr pane makes it unqueryable) before `ingest` ever runs.
+# session_id, unlike a worktree path, is never reused, so joining on it
+# lets both `ingest` (B, this file's own scan of its event store) and
+# `report` (A, read-time only, plan's "past isn't recalculated" invariant)
+# recover the answer from data that's already durably stored.
+
+
+def _accumulate_session_attr_sample(raw, event):
+    """Feeds one already-decoded event into `raw` (session_id -> {"run_id":
+    [(ts, value), ...], "role": [...]}, unsorted) if it's a quota.sample
+    carrying a session_id. Shared by the ingest-side single-pass scan
+    (`load_local_pr_binds_and_run_starts`, which decodes lines itself) and
+    the report-side scan (`session_attrs_from_events`, over already-decoded
+    `valid_events`) so the extraction rule lives in exactly one place.
+
+    run_id and role are appended independently (not as one paired sample):
+    a quota.sample can carry one without the other (OCW_RUN_ID set but
+    OCW_ROLE unset, or vice versa — see record_quota_sample), so requiring
+    both together would throw away usable half-samples."""
+    if event.get("event_type") != "quota.sample":
+        return
+    session_id = event.get("session_id")
+    if not isinstance(session_id, str) or not session_id:
+        return
+    ts = parse_ts(event.get("ts"))
+    if ts is None:
+        return
+    entry = raw.setdefault(session_id, {"run_id": [], "role": []})
+    run_id = event.get("run_id")
+    if isinstance(run_id, str) and run_id:
+        entry["run_id"].append((ts, run_id))
+    role = event.get("role")
+    if isinstance(role, str) and role and role != "unknown":
+        entry["role"].append((ts, role))
+
+
+def _finalize_session_attrs(raw):
+    """レビュー指摘3: `_nearest_sample_value`はbisectのため`times`列を
+    その場で作っていたが、この関数は補完対象のusage.messageごと・
+    run_id/roleで1回ずつ呼ばれる(実ストア実測で1回のreportあたり
+    877,012要素分の再構築)。ここでソート済みの(ts, value)を
+    `{"ts": [...], "values": [...]}`の2並列リストに1回だけ変換して
+    持たせ、`_nearest_sample_value`側の再構築を無くす。"""
+    for entry in raw.values():
+        for field in ("run_id", "role"):
+            entry[field].sort(key=lambda item: item[0])
+            entry[field] = {
+                "ts": [item[0] for item in entry[field]],
+                "values": [item[1] for item in entry[field]],
+            }
+    return raw
+
+
+def session_attrs_from_events(events):
+    """Report側(A)用: 既にデコード済みのイベント列(`valid_events`)から
+    session_attrsを組み立てる。ingest側(B)は同じ抽出を
+    `load_local_pr_binds_and_run_starts`内の1パスで行う(全走査を二重に
+    しないため)。"""
+    raw = {}
+    for e in events:
+        _accumulate_session_attr_sample(raw, e)
+    return _finalize_session_attrs(raw)
+
+
+def _nearest_sample_value(times_values, ts):
+    """`times_values`: `_finalize_session_attrs`が組んだ
+    `{"ts": [ts昇順...], "values": [...]}`(同じ長さの2並列リスト)。
+    `ts`に時刻が最も近いサンプルのvalueを返す(前後どちらでもよい —
+    quota.sampleは60秒スロットルの定期ポーリングであり、対象メッセージ
+    の前後どちらの状態が「そのときのrun_id/role」かを決める根拠は無い)。
+    同点は前方(`ts`より前)のサンプルを優先する — 決定的にするためだけの
+    選択で、後方を優先すべき積極的な理由は無い。1つのsession_idに複数の
+    run_id/roleが紐づく場合(同じセッションでworktreeを移った等)も、
+    「一意でなければ解決しない」ではなくこの時刻近傍則で1つに定める
+    方針とした(計画書 DOC-2608081456 孫5プロンプト §1)。"""
+    times = times_values["ts"]
+    if not times or ts is None:
+        return None
+    values = times_values["values"]
+    idx = bisect.bisect_left(times, ts)
+    candidates = []
+    if idx < len(times):
+        candidates.append((times[idx], values[idx]))
+    if idx > 0:
+        candidates.append((times[idx - 1], values[idx - 1]))
+    best = min(candidates, key=lambda item: (abs((item[0] - ts).total_seconds()), item[0]))
+    return best[1]
+
+
+def resolve_session_attrs(session_attrs, session_id, ts):
+    """(run_id, role) resolved via session_id join, each independently
+    nearest-in-time to `ts`. Returns (None, None) when `session_id` has no
+    quota.sample history at all (not every session gets sampled — e.g.
+    claude-ds sessions, or ones where statusLine never ran)."""
+    entry = session_attrs.get(session_id) if session_id else None
+    if entry is None:
+        return None, None
+    return _nearest_sample_value(entry["run_id"], ts), _nearest_sample_value(entry["role"], ts)
+
+
 # ── run_id / PR attribution from this meter's own local event store ────
 
 def load_local_pr_binds_and_run_starts(paths):
-    """Single pass over every stored event, building two lookup tables
+    """Single pass over every stored event, building three lookup tables
     `ingest` needs: the pr.bind table (plan §7.4 PR resolution once a
-    run_id is known) and run_id -> run.start ts (PR #27 review round 2
-    finding "新規1", see resolve_run_id_via_ocw_run_id_file's caller).
-    Tolerates malformed lines by skipping them — this is advisory
-    context-building, not `validate`, so a corrupt line here just means
-    less context, not an error."""
+    run_id is known), run_id -> run.start ts (PR #27 review round 2
+    finding "新規1", see resolve_run_id_via_ocw_run_id_file's caller), and
+    session_attrs (計画書 DOC-2608081456 孫5プロンプト §1: session_id ->
+    quota.sample-derived run_id/role samples, for `build_usage_event`'s
+    session_id join fallback). Tolerates malformed lines by skipping
+    them — this is advisory context-building, not `validate`, so a
+    corrupt line here just means less context, not an error."""
     binds, run_starts = {}, {}
+    session_attrs_raw = {}
     for target in sorted(paths.events_dir.glob("*.jsonl")):
         try:
             text = target.read_text(encoding="utf-8", errors="replace")
@@ -3932,7 +4238,9 @@ def load_local_pr_binds_and_run_starts(paths):
                 ts = parse_ts(obj.get("ts"))
                 if ts is not None:
                     run_starts[run_id] = ts
-    return binds, run_starts
+            elif event_type == "quota.sample":
+                _accumulate_session_attr_sample(session_attrs_raw, obj)
+    return binds, run_starts, _finalize_session_attrs(session_attrs_raw)
 
 
 def resolve_run_id_via_ocw_run_id_file(cwd, cache):
@@ -4035,7 +4343,7 @@ def gh_pr_for_branch(branch):
 
 # ── assembling usage.message events ─────────────────────────────────────
 
-def build_usage_event(candidate, price_tables, today_str, role_map, binds, run_starts, pr_link_map, gh_cache, run_id_cache, repo_cache):
+def build_usage_event(candidate, price_tables, today_str, role_map, binds, run_starts, pr_link_map, gh_cache, run_id_cache, repo_cache, session_attrs):
     usage = candidate["usage"] or {}
     input_tokens = usage.get("input_tokens")
     cache_read = usage.get("cache_read_input_tokens")
@@ -4070,7 +4378,7 @@ def build_usage_event(candidate, price_tables, today_str, role_map, binds, run_s
     role_info = role_map.get(session_id) if session_id else None
 
     worktree = candidate["cwd"]
-    run_id = resolve_run_id_via_ocw_run_id_file(worktree, run_id_cache)
+    direct_run_id = resolve_run_id_via_ocw_run_id_file(worktree, run_id_cache)
     # PR #27 review round 2 finding "新規1": the ocw-run-id file answers
     # "which run_id does THIS PATH belong to NOW", not "...when this
     # message was generated". `ocw rm <name>` + `ocw new <name>` reuses
@@ -4081,10 +4389,40 @@ def build_usage_event(candidate, price_tables, today_str, role_map, binds, run_s
     # (null, not guessed). Unknown run.start ts (e.g. from before this
     # meter started recording, or a different machine) gives the match
     # the benefit of the doubt rather than nulling everything out.
-    if run_id is not None and ts_dt is not None:
-        run_start_ts = run_starts.get(run_id)
+    #
+    # This reversal check applies ONLY to `direct_run_id` (see below) —
+    # 計画書 DOC-2608081456 罠1: it exists to catch worktree PATH reuse,
+    # and session_id (unlike a path) is never reused, so applying it to
+    # the session_id-join fallback would null out otherwise-correct
+    # attributions instead of catching anything real.
+    if direct_run_id is not None and ts_dt is not None:
+        run_start_ts = run_starts.get(direct_run_id)
         if run_start_ts is not None and ts_dt < run_start_ts:
-            run_id = None
+            direct_run_id = None
+
+    direct_role = (role_info or {}).get("role")
+    # レビュー指摘5: "unknown"はこのスキーマ全体で「未解決」を表す文字列
+    # センチネル(`_accumulate_session_attr_sample`/`_attribution_source_
+    # counts`と同じ判定基準)。`resolve_herdr_role_map()`はHerdrペインの
+    # `label`をそのまま`role`に入れる(人間が`herdr pane rename`で自由に
+    # 付けられ、"unknown"という名前も付けうる)ため、正規化せずに真偽値
+    # 判定へ渡すと"unknown"が「directで解決済み」と誤認され、本来通す
+    # べきsession joinへのフォールバックが飛ばされてしまう。
+    if direct_role == "unknown":
+        direct_role = None
+
+    # 孫5プロンプト §1 (B: ingest側フォールバック / 計画書「【2】【3】の鍵」):
+    # direct resolution (ocw-run-id file / Herdr live pane list) failed to
+    # answer, fall back to the session_id join against quota.sample before
+    # giving up. See `_nearest_sample_value`'s docstring for how a
+    # session_id with multiple distinct run_id/role samples is resolved.
+    session_run_id, session_role = (
+        resolve_session_attrs(session_attrs, session_id, ts_dt) if session_id else (None, None)
+    )
+    run_id = direct_run_id if direct_run_id is not None else session_run_id
+    run_id_source = "direct" if direct_run_id is not None else ("session_id" if session_run_id is not None else None)
+    role = direct_role or session_role
+    role_source = "direct" if direct_role else ("session_id" if session_role else None)
 
     pr_info = binds.get(run_id) if run_id else None
     if pr_info is None:
@@ -4123,13 +4461,19 @@ def build_usage_event(candidate, price_tables, today_str, role_map, binds, run_s
         "parser_version": INGEST_PARSER_VERSION,
         "completeness": completeness,
         "run_id": run_id,
+        # 孫5プロンプト §3: どの経路で解決したか(direct/session_id/未解決)
+        # を`report`のattribution行が数えられるようにする内部由来タグ。
+        # 既存の usage.message スキーマには無かった新規フィールドで、
+        # 未知フィールドは forward-compatible に保持される(plan §9.1)。
+        "run_id_source": run_id_source,
         "repo": repo_slug_for_cwd(worktree, repo_cache),
         "worktree": worktree,
         "branch": candidate["git_branch"],
         "head_sha": None,
         "workspace_id": (role_info or {}).get("workspace_id"),
         "pane_id": (role_info or {}).get("pane_id"),
-        "role": (role_info or {}).get("role") or "unknown",
+        "role": role or "unknown",
+        "role_source": role_source,
         "session_id": session_id,
         "provider": provider,
         "model": model,
@@ -4385,7 +4729,7 @@ def perform_ingest(root, since_dt=None):
         }
 
     role_map = resolve_herdr_role_map()
-    binds, run_starts = load_local_pr_binds_and_run_starts(paths)
+    binds, run_starts, session_attrs = load_local_pr_binds_and_run_starts(paths)
     price_tables = load_price_tables(price_table_dir())
     # Round-1 review finding 3: a `time_of_day_pricing` block that's
     # PRESENT but unusable must not look identical to "this table simply
@@ -4398,7 +4742,7 @@ def perform_ingest(root, since_dt=None):
     gh_cache, run_id_cache, repo_cache = {}, {}, {}
 
     events = [
-        build_usage_event(candidate, price_tables, today_str, role_map, binds, run_starts, pr_link_map, gh_cache, run_id_cache, repo_cache)
+        build_usage_event(candidate, price_tables, today_str, role_map, binds, run_starts, pr_link_map, gh_cache, run_id_cache, repo_cache, session_attrs)
         for candidate in candidates.values()
     ]
 
