@@ -337,13 +337,17 @@ ocw-meter report --reconcile [--month <YYYY-MM>] [--provider-total <model>=<toke
 
 # statusLineコマンドとして呼ばれ、stdinのJSONからquota.sampleを1行append、表示文字列をstdoutへ返す
 ocw-meter snapshot-quota
+
+# state/meter-errors.jsonl・state/quota-worktree-refusal.jsonの古いエントリを掃除する（events/には触れない）。
+# 既定はdry-run。--applyで実削除、--older-than <日数>で保持期間指定（既定30日）
+ocw-meter prune-diagnostics [--older-than <days>] [--apply]
 ```
 
 | サブコマンド | 失敗時の挙動 |
 |---|---|
 | `event` / `bind-pr` | **常に exit 0**。stderrに1行warnのみ。本番フローを止めない |
 | `snapshot-quota` | **常に exit 0 かつ必ずstdoutに表示文字列を出す**（statusLineが壊れて画面が崩れる事態を絶対に避ける。event/bind-pr以上に厳格なfail-open） |
-| `validate` / `report` / `ingest` | 失敗したら非ゼロで落ちる（壊れたデータを黙って集計しない） |
+| `validate` / `report` / `ingest` / `prune-diagnostics` | 失敗したら非ゼロで落ちる（壊れたデータを黙って集計しない） |
 
 **`--repo <owner>/<name>`（`--pr`・standalone `--month`専用。孫5後半で追加）**:
 
