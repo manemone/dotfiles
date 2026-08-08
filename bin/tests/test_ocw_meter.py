@@ -2263,7 +2263,7 @@ class PriceTableFallbackWarningTests(OcwMeterTestCase):
         self.assertEqual(applied[0]["fallback_event_count"], 1)
         self.assertTrue(applied[0]["is_fallback"])
         self.assertEqual(data["price_table_fallback_count"], 1)
-        # Text output must say "1件中1件" (partial), not claim the whole
+        # Text output must say "2件中1件" (partial), not claim the whole
         # month (2件) is a fallback.
         text_result = run_report(self.home, self.projects_dir, args=["--month", "2026-08"], price_dir=price_dir)
         self.assertIn("2件中1件", text_result.stdout)
