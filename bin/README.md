@@ -349,6 +349,14 @@ ocw-meter prune-diagnostics [--older-than <days>] [--apply]
 | `snapshot-quota` | **常に exit 0 かつ必ずstdoutに表示文字列を出す**（statusLineが壊れて画面が崩れる事態を絶対に避ける。event/bind-pr以上に厳格なfail-open） |
 | `validate` / `report` / `ingest` / `prune-diagnostics` | 失敗したら非ゼロで落ちる（壊れたデータを黙って集計しない） |
 
+**`prune-diagnostics` の既定保持期間（30日）について**: これは運用上のリテンションポリシーであり、
+「今すぐ全部消す」既定ではない。数日〜1週間前にできたばかりのエントリ（一時的な設定ミスの記録など）を
+今すぐ後始末したい場合は、`--older-than` に小さい値を明示する（例:
+`ocw-meter prune-diagnostics --older-than 1 --apply`）。
+`OCW_METER_HOME`（またはその既定値）と `$HOME` 由来の既定rootの両方を調べる
+（`state/quota-worktree-refusal.json` は常に既定rootにしか書かれないため。片方がGitワークツリー内で
+使えなくても、もう片方が生きていれば処理を続ける）。
+
 **`--repo <owner>/<name>`（`--pr`・standalone `--month`専用。孫5後半で追加）**:
 
 `~/.local/state/ocw-meter`は本マシンの`ocw-meter`が向いた**全リポジトリで共有される1つのストア**だが、

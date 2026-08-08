@@ -2585,6 +2585,80 @@ class PruneDiagnosticsTests(OcwMeterTestCase):
         self.assertEqual(result.returncode, 0)
         self.assertFalse(errors_path.exists())
 
+    def test_trailing_slash_ocw_meter_home_does_not_double_count_meter_errors(self):
+        # round-2 review finding 2: storage_root() and
+        # default_storage_root() were deduped by bare string equality —
+        # a trailing slash on OCW_METER_HOME made the SAME real
+        # directory look like two distinct roots, so meter-errors.jsonl
+        # got read (and reported) twice, and dry-run/--apply disagreed.
+        fake_home = pathlib.Path(self.tmpdir.name) / "fake-home-for-trailing-slash"
+        fake_home.mkdir()
+        default_root = fake_home / ".local" / "state" / "ocw-meter"
+        old_ts = _iso(datetime.now(timezone.utc) - timedelta(days=31))
+        errors_path = _write_meter_errors(
+            default_root,
+            [
+                {
+                    "schema_version": 1, "event_type": "meter.error",
+                    "idempotency_key": "meter-error:storage_home_inside_git_worktree:old",
+                    "ts": old_ts, "stage": "storage_home_inside_git_worktree", "completeness": "unknown",
+                },
+            ],
+        )
+        # Same real directory as default_storage_root() would compute,
+        # spelled with a trailing slash as OCW_METER_HOME.
+        ocw_meter_home_with_slash = str(default_root) + "/"
+
+        result = run_meter(["prune-diagnostics"], ocw_meter_home_with_slash, extra_env={"HOME": str(fake_home)})
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("would remove 1, kept 0", result.stdout)
+
+        result_apply = run_meter(
+            ["prune-diagnostics", "--apply"], ocw_meter_home_with_slash, extra_env={"HOME": str(fake_home)}
+        )
+        self.assertEqual(result_apply.returncode, 0)
+        self.assertIn("removed 1, kept 0", result_apply.stdout)
+        # The only entry was dropped, so the file is removed outright
+        # (same convention as an emptied meter-errors.jsonl elsewhere) —
+        # if it had instead been double-counted, this would still exist
+        # with the second, incorrectly-kept "copy" of the entry.
+        self.assertFalse(errors_path.exists())
+
+    def test_per_root_breakdown_shown_when_both_roots_have_meter_errors(self):
+        # round-2 review finding 4: once meter-errors.jsonl could live
+        # under either root, the aggregate count alone no longer says
+        # which physical file(s) actually get rewritten.
+        fake_home = pathlib.Path(self.tmpdir.name) / "fake-home-for-breakdown"
+        fake_home.mkdir()
+        default_root = fake_home / ".local" / "state" / "ocw-meter"
+        old_ts = _iso(datetime.now(timezone.utc) - timedelta(days=31))
+        _write_meter_errors(
+            default_root,
+            [
+                {
+                    "schema_version": 1, "event_type": "meter.error",
+                    "idempotency_key": "meter-error:storage_home_inside_git_worktree:default",
+                    "ts": old_ts, "stage": "storage_home_inside_git_worktree", "completeness": "unknown",
+                },
+            ],
+        )
+        _write_meter_errors(
+            self.home,
+            [
+                {
+                    "schema_version": 1, "event_type": "meter.error",
+                    "idempotency_key": "meter-error:write_event_lock_timeout:custom",
+                    "ts": old_ts, "stage": "write_event_lock_timeout", "completeness": "unknown",
+                },
+            ],
+        )
+
+        result = run_meter(["prune-diagnostics"], self.home, extra_env={"HOME": str(fake_home)})
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("would remove 2, kept 0", result.stdout)
+        self.assertIn(str(pathlib.Path(default_root).resolve()), result.stdout)
+        self.assertIn(str(pathlib.Path(self.home).resolve()), result.stdout)
+
     def test_negative_older_than_is_rejected(self):
         result = run_meter(["prune-diagnostics", "--older-than", "-1"], self.home)
         self.assertNotEqual(result.returncode, 0)

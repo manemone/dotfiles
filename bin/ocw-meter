@@ -190,9 +190,14 @@ subcommands:
     back to the default root whenever OCW_METER_HOME itself is refused
     for resolving inside a Git worktree). A root that itself resolves
     inside a Git worktree is skipped, not fatal, as long as the other
-    one is reachable. A corrupt (unparseable, or not a JSON object)
-    quota-worktree-refusal.json is reported as such, not silently
-    treated as empty; --apply replaces it with a fresh empty state.
+    one is reachable. The two roots are compared by RESOLVED path, so a
+    trailing slash or a symlink does not make the same real directory
+    look like two roots and get double-counted. The roots actually
+    checked are always printed, and meter-errors.jsonl gets a per-root
+    breakdown whenever more than one contributed to the total. A
+    corrupt (unparseable, or not a JSON object) quota-worktree-
+    refusal.json is reported as such, not silently treated as empty;
+    --apply replaces it with a fresh empty state.
 
     Always reports both a removed count and a kept count, plus (as
     informational-only text, never as a deletion criterion) how many of
@@ -4071,9 +4076,18 @@ def record_quota_sample(obj):
     # path), so `refusal_paths` still ends up None via that check, no
     # new paradox introduced.
     default_root = default_storage_root()
-    refusal_paths = (
-        Paths(default_root) if (default_root and not in_git_worktree(default_root)) else None
-    )
+    # 孫1 round-2 review finding 1: `default_root == root` is exactly the
+    # common case the round-1 fix above stopped short-circuiting on
+    # (OCW_METER_HOME unset) — so `in_git_worktree(default_root)` below
+    # and `in_git_worktree(root)` a few lines down were now hitting the
+    # SAME path with two separate `git rev-parse --is-inside-work-tree`
+    # subprocess calls per `snapshot-quota` invocation, exactly the
+    # doubled cost this function's own docstring and the comment on the
+    # per-session throttle check above both say to avoid. Evaluate it
+    # ONCE here and reuse the result for `root` whenever the two paths
+    # are identical.
+    default_root_is_worktree = bool(default_root) and in_git_worktree(default_root)
+    refusal_paths = Paths(default_root) if (default_root and not default_root_is_worktree) else None
     refusal_state = {}
     if refusal_paths is not None:
         # Already pruned of anything >24h old (see load_and_prune_
@@ -4086,7 +4100,8 @@ def record_quota_sample(obj):
         if last_refused_at is not None and (now - last_refused_at).total_seconds() < interval:
             return  # still within the suppression window from a previous refusal
 
-    if in_git_worktree(root):
+    root_is_worktree = default_root_is_worktree if (default_root and default_root == root) else in_git_worktree(root)
+    if root_is_worktree:
         print(
             f"warning: OCW_METER_HOME ({root}) resolves inside a Git worktree; "
             "refusing to write there (no quota.sample recorded)",
@@ -4332,6 +4347,17 @@ def _parse_prune_diagnostics_args(args):
     return apply_changes, older_than_days
 
 
+def _resolve_path_str(path):
+    """Same normalization `in_git_worktree` applies internally (resolve,
+    falling back to the original on OSError) — used here so dedup
+    compares REAL locations, not surface path spelling."""
+    p = pathlib.Path(path)
+    try:
+        return str(p.resolve())
+    except OSError:
+        return str(p)
+
+
 def _diagnostic_target_roots():
     """The distinct, reachable storage roots ocw-meter's OWN diagnostics
     can actually live under (孫1 round-1 review finding 2):
@@ -4344,11 +4370,30 @@ def _diagnostic_target_roots():
     load_and_prune_worktree_refusal_state's docstring) — never under a
     custom OCW_METER_HOME. A root that itself resolves inside a Git
     worktree is skipped, not fatal for the whole subcommand: the other
-    root may still be reachable and worth cleaning."""
+    root may still be reachable and worth cleaning.
+
+    Dedup compares RESOLVED paths (孫1 round-2 review finding 2): a bare
+    string comparison let a trailing slash or a symlink hop make
+    `storage_root()` and `default_storage_root()` look like two
+    different roots when they were the same real directory, so
+    `state/meter-errors.jsonl` got read (and counted) twice — dry-run
+    and `--apply` then disagreed on how many lines would be removed.
+    The RESOLVED path is also what gets returned and used to build
+    `Paths(...)` downstream, so every consumer sees the same
+    canonicalized root `in_git_worktree` itself already compares
+    against."""
     roots = []
+    seen = set()
     for candidate in (storage_root(), default_storage_root()):
-        if candidate and candidate not in roots and not in_git_worktree(candidate):
-            roots.append(candidate)
+        if not candidate:
+            continue
+        resolved = _resolve_path_str(candidate)
+        if resolved in seen:
+            continue
+        if in_git_worktree(resolved):
+            continue
+        seen.add(resolved)
+        roots.append(resolved)
     return roots
 
 
@@ -4430,7 +4475,13 @@ def cmd_prune_diagnostics(args):
     legitimately end up at either, and quota-worktree-refusal.json is
     ALWAYS at the default root regardless of OCW_METER_HOME. A root
     that resolves inside a Git worktree is skipped, not fatal: the
-    other root may still be reachable.
+    other root may still be reachable. The two are compared by
+    RESOLVED path, so a trailing slash or a symlink hop never makes the
+    same real directory look like two different roots (which would
+    otherwise double-count state/meter-errors.jsonl). The roots
+    actually selected are always printed, and state/meter-errors.jsonl
+    gets a per-root breakdown whenever more than one of them
+    contributed to the total.
 
     Default is dry-run: reports counts without writing anything. Only
     --apply rewrites the files, and only entries older than
@@ -4466,6 +4517,12 @@ def cmd_prune_diagnostics(args):
         )
         return 0
 
+    # 孫1 round-2 review finding 4: with two files now possibly spread
+    # across two DIFFERENT physical directories, a single aggregate
+    # count no longer says which store actually gets rewritten. Always
+    # print which roots `_diagnostic_target_roots()` actually selected.
+    print(f"  checked roots: {', '.join(target_roots)}")
+
     def _report(label, dropped, kept_count, dropped_test_like):
         verb = "removed" if apply_changes else "would remove"
         suffix = f" ({dropped_test_like} of those look test-derived, heuristic only)" if dropped_test_like else ""
@@ -4474,6 +4531,7 @@ def cmd_prune_diagnostics(args):
     errors_dropped_total = 0
     errors_kept_total = 0
     errors_dropped_test_like_total = 0
+    per_root_error_reports = []
     for root in target_roots:
         paths = Paths(root)
         if not paths.meter_errors_file.exists():
@@ -4490,12 +4548,22 @@ def cmd_prune_diagnostics(args):
             except OSError as exc:
                 print(f"error: failed to rewrite {paths.meter_errors_file}: {exc}", file=sys.stderr)
                 return 1
+        per_root_error_reports.append((root, dropped, len(kept), dropped_test_like))
         errors_dropped_total += dropped
         errors_kept_total += len(kept)
         errors_dropped_test_like_total += dropped_test_like
     _report("state/meter-errors.jsonl", errors_dropped_total, errors_kept_total, errors_dropped_test_like_total)
+    if len(per_root_error_reports) > 1:
+        # More than one physical file actually contributed to the total
+        # above — break it down so it is clear which store each part
+        # came (or will come) from.
+        verb = "removed" if apply_changes else "would remove"
+        for root, dropped, kept_count, dropped_test_like in per_root_error_reports:
+            suffix = f" ({dropped_test_like} test-derived)" if dropped_test_like else ""
+            print(f"    {root}: {verb} {dropped}, kept {kept_count}{suffix}")
 
     default_root = default_storage_root()
+    default_root = _resolve_path_str(default_root) if default_root else None
     if default_root is None or default_root not in target_roots:
         print("  state/quota-worktree-refusal.json: default storage root unreachable — 0 removed, 0 kept")
         return 0
