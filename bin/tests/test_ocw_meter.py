@@ -254,6 +254,12 @@ def write_transcript(projects_dir, slug, session_id, line_dicts):
     return path
 
 
+def write_price_table(price_dir, filename, table):
+    price_dir = pathlib.Path(price_dir)
+    price_dir.mkdir(parents=True, exist_ok=True)
+    (price_dir / filename).write_text(json.dumps(table, ensure_ascii=False), encoding="utf-8")
+
+
 def make_ocw_style_worktree(tmp_root, run_id):
     """Creates a throwaway git repo + linked worktree and writes
     `run_id` to `<worktree's git-dir>/ocw-run-id`, mirroring bin/ocw's
@@ -1878,6 +1884,414 @@ class IngestTests(OcwMeterTestCase):
         r2 = run_ingest(self.home, self.projects_dir)
         self.assertEqual(r2.returncode, 0, r2.stderr)
         self.assertFalse(events_file.read_text(encoding="utf-8").endswith("\n"))
+
+
+class TimeOfDayPricingTests(OcwMeterTestCase):
+    """計画書 DOC-2608081456孫3: time-of-day price table extension. All
+    windows below use `tz_offset: "+08:00"` (Beijing time, matching
+    DeepSeek's own announced windows) with a deliberately simple
+    base/window price pair (1.0 / 2.0 per token) so cost assertions
+    don't need to reproduce the real formula's arithmetic.
+
+    `time_of_day_basis` uses basis-neutral values (`in_window` /
+    `base_rate`, not `peak` / `off_peak` — レビュー指摘4: this schema
+    can't know which side is actually more expensive)."""
+
+    def setUp(self):
+        super().setUp()
+        self.projects_dir = pathlib.Path(self.tmpdir.name) / "claude-projects"
+        self.projects_dir.mkdir(parents=True, exist_ok=True)
+        self.price_dir = pathlib.Path(self.tmpdir.name) / "prices-tod"
+
+    def _tod_table(self, version="deepseek-2026-08-01-tod"):
+        return {
+            "price_table_version": version,
+            "effective_date": "2026-08-01",
+            "models": {
+                "deepseek-v4-pro": {"cache_hit_in": 0, "cache_miss_in": 1.0, "out": 0},
+            },
+            "time_of_day_pricing": {
+                "tz_offset": "+08:00",
+                "boundary": "start_inclusive_end_exclusive",
+                "windows": [
+                    {"start": "09:00", "end": "12:00",
+                     "models": {"deepseek-v4-pro": {"cache_hit_in": 0, "cache_miss_in": 2.0, "out": 0}}},
+                    {"start": "14:00", "end": "18:00",
+                     "models": {"deepseek-v4-pro": {"cache_hit_in": 0, "cache_miss_in": 2.0, "out": 0}}},
+                ],
+            },
+        }
+
+    def _ingest_one(self, timestamp, table=None, session="sess-tod"):
+        write_price_table(self.price_dir, "deepseek-tod.json", table or self._tod_table())
+        write_transcript(self.projects_dir, "proj", session, [
+            assistant_line(session, "m1", model="deepseek-v4-pro", timestamp=timestamp,
+                            input_tokens=1_000_000, cache_read_input_tokens=0,
+                            cache_creation_input_tokens=0, output_tokens=0),
+        ])
+        result = run_ingest(self.home, self.projects_dir, price_dir=self.price_dir)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return read_events(self.home)[0]
+
+    # -- backward compatibility --------------------------------------------
+
+    def test_table_without_time_of_day_pricing_is_unaffected(self):
+        # Uses the real, unmodified bin/prices/deepseek-2026-08-01.json —
+        # the primary evidence this feature is backward compatible (孫3
+        # プロンプト §テスト "既存のテストが無改変で通ることが主要な根拠").
+        write_transcript(self.projects_dir, "proj", "sess-compat", [
+            assistant_line("sess-compat", "m1", model="deepseek-v4-pro",
+                            timestamp="2026-08-05T02:00:00.000Z",  # Beijing 10:00 — would be "in_window" if defined
+                            input_tokens=1000, cache_read_input_tokens=2000, output_tokens=300),
+        ])
+        result = run_ingest(self.home, self.projects_dir)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        event = read_events(self.home)[0]
+        self.assertEqual(event["time_of_day_basis"], "not_applicable")
+        self.assertIsNotNone(event["cost_estimate_usd"])
+
+    # -- in_window / base_rate -----------------------------------------------
+
+    def test_timestamp_inside_window_gets_window_price(self):
+        # Beijing 10:00 (UTC 02:00) is inside the 09:00-12:00 window.
+        event = self._ingest_one("2026-08-05T02:00:00.000Z")
+        self.assertEqual(event["time_of_day_basis"], "in_window")
+        self.assertAlmostEqual(event["cost_estimate_usd"], 2.0)
+
+    def test_timestamp_outside_every_window_gets_base_price(self):
+        # Beijing 13:00 (UTC 05:00) is between the two windows.
+        event = self._ingest_one("2026-08-05T05:00:00.000Z")
+        self.assertEqual(event["time_of_day_basis"], "base_rate")
+        self.assertAlmostEqual(event["cost_estimate_usd"], 1.0)
+
+    # -- boundary handling -----------------------------------------------
+
+    def test_window_start_boundary_is_inclusive(self):
+        # Beijing 09:00:00 exactly (UTC 01:00:00) -- start of the window.
+        event = self._ingest_one("2026-08-05T01:00:00.000Z")
+        self.assertEqual(event["time_of_day_basis"], "in_window")
+        self.assertAlmostEqual(event["cost_estimate_usd"], 2.0)
+
+    def test_window_end_boundary_is_exclusive(self):
+        # Beijing 12:00:00 exactly (UTC 04:00:00) -- end of the window.
+        event = self._ingest_one("2026-08-05T04:00:00.000Z")
+        self.assertEqual(event["time_of_day_basis"], "base_rate")
+        self.assertAlmostEqual(event["cost_estimate_usd"], 1.0)
+
+    def test_boundary_field_mismatching_the_only_supported_rule_is_unusable(self):
+        # レビュー指摘5: `boundary` is a real, validated field now, not a
+        # documented-but-ignored one -- a table that claims a boundary
+        # rule this file doesn't implement must be treated as unusable,
+        # not silently computed with the (opposite) hardcoded rule.
+        table = self._tod_table()
+        table["time_of_day_pricing"]["boundary"] = "start_exclusive_end_inclusive"
+        event = self._ingest_one("2026-08-05T02:00:00.000Z", table=table)  # otherwise squarely in-window
+        self.assertEqual(event["time_of_day_basis"], "not_applicable")
+        self.assertAlmostEqual(event["cost_estimate_usd"], 1.0)
+
+    # -- UTC -> Beijing conversion, including a date rollover --------------
+
+    def test_utc_timestamp_is_converted_to_beijing_window_across_date_boundary(self):
+        # A window entirely inside "the day after" from UTC's point of
+        # view: Beijing 00:00-03:00 (UTC+8) only exists as UTC 16:00-
+        # 19:00 of the PREVIOUS calendar date -- exactly the "UTC 深夜 =
+        # 北京の朝" case 孫3プロンプト's test list requires. If the
+        # implementation ever forgot to actually convert timezones (e.g.
+        # read `ts_dt.hour` instead of `ts_dt.astimezone(tz).hour`), this
+        # message (2026-07-14 UTC) would be judged against the WRONG
+        # calendar date's window matching (still base_rate by accident,
+        # since the naive UTC hour 16 isn't in 00:00-03:00 either) —
+        # the assertion below instead pins the actual local hour (00:30)
+        # produced by a correct astimezone() conversion.
+        table = self._tod_table()
+        table["time_of_day_pricing"]["windows"] = [{
+            "start": "00:00", "end": "03:00",
+            "models": {"deepseek-v4-pro": {"cache_hit_in": 0, "cache_miss_in": 2.0, "out": 0}},
+        }]
+        # 2026-07-14T16:30:00Z + 08:00 = 2026-07-15T00:30:00 (next date).
+        event = self._ingest_one("2026-07-14T16:30:00.000Z", table=table)
+        self.assertEqual(event["time_of_day_basis"], "in_window")
+        self.assertAlmostEqual(event["cost_estimate_usd"], 2.0)
+
+    # -- missing timestamp -------------------------------------------------
+
+    def test_missing_timestamp_falls_back_to_base_price_without_crashing(self):
+        write_price_table(self.price_dir, "deepseek-tod.json", self._tod_table())
+        line = assistant_line("sess-notime", "m1", model="deepseek-v4-pro",
+                               input_tokens=1_000_000, cache_read_input_tokens=0,
+                               cache_creation_input_tokens=0, output_tokens=0)
+        line["timestamp"] = None
+        write_transcript(self.projects_dir, "proj", "sess-notime", [line])
+        result = run_ingest(self.home, self.projects_dir, price_dir=self.price_dir)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        event = read_events(self.home)[0]
+        self.assertEqual(event["time_of_day_basis"], "unknown_timestamp")
+        self.assertAlmostEqual(event["cost_estimate_usd"], 1.0)  # base price, not guessed in/out of window
+
+    # -- a model absent from every window is unaffected ---------------------
+
+    def test_model_not_listed_in_any_window_is_not_applicable(self):
+        table = self._tod_table()
+        table["models"]["deepseek-v4-flash"] = {"cache_hit_in": 0, "cache_miss_in": 1.0, "out": 0}
+        write_price_table(self.price_dir, "deepseek-tod.json", table)
+        write_transcript(self.projects_dir, "proj", "sess-flash", [
+            # Beijing 10:00 -- inside the pro-only window, but this
+            # message uses -flash, which has no window override.
+            assistant_line("sess-flash", "m1", model="deepseek-v4-flash", timestamp="2026-08-05T02:00:00.000Z",
+                            input_tokens=1_000_000, cache_read_input_tokens=0,
+                            cache_creation_input_tokens=0, output_tokens=0),
+        ])
+        result = run_ingest(self.home, self.projects_dir, price_dir=self.price_dir)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        event = read_events(self.home)[0]
+        self.assertEqual(event["time_of_day_basis"], "not_applicable")
+        self.assertAlmostEqual(event["cost_estimate_usd"], 1.0)
+
+    # -- malformed time_of_day_pricing never crashes ingest -----------------
+
+    def test_missing_tz_offset_does_not_crash_ingest(self):
+        table = self._tod_table()
+        # No tz_offset at all -- the whole block must be treated as
+        # unusable (not_applicable), not raise.
+        del table["time_of_day_pricing"]["tz_offset"]
+        event = self._ingest_one("2026-08-05T02:00:00.000Z", table=table)
+        self.assertEqual(event["time_of_day_basis"], "not_applicable")
+        self.assertAlmostEqual(event["cost_estimate_usd"], 1.0)
+
+    def test_out_of_range_tz_offset_does_not_crash_ingest(self):
+        # レビュー指摘1の回帰テスト: `timezone()` raises ValueError for a
+        # >=24h magnitude offset. This used to propagate all the way up
+        # through `_time_of_day_spec` -> `_select_prices_for_model` ->
+        # `compute_cost` -> the list comprehension in the ingest routine
+        # that calls `build_usage_event` for every candidate, with no
+        # try/except anywhere in that chain -- `ingest` exited 1 and
+        # wrote ZERO events (including unrelated messages), directly
+        # violating `compute_cost`'s own "Never raises" docstring.
+        table = self._tod_table()
+        table["time_of_day_pricing"]["tz_offset"] = "+25:00"
+        event = self._ingest_one("2026-08-05T02:00:00.000Z", table=table)
+        self.assertEqual(event["time_of_day_basis"], "not_applicable")
+        self.assertAlmostEqual(event["cost_estimate_usd"], 1.0)
+
+    def test_out_of_range_minutes_in_tz_offset_does_not_silently_normalize(self):
+        # "+08:75" must not silently become UTC+09:15 -- minutes are
+        # range-checked exactly like `_parse_hhmm_to_minutes` already
+        # checks window boundaries.
+        table = self._tod_table()
+        table["time_of_day_pricing"]["tz_offset"] = "+08:75"
+        event = self._ingest_one("2026-08-05T02:00:00.000Z", table=table)
+        self.assertEqual(event["time_of_day_basis"], "not_applicable")
+        self.assertAlmostEqual(event["cost_estimate_usd"], 1.0)
+
+    def test_tz_database_name_is_rejected_not_crashed_on(self):
+        # zoneinfo names are deliberately unsupported (孫3プロンプト §1:
+        # tzdata isn't guaranteed present) -- must fall back cleanly.
+        table = self._tod_table()
+        table["time_of_day_pricing"]["tz_offset"] = "Asia/Shanghai"
+        event = self._ingest_one("2026-08-05T02:00:00.000Z", table=table)
+        self.assertEqual(event["time_of_day_basis"], "not_applicable")
+        self.assertAlmostEqual(event["cost_estimate_usd"], 1.0)
+
+    def test_non_list_windows_does_not_crash_ingest(self):
+        table = self._tod_table()
+        table["time_of_day_pricing"]["windows"] = {"start": "09:00", "end": "12:00"}
+        event = self._ingest_one("2026-08-05T02:00:00.000Z", table=table)
+        self.assertEqual(event["time_of_day_basis"], "not_applicable")
+        self.assertAlmostEqual(event["cost_estimate_usd"], 1.0)
+
+    def test_non_dict_time_of_day_pricing_does_not_crash_ingest(self):
+        table = self._tod_table()
+        table["time_of_day_pricing"] = ["not", "a", "dict"]
+        event = self._ingest_one("2026-08-05T02:00:00.000Z", table=table)
+        self.assertEqual(event["time_of_day_basis"], "not_applicable")
+        self.assertAlmostEqual(event["cost_estimate_usd"], 1.0)
+
+    def test_malformed_hhmm_window_bounds_never_match_but_do_not_crash(self):
+        table = self._tod_table()
+        table["time_of_day_pricing"]["windows"] = [{
+            "start": "9:00", "end": "12:00",  # single-digit hour: not "HH:MM"
+            "models": {"deepseek-v4-pro": {"cache_hit_in": 0, "cache_miss_in": 2.0, "out": 0}},
+        }]
+        event = self._ingest_one("2026-08-05T02:00:00.000Z", table=table)  # would be in-window if parsed
+        self.assertEqual(event["time_of_day_basis"], "base_rate")
+        self.assertAlmostEqual(event["cost_estimate_usd"], 1.0)
+
+    def test_cross_midnight_window_never_matches_but_does_not_crash(self):
+        table = self._tod_table()
+        table["time_of_day_pricing"]["windows"] = [{
+            "start": "22:00", "end": "02:00",  # start >= end after normalization: unsupported
+            "models": {"deepseek-v4-pro": {"cache_hit_in": 0, "cache_miss_in": 2.0, "out": 0}},
+        }]
+        event = self._ingest_one("2026-08-05T15:30:00.000Z", table=table)  # Beijing 23:30
+        self.assertEqual(event["time_of_day_basis"], "base_rate")
+        self.assertAlmostEqual(event["cost_estimate_usd"], 1.0)
+
+    # -- present-but-unusable time_of_day_pricing is diagnosed, not silent --
+
+    def test_present_but_unusable_time_of_day_pricing_emits_a_meter_error(self):
+        # レビュー指摘3: a table that predates this feature (no
+        # `time_of_day_pricing` key at all) and one that tried and got
+        # the shape wrong must not be indistinguishable -- the latter
+        # records a `meter.error` diagnostic (already surfaced in
+        # `report`'s footer), the former does not.
+        table = self._tod_table()
+        del table["time_of_day_pricing"]["tz_offset"]
+        self._ingest_one("2026-08-05T02:00:00.000Z", table=table)
+        errors = read_meter_errors(self.home)
+        stages = [e.get("stage") for e in errors]
+        self.assertIn("price_table_time_of_day_pricing_unusable", stages)
+
+    def test_table_without_any_time_of_day_pricing_key_does_not_emit_a_meter_error(self):
+        write_transcript(self.projects_dir, "proj", "sess-no-tod-key", [
+            assistant_line("sess-no-tod-key", "m1", model="deepseek-v4-pro", timestamp="2026-08-05T10:00:00.000Z"),
+        ])
+        result = run_ingest(self.home, self.projects_dir)  # real REPO_PRICE_DIR table: no time_of_day_pricing key
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(read_meter_errors(self.home), [])
+
+
+class PriceTableFallbackWarningTests(OcwMeterTestCase):
+    """計画書 DOC-2608081456孫3 §3 / 罠5: 該当する価格表が無い期間を黙らせない。"""
+
+    def setUp(self):
+        super().setUp()
+        self.projects_dir = pathlib.Path(self.tmpdir.name) / "claude-projects"
+        self.projects_dir.mkdir(parents=True, exist_ok=True)
+        self.price_dir = pathlib.Path(self.tmpdir.name) / "prices-fallback"
+        write_price_table(self.price_dir, "deepseek-2026-08-01.json", {
+            "price_table_version": "deepseek-2026-08-01", "effective_date": "2026-08-01",
+            "models": {"deepseek-v4-pro": {"cache_hit_in": 0.003625, "cache_miss_in": 0.435, "out": 0.87}},
+        })
+
+    def test_footer_warns_when_price_table_took_effect_after_the_message(self):
+        # July message, only an August table exists -> fallback.
+        write_transcript(self.projects_dir, "proj", "sess-july", [
+            assistant_line("sess-july", "m1", model="deepseek-v4-pro", timestamp="2026-07-15T10:00:00.000Z"),
+        ])
+        result = run_report(self.home, self.projects_dir, args=["--json"], price_dir=self.price_dir)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        data = json.loads(result.stdout)
+        self.assertEqual(data["price_table_fallback_count"], 1)
+        self.assertIn("took effect AFTER their own message date", data["price_table"])
+
+    def test_footer_does_not_warn_when_price_table_covers_the_message(self):
+        # August message, August table applies as intended -> no fallback.
+        write_transcript(self.projects_dir, "proj", "sess-aug", [
+            assistant_line("sess-aug", "m1", model="deepseek-v4-pro", timestamp="2026-08-05T10:00:00.000Z"),
+        ])
+        result = run_report(self.home, self.projects_dir, args=["--json"], price_dir=self.price_dir)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        data = json.loads(result.stdout)
+        self.assertEqual(data["price_table_fallback_count"], 0)
+        self.assertNotIn("took effect AFTER", data["price_table"])
+
+    def test_month_report_flags_price_table_effective_after_the_month(self):
+        write_transcript(self.projects_dir, "proj", "sess-july2", [
+            assistant_line("sess-july2", "m1", model="deepseek-v4-pro", timestamp="2026-07-15T10:00:00.000Z"),
+        ])
+        result = run_report(self.home, self.projects_dir, args=["--month", "2026-07", "--json"], price_dir=self.price_dir)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        data = json.loads(result.stdout)
+        applied = data["cash_cost"]["price_tables_applied"]
+        self.assertEqual(len(applied), 1)
+        self.assertEqual(applied[0]["price_table_version"], "deepseek-2026-08-01")
+        self.assertEqual(applied[0]["effective_date"], "2026-08-01")
+        self.assertTrue(applied[0]["is_fallback"])
+        self.assertEqual(applied[0]["event_count"], 1)
+        self.assertEqual(applied[0]["fallback_event_count"], 1)
+
+    def test_month_report_does_not_flag_price_table_covering_the_month(self):
+        write_transcript(self.projects_dir, "proj", "sess-aug2", [
+            assistant_line("sess-aug2", "m1", model="deepseek-v4-pro", timestamp="2026-08-05T10:00:00.000Z"),
+        ])
+        result = run_report(self.home, self.projects_dir, args=["--month", "2026-08", "--json"], price_dir=self.price_dir)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        data = json.loads(result.stdout)
+        applied = data["cash_cost"]["price_tables_applied"]
+        self.assertEqual(len(applied), 1)
+        self.assertFalse(applied[0]["is_fallback"])
+        self.assertEqual(applied[0]["event_count"], 1)
+        self.assertEqual(applied[0]["fallback_event_count"], 0)
+
+    def test_month_report_flags_a_same_month_fallback(self):
+        # レビュー指摘2の回帰テスト: the sole price table is effective
+        # 2026-08-15 -- LATER in the SAME month as the message it's
+        # applied to (2026-08-05). Month-granularity comparison
+        # (`"2026-08" > "2026-08"`) missed this; day-granularity
+        # (reusing `_price_table_predates_message`) must catch it, and
+        # must agree with the footer's own (day-granularity) verdict in
+        # the same JSON response.
+        price_dir = pathlib.Path(self.tmpdir.name) / "prices-same-month-fallback"
+        write_price_table(price_dir, "deepseek-2026-08-15.json", {
+            "price_table_version": "deepseek-2026-08-15", "effective_date": "2026-08-15",
+            "models": {"deepseek-v4-pro": {"cache_hit_in": 0.003625, "cache_miss_in": 0.435, "out": 0.87}},
+        })
+        write_transcript(self.projects_dir, "proj", "sess-samemonth", [
+            assistant_line("sess-samemonth", "m1", model="deepseek-v4-pro", timestamp="2026-08-05T10:00:00.000Z"),
+        ])
+        result = run_report(self.home, self.projects_dir, args=["--month", "2026-08", "--json"], price_dir=price_dir)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        data = json.loads(result.stdout)
+        applied = data["cash_cost"]["price_tables_applied"]
+        self.assertEqual(len(applied), 1)
+        self.assertTrue(applied[0]["is_fallback"])
+        # Must agree with the footer's own (independently computed) verdict.
+        self.assertEqual(data["price_table_fallback_count"], 1)
+
+    def test_month_report_flags_a_mixed_fallback_and_covered_month(self):
+        # レビュー指摘8の回帰テスト: the sole price table is effective
+        # 2026-08-15. One message (08-05) predates it (fallback); another
+        # (08-20) is genuinely covered by it. Both are priced by the SAME
+        # `price_table_version`, so a single per-version boolean can't
+        # honestly describe the month -- `fallback_event_count` must be
+        # 1 out of `event_count` 2, not "all" or "none".
+        price_dir = pathlib.Path(self.tmpdir.name) / "prices-mixed-month"
+        write_price_table(price_dir, "deepseek-2026-08-15.json", {
+            "price_table_version": "deepseek-2026-08-15", "effective_date": "2026-08-15",
+            "models": {"deepseek-v4-pro": {"cache_hit_in": 0.003625, "cache_miss_in": 0.435, "out": 0.87}},
+        })
+        write_transcript(self.projects_dir, "proj", "sess-mixed", [
+            assistant_line("sess-mixed", "m1", model="deepseek-v4-pro", timestamp="2026-08-05T10:00:00.000Z"),
+            assistant_line("sess-mixed", "m2", model="deepseek-v4-pro", timestamp="2026-08-20T10:00:00.000Z"),
+        ])
+        result = run_report(self.home, self.projects_dir, args=["--month", "2026-08", "--json"], price_dir=price_dir)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        data = json.loads(result.stdout)
+        applied = data["cash_cost"]["price_tables_applied"]
+        self.assertEqual(len(applied), 1)
+        self.assertEqual(applied[0]["event_count"], 2)
+        self.assertEqual(applied[0]["fallback_event_count"], 1)
+        self.assertTrue(applied[0]["is_fallback"])
+        self.assertEqual(data["price_table_fallback_count"], 1)
+        # Text output must say "2件中1件" (partial), not claim the whole
+        # month (2件) is a fallback.
+        text_result = run_report(self.home, self.projects_dir, args=["--month", "2026-08"], price_dir=price_dir)
+        self.assertIn("2件中1件", text_result.stdout)
+
+    def test_month_report_text_output_shows_the_fallback_marker(self):
+        # レビュー指摘6: only --json was ever asserted on for this view;
+        # the text renderer builds its marker string independently
+        # (bin/ocw-meter's _report_month_standalone) and could silently
+        # diverge from the JSON without any test catching it.
+        write_transcript(self.projects_dir, "proj", "sess-july3", [
+            assistant_line("sess-july3", "m1", model="deepseek-v4-pro", timestamp="2026-07-15T10:00:00.000Z"),
+        ])
+        result = run_report(self.home, self.projects_dir, args=["--month", "2026-07"], price_dir=self.price_dir)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("price_tables_applied:", result.stdout)
+        self.assertIn("deepseek-2026-08-01 (effective 2026-08-01)", result.stdout)
+        self.assertIn("フォールバック", result.stdout)
+        # Full-month fallback (1件全て), not the mixed-case wording.
+        self.assertIn("1件全て", result.stdout)
+
+    def test_month_report_text_output_has_no_fallback_marker_when_covered(self):
+        write_transcript(self.projects_dir, "proj", "sess-aug3", [
+            assistant_line("sess-aug3", "m1", model="deepseek-v4-pro", timestamp="2026-08-05T10:00:00.000Z"),
+        ])
+        result = run_report(self.home, self.projects_dir, args=["--month", "2026-08"], price_dir=self.price_dir)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("deepseek-2026-08-01 (effective 2026-08-01)", result.stdout)
+        self.assertNotIn("フォールバック", result.stdout)
 
 
 class ReportAutoIngestTests(OcwMeterTestCase):

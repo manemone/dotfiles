@@ -545,6 +545,9 @@ EVENT_ENUM_FIELDS = {
     "review.round": {"verdict": ("approved", "changes_requested", "ambiguous")},
     "block.start": {"cause": ("rate_limit", "api_error", "unknown")},
     "block.end": {"cause": ("rate_limit", "api_error", "unknown")},
+    "usage.message": {
+        "time_of_day_basis": ("not_applicable", "in_window", "base_rate", "unknown_timestamp"),
+    },
 }
 
 # Secret-shaped values must never survive into stored events (plan §9.2 /
@@ -1573,6 +1576,22 @@ def normalize_month_arg(month):
     return month, None
 
 
+def _price_table_predates_message(event):
+    """True when this `usage.message` event's applied `price_effective_date`
+    is AFTER the message's own date — i.e. `select_price_table()` fell
+    back to the earliest available table (`tables[0]`) at ingest time
+    because no table had yet taken effect when the message actually
+    happened (計画書 DOC-2608081456 罠5 / 孫3プロンプト §3). Purely a
+    read-time judgment from fields already stored on the event — no
+    stored event is ever rewritten to compute this (罠5's "past isn't
+    recalculated" invariant), it's just re-derived on every read."""
+    effective = event.get("price_effective_date")
+    ts = event.get("ts")
+    if not isinstance(effective, str) or not isinstance(ts, str) or len(ts) < 10:
+        return False
+    return effective > ts[:10]
+
+
 def usage_cost_footer(usage_events):
     """The cost/coverage/price_table portion of the required per-plan-
     §10.4 footer, shared by every `report` view (孫5 §1: "coverage 併記が
@@ -1581,6 +1600,7 @@ def usage_cost_footer(usage_events):
     forget a piece of it)."""
     cost_sum, has_cost = 0.0, False
     price_versions, cost_bases = set(), set()
+    fallback_count = 0
     for e in usage_events:
         cost = e.get("cost_estimate_usd")
         if isinstance(cost, (int, float)):
@@ -1590,12 +1610,23 @@ def usage_cost_footer(usage_events):
             price_versions.add(e["price_table_version"])
         if e.get("cost_basis"):
             cost_bases.add(e["cost_basis"])
+        if _price_table_predates_message(e):
+            fallback_count += 1
     if usage_events:
         coverage = (
             f"{len(usage_events)} usage.message event(s); run "
             "'ocw-meter report --reconcile' for model別 coverage against provider totals"
         )
         price_table_summary = ", ".join(sorted(price_versions)) if price_versions else "(none applied)"
+        # 孫3プロンプト §3: a table that only took effect AFTER the
+        # message it was applied to must not be silently indistinguishable
+        # from a table that genuinely covered that message's date.
+        if fallback_count:
+            price_table_summary += (
+                f"; {fallback_count} event(s) priced with a table that took effect AFTER their own "
+                "message date (fallback to the earliest available table — treat as a rough estimate, "
+                "not the period's real pricing)"
+            )
         cost_basis_summary = ", ".join(sorted(cost_bases)) if cost_bases else "(none)"
         cost_estimate_summary = f"${cost_sum:.2f} (estimated — not an invoice)" if has_cost else "null"
     else:
@@ -1620,6 +1651,7 @@ def usage_cost_footer(usage_events):
         "price_table": price_table_summary,
         "cost_basis": cost_basis_summary,
         "cost_estimate_usd": cost_estimate_summary,
+        "price_table_fallback_count": fallback_count,
     }
 
 
@@ -2173,6 +2205,71 @@ def report_month_process_efficiency(valid_events, month, repo):
     }
 
 
+def _price_tables_applied_for_month(usage_month):
+    """孫3プロンプト §3: which `price_table_version`(s) actually priced
+    this month's usage.message events, and how many of THOSE specific
+    events were a fallback — `_price_table_predates_message`'s same
+    per-event, day-granularity check `usage_cost_footer` already uses,
+    not a month-granularity comparison. Takes only the month's own
+    events (round-2 review finding 9: an earlier version also took
+    `month` as a second argument, but the per-event check needs no
+    month boundary at all — every date comparison it makes is against
+    that SAME event's own `ts`/`price_effective_date`, never against the
+    reported month string. `month` had become a dead parameter, kept
+    only because a docstring described it; the caller,
+    `report_month_cash_and_capacity`, already pre-filters `usage_month`
+    to the target month before calling this).
+
+    Round-1 review finding 2: an earlier version compared
+    `effective_date[:7] > month` (month-granularity), which MISSES a
+    same-month fallback — a table whose `effective_date` falls later in
+    the SAME month as a message it was applied to (e.g. table effective
+    2026-08-15, message 2026-08-05, `--month 2026-08`) is a genuine
+    罠5 fallback (`select_price_table` had nothing else to pick from) but
+    `"2026-08" > "2026-08"` is False, so this function said "no
+    fallback" in the same breath `usage_cost_footer`'s day-granularity
+    check said "1 event fell back" — two contradictory answers about the
+    same underlying fact, printed side by side in the same `--month`
+    output. Reusing the per-event check here removes that contradiction
+    by construction: both are now the same predicate applied to the same
+    stored fields, just aggregated differently (per version vs. summed
+    across all versions).
+
+    Round-2 review finding 8: per-event granularity also means a single
+    version can price a MIX of fallback and correctly-covered events
+    within the same month (e.g. a table effective mid-month covers the
+    back half correctly but was fallback-applied to the front half) —
+    `fallback_event_count` (out of this version's own `event_count`)
+    lets a caller distinguish "this whole month's worth of this version
+    is a rough estimate" from "only part of it is", instead of one
+    boolean forced to describe a mixed month either way.
+
+    Sorted by version for a stable, deterministic order."""
+    seen = {}
+    for e in usage_month:
+        version = e.get("price_table_version")
+        if not version:
+            continue
+        entry = seen.setdefault(version, {
+            "effective_date": e.get("price_effective_date"),
+            "event_count": 0,
+            "fallback_event_count": 0,
+        })
+        entry["event_count"] += 1
+        if _price_table_predates_message(e):
+            entry["fallback_event_count"] += 1
+    applied = []
+    for version, info in sorted(seen.items()):
+        applied.append({
+            "price_table_version": version,
+            "effective_date": info["effective_date"],
+            "event_count": info["event_count"],
+            "fallback_event_count": info["fallback_event_count"],
+            "is_fallback": info["fallback_event_count"] > 0,
+        })
+    return applied
+
+
 def report_month_cash_and_capacity(valid_events, month):
     """孫5 §1 --month: cash cost (metered API — currently only DeepSeek,
     `cost_basis: "estimated"`) and capacity (Claude subscription quota
@@ -2207,6 +2304,7 @@ def report_month_cash_and_capacity(valid_events, month):
     return {
         "usage_message_count": len(usage_month),
         "cash_cost_usd": cash_cost if has_cash else None,
+        "price_tables_applied": _price_tables_applied_for_month(usage_month),
         "capacity_message_count": capacity_message_count,
         "quota_sample_count": len(quota_month),
         "five_hour_used_pct_max": max(five_hour_vals) if five_hour_vals else None,
@@ -2808,6 +2906,7 @@ def _report_month_standalone(paths, valid_events, malformed, month, repo, as_jso
     summary["cash_cost"] = {
         "usage_message_count": cash_and_capacity["usage_message_count"],
         "cash_cost_usd": cash_and_capacity["cash_cost_usd"],
+        "price_tables_applied": cash_and_capacity["price_tables_applied"],
     }
     summary["capacity"] = {
         "capacity_message_count": cash_and_capacity["capacity_message_count"],
@@ -2827,6 +2926,27 @@ def _report_month_standalone(paths, valid_events, malformed, month, repo, as_jso
     cash_str = f"${summary['cash_cost']['cash_cost_usd']:.2f}" if isinstance(summary["cash_cost"]["cash_cost_usd"], (int, float)) else "null"
     print(f"  usage.message count: {summary['cash_cost']['usage_message_count']}")
     print(f"  cash_cost_usd:       {cash_str} (estimated — not an invoice)")
+    price_tables_applied = summary["cash_cost"]["price_tables_applied"]
+    if price_tables_applied:
+        print("  price_tables_applied:")
+        for pt in price_tables_applied:
+            # Round-2 review finding 8: `is_fallback` is per-EVENT, not
+            # per-month — a version can price a mix of fallback and
+            # correctly-covered events within the same month (e.g. its
+            # own effective_date falls mid-month). The count out of
+            # event_count says exactly how much of this version's usage
+            # this month was a fallback, instead of one boolean forced
+            # to describe a mixed month either way.
+            fallback_n, total_n = pt["fallback_event_count"], pt["event_count"]
+            if fallback_n == 0:
+                marker = ""
+            elif fallback_n == total_n:
+                marker = f" (フォールバック — この期間の{total_n}件全てが、まだ発効していなかった価格表。実際の単価とは異なる可能性)"
+            else:
+                marker = f" (フォールバック — この期間の{total_n}件中{fallback_n}件が、まだ発効していなかった価格表。実際の単価とは異なる可能性)"
+            print(f"    {pt['price_table_version']} (effective {pt['effective_date']}){marker}")
+    else:
+        print("  price_tables_applied: (none)")
     print("capacity cost (Claude subscription quota — never summed with cash cost):")
     for field, value in summary["capacity"].items():
         print(f"  {field}: {value}")
@@ -2918,34 +3038,279 @@ def select_price_table(tables, at_date_str):
     """Picks the table with the latest effective_date <= at_date_str
     (plan §5.5). Falls back to the earliest available table if every
     table's effective_date is in the future relative to at_date_str —
-    a conservative choice, never a crash, and this situation shouldn't
-    arise in practice since price files are only added once effective."""
+    a conservative choice, never a crash. This IS expected to happen in
+    practice for any message that predates the very first price table
+    ever added (計画書 DOC-2608081456 罠5 — e.g. 6〜7月 messages against
+    the sole 2026-08-01 table); callers must not assume "applicable" here
+    means "actually covers this date" (see `usage_cost_footer`'s
+    fallback-count logic, which re-derives this same fallback purely
+    from what got stored on the event — `price_effective_date` >
+    the message's own date)."""
     applicable = [t for t in tables if (t.get("effective_date") or "") <= at_date_str]
     if applicable:
         return applicable[-1]
     return tables[0] if tables else None
 
 
-def compute_cost(model, usage_fields, price_table):
+# ── time-of-day (peak/off-peak) pricing (計画書 DOC-2608081456孫3) ─────
+#
+# A price table MAY carry an optional `time_of_day_pricing` block on top
+# of its base `models` prices:
+#
+#   "time_of_day_pricing": {
+#     "tz_offset": "+08:00",
+#     "tz_label": "Beijing time (China Standard Time, UTC+8, no DST)",
+#     "boundary": "start_inclusive_end_exclusive",
+#     "windows": [
+#       {"start": "09:00", "end": "12:00", "models": {"deepseek-v4-pro": {...}}},
+#       {"start": "14:00", "end": "18:00", "models": {"deepseek-v4-pro": {...}}}
+#     ]
+#   }
+#
+# Design decisions (孫3プロンプト §1, each picked because the alternative
+# was measurably worse for THIS table's actual use case — DeepSeek's own
+# announced peak/off-peak windows):
+#
+# - **Fixed UTC offset, not a tz database name.** `zoneinfo` needs
+#   tzdata, which isn't guaranteed present everywhere this script runs.
+#   China has no DST, so "Beijing time" IS a fixed +08:00 offset with no
+#   edge cases to get wrong — a fixed-offset implementation loses nothing
+#   here while working with zero extra dependencies. The offset lives on
+#   the price table (never hardcoded in this file), so a future table
+#   covering a DST-observing region only needs a schema-compatible entry,
+#   not a code change (a hardcoded "+08:00" would silently mis-price such
+#   a table).
+# - **Start-inclusive, end-exclusive, and NOT configurable per table.**
+#   Matches this file's own existing convention for date ranges
+#   (`select_price_table`'s `effective_date <= at_date_str`) and avoids a
+#   message landing on both a matched and an unmatched window if two
+#   windows were ever defined back-to-back (`"end": "12:00"` followed by
+#   `"start": "12:00"`). The optional `boundary` field in a price table
+#   exists purely as a machine-checkable ASSERTION of this fixed
+#   convention (`_time_of_day_spec` rejects the whole block — same as a
+#   missing `tz_offset` — if a table's `boundary` disagrees with it), NOT
+#   as a way to configure a different boundary rule; this file has never
+#   implemented anything else.
+# - **Per-window basis labels are intentionally NOT part of this schema
+#   (round-1 review finding 4).** A window matching could mean either
+#   "this is the expensive peak period" or "this is the discounted
+#   off-peak period" depending on the provider's own pricing model —
+#   nothing here can know which without being told, and `time_of_day_
+#   basis` is baked into every stored `usage.message` event (this
+#   file's own "past isn't recalculated" invariant), so a wrong
+#   assumption can't be fixed later by adding a label after the fact.
+#   `time_of_day_basis` therefore uses basis-neutral values —
+#   `"in_window"` / `"base_rate"` — that describe MECHANISM (did a
+#   window match or not), never PRICE DIRECTION (which one costs more).
+# - **No cross-midnight windows.** A window with `start >= end` (e.g. an
+#   attempted `22:00`-`02:00`) is simply never matched — this is a
+#   DELIBERATE LIMITATION, not a bug: DeepSeek's own announced windows
+#   (`09:00-12:00`, `14:00-18:00`) never cross midnight, and getting
+#   wrap-around wrong (silently) is worse than not supporting it at all
+#   (see `bin/prices/README.md`, which documents this limitation for
+#   whoever adds the next price table).
+# - **Per-window explicit prices, not a multiplier.** DeepSeek's own
+#   notice ("2x pricing") doesn't say which side of the pair the 2x
+#   applies TO — writing the window's own `cache_hit_in`/`cache_miss_in`/
+#   `out` directly (mirroring the base `models` block's own shape) is
+#   unambiguous and traceable straight back to the source, exactly like
+#   the base table already is. A multiplier would require deciding
+#   "multiply against what baseline" as an extra, unstated rule.
+# - **A model absent from every window is simply not part of the
+#   time-of-day scheme** — its price is always the base `models` entry,
+#   time never enters into it (`time_of_day_basis: "not_applicable"`).
+#   This lets one table cover some models with time-of-day pricing and
+#   others without, without a separate opt-out flag.
+# - **A `time_of_day_pricing` block that IS present but unusable (bad
+#   `tz_offset`, non-list `windows`, disagreeing `boundary`, ...) is
+#   never silently indistinguishable from "no time-of-day pricing was
+#   ever intended" (round-1 review finding 3) — same underlying failure
+#   mode this whole PR exists to stop (計画書 罠5: an out-of-range
+#   period silently priced at the wrong rate). The ingest loop below
+#   emits a `meter.error` diagnostic (already surfaced in `report`'s
+#   footer) the first time it sees a table like this, in addition to
+#   `_select_prices_for_model` still falling back to base pricing rather
+#   than crashing `ingest`.
+
+def _parse_fixed_offset(offset_str):
+    """`"+08:00"` -> `timezone(timedelta(hours=8))`. Returns None for
+    anything else (missing, malformed, tz database name, or an
+    hour/minute magnitude `timezone()` itself rejects) — callers treat
+    that as "this table's time_of_day_pricing is unusable", never as a
+    reason to crash `ingest` (plan §5.5's "malformed price data is
+    skipped, not fatal" extended to this sub-block).
+
+    Round-1 review finding 1: `timezone()` raises `ValueError` for an
+    offset magnitude >= 24h, and NOTHING between here and `ingest`'s own
+    top-level loop over `build_usage_event()` catches that — an
+    unvalidated `"+25:00"` in a price table used to take down the WHOLE
+    `ingest` run (rc=1, zero events written, unrelated messages included)
+    instead of just this one table being treated as unusable. Range-
+    checking `hh`/`mm` here (same convention as `_parse_hhmm_to_minutes`)
+    keeps every value this function ever hands to `timezone()` inside
+    the range it accepts; the `try`/`except` below is defense in depth
+    for that invariant, not a substitute for the range check (a looser
+    regex in the future must not reopen the same hole)."""
+    if not isinstance(offset_str, str):
+        return None
+    m = re.match(r"^([+-])(\d{2}):(\d{2})$", offset_str)
+    if not m:
+        return None
+    sign, hh_str, mm_str = m.groups()
+    hh, mm = int(hh_str), int(mm_str)
+    if not (0 <= hh <= 23 and 0 <= mm <= 59):
+        return None
+    delta = timedelta(hours=hh, minutes=mm)
+    try:
+        return timezone(-delta if sign == "-" else delta)
+    except ValueError:
+        return None
+
+
+def _parse_hhmm_to_minutes(value):
+    """`"09:00"` -> `540` (minutes since local midnight). None if
+    malformed or out of range."""
+    if not isinstance(value, str):
+        return None
+    m = re.match(r"^(\d{2}):(\d{2})$", value)
+    if not m:
+        return None
+    hh, mm = int(m.group(1)), int(m.group(2))
+    if not (0 <= hh <= 23 and 0 <= mm <= 59):
+        return None
+    return hh * 60 + mm
+
+
+TIME_OF_DAY_BOUNDARY = "start_inclusive_end_exclusive"
+
+
+def _time_of_day_spec(price_table):
+    """Returns `price_table["time_of_day_pricing"]` if it's present and
+    minimally well-shaped (a dict with a `windows` list, a parseable
+    fixed `tz_offset`, and — if `boundary` is present at all — a value
+    matching `TIME_OF_DAY_BOUNDARY`, the ONLY boundary rule this file
+    implements), else None. To callers, "no such block at all" and "an
+    unusably malformed one" both just mean "apply base `models` pricing,
+    unconditionally" — which is exactly backward compatibility with
+    every price table that predates this feature (孫3プロンプト §1:
+    後方互換が絶対条件). What distinguishes the two cases from a
+    diagnostics standpoint is handled by the caller in the `ingest` loop
+    (round-1 review finding 3), not here — this function stays a pure
+    predicate.
+
+    Round-1 review finding 5: `boundary` used to be accepted into a
+    sample price table and this file's own design-decision comment
+    without ever being read — a table author could write
+    `"start_exclusive_end_inclusive"` and it would be silently ignored
+    in favor of the actual (opposite) hardcoded rule. Validating it here
+    turns that from a silent lie into "this table's time_of_day_pricing
+    is unusable", exactly like a bad `tz_offset`."""
+    spec = price_table.get("time_of_day_pricing")
+    if not isinstance(spec, dict):
+        return None
+    if not isinstance(spec.get("windows"), list):
+        return None
+    if _parse_fixed_offset(spec.get("tz_offset")) is None:
+        return None
+    boundary = spec.get("boundary", TIME_OF_DAY_BOUNDARY)
+    if boundary != TIME_OF_DAY_BOUNDARY:
+        return None
+    return spec
+
+
+def _time_of_day_pricing_present_but_unusable(price_table):
+    """True when a price table author clearly INTENDED time-of-day
+    pricing (the `time_of_day_pricing` key is there) but got the shape
+    wrong, as opposed to a table that simply predates this feature (key
+    absent entirely). Used only by the `ingest` loop to decide whether
+    to emit a `meter.error` diagnostic (round-1 review finding 3) — never
+    by cost computation itself, which treats both cases identically via
+    `_time_of_day_spec` returning None either way."""
+    return price_table.get("time_of_day_pricing") is not None and _time_of_day_spec(price_table) is None
+
+
+def _select_prices_for_model(price_table, model, ts_dt):
+    """Resolves which per-1M-token prices apply to this one message:
+    base `models` prices, or a matching time-of-day window's override.
+    Returns (prices_dict_or_None, time_of_day_basis) where
+    time_of_day_basis is one of:
+      - "not_applicable": no usable time_of_day_pricing block, OR this
+        model never appears in any of its windows (i.e. this model isn't
+        part of the time-of-day scheme at all)
+      - "unknown_timestamp": the model IS part of the scheme, but this
+        message's own timestamp couldn't be parsed — falls back to base
+        `models` pricing rather than guessing which basis applies
+        (計画書「推測で埋めない」原則). This is the "時刻が取れない
+        メッセージ" fallback 孫3プロンプト §2 requires deciding on.
+      - "in_window": timestamp fell inside a window that prices this
+        model — that window's prices are used. Deliberately NOT named
+        "peak": whether a matched window is the expensive period or a
+        discount period is a provider-specific pricing decision this
+        schema doesn't (and, per the design-decision comment above,
+        can't safely) encode (round-1 review finding 4)
+      - "base_rate": the model is part of the scheme and the timestamp
+        resolved fine, but fell outside every window — base `models`
+        pricing is used
+    Never raises: any malformed window is treated as never matching."""
+    base_prices = price_table.get("models", {}).get(model)
+    spec = _time_of_day_spec(price_table)
+    if spec is None:
+        return base_prices, "not_applicable"
+
+    windows = [w for w in spec["windows"] if isinstance(w, dict)]
+    model_in_scheme = any(isinstance(w.get("models"), dict) and model in w["models"] for w in windows)
+    if not model_in_scheme:
+        return base_prices, "not_applicable"
+
+    if ts_dt is None:
+        return base_prices, "unknown_timestamp"
+
+    tz = _parse_fixed_offset(spec["tz_offset"])
+    local_dt = ts_dt.astimezone(tz)
+    local_minutes = local_dt.hour * 60 + local_dt.minute
+    for window in windows:
+        window_models = window.get("models")
+        if not isinstance(window_models, dict) or model not in window_models:
+            continue
+        start = _parse_hhmm_to_minutes(window.get("start"))
+        end = _parse_hhmm_to_minutes(window.get("end"))
+        if start is None or end is None or start >= end:
+            continue  # malformed or cross-midnight window: never matches
+        if start <= local_minutes < end:
+            return window_models[model], "in_window"
+
+    return base_prices, "base_rate"
+
+
+def compute_cost(model, usage_fields, price_table, ts_dt=None):
     """plan §8.4 cost formula, with the 孫3-prompt override that
     Anthropic (`claude-*`) usage is never converted from a subscription
     into a per-token estimate (cost_basis: "subscription",
     cost_estimate_usd: null — a flat-rate plan has no meaningful
-    per-message price). Returns (cost_estimate_usd, price_table_version,
-    price_effective_date, cost_basis). Never raises."""
-    provider = infer_provider(model)
-    if provider == "anthropic":
-        return None, None, None, "subscription"
+    per-message price). `ts_dt` (a timezone-aware datetime, or None if
+    unavailable) is the message's own timestamp, used only for
+    time-of-day price resolution (see `_select_prices_for_model`) — it
+    does not affect WHICH price table is chosen (that's already decided
+    by the caller via `select_price_table` before this is called).
+    Returns (cost_estimate_usd, price_table_version, price_effective_date,
+    cost_basis, time_of_day_basis). Never raises."""
+    if infer_provider(model) == "anthropic":
+        return None, None, None, "subscription", None
 
     if price_table is None:
-        return None, None, None, "estimated"
+        return None, None, None, "estimated", None
 
-    prices = price_table.get("models", {}).get(model)
+    version = price_table.get("price_table_version")
+    effective = price_table.get("effective_date")
+    prices, time_of_day_basis = _select_prices_for_model(price_table, model, ts_dt)
     if not isinstance(prices, dict):
-        # Includes deepseek-v4-flash (plan §5.10: 0% transcript coverage,
-        # so this branch is mostly theoretical today) and any future/
-        # unrecognized model name — never guess a price.
-        return None, price_table.get("price_table_version"), price_table.get("effective_date"), "estimated"
+        # A model name the applicable price table's `models` block
+        # simply doesn't have an entry for (round-1 review finding 7:
+        # this is NOT deepseek-v4-flash — bin/prices/deepseek-2026-08-01.json
+        # prices it — it's any genuinely unrecognized/future model name,
+        # e.g. a DeepSeek-shaped name that never shipped) — never guess a
+        # price for it.
+        return None, version, effective, "estimated", time_of_day_basis
 
     values = (
         usage_fields.get("cache_read_input_tokens"),
@@ -2954,7 +3319,7 @@ def compute_cost(model, usage_fields, price_table):
         usage_fields.get("output_tokens"),
     )
     if any(not isinstance(v, (int, float)) for v in values):
-        return None, price_table.get("price_table_version"), price_table.get("effective_date"), "estimated"
+        return None, version, effective, "estimated", time_of_day_basis
 
     cache_read, input_tokens, cache_creation, output_tokens = values
     try:
@@ -2964,9 +3329,9 @@ def compute_cost(model, usage_fields, price_table):
             + output_tokens * prices["out"]
         ) / 1_000_000
     except (KeyError, TypeError):
-        return None, price_table.get("price_table_version"), price_table.get("effective_date"), "estimated"
+        return None, version, effective, "estimated", time_of_day_basis
 
-    return cost, price_table.get("price_table_version"), price_table.get("effective_date"), "estimated"
+    return cost, version, effective, "estimated", time_of_day_basis
 
 
 # ── ingest cursor (incremental, idempotent transcript reading) ────────
@@ -3401,7 +3766,7 @@ def build_usage_event(candidate, price_tables, today_str, role_map, binds, run_s
     # §5.5 forbids; it's picking the WRONG table on first write).
     price_date_str = ts_dt.strftime("%Y-%m-%d") if ts_dt is not None else today_str
     price_table = select_price_table(price_tables, price_date_str)
-    cost_estimate, price_version, price_effective, cost_basis = compute_cost(
+    cost_estimate, price_version, price_effective, cost_basis, time_of_day_basis = compute_cost(
         model,
         {
             "input_tokens": input_tokens,
@@ -3410,6 +3775,7 @@ def build_usage_event(candidate, price_tables, today_str, role_map, binds, run_s
             "output_tokens": output_tokens,
         },
         price_table,
+        ts_dt,
     )
 
     session_id = candidate["session_id"]
@@ -3496,6 +3862,7 @@ def build_usage_event(candidate, price_tables, today_str, role_map, binds, run_s
         "price_table_version": price_version,
         "price_effective_date": price_effective,
         "cost_basis": cost_basis,
+        "time_of_day_basis": time_of_day_basis,
         "currency": "USD" if cost_basis != "subscription" else None,
     }
     for key in list(event.keys()):
@@ -3732,6 +4099,13 @@ def perform_ingest(root, since_dt=None):
     role_map = resolve_herdr_role_map()
     binds, run_starts = load_local_pr_binds_and_run_starts(paths)
     price_tables = load_price_tables(price_table_dir())
+    # Round-1 review finding 3: a `time_of_day_pricing` block that's
+    # PRESENT but unusable must not look identical to "this table simply
+    # predates the feature" — `emit_meter_error` dedupes by (stage, day),
+    # so this only ever adds at most one line per day regardless of how
+    # many tables or how many messages are priced against them this run.
+    if any(_time_of_day_pricing_present_but_unusable(t) for t in price_tables):
+        emit_meter_error(paths.root, "price_table_time_of_day_pricing_unusable", None)
     today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     gh_cache, run_id_cache, repo_cache = {}, {}, {}
 
