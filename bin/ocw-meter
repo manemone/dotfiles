@@ -1599,7 +1599,13 @@ def usage_cost_footer(usage_events):
         cost_basis_summary = ", ".join(sorted(cost_bases)) if cost_bases else "(none)"
         cost_estimate_summary = f"${cost_sum:.2f} (estimated — not an invoice)" if has_cost else "null"
     else:
-        coverage = "no usage.message events yet — run 'ocw-meter ingest'"
+        # PR #57 review round 1 finding 1: `report` now ingests
+        # automatically before this function ever runs, so "no events
+        # yet" no longer means "you forgot to run ingest" — it means the
+        # transcript store had nothing matching. Telling the reader to
+        # run the very thing that just ran is a contradiction they'd see
+        # two lines below in the freshness footer.
+        coverage = "no usage.message events found in transcripts (ingest already ran automatically)"
         price_table_summary = "not applicable (no cost data ingested yet)"
         cost_basis_summary = "not applicable (no cost data ingested yet)"
         cost_estimate_summary = "null"
@@ -1668,20 +1674,36 @@ def ingest_freshness_footer(cursor, ingest_run):
     `last_ingest_at` deliberately does NOT fall back to guessing from a
     file mtime when the cursor predates this field (plan's "推測で埋め
     ない" principle, §全孫共通の注意5) — an old `ingest-cursor.json`
-    reports "unknown", full stop."""
+    reports "unknown", full stop.
+
+    `last_ingest_at` itself is a display string (see above), so a
+    machine `--json` consumer can't recover the raw timestamp from it
+    without re-parsing a human sentence — `last_ingest_at_rfc3339` (PR
+    #57 review round 1 finding 6) carries the same value `cursor` itself
+    stores, untouched, specifically for that use (e.g.
+    docs/reference/DOC-2608021229-b_...'s "transcribe report --json into
+    the writeup" workflow); it is `None` when unknown, same as any other
+    JSON consumer would expect for "no value yet"."""
     last_ingest_raw = cursor.get("last_ingest_at")
     last_ingest_dt = parse_ts(last_ingest_raw) if isinstance(last_ingest_raw, str) else None
     if last_ingest_dt is None:
         last_ingest_at = "unknown (次回 ingest で記録される)"
+        last_ingest_at_rfc3339 = None
         freshness_warning = "(none — last ingest time unknown)"
     else:
         age_seconds = (datetime.now(timezone.utc) - last_ingest_dt).total_seconds()
         last_ingest_at = f"{last_ingest_raw} ({format_elapsed_seconds(age_seconds)} 経過)"
+        last_ingest_at_rfc3339 = last_ingest_raw
+        # PR #57 review round 1 finding 4: the plan's own wording
+        # ("一定時間以上経っていたら") is inclusive ("以上" = "at or
+        # above"), so a sample landing on the threshold exactly (rare,
+        # but real once ingest runs on a fixed schedule) still warns —
+        # `>=`, not `>`.
         freshness_warning = (
             f"最終ingestから{format_elapsed_seconds(age_seconds)}経過しています"
             f"（閾値 {INGEST_STALE_THRESHOLD_SECONDS // 3600}h）。"
             "自動ingestが失敗し続けていないか確認してください"
-            if age_seconds > INGEST_STALE_THRESHOLD_SECONDS else "(none)"
+            if age_seconds >= INGEST_STALE_THRESHOLD_SECONDS else "(none)"
         )
 
     status = ingest_run["status"]
@@ -1695,6 +1717,7 @@ def ingest_freshness_footer(cursor, ingest_run):
 
     return {
         "last_ingest_at": last_ingest_at,
+        "last_ingest_at_rfc3339": last_ingest_at_rfc3339,
         "ingest_this_run": ingest_this_run,
         "ingest_freshness_warning": freshness_warning,
     }
@@ -1720,6 +1743,7 @@ def print_footer_text(footer_completeness, footer_cost, footer_freshness, total)
     print(f"cost_basis:    {footer_cost['cost_basis']}")
     print(f"cost_estimate: {footer_cost['cost_estimate_usd']}")
     print(f"last_ingest_at: {footer_freshness['last_ingest_at']}")
+    print(f"last_ingest_at_rfc3339: {footer_freshness['last_ingest_at_rfc3339'] or 'unknown'}")
     print(f"ingest (this run): {footer_freshness['ingest_this_run']}")
     print(f"ingest_freshness_warning: {footer_freshness['ingest_freshness_warning']}")
 
@@ -2272,7 +2296,9 @@ def _report_reconcile(paths, month, provider_totals, as_json, footer_freshness):
     coverage_text = (
         f"{total_messages} usage.message event(s) for {month}; per-model coverage_ratio requires "
         "--provider-total <model>=<tokens>"
-        if total_messages else f"no usage.message events for {month} — run 'ocw-meter ingest' first"
+        # PR #57 review round 1 finding 1: see usage_cost_footer's
+        # comment above — this ran automatically before we got here.
+        if total_messages else f"no usage.message events found in transcripts for {month} (ingest already ran automatically)"
     )
 
     summary = {
@@ -2305,7 +2331,7 @@ def _report_reconcile(paths, month, provider_totals, as_json, footer_freshness):
     print(f"month:         {summary['month']}")
     print(f"cost_basis:    {summary['cost_basis']}")
     if not models_out:
-        print("models:        (no usage.message events for this month — run 'ocw-meter ingest' first)")
+        print("models:        (no usage.message events found in transcripts for this month — ingest already ran automatically)")
     for model, m in sorted(models_out.items()):
         print(f"  {model}:")
         print(f"    messages:             {m['messages']}")
@@ -2564,6 +2590,53 @@ def cmd_report(args):
         print("error: --repo has no effect without --pr, --window, or standalone --month — it only scopes PR attribution", file=sys.stderr)
         return 1
 
+    # PR #57 review round 1 finding 7: both the repo resolution below and
+    # the --month validation that follows it used to run AFTER the
+    # auto-ingest call — a request that was always going to fail loud
+    # (a malformed --month, or no resolvable repo) still ran a whole
+    # live ingest (writing events/cursor) first. All pure input/context
+    # validation now happens before `root`/`paths` are even touched.
+    #
+    # Round-2 review finding 10 (regression introduced by round-1's own
+    # fix for finding 1): `events_for_pr`'s repo scoping only works if a
+    # repo is actually resolved. `report` can be run from ANYWHERE
+    # (unlike `event`, which is only ever called from inside a worktree
+    # by `ocw`/`pr-review-loop`) — running it from outside any git repo
+    # makes `git_repo_slug()` return None, and `e.get("repo") == None`
+    # then matches every repo:null event (exactly the class of event
+    # `events_for_pr`'s docstring promises to EXCLUDE), while every
+    # `pr.bind`/legitimate event WITH a repo set gets rejected. Measured:
+    # this flips finding 1's fix from "correct data + contamination" to
+    # "contamination only, zero correct events" when run from outside a
+    # git repo. Since resolving "which repo" is required for --pr and
+    # for --month's process_efficiency (both call `events_for_pr`), fail
+    # loud instead of silently scoping to the wrong (or no) repo.
+    # `--repo <owner>/<name>` is the escape hatch for a case where this
+    # needs to run from outside the target repo's own worktree.
+    repo = explicit_repo or git_repo_slug()
+    needs_repo = filter_pr is not None or (month_flag_present and view is None) or view == "window"
+    if needs_repo and not repo:
+        print(
+            "error: could not resolve a repo for PR-scoped reporting (not inside a git repo with an "
+            "'origin' remote, and --repo <owner>/<name> was not given). --pr, --window, and --month all need this "
+            "to avoid scoping to another repo's same-numbered PR in the shared ocw-meter store.",
+            file=sys.stderr,
+        )
+        return 1
+
+    if reconcile:
+        month, err = normalize_month_arg(month)
+        if err:
+            print(err, file=sys.stderr)
+            return 1
+    elif month_flag_present and view is None:
+        # 孫5 §1 --month (standalone, i.e. NOT --reconcile): cash cost /
+        # capacity cost / process efficiency, kept separate (plan §16).
+        month, err = normalize_month_arg(month)
+        if err:
+            print(err, file=sys.stderr)
+            return 1
+
     root = storage_root()
     if in_git_worktree(root):
         print(f"error: OCW_METER_HOME ({root}) resolves inside a Git worktree; refusing to operate", file=sys.stderr)
@@ -2581,39 +2654,7 @@ def cmd_report(args):
     footer_freshness = ingest_freshness_footer(load_ingest_cursor(paths), ingest_run)
 
     if reconcile:
-        month, err = normalize_month_arg(month)
-        if err:
-            print(err, file=sys.stderr)
-            return 1
         return _report_reconcile(paths, month, provider_totals, as_json, footer_freshness)
-
-    # Round-2 review finding 10 (regression introduced by round-1's own
-    # fix for finding 1): `events_for_pr`'s repo scoping only works if a
-    # repo is actually resolved. `report` can be run from ANYWHERE
-    # (unlike `event`, which is only ever
-    # called from inside a worktree by `ocw`/`pr-review-loop`) — running
-    # it from outside any git repo makes `git_repo_slug()` return None,
-    # and `e.get("repo") == None` then matches every repo:null event
-    # (exactly the class of event `events_for_pr`'s docstring promises
-    # to EXCLUDE), while every `pr.bind`/legitimate event WITH a repo
-    # set gets rejected. Measured: this flips finding 1's fix from
-    # "correct data + contamination" to "contamination only, zero
-    # correct events" when run from outside a git repo. Since resolving
-    # "which repo" is required for --pr and for --month's
-    # process_efficiency (both call `events_for_pr`), fail loud instead
-    # of silently scoping to the wrong (or no) repo. `--repo
-    # <owner>/<name>` is the escape hatch for a case where this needs to
-    # run from outside the target repo's own worktree.
-    repo = explicit_repo or git_repo_slug()
-    needs_repo = filter_pr is not None or (month_flag_present and view is None) or view == "window"
-    if needs_repo and not repo:
-        print(
-            "error: could not resolve a repo for PR-scoped reporting (not inside a git repo with an "
-            "'origin' remote, and --repo <owner>/<name> was not given). --pr, --window, and --month all need this "
-            "to avoid scoping to another repo's same-numbered PR in the shared ocw-meter store.",
-            file=sys.stderr,
-        )
-        return 1
 
     valid_events, malformed = [], 0
     for obj, _raw, error in iter_stored_events(paths):
@@ -2623,12 +2664,6 @@ def cmd_report(args):
             valid_events.append(obj)
 
     if month_flag_present and view is None:
-        # 孫5 §1 --month (standalone, i.e. NOT --reconcile): cash cost /
-        # capacity cost / process efficiency, kept separate (plan §16).
-        month, err = normalize_month_arg(month)
-        if err:
-            print(err, file=sys.stderr)
-            return 1
         return _report_month_standalone(paths, valid_events, malformed, month, repo, as_json, footer_freshness)
 
     if filter_pr is not None:
@@ -3708,19 +3743,28 @@ def perform_ingest(root, since_dt=None):
     # (restricted or not) simply re-reads the same unconsumed range from
     # wherever the last UNRESTRICTED run left off.
     # 計画書 DOC-2608081456孫2 §2: the cursor now also records WHEN the
-    # last full ingest completed and that it completed cleanly — the
-    # freshness footer reads these two fields back (`ingest_freshness_
-    # footer`). Recorded here, not on failure, so a stale timestamp
-    # after this run means exactly what it says: "this is the last time
-    # ingest actually finished", not "the last time it was attempted".
-    # Not recorded under --since either, for the same reason the file
-    # cursor itself isn't: a --since run is deliberately read-only with
-    # respect to persisted ingest state (see the comment above).
+    # last full ingest completed — the freshness footer
+    # (`ingest_freshness_footer`) reads this back. Recorded here, not on
+    # failure, so a stale timestamp after this run means exactly what it
+    # says: "this is the last time ingest actually finished", not "the
+    # last time it was attempted". Not recorded under --since either,
+    # for the same reason the file cursor itself isn't: a --since run is
+    # deliberately read-only with respect to persisted ingest state (see
+    # the comment above).
+    #
+    # PR #57 review round 1 finding 5: an earlier version of this also
+    # wrote `"last_ingest_result": "ok"` — but this branch is the ONLY
+    # place that ever calls `save_ingest_cursor`, and only ever on
+    # success, so that field could structurally never hold any value
+    # other than `"ok"`. A field that can't vary carries no information;
+    # dropped rather than kept as a decoration. If a persisted FAILED-
+    # attempt record ever becomes worth having, it belongs in its own
+    # field (e.g. `last_ingest_attempt_result`) written on the failure
+    # paths too — not bolted onto this success-only one.
     if since_dt is None:
         save_ingest_cursor(paths, {
             "files": new_cursor_files,
             "last_ingest_at": iso_utc(datetime.now(timezone.utc)),
-            "last_ingest_result": "ok",
         })
 
     return {

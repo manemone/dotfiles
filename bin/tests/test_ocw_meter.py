@@ -1907,6 +1907,17 @@ class ReportAutoIngestTests(OcwMeterTestCase):
         self.assertEqual(read_events(self.home), [])
         self.assertIn("ingest (this run): skipped (--no-ingest)", result.stdout)
 
+    def test_invalid_month_fails_before_running_the_automatic_ingest(self):
+        # PR #57 review round 1 finding 7: argument validation (a
+        # malformed --month) used to run AFTER the automatic ingest call,
+        # so a request that was always going to fail loud still wrote a
+        # live ingest-cursor.json/events first.
+        write_transcript(self.projects_dir, "proj", "sess-bad-month", [assistant_line("sess-bad-month", "m1")])
+        result = run_report(self.home, self.projects_dir, args=["--reconcile", "--month", "2026-13"])
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse((self.home / "state" / "ingest-cursor.json").exists())
+        self.assertEqual(read_events(self.home), [])
+
     def test_auto_ingest_runs_for_every_report_view(self):
         # 計画書「1つでも漏れると、そのビューだけ古いデータを見る」: each
         # view gets its OWN isolated home/projects_dir so a prior view's
@@ -1955,7 +1966,10 @@ class ReportAutoIngestTests(OcwMeterTestCase):
         self.assertNotIn("last_ingest_at: unknown", result.stdout)
         cursor = json.loads((self.home / "state" / "ingest-cursor.json").read_text(encoding="utf-8"))
         self.assertIn("last_ingest_at", cursor)
-        self.assertEqual(cursor["last_ingest_result"], "ok")
+        # The raw RFC3339 the footer's --json field (last_ingest_at_rfc3339)
+        # must carry, unmodified, for a machine consumer (PR #57 review
+        # round 1 finding 6) — round-trips through the text footer too.
+        self.assertIn(f"last_ingest_at_rfc3339: {cursor['last_ingest_at']}", result.stdout)
 
     def test_old_format_ingest_cursor_without_last_ingest_at_shows_unknown(self):
         state_dir = self.home / "state"
@@ -1964,27 +1978,63 @@ class ReportAutoIngestTests(OcwMeterTestCase):
         result = run_meter(["report", "--no-ingest"], self.home)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("last_ingest_at: unknown", result.stdout)
+        self.assertIn("last_ingest_at_rfc3339: unknown", result.stdout)
 
     def test_freshness_warning_only_appears_past_the_staleness_threshold(self):
+        # PR #57 review round 1 finding 4: the threshold comparison is
+        # `>=` (inclusive — see ingest_freshness_footer's comment), so
+        # the boundary itself, not just comfortably-inside/outside
+        # samples, must be pinned down here.
         state_dir = self.home / "state"
         state_dir.mkdir(parents=True, exist_ok=True)
 
-        recent = (datetime.now(timezone.utc) - timedelta(minutes=5)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
-        (state_dir / "ingest-cursor.json").write_text(
-            json.dumps({"files": {}, "last_ingest_at": recent, "last_ingest_result": "ok"}), encoding="utf-8",
-        )
-        fresh_result = run_meter(["report", "--no-ingest"], self.home)
+        def cursor_at_age(**age_kwargs):
+            ts = (datetime.now(timezone.utc) - timedelta(**age_kwargs)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+            (state_dir / "ingest-cursor.json").write_text(
+                json.dumps({"files": {}, "last_ingest_at": ts}), encoding="utf-8",
+            )
+            return run_meter(["report", "--no-ingest"], self.home)
+
+        fresh_result = cursor_at_age(minutes=5)
         self.assertEqual(fresh_result.returncode, 0, fresh_result.stderr)
         self.assertIn("ingest_freshness_warning: (none)", fresh_result.stdout)
 
-        stale = (datetime.now(timezone.utc) - timedelta(hours=25)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
-        (state_dir / "ingest-cursor.json").write_text(
-            json.dumps({"files": {}, "last_ingest_at": stale, "last_ingest_result": "ok"}), encoding="utf-8",
-        )
-        stale_result = run_meter(["report", "--no-ingest"], self.home)
+        just_under_result = cursor_at_age(hours=24, seconds=-5)
+        self.assertEqual(just_under_result.returncode, 0, just_under_result.stderr)
+        self.assertIn("ingest_freshness_warning: (none)", just_under_result.stdout)
+
+        exactly_at_result = cursor_at_age(hours=24, seconds=1)
+        self.assertEqual(exactly_at_result.returncode, 0, exactly_at_result.stderr)
+        self.assertNotIn("ingest_freshness_warning: (none)", exactly_at_result.stdout)
+        self.assertIn("経過しています", exactly_at_result.stdout)
+
+        stale_result = cursor_at_age(hours=25)
         self.assertEqual(stale_result.returncode, 0, stale_result.stderr)
         self.assertNotIn("ingest_freshness_warning: (none)", stale_result.stdout)
         self.assertIn("経過しています", stale_result.stdout)
+
+    def test_json_output_includes_freshness_footer_keys_for_every_view(self):
+        # PR #57 review round 1 finding 3: `footer_freshness` is `**`-
+        # expanded into 4 separate JSON summary dicts
+        # (cmd_report/_print_grouped_report/_report_month_standalone/
+        # _report_reconcile) — a dropped `**footer_freshness` in any ONE
+        # of them would otherwise go undetected, since every other
+        # existing test only checks the text footer's print lines.
+        write_transcript(self.projects_dir, "proj", "sess-json-fresh", [
+            assistant_line("sess-json-fresh", "m1", timestamp="2026-07-15T10:00:00.000Z"),
+        ])
+        freshness_keys = {"last_ingest_at", "last_ingest_at_rfc3339", "ingest_this_run", "ingest_freshness_warning"}
+        view_cases = [
+            [], ["--phase"], ["--model"], ["--role"], ["--window"],
+            ["--month", "2026-07"], ["--reconcile", "--month", "2026-07"],
+        ]
+        for view_args in view_cases:
+            with self.subTest(view=view_args):
+                result = run_report(self.home, self.projects_dir, args=[*view_args, "--json"])
+                self.assertEqual(result.returncode, 0, result.stderr)
+                summary = json.loads(result.stdout)
+                missing = freshness_keys - summary.keys()
+                self.assertFalse(missing, f"view {view_args} --json is missing freshness keys: {missing}")
 
 
 class SymlinkInvocationTests(OcwMeterTestCase):
