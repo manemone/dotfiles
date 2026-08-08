@@ -495,10 +495,7 @@ PR番号はリポジトリ**内**でしか一意でない。`--pr`とstandalone�
   list_price_equiv_excluded_null_cost_count: 0
   list_price_equiv_excluded_deepseek_count: 0
   list_price_equiv_excluded_other_provider_count: 0
-  list_price_equiv_note: Claude Code自己申告のsession_cost_usd（statusLineのcost.total_cost_usd）を
-    provider=anthropicのみに絞り、session_idごとに正の差分の総和として積算した下限値（最後の
-    statusLine描画以降の消費は含まれない）。usage.messageのcost_estimate_usdとは別カラムであり、
-    cash costとは絶対に合算しない。請求書ではない。
+  list_price_equiv_note: Claude Code自己申告のsession_cost_usd（statusLineのcost.total_cost_usd）を provider=anthropicのみに絞り、session_idごとに正の差分の総和として積算した下限値（最後のstatusLine描画以降の消費は含まれない）。usage.messageのcost_estimate_usdとは別カラムであり、cash costとは絶対に合算しない。請求書ではない。
 ```
 
 **attribution行の読み方（`run_id`/`role`の帰属解決。孫5、計画書
@@ -555,10 +552,10 @@ attribution (role):   direct 0.0% / via session_id 66.7% / unresolved 33.3%
 運用上は、`OCW_METER_QUOTA_INTERVAL`を既定の60秒より大きくする、または手動で古い
 `events/YYYY-MM-DD.jsonl`を別途アーカイブ・削除する、のいずれかを検討すること。
 
-**`prune`を実装しない決定について（旧傘`ai-llm-cost-observability`の孫5、計画書
+**`prune`を実装しない決定について（旧傘`ai/llm-cost-observability`の孫5、計画書
 [DOC-2608021229-a](../docs/planning/DOC-2608021229-a_ai-llm-cost-observability_計画.md)§9.3の
-積み残し解消。本傘`ocw-meter-accuracy`の孫5〈session_id join、下記参照〉とは別の孫であることに
-注意）**: 計画書DOC-2608021229-a §9.3は「保存期間: 既定14日、`ocw-meter prune`で削除」と
+積み残し解消。本傘`ocw-meter-accuracy`の孫5〈session_id join、上記「attribution行の読み方」参照〉
+とは別の孫であることに注意）**: 計画書DOC-2608021229-a §9.3は「保存期間: 既定14日、`ocw-meter prune`で削除」と
 書いていたが、`prune`はどの孫の実装スコープにも入っておらず、計画時の書き漏れだった。
 （旧傘の）孫5で以下の理由により**意図的に未実装のまま据え置く**と決定した。
 **`prune-diagnostics`（上記）とは別物である点に注意**: `prune-diagnostics`が消すのは
