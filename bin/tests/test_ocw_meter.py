@@ -4056,6 +4056,30 @@ class ReportListPriceEquivTests(OcwMeterTestCase):
         self.assertAlmostEqual(data301["pr_detail"]["list_price_equiv_usd"], 20.0)
         self.assertAlmostEqual(data302["pr_detail"]["list_price_equiv_usd"], 25.0)
 
+    def test_window_and_pr_filter_combined_does_not_double_count_carryover(self):
+        # round-2レビュー持ち越し指摘: セッションS1が W1/PR#101(10->20)、
+        # W2/PR#102(30->45) とまたぐケースで、`--window` 単体・`--pr` 単体
+        # はround-1の修正で直ったが、`--window --pr <n>` の併用だけ
+        # report_by_window() が自分の受け取った引数(PRで絞られた
+        # filtered)からquota_contributionsを計算していたため、
+        # まったく同じ二重計上が残っていた。真の消費は #102=25。
+        run_meter(["event", "run.start", "--idempotency-key", "r101", "--run-id", "run-101",
+                   "--ts", "2026-08-05T09:00:00.000Z"], self.home)
+        run_meter(["bind-pr", "--run", "run-101", "--pr", "101"], self.home)
+        run_meter(["event", "run.start", "--idempotency-key", "r102", "--run-id", "run-102",
+                   "--ts", "2026-08-05T10:00:00.000Z"], self.home)
+        run_meter(["bind-pr", "--run", "run-102", "--pr", "102"], self.home)
+        self._quota_sample("q1", "sess-carry-both", 10, "2026-08-05T09:00:00.000Z",
+                            extra=["--run-id", "run-101", "--pr-number", "101", "--window-id", "winX"])
+        self._quota_sample("q2", "sess-carry-both", 20, "2026-08-05T09:01:00.000Z",
+                            extra=["--run-id", "run-101", "--pr-number", "101", "--window-id", "winX"])
+        self._quota_sample("q3", "sess-carry-both", 30, "2026-08-05T10:00:00.000Z",
+                            extra=["--run-id", "run-102", "--pr-number", "102", "--window-id", "winY"])
+        self._quota_sample("q4", "sess-carry-both", 45, "2026-08-05T10:01:00.000Z",
+                            extra=["--run-id", "run-102", "--pr-number", "102", "--window-id", "winY"])
+        data = json.loads(run_meter(["report", "--window", "--pr", "102", "--json"], self.home).stdout)
+        self.assertAlmostEqual(data["by_window"]["winY"]["list_price_equiv_usd"], 25.0)
+
     def test_month_view_still_sums_the_whole_session_across_windows(self):
         # 上のwindowテストと同じセッションでも、--monthはウィンドウを
         # またいでも変わらず正しい合計(40)を返す(こちらは元々スコープが
