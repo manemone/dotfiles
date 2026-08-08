@@ -22,8 +22,8 @@
 |---|---|---|---|
 | 1 | `ocw-meter-01-store-hygiene` | 【4】【6】テストによる実ストア汚染の停止・`quota-worktree-refusal.json` のプルーニング片手落ち修正・診断ファイル専用の掃除サブコマンド新設 | ✅ PR #56 マージ済 |
 | 2 | `ocw-meter-02-ingest-freshness` | 【1】`report` からの ingest 自動実行と、最終 ingest 時刻・鮮度のフッター表示 | ✅ PR #57 マージ済 |
-| 3 | `ocw-meter-03-price-tables` | 【5】価格表スキーマの時間帯（peak/off-peak）対応・フォールバック時の警告・適用期間ミスマッチの可視化 | 🔄 実装中 |
-| 4 | `ocw-meter-04-list-price-equiv` | 【2】`quota.sample` の `session_cost_usd` から `list_price_equiv_usd` を集計して `report` に出す | ⬜ 待機中 |
+| 3 | `ocw-meter-03-price-tables` | 【5】価格表スキーマの時間帯（peak/off-peak）対応・フォールバック時の警告・適用期間ミスマッチの可視化 | ✅ PR #58 マージ済 |
+| 4 | `ocw-meter-04-list-price-equiv` | 【2】`quota.sample` の `session_cost_usd` から `list_price_equiv_usd` を集計して `report` に出す | 🔄 実装中 |
 | 5 | `ocw-meter-05-session-attribution` | 【3】`session_id` join による `run_id` / `role` の帰属解決（ingest 側フォールバック + report 側 join）と attribution 行 | ⬜ 待機中 |
 | 6 | `ocw-meter-06-docs` | 文書（`bin/README.md` / スキーマ文書 DOC-2608021229-c / ADR DOC-2608021229 への追記節 / ルート `README.md`） | ⬜ 待機中 |
 
