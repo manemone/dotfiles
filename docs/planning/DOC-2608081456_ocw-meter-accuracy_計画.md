@@ -25,7 +25,7 @@
 | 3 | `ocw-meter-03-price-tables` | 【5】価格表スキーマの時間帯（peak/off-peak）対応・フォールバック時の警告・適用期間ミスマッチの可視化 | ✅ PR #58 マージ済 |
 | 4 | `ocw-meter-04-list-price-equiv` | 【2】`quota.sample` の `session_cost_usd` から `list_price_equiv_usd` を集計して `report` に出す | ✅ PR #59 マージ済 |
 | 5 | `ocw-meter-05-session-attribution` | 【3】`session_id` join による `run_id` / `role` の帰属解決（ingest 側フォールバック + report 側 join）と attribution 行 | ✅ PR #60 マージ済 |
-| 6 | `ocw-meter-06-docs` | 文書（`bin/README.md` / スキーマ文書 DOC-2608021229-c / ADR DOC-2608021229 への追記節 / ルート `README.md`） | 🔄 実装中 |
+| 6 | `ocw-meter-06-docs` | 文書（`bin/README.md` / スキーマ文書 DOC-2608021229-c / ADR DOC-2608021229 への追記節 / ルート `README.md`） | ✅ PR #61 マージ済 |
 
 **ブランチ名に `ai/` 接頭辞は付けない。** PR #54（DOC-2608062258）で `ocw` の `ai/` 接頭辞は
 廃止済みであり、傘ブランチ自体も `ocw-meter-accuracy`（接頭辞なし）である。
