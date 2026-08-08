@@ -493,7 +493,9 @@ rm ~/.local/state/ocw-meter/events/2026-01-*.jsonl
 `state/session-pr-links.json`（`ingest`がtranscriptの`pr-link`行から学習したsession→PRの対応。
 増分実行をまたいで保持される）/
 `state/meter-errors.jsonl`（`meter.error`自己診断専用。
-`events/`とは別ファイルにすることで、後勝ちdedupによるイベントファイル書き換えと競合せずlock無しで追記できる）/
+`events/`とは別ファイルにすることで、後勝ちdedupによるイベントファイル書き換えと競合せずlock無しで追記できる。
+ただし `ocw-meter prune-diagnostics --apply` はこのファイルを丸ごと書き換える唯一の例外で、
+書き換えの瞬間と重なった追記1行を失う可能性がある）/
 `state/quota-last-sample.json`（`snapshot-quota`のサンプリング間隔自制・同一window内の異常値検知に使う
 直近サンプルの状態）/
 `raw/YYYY-MM-DD/*.json`（`OCW_METER_RAW=1`のときのみ。`snapshot-quota`が保存するredaction済みの
