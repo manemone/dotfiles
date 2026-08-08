@@ -1823,6 +1823,82 @@ def events_for_pr(valid_events, pr_number, repo):
     ]
 
 
+def report_capacity_list_price(quota_events):
+    """孫4プロンプト §1: aggregates Claude Code's own self-reported
+    session cost (`quota.sample`'s `session_cost_usd`, statusLine's
+    `cost.total_cost_usd`) into a Claude-side "list price equivalent"
+    total. This is a completely separate signal from `cost_estimate_usd`
+    (ocw-meter's own price-table estimate, carried on `usage.message`)
+    and must never be summed with it, nor with cash cost —
+    `report_month_cash_and_capacity`'s "cash cost と capacity は never
+    summed" contract covers this metric the same way it covers cash vs
+    capacity (罠4). Callers merge this dict's keys into whichever
+    capacity-side summary they're building (`--month`'s capacity
+    section, `--pr`'s pr_detail, `--window`'s per-window row).
+
+    罠2: scoped to `provider == "anthropic"` ONLY. `deepseek`'s own
+    `session_cost_usd` (measured $93.35 across 10 sessions) is Claude
+    Code pricing an unknown-to-us rate table against a non-Anthropic
+    model — summing it in here would double-count against
+    `usage.message`'s own DeepSeek price-table estimate.
+
+    罠3: `session_cost_usd` is monotonic WITHIN one continuous session
+    but resets on `/clear`/compaction — measured 26/214 real sessions
+    with a mid-session decrease. `max()` silently drops everything
+    accumulated before a reset. Instead, sort each `session_id`'s
+    samples by `ts` and sum only the positive deltas between adjacent
+    samples (a negative delta means "a reset happened here" and
+    contributes 0, not a subtraction); the first sample in a session
+    contributes its own value as the opening term.
+
+    Samples missing `session_id` (can't be grouped into a session at
+    all) or with a null/non-numeric `session_cost_usd` are excluded
+    rather than guessed at, and counted separately so the exclusion is
+    visible in the output instead of silently dropped (plan's
+    "推測で埋めない" — 全孫共通の注意5)."""
+    sessions = {}
+    excluded_no_session_id = 0
+    excluded_null_cost = 0
+    for e in quota_events:
+        if e.get("event_type") != "quota.sample" or e.get("provider") != "anthropic":
+            continue
+        session_id = e.get("session_id")
+        if not isinstance(session_id, str) or not session_id:
+            excluded_no_session_id += 1
+            continue
+        cost = e.get("session_cost_usd")
+        if not isinstance(cost, (int, float)):
+            excluded_null_cost += 1
+            continue
+        sessions.setdefault(session_id, []).append((e.get("ts") or "", cost))
+
+    total = 0.0
+    for samples in sessions.values():
+        samples.sort(key=lambda pair: pair[0])
+        prev = None
+        for _, cost in samples:
+            total += cost if prev is None else max(0.0, cost - prev)
+            prev = cost
+
+    has_data = bool(sessions)
+    note = (
+        "Claude Code自己申告のsession_cost_usd（statusLineのcost.total_cost_usd）を "
+        "provider=anthropicのみに絞り、session_idごとに正の差分の総和として積算した下限値"
+        "（最後のstatusLine描画以降の消費は含まれない）。usage.messageのcost_estimate_usd"
+        "とは別カラムであり、cash costとは絶対に合算しない。請求書ではない。"
+    )
+    if not has_data:
+        note += " このスコープにanthropicのquota.sampleが1件も無いため null（$0.00ではない）。"
+    return {
+        "list_price_equiv_usd": total if has_data else None,
+        "list_price_equiv_is_lower_bound": True,
+        "list_price_equiv_session_count": len(sessions),
+        "list_price_equiv_excluded_no_session_id_count": excluded_no_session_id,
+        "list_price_equiv_excluded_null_cost_count": excluded_null_cost,
+        "list_price_equiv_note": note,
+    }
+
+
 def pr_review_summary(pr_events):
     """孫5 §1 --pr: review round list / human intervention count / final
     result / cash+capacity cost split / 5h枠消費 for one PR's own
@@ -1906,6 +1982,7 @@ def pr_review_summary(pr_events):
         "seven_day_used_pct_max": max(seven_day_vals) if seven_day_vals else None,
         "cash_cost_usd": cash_cost if has_cash_cost else None,
         "capacity_message_count": capacity_message_count,
+        **report_capacity_list_price(pr_events),
     }
 
 
@@ -2082,9 +2159,14 @@ def report_by_window(valid_events, repo=None):
             continue
         w = windows.setdefault(wid, {
             "samples": 0, "five_hour_used_pct_max": None, "seven_day_used_pct_max": None,
-            "first_ts": None, "last_ts": None, "prs_direct": set(),
+            "first_ts": None, "last_ts": None, "prs_direct": set(), "quota_events": [],
         })
         w["samples"] += 1
+        # 孫4プロンプト §2: list_price_equiv needs each window's own raw
+        # quota.sample events (session-level delta accounting can't be
+        # done from the running maxes above) — kept only for the
+        # `report_capacity_list_price` call below, not exposed itself.
+        w["quota_events"].append(e)
         for pct_field, out_field in (("five_hour_used_pct", "five_hour_used_pct_max"), ("seven_day_used_pct", "seven_day_used_pct_max")):
             pct = e.get(pct_field)
             if isinstance(pct, (int, float)):
@@ -2128,6 +2210,7 @@ def report_by_window(valid_events, repo=None):
             "prs_time_overlap": prs_overlap,
             "blocked_seconds": None,
             "blocked_note": "block.start/block.end are schema-defined but not emitted by any caller yet (計画書16章) — always null here",
+            **report_capacity_list_price(w["quota_events"]),
         }
     return out
 
@@ -2310,6 +2393,7 @@ def report_month_cash_and_capacity(valid_events, month):
         "five_hour_used_pct_max": max(five_hour_vals) if five_hour_vals else None,
         "seven_day_used_pct_max": max(seven_day_vals) if seven_day_vals else None,
         "distinct_five_hour_windows": len(distinct_windows),
+        **report_capacity_list_price(quota_month),
     }
 
 
@@ -2551,6 +2635,8 @@ def _print_grouped_report(title, group_label, groups, as_json, storage_root_str,
                 continue
             if field == "cost_estimate_usd":
                 value = f"${value:.4f}" if isinstance(value, (int, float)) else "null"
+            elif field == "list_price_equiv_usd":
+                value = f"${value:.2f}+ (下限 / list price相当)" if isinstance(value, (int, float)) else "null"
             print(f"    {field}: {value}")
     print_footer_text(footer_completeness, footer_cost, footer_freshness, total)
     return 0
@@ -2868,6 +2954,13 @@ def cmd_report(args):
             cash_str = f"${detail['cash_cost_usd']:.4f}" if isinstance(detail["cash_cost_usd"], (int, float)) else "null"
             print(f"cash_cost_usd: {cash_str}")
             print(f"capacity_message_count (claude subscription, no dollar figure): {detail['capacity_message_count']}")
+            list_price_str = (
+                f"${detail['list_price_equiv_usd']:.2f}+ (下限 / list price相当 / 請求書ではない / cash costと合算不可)"
+                if isinstance(detail["list_price_equiv_usd"], (int, float)) else "null"
+            )
+            print(f"list_price_equiv_usd: {list_price_str}")
+            print(f"list_price_equiv_session_count: {detail['list_price_equiv_session_count']}")
+            print(f"list_price_equiv_note: {detail['list_price_equiv_note']}")
 
     return 0
 
@@ -2914,6 +3007,24 @@ def _report_month_standalone(paths, valid_events, malformed, month, repo, as_jso
         "five_hour_used_pct_max": cash_and_capacity["five_hour_used_pct_max"],
         "seven_day_used_pct_max": cash_and_capacity["seven_day_used_pct_max"],
         "distinct_five_hour_windows": cash_and_capacity["distinct_five_hour_windows"],
+        "list_price_equiv_usd": cash_and_capacity["list_price_equiv_usd"],
+        "list_price_equiv_is_lower_bound": cash_and_capacity["list_price_equiv_is_lower_bound"],
+        "list_price_equiv_session_count": cash_and_capacity["list_price_equiv_session_count"],
+        "list_price_equiv_excluded_no_session_id_count": cash_and_capacity["list_price_equiv_excluded_no_session_id_count"],
+        "list_price_equiv_excluded_null_cost_count": cash_and_capacity["list_price_equiv_excluded_null_cost_count"],
+        # 孫4プロンプト §4: quota.sample collection itself only started
+        # 2026-08-01 — a month before that has NO Claude-side cost data
+        # to find, which is a different fact from "this particular
+        # month happened to have zero anthropic sessions" (both produce
+        # the same null above; this line is what tells them apart).
+        "list_price_equiv_note": (
+            cash_and_capacity["list_price_equiv_note"]
+            + (
+                " (quota.sampleの記録自体が2026-08-01開始のため、それより前の月は原理的に"
+                "データが無い)"
+                if month < "2026-08" else ""
+            )
+        ),
     }
 
     if as_json:
@@ -2949,6 +3060,8 @@ def _report_month_standalone(paths, valid_events, malformed, month, repo, as_jso
         print("  price_tables_applied: (none)")
     print("capacity cost (Claude subscription quota — never summed with cash cost):")
     for field, value in summary["capacity"].items():
+        if field == "list_price_equiv_usd":
+            value = f"${value:.2f}+ (下限 / list price相当 / 請求書ではない)" if isinstance(value, (int, float)) else "null"
         print(f"  {field}: {value}")
     pe = summary["process_efficiency"]
     print(f"process efficiency (approved PRs in {month}):")
