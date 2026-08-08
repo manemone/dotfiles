@@ -2952,15 +2952,28 @@ def backfill_run_id_and_role_via_session(usage_events, session_attrs, binds):
     それは常にdirect解決だったとみなせる)。
 
     レビュー指摘2: `pr_number`/`pr_url`も、B側の`build_usage_event`が
-    `pr_info = binds.get(run_id)`で無条件に行っているのと同じ補完を
-    ここでも行う。これをしないと「session joinでrun_idを持つように
-    なったのに、ingestより後に読まれたか先に読まれたかでpr_numberの
-    有無が変わる」という非対称が生じ、`report_by_window`の`pr_ranges`
-    （`e.get("pr_number")`が非nullのイベントだけからPRの時刻レンジを
-    作る）がingestタイミング依存になる。run_idがこの関数の対象外
-    （元から埋まっていた）イベントも含め、run_idがありpr_numberが無い
-    全usage.messageに対して行う — B側と全く同じ「run_idが決まれば
-    pr_numberも決まる」という関係を保つため。"""
+    `pr_info = binds.get(run_id)`で行っているのと同じ補完をここでも
+    行う。これをしないと「session joinでrun_idを持つようになったのに、
+    ingestより後に読まれたか先に読まれたかでpr_numberの有無が変わる」
+    という非対称が生じ、`report_by_window`の`pr_ranges`（`e.get(
+    "pr_number")`が非nullのイベントだけからPRの時刻レンジを作る）が
+    ingestタイミング依存になる。run_idがこの関数の対象外（元から埋まっ
+    ていた）イベントも含め、run_idがありpr_numberが無い全usage.message
+    に対して行う。
+
+    レビュー指摘(ラウンド2 新規1): ここで揃えているのは「run_idが決まれば
+    pr_numberも決まる」という**関係**だけであり、bindの絞り方までB側と
+    同じにするという意味ではない。渡ってくる`binds`（`pr_binds_from_
+    events()`が組む）はrepoスコープ付き — `events_for_pr()`の
+    `bound_run_ids`と同じ絞り方に揃えてある。一方B側の`load_local_pr_
+    binds_and_run_starts()`が返す`binds`にはrepoスコープが無く、この点で
+    AとBは意図的に異なる（ラウンド2 新規1: repoスコープ無しの`binds`を
+    read-timeに無条件適用すると、別リポジトリでbindされたpr_numberが
+    このrepoのusage.messageへ焼き込まれ、`events_for_pr()`の直接マッチ
+    をすり抜けて別リポジトリの費用が混入する実測済みの不具合になる）。
+    「Bと揃える」つもりでこの関数へrepoスコープ無しの`binds`を渡さない
+    こと。B側自体のrepoスコープ欠如は本PR以前から存在する別の問題であり、
+    本PRの意図的な対象外。"""
     for e in usage_events:
         if e.get("event_type") != "usage.message":
             continue
