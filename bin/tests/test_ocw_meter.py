@@ -3986,13 +3986,119 @@ class ReportListPriceEquivTests(OcwMeterTestCase):
         self.assertAlmostEqual(data["capacity"]["list_price_equiv_usd"], 12.0)
 
     def test_rate_limits_less_deepseek_shaped_samples_are_excluded(self):
-        # provider が rate_limits を持たない（DeepSeek/claude-ds形状）
-        # サンプルとして "unknown" や "deepseek" になっていても、
-        # anthropic 以外は一切合算しない。
+        # 罠2は「providerフィールドが deepseek 文字列であること」ではなく
+        # 「rate_limitsを持たない実際のDeepSeek/claude-ds形状のstatusLine
+        # JSONが、その書き込み経路(snapshot-quota)を通って provider を
+        # 正しく推論され、結果として除外されること」を確認する必要がある
+        # (round-1レビュー指摘4: 直接 --provider を叩くだけのテストは
+        # rate_limits の有無がproviderに効かなくなっても緑のままだった)。
         self._quota_sample("q1", "sess-a", 1.0, "2026-08-05T09:00:00.000Z", provider="anthropic")
-        self._quota_sample("q2", "sess-b", 999.0, "2026-08-05T09:01:00.000Z", provider="unknown")
+        run_snapshot_quota(json.dumps({
+            "session_id": "sess-ds-shaped", "cwd": "/tmp",
+            "model": {"id": "deepseek-v4-pro[1m]"},
+            "cost": {"total_cost_usd": 999.0},
+        }), self.home)
         data = json.loads(run_meter(["report", "--month", "2026-08", "--json"], self.home).stdout)
         self.assertAlmostEqual(data["capacity"]["list_price_equiv_usd"], 1.0)
+        self.assertEqual(data["capacity"]["list_price_equiv_excluded_deepseek_count"], 1)
+
+    def test_provider_unresolved_samples_are_excluded_and_counted_separately(self):
+        # round-1レビュー指摘3: model名もrate_limitsも無いサンプルは
+        # provider: null で書かれる(deepseekと判定されたわけではない)。
+        # anthropicとして合算してはいけないが、除外したこと自体は
+        # deepseekの除外とは別カウンタで報告する。
+        self._quota_sample("q1", "sess-a", 1.0, "2026-08-05T09:00:00.000Z", provider="anthropic")
+        run_snapshot_quota(json.dumps({
+            "session_id": "sess-unresolved", "cwd": "/tmp",
+            "cost": {"total_cost_usd": 999.0},
+        }), self.home)
+        event = next(e for e in read_events(self.home) if e["session_id"] == "sess-unresolved")
+        self.assertIsNone(event["provider"])
+        data = json.loads(run_meter(["report", "--month", "2026-08", "--json"], self.home).stdout)
+        self.assertAlmostEqual(data["capacity"]["list_price_equiv_usd"], 1.0)
+        self.assertEqual(data["capacity"]["list_price_equiv_excluded_other_provider_count"], 1)
+        self.assertEqual(data["capacity"]["list_price_equiv_excluded_deepseek_count"], 0)
+
+    # -- round-1レビュー指摘1: セッションがスコープをまたぐと持ち越し分を
+    # 二重計上してはいけない --
+
+    def test_window_scoped_session_does_not_double_count_carryover_from_a_prior_window(self):
+        # セッションS1: W1で 10 -> 20、W2で 30 -> 40。
+        # 真の消費は W1=20, W2=20 (合計40)。バグ版はW2の初項に30を
+        # まるごと足すため W2=40 になり、合計が60に膨らむ。
+        self._quota_sample("q1", "sess-carry", 10, "2026-08-05T09:00:00.000Z", extra=["--window-id", "winA"])
+        self._quota_sample("q2", "sess-carry", 20, "2026-08-05T09:01:00.000Z", extra=["--window-id", "winA"])
+        self._quota_sample("q3", "sess-carry", 30, "2026-08-05T10:00:00.000Z", extra=["--window-id", "winB"])
+        self._quota_sample("q4", "sess-carry", 40, "2026-08-05T10:01:00.000Z", extra=["--window-id", "winB"])
+        data = json.loads(run_meter(["report", "--window", "--json"], self.home).stdout)
+        self.assertAlmostEqual(data["by_window"]["winA"]["list_price_equiv_usd"], 20.0)
+        self.assertAlmostEqual(data["by_window"]["winB"]["list_price_equiv_usd"], 20.0)
+
+    def test_pr_scoped_session_does_not_double_count_carryover_from_a_prior_pr(self):
+        # セッションS1: PR#301で 10 -> 20、PR#302で 30 -> 45。
+        # 真の消費は #301=20, #302=25。
+        run_meter(["event", "run.start", "--idempotency-key", "r301", "--run-id", "run-301",
+                   "--ts", "2026-08-05T09:00:00.000Z"], self.home)
+        run_meter(["bind-pr", "--run", "run-301", "--pr", "301"], self.home)
+        run_meter(["event", "run.start", "--idempotency-key", "r302", "--run-id", "run-302",
+                   "--ts", "2026-08-05T10:00:00.000Z"], self.home)
+        run_meter(["bind-pr", "--run", "run-302", "--pr", "302"], self.home)
+        self._quota_sample("q1", "sess-carry-pr", 10, "2026-08-05T09:00:00.000Z",
+                            extra=["--run-id", "run-301", "--pr-number", "301"])
+        self._quota_sample("q2", "sess-carry-pr", 20, "2026-08-05T09:01:00.000Z",
+                            extra=["--run-id", "run-301", "--pr-number", "301"])
+        self._quota_sample("q3", "sess-carry-pr", 30, "2026-08-05T10:00:00.000Z",
+                            extra=["--run-id", "run-302", "--pr-number", "302"])
+        self._quota_sample("q4", "sess-carry-pr", 45, "2026-08-05T10:01:00.000Z",
+                            extra=["--run-id", "run-302", "--pr-number", "302"])
+        data301 = json.loads(run_meter(["report", "--pr", "301", "--json"], self.home).stdout)
+        data302 = json.loads(run_meter(["report", "--pr", "302", "--json"], self.home).stdout)
+        self.assertAlmostEqual(data301["pr_detail"]["list_price_equiv_usd"], 20.0)
+        self.assertAlmostEqual(data302["pr_detail"]["list_price_equiv_usd"], 25.0)
+
+    def test_month_view_still_sums_the_whole_session_across_windows(self):
+        # 上のwindowテストと同じセッションでも、--monthはウィンドウを
+        # またいでも変わらず正しい合計(40)を返す(こちらは元々スコープが
+        # 月全体なのでバグの対象外だったことの回帰確認)。
+        self._quota_sample("q1", "sess-carry-month", 10, "2026-08-05T09:00:00.000Z", extra=["--window-id", "winA"])
+        self._quota_sample("q2", "sess-carry-month", 20, "2026-08-05T09:01:00.000Z", extra=["--window-id", "winA"])
+        self._quota_sample("q3", "sess-carry-month", 30, "2026-08-05T10:00:00.000Z", extra=["--window-id", "winB"])
+        self._quota_sample("q4", "sess-carry-month", 40, "2026-08-05T10:01:00.000Z", extra=["--window-id", "winB"])
+        data = json.loads(run_meter(["report", "--month", "2026-08", "--json"], self.home).stdout)
+        self.assertAlmostEqual(data["capacity"]["list_price_equiv_usd"], 40.0)
+
+    # -- round-1レビュー指摘5: null と 下限 は同時に成立しない --
+
+    def test_is_lower_bound_is_null_not_true_when_value_is_null(self):
+        data = json.loads(run_meter(["report", "--month", "2026-08", "--json"], self.home).stdout)
+        self.assertIsNone(data["capacity"]["list_price_equiv_usd"])
+        self.assertIsNone(data["capacity"]["list_price_equiv_is_lower_bound"])
+
+    # -- round-1レビュー指摘2: --prのテキスト出力でも除外件数を出す --
+
+    def test_pr_text_output_includes_exclusion_counts(self):
+        run_meter(["event", "run.start", "--idempotency-key", "r400", "--run-id", "run-400",
+                   "--ts", "2026-08-05T09:00:00.000Z"], self.home)
+        run_meter(["bind-pr", "--run", "run-400", "--pr", "400"], self.home)
+        run_meter(["event", "quota.sample", "--idempotency-key", "q1",
+                   "--plan-source", "statusline", "--provider", "anthropic",
+                   "--session-cost-usd", "5.0", "--run-id", "run-400", "--pr-number", "400",
+                   "--ts", "2026-08-05T09:05:00.000Z"], self.home)
+        result = run_meter(["report", "--pr", "400"], self.home)
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("list_price_equiv_excluded_no_session_id_count:", result.stdout)
+        self.assertIn("list_price_equiv_excluded_null_cost_count:", result.stdout)
+        self.assertIn("list_price_equiv_excluded_deepseek_count:", result.stdout)
+        self.assertIn("list_price_equiv_excluded_other_provider_count:", result.stdout)
+
+    # -- round-1レビュー指摘6: --windowのテキスト出力で説明文を行ごとに繰り返さない --
+
+    def test_window_text_output_prints_the_note_once_not_per_row(self):
+        self._quota_sample("q1", "sess-win-a", 1.0, "2026-08-05T09:00:00.000Z", extra=["--window-id", "winA"])
+        self._quota_sample("q2", "sess-win-b", 2.0, "2026-08-05T10:00:00.000Z", extra=["--window-id", "winB"])
+        result = run_meter(["report", "--window"], self.home)
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(result.stdout.count("list_price_equiv_note:"), 1)
 
     # -- 表示と境界 --
 

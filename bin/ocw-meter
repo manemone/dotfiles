@@ -1823,44 +1823,113 @@ def events_for_pr(valid_events, pr_number, repo):
     ]
 
 
-def report_capacity_list_price(quota_events):
+def _quota_session_contributions(all_quota_events):
+    """孫4 round-1 review finding 1: computes each anthropic
+    `quota.sample` sample's own contribution to `list_price_equiv_usd`
+    — the positive delta from the immediately preceding sample IN THE
+    SAME SESSION (or the sample's own value, if it is that session's
+    TRUE first sample across the whole store), independent of any
+    window/PR/month scope.
+
+    **MUST be called with the full relevant event set for every
+    session's entire lifetime — never with an already window/PR/month-
+    scoped subset.** Scoping the input here (the original 孫4
+    implementation's bug) breaks "is this really the session's first
+    sample" and reintroduces carryover double counting: a session that
+    spans two windows would have its ENTIRE running total re-added as
+    window 2's "opening" sample instead of just window 2's own delta —
+    measured on the real store as a 48.7% overcount on `report
+    --window`'s summed rows (57/207 anthropic sessions, 27.5%, span 2+
+    windows).
+
+    Returns `{event_id: contribution_usd}` for every event that had a
+    `session_id` and a numeric `session_cost_usd` (provider scoping —
+    罠2 — is the caller's job via `report_capacity_list_price`, but is
+    applied here too since a non-anthropic sample must never participate
+    in an anthropic session's delta sequence). A caller then sums the
+    contributions of whichever subset of these events belongs to its
+    own scope to get that scope's own `list_price_equiv_usd`, without
+    re-deriving delta order itself (which is exactly the mistake that
+    caused the overcount)."""
+    sessions = {}
+    for e in all_quota_events:
+        if e.get("event_type") != "quota.sample" or e.get("provider") != "anthropic":
+            continue
+        session_id = e.get("session_id")
+        cost = e.get("session_cost_usd")
+        event_id = e.get("event_id")
+        if not isinstance(session_id, str) or not session_id:
+            continue
+        if not isinstance(cost, (int, float)):
+            continue
+        if not event_id:
+            continue
+        sessions.setdefault(session_id, []).append((e.get("ts") or "", event_id, cost))
+
+    contributions = {}
+    for samples in sessions.values():
+        samples.sort(key=lambda item: item[0])
+        prev_cost = None
+        for _, event_id, cost in samples:
+            contributions[event_id] = cost if prev_cost is None else max(0.0, cost - prev_cost)
+            prev_cost = cost
+    return contributions
+
+
+def report_capacity_list_price(scope_quota_events, contributions):
     """孫4プロンプト §1: aggregates Claude Code's own self-reported
     session cost (`quota.sample`'s `session_cost_usd`, statusLine's
     `cost.total_cost_usd`) into a Claude-side "list price equivalent"
-    total. This is a completely separate signal from `cost_estimate_usd`
-    (ocw-meter's own price-table estimate, carried on `usage.message`)
-    and must never be summed with it, nor with cash cost —
-    `report_month_cash_and_capacity`'s "cash cost と capacity は never
-    summed" contract covers this metric the same way it covers cash vs
-    capacity (罠4). Callers merge this dict's keys into whichever
-    capacity-side summary they're building (`--month`'s capacity
-    section, `--pr`'s pr_detail, `--window`'s per-window row).
+    total, scoped to `scope_quota_events` (a window's samples, a PR's
+    samples, a month's samples). This is a completely separate signal
+    from `cost_estimate_usd` (ocw-meter's own price-table estimate,
+    carried on `usage.message`) and must never be summed with it, nor
+    with cash cost — `report_month_cash_and_capacity`'s "cash cost と
+    capacity は never summed" contract covers this metric the same way
+    it covers cash vs capacity (罠4). Callers merge this dict's keys
+    into whichever capacity-side summary they're building (`--month`'s
+    capacity section, `--pr`'s pr_detail, `--window`'s per-window row).
 
-    罠2: scoped to `provider == "anthropic"` ONLY. `deepseek`'s own
-    `session_cost_usd` (measured $93.35 across 10 sessions) is Claude
-    Code pricing an unknown-to-us rate table against a non-Anthropic
-    model — summing it in here would double-count against
-    `usage.message`'s own DeepSeek price-table estimate.
+    `contributions` is `_quota_session_contributions()`'s return value,
+    computed ONCE by the caller from the FULL (unscoped) event set —
+    see that function's docstring for why per-sample contributions must
+    be computed globally rather than from `scope_quota_events` itself.
+    This function only decides WHICH contributions belong to this scope
+    and counts exclusions; it never recomputes deltas.
 
-    罠3: `session_cost_usd` is monotonic WITHIN one continuous session
-    but resets on `/clear`/compaction — measured 26/214 real sessions
-    with a mid-session decrease. `max()` silently drops everything
-    accumulated before a reset. Instead, sort each `session_id`'s
-    samples by `ts` and sum only the positive deltas between adjacent
-    samples (a negative delta means "a reset happened here" and
-    contributes 0, not a subtraction); the first sample in a session
-    contributes its own value as the opening term.
+    罠2: non-`anthropic` samples are excluded (not just `deepseek` —
+    round-1 review finding 3: a sample whose `provider` couldn't be
+    resolved at all, e.g. no model name AND no `rate_limits`, is stored
+    as `provider: null` by `snapshot-quota`, and previously vanished
+    from every exclusion counter here too, indistinguishable from "this
+    session simply doesn't exist"). `deepseek` (measured $93.35 across
+    10 sessions) is Claude Code pricing an unknown-to-us rate table
+    against a non-Anthropic model — summing it in here would double-
+    count against `usage.message`'s own DeepSeek price-table estimate;
+    a `provider`-unresolved sample might be genuinely anthropic, so
+    losing it silently (rather than counting the exclusion) would hide
+    a real gap if statusLine's payload shape ever changes upstream.
 
     Samples missing `session_id` (can't be grouped into a session at
     all) or with a null/non-numeric `session_cost_usd` are excluded
     rather than guessed at, and counted separately so the exclusion is
     visible in the output instead of silently dropped (plan's
     "推測で埋めない" — 全孫共通の注意5)."""
-    sessions = {}
     excluded_no_session_id = 0
     excluded_null_cost = 0
-    for e in quota_events:
-        if e.get("event_type") != "quota.sample" or e.get("provider") != "anthropic":
+    excluded_deepseek = 0
+    excluded_other_provider = 0
+    total = 0.0
+    session_ids = set()
+    for e in scope_quota_events:
+        if e.get("event_type") != "quota.sample":
+            continue
+        provider = e.get("provider")
+        if provider != "anthropic":
+            if provider == "deepseek":
+                excluded_deepseek += 1
+            else:
+                excluded_other_provider += 1
             continue
         session_id = e.get("session_id")
         if not isinstance(session_id, str) or not session_id:
@@ -1870,17 +1939,13 @@ def report_capacity_list_price(quota_events):
         if not isinstance(cost, (int, float)):
             excluded_null_cost += 1
             continue
-        sessions.setdefault(session_id, []).append((e.get("ts") or "", cost))
+        contribution = contributions.get(e.get("event_id"))
+        if contribution is None:
+            continue  # defensive: shouldn't happen if contributions came from the same event set
+        total += contribution
+        session_ids.add(session_id)
 
-    total = 0.0
-    for samples in sessions.values():
-        samples.sort(key=lambda pair: pair[0])
-        prev = None
-        for _, cost in samples:
-            total += cost if prev is None else max(0.0, cost - prev)
-            prev = cost
-
-    has_data = bool(sessions)
+    has_data = bool(session_ids)
     note = (
         "Claude Code自己申告のsession_cost_usd（statusLineのcost.total_cost_usd）を "
         "provider=anthropicのみに絞り、session_idごとに正の差分の総和として積算した下限値"
@@ -1891,21 +1956,31 @@ def report_capacity_list_price(quota_events):
         note += " このスコープにanthropicのquota.sampleが1件も無いため null（$0.00ではない）。"
     return {
         "list_price_equiv_usd": total if has_data else None,
-        "list_price_equiv_is_lower_bound": True,
-        "list_price_equiv_session_count": len(sessions),
+        # round-1 review finding 5: null と「下限」は同時に成立しない —
+        # データが無いスコープでは is_lower_bound 自体も null にする。
+        "list_price_equiv_is_lower_bound": True if has_data else None,
+        "list_price_equiv_session_count": len(session_ids),
         "list_price_equiv_excluded_no_session_id_count": excluded_no_session_id,
         "list_price_equiv_excluded_null_cost_count": excluded_null_cost,
+        "list_price_equiv_excluded_deepseek_count": excluded_deepseek,
+        "list_price_equiv_excluded_other_provider_count": excluded_other_provider,
         "list_price_equiv_note": note,
     }
 
 
-def pr_review_summary(pr_events):
+def pr_review_summary(pr_events, quota_contributions):
     """孫5 §1 --pr: review round list / human intervention count / final
     result / cash+capacity cost split / 5h枠消費 for one PR's own
     (already resolved via `events_for_pr`) event set. Reads ONLY the
     events already attributed to this PR — no additional time-range
     guessing beyond what plan §7.4's PR-attribution priority already
-    resolved."""
+    resolved.
+
+    `quota_contributions` is `_quota_session_contributions()`'s return
+    value, computed by the caller from the FULL (unscoped) event set —
+    passed straight through to `report_capacity_list_price` below (孫4
+    round-1 review finding 1: a session spanning two PRs must not have
+    its whole running total re-added to the second PR)."""
     review_rounds = []
     for e in pr_events:
         if e.get("event_type") == "review.round":
@@ -1982,7 +2057,7 @@ def pr_review_summary(pr_events):
         "seven_day_used_pct_max": max(seven_day_vals) if seven_day_vals else None,
         "cash_cost_usd": cash_cost if has_cash_cost else None,
         "capacity_message_count": capacity_message_count,
-        **report_capacity_list_price(pr_events),
+        **report_capacity_list_price(pr_events, quota_contributions),
     }
 
 
@@ -2149,7 +2224,16 @@ def report_by_window(valid_events, repo=None):
 
     `repo` scopes `pr_ranges` so that `report --window` run from one
     repo does not pollute the window's PR list with identically-numbered
-    PRs from a different repo in the shared ocw-meter store."""
+    PRs from a different repo in the shared ocw-meter store.
+
+    `quota_contributions` (`_quota_session_contributions()`'s return
+    value, computed from `valid_events` itself — the fullest set this
+    function ever receives, even under a combined `--pr` filter) is
+    threaded into each window's `report_capacity_list_price` call below
+    so a session spanning two windows attributes only its own delta to
+    each, not its whole running total twice (孫4 round-1 review finding
+    1)."""
+    quota_contributions = _quota_session_contributions(valid_events)
     windows = {}
     for e in valid_events:
         if e.get("event_type") != "quota.sample":
@@ -2210,7 +2294,7 @@ def report_by_window(valid_events, repo=None):
             "prs_time_overlap": prs_overlap,
             "blocked_seconds": None,
             "blocked_note": "block.start/block.end are schema-defined but not emitted by any caller yet (計画書16章) — always null here",
-            **report_capacity_list_price(w["quota_events"]),
+            **report_capacity_list_price(w["quota_events"], quota_contributions),
         }
     return out
 
@@ -2262,11 +2346,18 @@ def report_month_process_efficiency(valid_events, month, repo):
     per-PR numbers, matching how `report --pr` already resolves one
     PR's events. `repo` scopes both "which PRs count as approved" and
     "which events belong to each one" to the invoking repo (round-1
-    review finding 1)."""
+    review finding 1).
+
+    `quota_contributions` (孫4 round-1 review finding 1) is computed
+    ONCE here from the full `valid_events` and threaded into every
+    `pr_review_summary` call below, rather than each call recomputing
+    it (or worse, deriving it from just that one PR's own events —
+    the original bug)."""
+    quota_contributions = _quota_session_contributions(valid_events)
     per_pr = []
     for pr in sorted(find_approved_pr_numbers_in_month(valid_events, month, repo)):
         pr_events = events_for_pr(valid_events, pr, repo)
-        detail = pr_review_summary(pr_events)
+        detail = pr_review_summary(pr_events, quota_contributions)
         completion, _ = pr_five_hour_window_completion(pr_events, valid_events)
         per_pr.append({"pr_number": pr, "five_hour_window_completion": completion, **detail})
 
@@ -2360,7 +2451,15 @@ def report_month_cash_and_capacity(valid_events, month):
     plan §16 / 孫5プロンプト §1 "Cash cost と Capacity cost を混ぜない"
     is a hard requirement, not a style preference: a flat-rate
     subscription has no per-message dollar figure to add to the
-    metered total."""
+    metered total.
+
+    `quota_contributions` (孫4 round-1 review finding 1) is computed
+    from `valid_events` itself — the full store, not `quota_month` —
+    so a session that straddles a month boundary (only possible from
+    September on; `quota.sample` collection itself only started
+    2026-08-01) attributes only its own delta to each month, not its
+    whole running total twice."""
+    quota_contributions = _quota_session_contributions(valid_events)
     usage_month = [
         e for e in valid_events
         if e.get("event_type") == "usage.message" and isinstance(e.get("ts"), str) and e["ts"].startswith(month)
@@ -2393,7 +2492,7 @@ def report_month_cash_and_capacity(valid_events, month):
         "five_hour_used_pct_max": max(five_hour_vals) if five_hour_vals else None,
         "seven_day_used_pct_max": max(seven_day_vals) if seven_day_vals else None,
         "distinct_five_hour_windows": len(distinct_windows),
-        **report_capacity_list_price(quota_month),
+        **report_capacity_list_price(quota_month, quota_contributions),
     }
 
 
@@ -2628,16 +2727,33 @@ def _print_grouped_report(title, group_label, groups, as_json, storage_root_str,
     print(f"{title}:")
     if not groups:
         print("  (no data)")
+    has_list_price_equiv = False
     for key, row in sorted(groups.items(), key=lambda kv: str(kv[0])):
         print(f"  {key}:")
+        has_list_price_equiv = has_list_price_equiv or "list_price_equiv_usd" in row
         for field, value in row.items():
-            if field in ("provider", "model"):
+            # round-1 review finding 6: `list_price_equiv_note` (a ~190
+            # 文字 explanation, identical for every row) used to print
+            # once PER ROW — with `report --window`'s real store
+            # currently at 26 windows, that's the same sentence 26
+            # times, burying the one thing that actually differs
+            # between rows (each window's own list_price_equiv_usd).
+            # Printed once as a shared legend after the loop instead.
+            if field in ("provider", "model", "list_price_equiv_note"):
                 continue
             if field == "cost_estimate_usd":
                 value = f"${value:.4f}" if isinstance(value, (int, float)) else "null"
             elif field == "list_price_equiv_usd":
                 value = f"${value:.2f}+ (下限 / list price相当)" if isinstance(value, (int, float)) else "null"
             print(f"    {field}: {value}")
+    if has_list_price_equiv:
+        print(
+            "list_price_equiv_note: 各list_price_equiv_usdはClaude Code自己申告のsession_cost_usd"
+            "（statusLineのcost.total_cost_usd）を provider=anthropicのみに絞り、session_idごとに"
+            "正の差分の総和として積算した下限値。usage.messageのcost_estimate_usdとは別カラムであり、"
+            "cash costとは絶対に合算しない。請求書ではない。値がnullの行はそのスコープにanthropicの"
+            "quota.sampleが1件も無いことを意味する（$0.00ではない）。"
+        )
     print_footer_text(footer_completeness, footer_cost, footer_freshness, total)
     return 0
 
@@ -2924,8 +3040,12 @@ def cmd_report(args):
         summary["five_hour_window_completion"] = five_hour_window_completion
         summary["five_hour_window_ids_seen"] = five_hour_window_ids_seen
         # 孫5 §1: round/human-intervention/final-result/cash+capacity
-        # cost detail for this one PR.
-        summary["pr_detail"] = pr_review_summary(filtered)
+        # cost detail for this one PR. quota_contributions (孫4
+        # round-1 review finding 1) is computed from `valid_events`
+        # (the full store), NOT `filtered` — a session spanning two
+        # PRs must attribute only its own delta to each, not its whole
+        # running total twice.
+        summary["pr_detail"] = pr_review_summary(filtered, _quota_session_contributions(valid_events))
 
     if as_json:
         print(json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True))
@@ -2960,6 +3080,15 @@ def cmd_report(args):
             )
             print(f"list_price_equiv_usd: {list_price_str}")
             print(f"list_price_equiv_session_count: {detail['list_price_equiv_session_count']}")
+            # round-1 review finding 2: these exclusion counts exist
+            # specifically so exclusions are never silent (plan's
+            # "黙って落とさない") — omitting them from text output
+            # (while --json still had them) defeated that purpose for
+            # anyone not passing --json.
+            print(f"list_price_equiv_excluded_no_session_id_count: {detail['list_price_equiv_excluded_no_session_id_count']}")
+            print(f"list_price_equiv_excluded_null_cost_count: {detail['list_price_equiv_excluded_null_cost_count']}")
+            print(f"list_price_equiv_excluded_deepseek_count: {detail['list_price_equiv_excluded_deepseek_count']}")
+            print(f"list_price_equiv_excluded_other_provider_count: {detail['list_price_equiv_excluded_other_provider_count']}")
             print(f"list_price_equiv_note: {detail['list_price_equiv_note']}")
 
     return 0
@@ -3012,6 +3141,8 @@ def _report_month_standalone(paths, valid_events, malformed, month, repo, as_jso
         "list_price_equiv_session_count": cash_and_capacity["list_price_equiv_session_count"],
         "list_price_equiv_excluded_no_session_id_count": cash_and_capacity["list_price_equiv_excluded_no_session_id_count"],
         "list_price_equiv_excluded_null_cost_count": cash_and_capacity["list_price_equiv_excluded_null_cost_count"],
+        "list_price_equiv_excluded_deepseek_count": cash_and_capacity["list_price_equiv_excluded_deepseek_count"],
+        "list_price_equiv_excluded_other_provider_count": cash_and_capacity["list_price_equiv_excluded_other_provider_count"],
         # 孫4プロンプト §4: quota.sample collection itself only started
         # 2026-08-01 — a month before that has NO Claude-side cost data
         # to find, which is a different fact from "this particular
