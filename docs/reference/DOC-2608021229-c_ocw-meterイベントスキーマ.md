@@ -358,11 +358,12 @@ cost = ( cache_read_input_tokens               * price.cache_hit_in
 1. **`provider == "anthropic"`のイベントのみを対象にする。** `deepseek`（`claude-ds`経由の
    セッション）は除外する。Claude Codeが DeepSeekのモデル名にどの単価を当てて
    `cost.total_cost_usd`を計算しているか不明であり、含めると`usage.message`側の
-   DeepSeek価格表推定（cash cost）と二重計上になる。`provider`が`deepseek`以外
-   （`provider: null`を含む）のサンプルはすべて`list_price_equiv_excluded_other_provider_count`
-   に計上される。`deepseek`専用カウンタ（`list_price_equiv_excluded_deepseek_count`）とは
-   別だが、`deepseek`以外の非anthropicプロバイダ（`provider: null`を含む）は互いに区別されず
-   同じ`other_provider`カウンタへまとめて計上される
+   DeepSeek価格表推定（cash cost）と二重計上になる。`provider`が`anthropic`でも
+   `deepseek`でもない（`provider: null`を含む）サンプルはすべて
+   `list_price_equiv_excluded_other_provider_count`に計上される。`deepseek`専用カウンタ
+   （`list_price_equiv_excluded_deepseek_count`）とは別だが、`deepseek`以外の非anthropic
+   プロバイダ（`provider: null`を含む）は互いに区別されず同じ`other_provider`カウンタへ
+   まとめて計上される
 2. **`session_id`ごとに時系列でソートし、隣り合うサンプル間の正の差分だけを合計する
    （`max()`は使わない）。ただし、そのセッションでストア全体を通じて最初に観測されたサンプル
    （直前サンプルが存在しない、時系列で1件だけ）だけは例外で、差分ではなく値そのものを計上する**

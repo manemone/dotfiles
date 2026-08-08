@@ -8,7 +8,7 @@
 |---|---|
 | `ocw` | Git worktree 作成・管理。Herdr 連携で commander/implementer/reviewer の三面体制を自動セットアップ |
 | `claude-ds` | Claude Code を DeepSeek API 経由で実行するラッパー |
-| `ocw-meter` | LLM費用・Claude利用枠の観測基盤。既存ログの事後読み取り専用。fail-open |
+| `ocw-meter` | LLM費用・Claude利用枠の観測基盤。既存ログを事後に集計する。`event` / `bind-pr` / `snapshot-quota` はfail-open、`report` / `ingest` / `validate` / `prune-diagnostics` はfail-loud（`report` は自動でingestを実行し、`prune-diagnostics --apply` は診断ファイルを削除する） |
 
 ## 1. Requirements
 
@@ -349,7 +349,7 @@ ocw-meter prune-diagnostics [--older-than <days>] [--apply]
 |---|---|
 | `event` / `bind-pr` | **常に exit 0**。stderrに1行warnのみ。本番フローを止めない |
 | `snapshot-quota` | **常に exit 0 かつ必ずstdoutに表示文字列を出す**（statusLineが壊れて画面が崩れる事態を絶対に避ける。event/bind-pr以上に厳格なfail-open） |
-| `validate` / `report` / `ingest` / `prune-diagnostics` | 失敗したら非ゼロで落ちる（壊れたデータを黙って集計しない）。ただし `report` が実行のたびに自動実行する `ingest` 自体が失敗した場合（Gitワークツリー拒否等）はこの例外で、`report` は exit 0 のまま失敗をフッターに表示して既存データで応答する（`--no-ingest` で自動実行自体を無効化できる） |
+| `validate` / `report` / `ingest` / `prune-diagnostics` | 失敗したら非ゼロで落ちる（壊れたデータを黙って集計しない）。ただし `report` が実行のたびに自動実行する `ingest` 自体が失敗した場合はこの例外で、`report` は exit 0 のまま失敗をフッターに表示して既存データで応答する（`--no-ingest` で自動実行自体を無効化できる）。**ストア自体がGitワークツリー内にある場合はこの例外に当てはまらない**。`report` は `ingest` を呼ぶ前に同じ判定を自分で行い、非ゼロで即座に終了する（何もフッターに出ない） |
 
 **`prune-diagnostics` の既定保持期間（30日）について**: これは運用上のリテンションポリシーであり、
 「今すぐ全部消す」既定ではない。数日〜1週間前にできたばかりのエントリ（一時的な設定ミスの記録など）を

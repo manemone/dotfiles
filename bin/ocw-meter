@@ -88,11 +88,14 @@ subcommands:
     view below does this, at the very top of `report` — 計画書
     DOC-2608081456孫2), so a `report` right after Claude Code activity
     doesn't need a manual `ocw-meter ingest` first. An ingest failure
-    (including refusing to run inside a Git worktree) never aborts
-    `report` itself — it's shown as a footer line and `report` still
-    serves whatever was already stored. `--no-ingest` skips the
-    automatic run entirely (read-only use, or when you want to control
-    exactly what `report` sees). The footer also always includes the
+    never aborts `report` itself — it's shown as a footer line and
+    `report` still serves whatever was already stored. `--no-ingest`
+    skips the automatic run entirely (read-only use, or when you want
+    to control what `report` sees). If the store itself resolves
+    inside a Git worktree, `report` refuses to run at all and exits
+    non-zero before printing anything — this is a `report`-level guard
+    that runs before the automatic ingest, not an ingest failure that
+    shows up as a footer line. The footer also always includes the
     last successful ingest's timestamp, this run's own ingest outcome,
     and a staleness warning once that timestamp is 24h old or older.
 
@@ -2882,14 +2885,19 @@ def auto_ingest_for_report(root, no_ingest):
     ingested data — missing even one view here would make that one view
     silently see stale data while the others didn't.
 
-    Never raises: an ingest failure — including the exact same git-
-    worktree refusal `ingest` itself can hit (`perform_ingest` returns
-    `ok: False` for it, not an exception) — must never stop `report`
-    from showing whatever is already in the store; both funnel through
-    the same `{"status": "failed", "error": ...}` shape here so no
-    caller needs a special case for "which kind of failure was it".
-    `--no-ingest` (read-only use, and tests that want to control what
-    `report` sees) skips the call entirely."""
+    Never raises: any failure `perform_ingest` reports through its
+    `ok: False` return (not an exception) must never stop `report` from
+    showing whatever is already in the store; it funnels through the
+    same `{"status": "failed", "error": ...}` shape here so no caller
+    needs a special case for "which kind of failure was it". This does
+    NOT cover the git-worktree-refusal case: `cmd_report` checks
+    `in_git_worktree(root)` on this same `root` itself, before this
+    function is ever called, and returns non-zero immediately if the
+    store resolves inside a Git worktree — so the identical check
+    inside `perform_ingest` can never actually fire from this call site
+    (it exists there for `ingest`'s own direct invocation). `--no-ingest`
+    (read-only use, and tests that want to control what `report` sees)
+    skips the call entirely."""
     if no_ingest:
         return {"status": "skipped"}
     try:
@@ -3378,22 +3386,24 @@ def _report_month_standalone(paths, valid_events, malformed, month, repo, as_jso
         "list_price_equiv_excluded_null_cost_count": cash_and_capacity["list_price_equiv_excluded_null_cost_count"],
         "list_price_equiv_excluded_deepseek_count": cash_and_capacity["list_price_equiv_excluded_deepseek_count"],
         "list_price_equiv_excluded_other_provider_count": cash_and_capacity["list_price_equiv_excluded_other_provider_count"],
-        # 孫4プロンプト §4: quota.sample collection itself only started
-        # 2026-08-01 — a month before that has NO Claude-side cost data
-        # to find, which is a different fact from "this particular
-        # month happened to have zero anthropic sessions" (both produce
-        # the same null above; this line is what tells them apart). Only
-        # appended when the value actually IS null this scope — always
-        # true in real data for a pre-2026-08 month (quota.sample simply
-        # doesn't exist that far back), but guarding on the null itself
-        # (rather than only on the month string) keeps this from ever
-        # asserting "no data" next to a non-null figure.
+        # 孫4プロンプト §4: quota.sample collection only started when this
+        # machine deployed it, not on a fixed calendar date (`bin/ocw-meter`
+        # is deployed to different machines on different days — レビュー指摘
+        # 最終PRラウンド1 finding 3, same reasoning as
+        # `ATTRIBUTION_KNOWN_LIMITS` above). A null `list_price_equiv_usd`
+        # here can mean either "this scope predates quota.sample on this
+        # machine" or "quota.sample was running but no anthropic sessions
+        # happened to land in this scope" — the two are indistinguishable
+        # from the stored data alone, so the note names both possibilities
+        # rather than asserting one. Guarding on the null itself (not a
+        # month string) keeps this from ever appending next to a non-null
+        # figure.
         "list_price_equiv_note": (
             cash_and_capacity["list_price_equiv_note"]
             + (
-                " (quota.sampleの記録自体が2026-08-01開始のため、それより前の月は原理的に"
-                "データが無い)"
-                if month < "2026-08" and cash_and_capacity["list_price_equiv_usd"] is None else ""
+                " (quota.sampleの記録が始まる前の期間か、このスコープに該当する"
+                "anthropicセッションが無かったため、データが無い)"
+                if cash_and_capacity["list_price_equiv_usd"] is None else ""
             )
         ),
     }

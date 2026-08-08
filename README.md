@@ -138,7 +138,7 @@ for details. `bin/` changes should additionally be verified with
 ├── bin/
 │   ├── ocw                    # Git worktree manager with Herdr integration
 │   ├── claude-ds              # Claude Code via DeepSeek API wrapper
-│   ├── ocw-meter              # LLM cost / Claude quota observability (read-only, fail-open)
+│   ├── ocw-meter              # LLM cost / Claude quota observability (report auto-ingests; prune-diagnostics writes)
 │   ├── tests/                 # Python unit tests for ocw-meter etc. (bin/tests/lint.sh + unittest suite)
 │   ├── prices/                # Price tables used for cost calculation
 │   ├── deploy.sh              # bin deployment script
