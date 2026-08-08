@@ -311,29 +311,31 @@ ocw-meter validate [--file <path>]
 # イベント件数・completeness・coverage・推定費用の要約
 # --pr <n> を付けるとレビューラウンド一覧・人間介入回数・最終結果・
 # 同一5時間窓完走可否・そのPRのcash cost内訳も併せて出す
-ocw-meter report [--pr <n>] [--repo <owner>/<name>] [--json]
+# 実行のたびに ingest を自動実行してから集計する（--no-ingest で無効化可）。
+# 最終ingest時刻・鮮度警告はどのビューでもフッターに出る
+ocw-meter report [--pr <n>] [--repo <owner>/<name>] [--no-ingest] [--json]
 
 # 工程別（phase.start/endの時間ペアとusage.messageの時刻範囲による
 # ベストエフォート対応）のトークン・費用・所要時間
-ocw-meter report --phase [--pr <n>] [--repo <owner>/<name>] [--json]
+ocw-meter report --phase [--pr <n>] [--repo <owner>/<name>] [--no-ingest] [--json]
 
 # provider+model別のトークン・推定費用
-ocw-meter report --model [--pr <n>] [--repo <owner>/<name>] [--json]
+ocw-meter report --model [--pr <n>] [--repo <owner>/<name>] [--no-ingest] [--json]
 
 # role（commander/implementer/reviewer/unknown）別のイベント数・トークン・推定費用
-ocw-meter report --role [--pr <n>] [--repo <owner>/<name>] [--json]
+ocw-meter report --role [--pr <n>] [--repo <owner>/<name>] [--no-ingest] [--json]
 
 # 5時間窓（window_id）別のquota.sample集計。直接紐付き/時間範囲重複の
 # PRを別フィールドで提示
-ocw-meter report --window [--pr <n>] [--repo <owner>/<name>] [--json]
+ocw-meter report --window [--pr <n>] [--repo <owner>/<name>] [--no-ingest] [--json]
 
 # 月次: cash cost（従量API）/ capacity cost（Claudeサブスク枠）/
 # process efficiency（承認済みPRあたりの費用・ラウンド数等）を分離して表示
 # --reconcile とは別物（こちらは突合をしない）
-ocw-meter report --month [YYYY-MM] [--repo <owner>/<name>] [--json]
+ocw-meter report --month [YYYY-MM] [--repo <owner>/<name>] [--no-ingest] [--json]
 
 # model別トークン集計・推定費用・provider管理画面との突合（coverage比率）
-ocw-meter report --reconcile [--month <YYYY-MM>] [--provider-total <model>=<tokens> ...] [--json]
+ocw-meter report --reconcile [--month <YYYY-MM>] [--provider-total <model>=<tokens> ...] [--no-ingest] [--json]
 
 # statusLineコマンドとして呼ばれ、stdinのJSONからquota.sampleを1行append、表示文字列をstdoutへ返す
 ocw-meter snapshot-quota
@@ -347,7 +349,7 @@ ocw-meter prune-diagnostics [--older-than <days>] [--apply]
 |---|---|
 | `event` / `bind-pr` | **常に exit 0**。stderrに1行warnのみ。本番フローを止めない |
 | `snapshot-quota` | **常に exit 0 かつ必ずstdoutに表示文字列を出す**（statusLineが壊れて画面が崩れる事態を絶対に避ける。event/bind-pr以上に厳格なfail-open） |
-| `validate` / `report` / `ingest` / `prune-diagnostics` | 失敗したら非ゼロで落ちる（壊れたデータを黙って集計しない） |
+| `validate` / `report` / `ingest` / `prune-diagnostics` | 失敗したら非ゼロで落ちる（壊れたデータを黙って集計しない）。ただし `report` が実行のたびに自動実行する `ingest` 自体が失敗した場合（Gitワークツリー拒否等）はこの例外で、`report` は exit 0 のまま失敗をフッターに表示して既存データで応答する（`--no-ingest` で自動実行自体を無効化できる） |
 
 **`prune-diagnostics` の既定保持期間（30日）について**: これは運用上のリテンションポリシーであり、
 「今すぐ全部消す」既定ではない。数日〜1週間前にできたばかりのエントリ（一時的な設定ミスの記録など）を

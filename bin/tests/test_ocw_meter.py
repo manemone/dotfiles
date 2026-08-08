@@ -296,6 +296,21 @@ def run_ingest(home, projects_dir, args=None, price_dir=None, extra_env=None, ti
     return run_meter(["ingest", *(args or [])], home, extra_env=env, timeout=timeout)
 
 
+def run_report(home, projects_dir=None, args=None, price_dir=None, extra_env=None, timeout=60):
+    """Like `run_ingest`, but drives `report` (whose automatic ingest —
+    計画書 DOC-2608081456孫2 — is what most callers of this helper mean
+    to exercise) instead of `ingest` directly."""
+    env = {
+        "OCW_METER_PRICE_DIR": str(price_dir if price_dir is not None else REPO_PRICE_DIR),
+        "OCW_METER_INGEST_USE_GH": "0",
+    }
+    if projects_dir is not None:
+        env["OCW_METER_CLAUDE_PROJECTS_DIR"] = str(projects_dir)
+    if extra_env:
+        env.update(extra_env)
+    return run_meter(["report", *(args or [])], home, extra_env=env, timeout=timeout)
+
+
 class OcwMeterTestCase(unittest.TestCase):
     def setUp(self):
         self.tmpdir = tempfile.TemporaryDirectory()
@@ -1865,6 +1880,187 @@ class IngestTests(OcwMeterTestCase):
         self.assertFalse(events_file.read_text(encoding="utf-8").endswith("\n"))
 
 
+class ReportAutoIngestTests(OcwMeterTestCase):
+    """計画書 DOC-2608081456孫2: `report` auto-runs `ingest` at the top of
+    every view (DOC-2608021229-a:440 documented this from the start, but
+    `cmd_report` never actually called it — 4 days / 11.4% of events
+    silently missing on the real machine)."""
+
+    def setUp(self):
+        super().setUp()
+        self.projects_dir = pathlib.Path(self.tmpdir.name) / "claude-projects"
+        self.projects_dir.mkdir(parents=True, exist_ok=True)
+
+    def test_report_auto_ingests_transcripts_without_an_explicit_ingest_call(self):
+        write_transcript(self.projects_dir, "proj", "sess-auto", [assistant_line("sess-auto", "m1")])
+        self.assertEqual(read_events(self.home), [])
+
+        result = run_report(self.home, self.projects_dir)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        usage_events = [e for e in read_events(self.home) if e["event_type"] == "usage.message"]
+        self.assertEqual(len(usage_events), 1)
+
+    def test_no_ingest_flag_skips_the_automatic_ingest(self):
+        write_transcript(self.projects_dir, "proj", "sess-skip", [assistant_line("sess-skip", "m1")])
+        result = run_report(self.home, self.projects_dir, args=["--no-ingest"])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(read_events(self.home), [])
+        self.assertIn("ingest (this run): skipped (--no-ingest)", result.stdout)
+        # PR #57 review round 2 finding "新規2": the "no events yet"
+        # messages must not assert anything about whether ingest ran —
+        # round 1's own fix for finding 1 made them unconditionally claim
+        # "ingest already ran automatically", which is false right here
+        # under --no-ingest. Whether it ran is the freshness footer's
+        # `ingest (this run):` line's job alone (asserted above).
+        self.assertNotIn("ingest already ran automatically", result.stdout)
+        self.assertIn("no usage.message events found in transcripts", result.stdout)
+
+        reconcile_result = run_report(self.home, self.projects_dir, args=["--reconcile", "--no-ingest"])
+        self.assertEqual(reconcile_result.returncode, 0, reconcile_result.stderr)
+        self.assertNotIn("ingest already ran automatically", reconcile_result.stdout)
+
+    def test_invalid_month_fails_before_running_the_automatic_ingest(self):
+        # PR #57 review round 1 finding 7: argument validation (a
+        # malformed --month) used to run AFTER the automatic ingest call,
+        # so a request that was always going to fail loud still wrote a
+        # live ingest-cursor.json/events first.
+        write_transcript(self.projects_dir, "proj", "sess-bad-month", [assistant_line("sess-bad-month", "m1")])
+        result = run_report(self.home, self.projects_dir, args=["--reconcile", "--month", "2026-13"])
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse((self.home / "state" / "ingest-cursor.json").exists())
+        self.assertEqual(read_events(self.home), [])
+
+    def test_auto_ingest_runs_for_every_report_view(self):
+        # 計画書「1つでも漏れると、そのビューだけ古いデータを見る」: each
+        # view gets its OWN isolated home/projects_dir so a prior view's
+        # ingest can't accidentally satisfy this one's assertion.
+        view_cases = [
+            [], ["--phase"], ["--model"], ["--role"], ["--window"],
+            ["--month", "2026-07"], ["--reconcile", "--month", "2026-07"],
+        ]
+        for i, view_args in enumerate(view_cases):
+            with self.subTest(view=view_args):
+                home = pathlib.Path(self.tmpdir.name) / f"view-home-{i}"
+                projects_dir = pathlib.Path(self.tmpdir.name) / f"view-projects-{i}"
+                projects_dir.mkdir()
+                write_transcript(projects_dir, "proj", f"sess-view-{i}", [
+                    assistant_line(f"sess-view-{i}", "m1", timestamp="2026-07-15T10:00:00.000Z"),
+                ])
+                result = run_report(home, projects_dir, args=view_args)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                usage_events = [e for e in read_events(home) if e["event_type"] == "usage.message"]
+                self.assertEqual(len(usage_events), 1, f"view {view_args} did not auto-ingest: {result.stdout}")
+
+    def test_ingest_failure_does_not_crash_report_and_is_shown_in_the_footer(self):
+        # An empty HOME makes claude_projects_dir() unable to resolve a
+        # projects directory (and OCW_METER_CLAUDE_PROJECTS_DIR is
+        # deliberately not passed) — perform_ingest's own "could not
+        # determine" refusal, exercised without needing a git-worktree
+        # storage root (report's own top-level worktree guard would
+        # short-circuit before auto-ingest ever runs for that case).
+        run_meter(["event", "run.start", "--idempotency-key", "k1"], self.home)
+        result = run_meter(["report"], self.home, extra_env={"HOME": ""})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("total events:  1", result.stdout)
+        self.assertIn("ingest (this run): failed: could not determine the Claude projects directory", result.stdout)
+
+    def test_json_output_stays_pure_json_even_when_auto_ingest_runs(self):
+        write_transcript(self.projects_dir, "proj", "sess-json", [assistant_line("sess-json", "m1")])
+        result = run_report(self.home, self.projects_dir, args=["--json"])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        summary = json.loads(result.stdout)  # raises if anything besides JSON hit stdout
+        self.assertEqual(summary["total_events"], 1)
+
+    def test_footer_shows_last_ingest_timestamp_after_a_successful_run(self):
+        write_transcript(self.projects_dir, "proj", "sess-fresh", [assistant_line("sess-fresh", "m1")])
+        result = run_report(self.home, self.projects_dir)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("last_ingest_at: unknown", result.stdout)
+        cursor = json.loads((self.home / "state" / "ingest-cursor.json").read_text(encoding="utf-8"))
+        self.assertIn("last_ingest_at", cursor)
+        # The raw RFC3339 the footer's --json field (last_ingest_at_rfc3339)
+        # must carry, unmodified, for a machine consumer (PR #57 review
+        # round 1 finding 6) — round-trips through the text footer too.
+        self.assertIn(f"last_ingest_at_rfc3339: {cursor['last_ingest_at']}", result.stdout)
+
+    def test_old_format_ingest_cursor_without_last_ingest_at_shows_unknown(self):
+        state_dir = self.home / "state"
+        state_dir.mkdir(parents=True, exist_ok=True)
+        (state_dir / "ingest-cursor.json").write_text(json.dumps({"files": {}}), encoding="utf-8")
+        result = run_meter(["report", "--no-ingest"], self.home)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("last_ingest_at: unknown", result.stdout)
+        self.assertIn("last_ingest_at_rfc3339: unknown", result.stdout)
+
+    def test_freshness_warning_only_appears_past_the_staleness_threshold(self):
+        # PR #57 review round 1 finding 4: the threshold comparison is
+        # `>=` (inclusive — see ingest_freshness_footer's comment, chosen
+        # because the plan's own wording "一定時間以上経っていたら" is
+        # inclusive). This test cannot pin the literal single-instant
+        # edge (age_seconds == INGEST_STALE_THRESHOLD_SECONDS exactly):
+        # this is a black-box subprocess test built on real wall-clock
+        # `datetime.now()`, and the round trip between writing the
+        # fixture timestamp here and `ingest_freshness_footer` reading
+        # "now" always adds strictly positive latency — so any nominal
+        # age computed here always reads back slightly HIGHER once the
+        # subprocess evaluates it, which makes `>` and `>=` behave
+        # identically in practice (verified: reverting to `>` still
+        # passes every case below). Matches this file's existing
+        # precedent for other 24h-based staleness checks
+        # (WorktreeRefusalPruningTests uses a 1h/25h margin, not an
+        # exact-instant one, for the same reason).
+        state_dir = self.home / "state"
+        state_dir.mkdir(parents=True, exist_ok=True)
+
+        def cursor_at_age(**age_kwargs):
+            ts = (datetime.now(timezone.utc) - timedelta(**age_kwargs)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+            (state_dir / "ingest-cursor.json").write_text(
+                json.dumps({"files": {}, "last_ingest_at": ts}), encoding="utf-8",
+            )
+            return run_meter(["report", "--no-ingest"], self.home)
+
+        fresh_result = cursor_at_age(minutes=5)
+        self.assertEqual(fresh_result.returncode, 0, fresh_result.stderr)
+        self.assertIn("ingest_freshness_warning: (none)", fresh_result.stdout)
+
+        just_under_result = cursor_at_age(hours=23, minutes=59)
+        self.assertEqual(just_under_result.returncode, 0, just_under_result.stderr)
+        self.assertIn("ingest_freshness_warning: (none)", just_under_result.stdout)
+
+        just_over_result = cursor_at_age(hours=24, minutes=1)
+        self.assertEqual(just_over_result.returncode, 0, just_over_result.stderr)
+        self.assertNotIn("ingest_freshness_warning: (none)", just_over_result.stdout)
+        self.assertIn("経過しています", just_over_result.stdout)
+
+        stale_result = cursor_at_age(hours=25)
+        self.assertEqual(stale_result.returncode, 0, stale_result.stderr)
+        self.assertNotIn("ingest_freshness_warning: (none)", stale_result.stdout)
+        self.assertIn("経過しています", stale_result.stdout)
+
+    def test_json_output_includes_freshness_footer_keys_for_every_view(self):
+        # PR #57 review round 1 finding 3: `footer_freshness` is `**`-
+        # expanded into 4 separate JSON summary dicts
+        # (cmd_report/_print_grouped_report/_report_month_standalone/
+        # _report_reconcile) — a dropped `**footer_freshness` in any ONE
+        # of them would otherwise go undetected, since every other
+        # existing test only checks the text footer's print lines.
+        write_transcript(self.projects_dir, "proj", "sess-json-fresh", [
+            assistant_line("sess-json-fresh", "m1", timestamp="2026-07-15T10:00:00.000Z"),
+        ])
+        freshness_keys = {"last_ingest_at", "last_ingest_at_rfc3339", "ingest_this_run", "ingest_freshness_warning"}
+        view_cases = [
+            [], ["--phase"], ["--model"], ["--role"], ["--window"],
+            ["--month", "2026-07"], ["--reconcile", "--month", "2026-07"],
+        ]
+        for view_args in view_cases:
+            with self.subTest(view=view_args):
+                result = run_report(self.home, self.projects_dir, args=[*view_args, "--json"])
+                self.assertEqual(result.returncode, 0, result.stderr)
+                summary = json.loads(result.stdout)
+                missing = freshness_keys - summary.keys()
+                self.assertFalse(missing, f"view {view_args} --json is missing freshness keys: {missing}")
+
+
 class SymlinkInvocationTests(OcwMeterTestCase):
     """ADR DOC-2608040229 §2.6: deploy.sh installs this script as a
     symlink (e.g. ~/bin/ocw-meter). `dirname` on an unresolved
@@ -2058,6 +2254,21 @@ class ReportReconcileTests(OcwMeterTestCase):
         data = json.loads(report.stdout)
         self.assertEqual(data["transcript_lines_quarantined"], 1)
         self.assertEqual(data["quarantined_lines"], 0)
+
+    def test_reconcile_with_month_works_outside_any_git_repo(self):
+        # PR #57 review round 2 finding "新規1": moving the repo-
+        # resolution-needed check earlier (round 1 finding 7, to run
+        # before the automatic-ingest side effect) accidentally exposed
+        # `--reconcile --month` to it for the first time — previously
+        # `_report_reconcile`'s early return made the check dead code on
+        # this path. `_report_reconcile` never takes (or needs) a `repo`
+        # argument at all, so this combination must keep working from
+        # outside any git repo, exactly like it always has (this is a
+        # documented workflow — docs/reference/DOC-2608021229-b_...).
+        no_git_dir = pathlib.Path(self.tmpdir.name) / "not-a-git-repo-reconcile"
+        no_git_dir.mkdir()
+        result = run_meter(["report", "--reconcile", "--month", "2026-07"], self.home, cwd=no_git_dir)
+        self.assertEqual(result.returncode, 0, result.stderr)
 
 
 CLAUDE_STATUSLINE_SAMPLE = {
