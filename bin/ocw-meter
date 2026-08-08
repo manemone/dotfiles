@@ -3016,13 +3016,18 @@ def _report_month_standalone(paths, valid_events, malformed, month, repo, as_jso
         # 2026-08-01 — a month before that has NO Claude-side cost data
         # to find, which is a different fact from "this particular
         # month happened to have zero anthropic sessions" (both produce
-        # the same null above; this line is what tells them apart).
+        # the same null above; this line is what tells them apart). Only
+        # appended when the value actually IS null this scope — always
+        # true in real data for a pre-2026-08 month (quota.sample simply
+        # doesn't exist that far back), but guarding on the null itself
+        # (rather than only on the month string) keeps this from ever
+        # asserting "no data" next to a non-null figure.
         "list_price_equiv_note": (
             cash_and_capacity["list_price_equiv_note"]
             + (
                 " (quota.sampleの記録自体が2026-08-01開始のため、それより前の月は原理的に"
                 "データが無い)"
-                if month < "2026-08" else ""
+                if month < "2026-08" and cash_and_capacity["list_price_equiv_usd"] is None else ""
             )
         ),
     }

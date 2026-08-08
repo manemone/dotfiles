@@ -4012,6 +4012,13 @@ class ReportListPriceEquivTests(OcwMeterTestCase):
         data = json.loads(run_meter(["report", "--month", "2026-08", "--json"], self.home).stdout)
         self.assertIsNone(data["capacity"]["list_price_equiv_usd"])
 
+    def test_pre_august_month_explains_null_as_no_collection_yet(self):
+        # quota.sample の記録自体が2026-08-01開始なので、それより前の月は
+        # 「今月たまたま0件だった」ではなく「原理的にデータが無い」。
+        data = json.loads(run_meter(["report", "--month", "2026-07", "--json"], self.home).stdout)
+        self.assertIsNone(data["capacity"]["list_price_equiv_usd"])
+        self.assertIn("2026-08-01", data["capacity"]["list_price_equiv_note"])
+
     def test_list_price_equiv_appears_in_pr_report(self):
         run_meter(["event", "run.start", "--idempotency-key", "r1", "--run-id", "run-lp1",
                    "--ts", "2026-08-05T09:00:00.000Z"], self.home)
