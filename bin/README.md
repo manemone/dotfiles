@@ -455,7 +455,7 @@ PR番号はリポジトリ**内**でしか一意でない。`--pr`とstandalone�
   （リポジトリルートから）を実行して `~/bin/ocw-meter` を配置し、`~/bin` が PATH に
   入っていることを確認すること（本ドキュメント §5 参照）
 
-**`list_price_equiv_usd` の読み方（Claude側 list price相当額。孫5、計画書
+**`list_price_equiv_usd` の読み方（Claude側 list price相当額。孫4、計画書
 [DOC-2608081456](../docs/planning/DOC-2608081456_ocw-meter-accuracy_計画.md)）:**
 
 `quota.sample`に眠っている自己申告`session_cost_usd`を集計し、`report --month`のcapacity cost節・
@@ -465,11 +465,17 @@ PR番号はリポジトリ**内**でしか一意でない。`--pr`とstandalone�
   DeepSeekのモデル名にどの単価を当てているか不明であり、`ocw-meter`自身の推定`cost_estimate_usd`
   と二重計上になるため混ぜない（除外件数は`list_price_equiv_excluded_deepseek_count`等の各
   フィールドに出る）
-- **`max()`ではなく「`session_id`ごとの正の差分の総和」。** `session_cost_usd`はセッション累積の
-  はずだが、`/clear`やコンパクションでリセットされる（非単調になる）ケースが実測されており、
-  単純な`max()`ではリセット前の消費分を取りこぼす
+- **`max()`ではなく「`session_id`ごとに、ストア全体を通じた最初のサンプルはその値そのもの・
+  それ以降は直前サンプルとの正の差分」を合計する。** `session_cost_usd`はセッション累積のはずだが、
+  `/clear`やコンパクションでリセットされる（非単調になる）ケースが実測されており、単純な`max()`
+  ではリセット前の消費分を取りこぼす。**この寄与は必ずストア全体の`quota.sample`から計算し、
+  窓/PR/月でスコープを絞った部分集合から再計算してはいけない**（絞ると、窓をまたぐセッションの
+  累計が窓2の「最初のサンプル」として丸ごと再計上され、実測で`report --window`の行合計が
+  48.7%過大になった）
 - **常に下限値であり、請求書ではない。** 最後のstatusLine描画以降の消費は含まれない
-  （`list_price_equiv_is_lower_bound: true`がこれを機械可読にも表す）
+  （値が`null`でない限り`list_price_equiv_is_lower_bound: true`がこれを機械可読にも表す。
+  対象サンプルが1件も無いスコープでは`list_price_equiv_usd`も`list_price_equiv_is_lower_bound`も
+  `null`になる）
 - **`usage.message`の`cost_estimate_usd`（cash cost）とは絶対に合算しない。** 出所も信頼レベルも
   異なる別カラムである（この線引きの記録は
   `docs/adr/DOC-2608021229_llm-cost-observability-collection-method.md` §10「Anthropic自己申告値の
@@ -477,16 +483,22 @@ PR番号はリポジトリ**内**でしか一意でない。`--pr`とstandalone�
 - **`quota.sample`は各マシンへのデプロイ日から記録が始まる**ため、それより前の月は`list_price_equiv_usd`
   が`null`になる（`$0.00`ではなく「データが無い」の意味）
 
-実際の出力例（サンドボックスで実行して確認したもの。`report --month`のcapacity cost節）:
+実際の出力例（サンドボックスで実行して確認したもの。`report --month`のcapacity cost節の抜粋。
+先頭の`capacity_message_count`等は省略）:
 
 ```
-list_price_equiv_usd: $1.50+ (下限 / list price相当 / 請求書ではない)
-list_price_equiv_is_lower_bound: True
-list_price_equiv_session_count: 1
-list_price_equiv_excluded_no_session_id_count: 0
-list_price_equiv_excluded_null_cost_count: 0
-list_price_equiv_excluded_deepseek_count: 0
-list_price_equiv_excluded_other_provider_count: 0
+  ...
+  list_price_equiv_usd: $2.00+ (下限 / list price相当 / 請求書ではない)
+  list_price_equiv_is_lower_bound: True
+  list_price_equiv_session_count: 1
+  list_price_equiv_excluded_no_session_id_count: 0
+  list_price_equiv_excluded_null_cost_count: 0
+  list_price_equiv_excluded_deepseek_count: 0
+  list_price_equiv_excluded_other_provider_count: 0
+  list_price_equiv_note: Claude Code自己申告のsession_cost_usd（statusLineのcost.total_cost_usd）を
+    provider=anthropicのみに絞り、session_idごとに正の差分の総和として積算した下限値（最後の
+    statusLine描画以降の消費は含まれない）。usage.messageのcost_estimate_usdとは別カラムであり、
+    cash costとは絶対に合算しない。請求書ではない。
 ```
 
 **attribution行の読み方（`run_id`/`role`の帰属解決。孫5、計画書
@@ -543,9 +555,12 @@ attribution (role):   direct 0.0% / via session_id 66.7% / unresolved 33.3%
 運用上は、`OCW_METER_QUOTA_INTERVAL`を既定の60秒より大きくする、または手動で古い
 `events/YYYY-MM-DD.jsonl`を別途アーカイブ・削除する、のいずれかを検討すること。
 
-**`prune`を実装しない決定について（孫5、計画書9.3の積み残し解消）**: 計画書9.3は
-「保存期間: 既定14日、`ocw-meter prune`で削除」と書いていたが、`prune`はどの孫の実装スコープにも
-入っておらず、計画時の書き漏れだった。孫5で以下の理由により**意図的に未実装のまま据え置く**と決定した。
+**`prune`を実装しない決定について（旧傘`ai-llm-cost-observability`の孫5、計画書
+[DOC-2608021229-a](../docs/planning/DOC-2608021229-a_ai-llm-cost-observability_計画.md)§9.3の
+積み残し解消。本傘`ocw-meter-accuracy`の孫5〈session_id join、下記参照〉とは別の孫であることに
+注意）**: 計画書DOC-2608021229-a §9.3は「保存期間: 既定14日、`ocw-meter prune`で削除」と
+書いていたが、`prune`はどの孫の実装スコープにも入っておらず、計画時の書き漏れだった。
+（旧傘の）孫5で以下の理由により**意図的に未実装のまま据え置く**と決定した。
 **`prune-diagnostics`（上記）とは別物である点に注意**: `prune-diagnostics`が消すのは
 `state/meter-errors.jsonl`と`state/quota-worktree-refusal.json`という自己診断・状態ファイルのみで、
 **`events/`（費用履歴そのもの）には一切触れない**。ここで未実装のまま据え置いているのは

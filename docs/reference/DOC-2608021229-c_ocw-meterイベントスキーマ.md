@@ -125,9 +125,11 @@ phase.start/phase.endとして発火されない**:
 > 持たないため、直接解決に失敗した`usage.message`を`quota.sample`とのsession_id joinで補う。
 > `quota.sample`の記録が始まった2026-08-01以降の実測では、`run_id` 17.2% → **61.6%**、
 > `role` 27.2% → **72.1%**まで上がった。**ただしこのjoinは`quota.sample`の記録開始より前へは
-> 遡れない**ため、7月以前（DeepSeek時代）の29,676件の`run_id`/`role`は復元手段が無いままである。
-> `report`の全ビューのフッターに出る`attribution (run_id):`/`attribution (role):`行が、
-> 実行のたびの実測内訳（`direct`/`via session_id`/`unresolved`）を示す。
+> 遡れない**ため、7月の29,676件（DeepSeek時代の`deepseek-v4-pro`分）の`run_id`/`role`は
+> 復元手段が無いままである。`report`の`--reconcile`を除く全ビューのフッターに出る
+> `attribution (run_id):`/`attribution (role):`行が、実行のたびの実測内訳
+> （`direct`/`via session_id`/`unresolved`）を示す（`--reconcile`は`session_id` joinを経由しない
+> ためattributionを計算せず、この行自体が出ない）。
 > `report --phase`を意味のある形で使うには、引き続き**PRの作業中〜マージ直後、worktreeを
 > `ocw rm`する前に`ocw-meter ingest`を実行する運用**が望ましい（`docs/reference/DOC-2608021229-b_...`
 > §2で手順化。session_id joinは直接解決の救済策であり、完全な代替ではない）。
@@ -153,9 +155,9 @@ phase.start/phase.endとして発火されない**:
 | `price_table_version` | string \| null | 適用した価格表のバージョン（再計算されない、§4） |
 | `price_effective_date` | string \| null | 同上の`effective_date` |
 | `cost_basis` | string | `estimated`（DeepSeek等の従量課金） / `subscription`（Anthropic定額契約） |
-| `time_of_day_basis` | string | `not_applicable` / `in_window` / `base_rate` / `unknown_timestamp`（孫3。§4「時間帯課金」参照） |
+| `time_of_day_basis` | string \| null | `not_applicable` / `in_window` / `base_rate` / `unknown_timestamp`、または`null`（Anthropicモデル`cost_basis: "subscription"`のとき、または適用可能な価格表が1枚も無いとき。孫3。§4.2「時間帯課金」参照） |
 | `currency` | string \| null | `USD`。`cost_basis == "subscription"`のときは`null` |
-| `run_id_source` | string \| null | `run_id`をどの経路で解決したか。`"direct"` / `"session_id"` / `null`（未解決、またはこのフィールドが無かった旧バージョンでのingest。孫5。§4.2「attributionの解決順」参照） |
+| `run_id_source` | string \| null | `run_id`をどの経路で解決したか。`"direct"` / `"session_id"` / `null`（未解決、またはこのフィールドが無かった旧バージョンでのingest。孫5。§4.5「attributionの解決順」参照） |
 | `role_source` | string \| null | `role`をどの経路で解決したか。値の意味は`run_id_source`と同じ（孫5） |
 
 ### 2.5 `quota.sample` のペイロードフィールド（共通エンベロープに加えて）
@@ -166,7 +168,7 @@ phase.start/phase.endとして発火されない**:
 | `seven_day_used_pct` / `seven_day_resets_at` | number \| null | `rate_limits.seven_day` |
 | `window_id` | string \| null | `five_hour_resets_at`の値そのもの。**未来時刻のときのみ**採用（stale値は`null`にする — 計画書§8.5） |
 | `context_used_pct` | number \| null | `context_window.used_percentage`。`null`のときは`total_input_tokens / context_window_size`からのフォールバック計算値が入る場合がある（表示文字列側は使わない。`bin/README.md`参照） |
-| `session_cost_usd` | number \| null | statusLineの`cost.total_cost_usd`（Claude Code自己申告のセッション累積コスト）。`usage.message`の`cost_estimate_usd`とは別カラムで、合算しない。`report`はこれを`list_price_equiv_usd`として集計・表示する（孫4。§4.1「`list_price_equiv_usd`の集計定義」参照） |
+| `session_cost_usd` | number \| null | statusLineの`cost.total_cost_usd`（Claude Code自己申告のセッション累積コスト）。`usage.message`の`cost_estimate_usd`とは別カラムで、合算しない。`report`はこれを`list_price_equiv_usd`として集計・表示する（孫4。§4.4「`list_price_equiv_usd`の集計定義」参照） |
 | `plan_source` | string | 常に`"statusline"` |
 | `raw_ref` | string \| null | `OCW_METER_RAW=1`時のみ、redaction済みraw snapshotのファイル参照。既定`null` |
 | `cwd` | string \| null | statusLine JSONの`cwd`（作業ディレクトリ）。**`ENVELOPE_FIELDS`には含まれない forward-compatible な追加フィールド** — envelope標準の`worktree`とは別に、statusLineが報告した生の`cwd`をそのまま保存する |
@@ -246,7 +248,7 @@ cost = ( cache_read_input_tokens               * price.cache_hit_in
   価格表自体が存在しない/読めない等の異常時）は `cost_estimate_usd: null` / `completeness: "unknown"`
   （§5参照）
 
-### 価格表（`bin/prices/*.json`）
+### 4.1 価格表（`bin/prices/*.json`）
 
 ```json
 {
@@ -272,7 +274,7 @@ cost = ( cache_read_input_tokens               * price.cache_hit_in
   価格表のバージョン・発効日をそのまま複写したもの。「今の価格表」ではなく「このイベントを
   計算したときの価格表」を指す
 
-### 時間帯（peak/off-peak）課金
+### 4.2 時間帯（peak/off-peak）課金
 
 孫3、計画書 [DOC-2608081456](../planning/DOC-2608081456_ocw-meter-accuracy_計画.md)【5】。
 
@@ -326,20 +328,22 @@ cost = ( cache_read_input_tokens               * price.cache_hit_in
 **このスキーマ拡張は既存の価格表と互換であり、`bin/prices/deepseek-2026-08-01.json`は現時点で
 `time_of_day_pricing`を使っていない**（DeepSeekの時間帯課金は本傘の調査時点で発効日未定のため）。
 
-### 価格表フォールバックの検出（孫3、罠5対策）
+### 4.3 価格表フォールバックの検出（孫3、罠5対策）
 
 `select_price_table()`は、対象日以前に有効な価格表が1枚も無いとき、クラッシュせず最も古いテーブル
 （`tables[0]`）にフォールバックする。このとき保存される`price_effective_date`は、実際のメッセージ
 日付より**後**になる — この状態（`price_effective_date`がメッセージ自身の日付より後）を、
 `report`は（イベントを書き換えずに）読み取り時の突き合わせで検出する:
 
-- `report`の全ビューのフッター`price_table:`行に、フォールバックが起きた件数を表示する
+- `report`の`--reconcile`を除くフッター`price_table:`行に、フォールバックが起きた件数を表示する
+  （`--reconcile`は`usage_cost_footer()`を経由せず自前で`price_table`文字列を組み立てており、
+  フォールバック件数に相当する情報を持たない）
 - `report --month`の`price_tables_applied[]`の各エントリに`is_fallback`（そのバージョンで
   フォールバックが1件でも起きたか）と`fallback_event_count`（そのバージョンの中で実際に
   フォールバックした件数。1つの価格表が月の前半はフォールバック・後半は正しく適用、という
   混在も表現できる）を持つ
 
-### 4.1 `list_price_equiv_usd` の集計定義
+### 4.4 `list_price_equiv_usd` の集計定義
 
 孫4、計画書 [DOC-2608081456](../planning/DOC-2608081456_ocw-meter-accuracy_計画.md)【2】。
 
@@ -354,14 +358,23 @@ cost = ( cache_read_input_tokens               * price.cache_hit_in
 1. **`provider == "anthropic"`のイベントのみを対象にする。** `deepseek`（`claude-ds`経由の
    セッション）は除外する。Claude Codeが DeepSeekのモデル名にどの単価を当てて
    `cost.total_cost_usd`を計算しているか不明であり、含めると`usage.message`側の
-   DeepSeek価格表推定（cash cost）と二重計上になる。`provider`が解決できなかったサンプル
-   （`provider: null`）も対象外だが、他プロバイダとは別カウントで除外件数に計上する
-   （`list_price_equiv_excluded_deepseek_count` / `list_price_equiv_excluded_other_provider_count`）
-2. **`session_id`ごとに時系列でソートし、正の差分だけを合計する（`max()`は使わない）。**
+   DeepSeek価格表推定（cash cost）と二重計上になる。`provider`が`deepseek`以外
+   （`provider: null`を含む）のサンプルはすべて`list_price_equiv_excluded_other_provider_count`
+   に計上される。`deepseek`専用カウンタ（`list_price_equiv_excluded_deepseek_count`）とは
+   別だが、`deepseek`以外の非anthropicプロバイダ（`provider: null`を含む）は互いに区別されず
+   同じ`other_provider`カウンタへまとめて計上される
+2. **`session_id`ごとに、そのセッションのストア全体を通じた最初のサンプルは値そのものを、
+   それ以降は直前サンプルとの正の差分を合計する（`max()`は使わない）。**
    `session_cost_usd`はセッション累積のはずだが、実測で214セッション中26セッション（12.1%）が
    非単調（値が減少する箇所がある）だった。`/clear`やコンパクションでのリセットが原因と推定される。
    単純な`max()`ではリセット前の消費分を取りこぼすため、隣り合うサンプル間の差分のうち正のものだけ
-   を積算する（負の差分＝リセットは0として扱い、そのサンプル自身の値を新しい系列の起点にする）
+   を積算する（負の差分＝リセットは0として扱い、そのサンプル自身の値を新しい系列の起点にする）。
+   **その系列の最初のサンプル自身は「直前が無い」ため差分計算をせず、値そのものを計上する**
+   （＝そのサンプルより前の消費も丸ごと含める）。この寄与（`event_id`ごとの寄与額）は
+   **必ずストア全体の`quota.sample`から計算し、窓/PR/月でスコープを絞った部分集合から
+   再計算してはいけない。** スコープを絞って計算すると、窓をまたぐセッションの累計が
+   窓2の「最初のサンプル」として丸ごと再計上され、実ストアで`report --window`の行合計が
+   48.7%（57/207 anthropicセッション、27.5%が2窓以上にまたがる）過大になることを実測で確認した
 3. `session_id`が無い、または`session_cost_usd`が数値でないサンプルは除外し、
    `list_price_equiv_excluded_no_session_id_count` / `list_price_equiv_excluded_null_cost_count`
    としてそれぞれ数える（黙って捨てない）
@@ -374,7 +387,7 @@ cost = ( cache_read_input_tokens               * price.cache_hit_in
 合算してはならない（線引きの記録は
 `docs/adr/DOC-2608021229_llm-cost-observability-collection-method.md` §10参照）。
 
-### 4.2 attribution の解決順
+### 4.5 attribution の解決順
 
 孫5、計画書 [DOC-2608081456](../planning/DOC-2608081456_ocw-meter-accuracy_計画.md)【3】。
 
@@ -512,7 +525,7 @@ path対策であり、`session_id`はworktreeパスと違って再利用され�
 
 `run_id_source`/`role_source`（孫5追加）は、この例のように`run_id`/`role`が`ocw-run-id`ファイル /
 Herdr liveから直接解決できた場合は`"direct"`、`quota.sample`とのsession_id joinで解決した場合は
-`"session_id"`になる（§4.2参照）。`time_of_day_basis`（孫3追加）はこの例が使う価格表
+`"session_id"`になる（§4.5参照）。`time_of_day_basis`（孫3追加）はこの例が使う価格表
 （`bin/prices/deepseek-2026-08-01.json`）が`time_of_day_pricing`を持たないため`"not_applicable"`。
 サンドボックス実行で実際に確認した`run_id_source: "session_id"`の例:
 
