@@ -1599,13 +1599,19 @@ def usage_cost_footer(usage_events):
         cost_basis_summary = ", ".join(sorted(cost_bases)) if cost_bases else "(none)"
         cost_estimate_summary = f"${cost_sum:.2f} (estimated — not an invoice)" if has_cost else "null"
     else:
-        # PR #57 review round 1 finding 1: `report` now ingests
-        # automatically before this function ever runs, so "no events
-        # yet" no longer means "you forgot to run ingest" — it means the
-        # transcript store had nothing matching. Telling the reader to
-        # run the very thing that just ran is a contradiction they'd see
-        # two lines below in the freshness footer.
-        coverage = "no usage.message events found in transcripts (ingest already ran automatically)"
+        # PR #57 review round 1 finding 1 / round 2 finding "新規2": this
+        # used to say "run 'ocw-meter ingest'", which contradicted the
+        # freshness footer a few lines below once `report` started
+        # auto-ingesting (round 1) — and a version that instead asserted
+        # ingest "already ran automatically" (round 1's own fix)
+        # contradicted the SAME footer line in the other direction under
+        # `--no-ingest`, where it deliberately didn't run. This function
+        # has no way to know which case it's in (it isn't passed
+        # `ingest_run`/`footer_freshness`), so it now says neither —
+        # whether ingest ran this time is `ingest_freshness_footer`'s
+        # `ingest (this run):` line's job alone, not duplicated (and
+        # therefore contradictable) here.
+        coverage = "no usage.message events found in transcripts"
         price_table_summary = "not applicable (no cost data ingested yet)"
         cost_basis_summary = "not applicable (no cost data ingested yet)"
         cost_estimate_summary = "null"
@@ -2296,9 +2302,11 @@ def _report_reconcile(paths, month, provider_totals, as_json, footer_freshness):
     coverage_text = (
         f"{total_messages} usage.message event(s) for {month}; per-model coverage_ratio requires "
         "--provider-total <model>=<tokens>"
-        # PR #57 review round 1 finding 1: see usage_cost_footer's
-        # comment above — this ran automatically before we got here.
-        if total_messages else f"no usage.message events found in transcripts for {month} (ingest already ran automatically)"
+        # PR #57 review round 1 finding 1 / round 2 finding "新規2": see
+        # usage_cost_footer's comment above — same reasoning, this
+        # function has no way to know whether this run's ingest actually
+        # ran (--no-ingest), so it doesn't claim either way.
+        if total_messages else f"no usage.message events found in transcripts for {month}"
     )
 
     summary = {
@@ -2331,7 +2339,7 @@ def _report_reconcile(paths, month, provider_totals, as_json, footer_freshness):
     print(f"month:         {summary['month']}")
     print(f"cost_basis:    {summary['cost_basis']}")
     if not models_out:
-        print("models:        (no usage.message events found in transcripts for this month — ingest already ran automatically)")
+        print("models:        (no usage.message events found in transcripts for this month)")
     for model, m in sorted(models_out.items()):
         print(f"  {model}:")
         print(f"    messages:             {m['messages']}")
@@ -2614,7 +2622,19 @@ def cmd_report(args):
     # `--repo <owner>/<name>` is the escape hatch for a case where this
     # needs to run from outside the target repo's own worktree.
     repo = explicit_repo or git_repo_slug()
-    needs_repo = filter_pr is not None or (month_flag_present and view is None) or view == "window"
+    # PR #57 review round 2 finding "新規1": moving this check up (round 1
+    # finding 7, above) exposed it to standalone --reconcile for the
+    # first time — previously the `if reconcile: return
+    # _report_reconcile(...)` early-return below made this condition
+    # dead code for that path, so it never needed the `and not
+    # reconcile` its sibling `repo_is_used` (right above) already has.
+    # `_report_reconcile()` never takes a `repo` argument at all (it does
+    # a store-wide model/token reconciliation, no PR scoping), so
+    # requiring one made `report --reconcile --month ...` — a documented
+    # workflow (docs/reference/DOC-2608021229-b) — fail outside any git
+    # repo with no `--repo` escape hatch (repo_is_used's `not reconcile`
+    # rejects `--repo` too in that combination).
+    needs_repo = filter_pr is not None or (month_flag_present and view is None and not reconcile) or view == "window"
     if needs_repo and not repo:
         print(
             "error: could not resolve a repo for PR-scoped reporting (not inside a git repo with an "

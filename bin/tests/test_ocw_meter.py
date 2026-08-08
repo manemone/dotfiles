@@ -1906,6 +1906,18 @@ class ReportAutoIngestTests(OcwMeterTestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(read_events(self.home), [])
         self.assertIn("ingest (this run): skipped (--no-ingest)", result.stdout)
+        # PR #57 review round 2 finding "新規2": the "no events yet"
+        # messages must not assert anything about whether ingest ran —
+        # round 1's own fix for finding 1 made them unconditionally claim
+        # "ingest already ran automatically", which is false right here
+        # under --no-ingest. Whether it ran is the freshness footer's
+        # `ingest (this run):` line's job alone (asserted above).
+        self.assertNotIn("ingest already ran automatically", result.stdout)
+        self.assertIn("no usage.message events found in transcripts", result.stdout)
+
+        reconcile_result = run_report(self.home, self.projects_dir, args=["--reconcile", "--no-ingest"])
+        self.assertEqual(reconcile_result.returncode, 0, reconcile_result.stderr)
+        self.assertNotIn("ingest already ran automatically", reconcile_result.stdout)
 
     def test_invalid_month_fails_before_running_the_automatic_ingest(self):
         # PR #57 review round 1 finding 7: argument validation (a
@@ -2242,6 +2254,21 @@ class ReportReconcileTests(OcwMeterTestCase):
         data = json.loads(report.stdout)
         self.assertEqual(data["transcript_lines_quarantined"], 1)
         self.assertEqual(data["quarantined_lines"], 0)
+
+    def test_reconcile_with_month_works_outside_any_git_repo(self):
+        # PR #57 review round 2 finding "新規1": moving the repo-
+        # resolution-needed check earlier (round 1 finding 7, to run
+        # before the automatic-ingest side effect) accidentally exposed
+        # `--reconcile --month` to it for the first time — previously
+        # `_report_reconcile`'s early return made the check dead code on
+        # this path. `_report_reconcile` never takes (or needs) a `repo`
+        # argument at all, so this combination must keep working from
+        # outside any git repo, exactly like it always has (this is a
+        # documented workflow — docs/reference/DOC-2608021229-b_...).
+        no_git_dir = pathlib.Path(self.tmpdir.name) / "not-a-git-repo-reconcile"
+        no_git_dir.mkdir()
+        result = run_meter(["report", "--reconcile", "--month", "2026-07"], self.home, cwd=no_git_dir)
+        self.assertEqual(result.returncode, 0, result.stderr)
 
 
 CLAUDE_STATUSLINE_SAMPLE = {
