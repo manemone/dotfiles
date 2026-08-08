@@ -4807,6 +4807,36 @@ class SessionAttributionTests(OcwMeterTestCase):
         data = json.loads(run_meter(["report", "--window", "--json"], self.home).stdout)
         self.assertIn(88, data["by_window"]["win-report-pr-window"]["prs_time_overlap"])
 
+    def test_report_side_pr_number_backfill_is_scoped_to_repo(self):
+        # レビュー指摘(ラウンド2 新規1): `pr_binds_from_events()`が`repo`
+        # でスコープしないと、別リポジトリでbindされたPR番号が
+        # read-timeにこのイベントのpr_numberとして焼き込まれ、
+        # `events_for_pr()`の直接マッチ(pr_number一致 + repo一致)を
+        # すり抜けて別リポジトリの費用が混入してしまう。`run_id`は
+        # グローバルに一意な値なので、このセッションのrun_idと別
+        # リポジトリのpr.bindのrun_idを衝突させて再現する。
+        session_id = "sess-cross-repo"
+        run_meter(["event", "pr.bind", "--idempotency-key", "cross-repo-bind",
+                   "--run-id", "run-cross-repo", "--pr-number", "55",
+                   "--repo", "someone/other-repo"], self.home)
+        run_meter(["event", "quota.sample", "--idempotency-key", "cross-repo-q1", "--plan-source", "statusline",
+                   "--session-id", session_id, "--run-id", "run-cross-repo",
+                   "--ts", "2026-08-01T09:00:00.000Z"], self.home)
+        # 自リポジトリ(このテストの実行cwdから自動解決される)の
+        # usage.message。session_idのみでrun_id/pr_numberは無い —
+        # session joinでrun_idを"run-cross-repo"に解決した後、修正前は
+        # そのrun_idを(repoでスコープせず)binds に引いてpr_number=55を
+        # 焼き込んでしまっていた。
+        run_meter(["event", "usage.message", "--idempotency-key", "cross-repo-u1", "--message-id", "m-cross-repo",
+                   "--session-id", session_id, "--model", "deepseek-v4-pro", "--cost-basis", "estimated",
+                   "--cost-estimate-usd", "999.0",
+                   "--ts", "2026-08-01T09:05:00.000Z"], self.home)
+        data = json.loads(run_meter(["report", "--pr", "55", "--json"], self.home).stdout)
+        # このリポジトリにはPR55への直接紐づけも無いはずなので、上の
+        # usage.message(別リポジトリのPR55にbindされたrun_id経由)は
+        # 一切拾われてはいけない。
+        self.assertIsNone(data["pr_detail"]["cash_cost_usd"])
+
     def test_report_side_join_does_not_overwrite_already_resolved_run_id(self):
         session_id = "sess-report-nooverwrite"
         run_meter(["event", "quota.sample", "--idempotency-key", "rno-q1", "--plan-source", "statusline",
@@ -4845,10 +4875,14 @@ class SessionAttributionTests(OcwMeterTestCase):
     def test_attribution_known_limits_present_in_text_and_json(self):
         # 孫5プロンプト §4「残る限界を出力または文書に書く」/ レビュー
         # 指摘1: session_id joinを入れても100%解決には到達しない構造的な
-        # 理由(quota.sampleが2026-08-01開始であること等)を、attribution行
-        # と一緒に毎回出す。
+        # 理由を、attribution行と一緒に毎回出す。
+        # レビュー指摘(ラウンド2 新規2): 絶対日付(2026-08-01)はこの
+        # マシン固有の事実であり、`bin/ocw-meter`は各マシンへ個別に
+        # デプロイされるツールの出力として断言してはいけない。ここでは
+        # マシン非依存の構造的な言い回しの一部だけを固定する。
         data = json.loads(run_meter(["report", "--json"], self.home).stdout)
-        self.assertIn("2026-08-01", data["attribution_known_limits"])
+        self.assertIn("quota.sampleの記録が始まるより前の期間は", data["attribution_known_limits"])
+        self.assertNotIn("2026-08-01", data["attribution_known_limits"])
         text = run_meter(["report"], self.home).stdout
         self.assertIn("attribution_known_limits:", text)
 

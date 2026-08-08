@@ -1634,12 +1634,16 @@ def _attribution_line(counts, total):
 # （実測時点のrun_id 61.6%/role 72.1%等）はこの定数に埋め込まない —
 # 母数が変わるたびに嘘になるため、実測値は毎回のattribution行自体に
 # 出る。ここに書くのは変わらない構造的な理由のみ。
+# レビュー指摘(ラウンド2 新規2): 絶対日付(2026-08-01)を埋め込まない —
+# `bin/ocw-meter` は各マシンへ個別にデプロイされ、quota.sampleの記録
+# 開始日はマシンごとのデプロイ日でありこのマシン固有の日付ではない。
+# 断言できるのは「記録開始より前は遡れない」という構造だけ。
 ATTRIBUTION_KNOWN_LIMITS = (
-    "quota.sampleの記録は2026-08-01開始のため、それより前の期間はsession_id "
-    "joinによる復元ができない。以降の期間でも100%には到達しない — claude-ds "
-    "セッションやstatusLineが一度も走らなかったセッションはrun_id/roleとも "
-    "復元不能。roleのunknownの一部はHerdr外で起動したClaudeであり原理的に "
-    "取得不能(推測で埋めない方針を維持)。"
+    "quota.sampleの記録が始まるより前の期間は、session_id joinによる復元が"
+    "できない。以降の期間でも100%には到達しない — claude-dsセッションや"
+    "statusLineが一度も走らなかったセッションはrun_id/roleとも復元不能。"
+    "roleのunknownの一部はHerdr外で起動したClaudeであり原理的に取得不能"
+    "(推測で埋めない方針を維持)。"
 )
 
 
@@ -1824,7 +1828,7 @@ def ingest_freshness_footer(cursor, ingest_run):
     }
 
 
-def print_footer_text(footer_completeness, footer_cost, footer_freshness, total, attribution=True):
+def print_footer_text(footer_completeness, footer_cost, footer_freshness, total, *, attribution=True):
     """レビュー指摘4: `attribution`はキーワード専用の明示フラグ
     (既定True) — 以前は`footer_cost.get('attribution_run_id', 'n/a ...')`
     で欠落を暗黙に許容していたが、これだと将来 `footer_cost` を手組みする
@@ -2897,16 +2901,28 @@ def auto_ingest_for_report(root, no_ingest):
     return {"status": "ran", "stats": result}
 
 
-def pr_binds_from_events(events):
+def pr_binds_from_events(events, repo):
     """report側(A)用: 既にデコード済みのイベント列(`valid_events`)から
     run_id -> pr.bind情報を組み立てる。ingest側(B)の
     `load_local_pr_binds_and_run_starts`が返す`binds`と同じ形
     (`{"pr_number": ..., "pr_url": ...}`) — `backfill_run_id_and_role_
     via_session`がB側の`build_usage_event`の`pr_info = binds.get(run_id)`
-    と同じ補完をread-time側でも行うために使う(レビュー指摘2)。"""
+    と同じ補完をread-time側でも行うために使う(レビュー指摘2)。
+
+    レビュー指摘(ラウンド2 新規1): `repo`でスコープしないと、別repoで
+    bindされた`pr_number`がこの共有ストア（`ocw-meter`は全repo共有）で
+    `usage.message`の`pr_number`に焼き込まれ、`events_for_pr()`の直接
+    マッチ（`e.get("pr_number") == pr_number and e.get("repo") == repo`）
+    をすり抜けて別repoの費用が混入する。`find_approved_pr_numbers_in_
+    month()`の`run_to_pr`と同じ`e.get("repo") == repo`スコープを揃える。
+    `repo`が`None`（PR/window/monthビュー以外でgit repo外から実行された
+    場合）のときは、`repo`が`None`のpr.bindしかマッチしない — 「推測で
+    埋めない」の原則どおり、repoが分からない状況でscopeを緩めない。"""
     binds = {}
     for e in events:
         if e.get("event_type") != "pr.bind":
+            continue
+        if e.get("repo") != repo:
             continue
         run_id = e.get("run_id")
         pr_number = e.get("pr_number")
@@ -3172,7 +3188,7 @@ def cmd_report(args):
     # included) so every view — default/--pr/--phase/--role/--model/
     # --window/--month — sees the same backfilled run_id/role/pr_number.
     backfill_run_id_and_role_via_session(
-        valid_events, session_attrs_from_events(valid_events), pr_binds_from_events(valid_events)
+        valid_events, session_attrs_from_events(valid_events), pr_binds_from_events(valid_events, repo)
     )
 
     if month_flag_present and view is None:
