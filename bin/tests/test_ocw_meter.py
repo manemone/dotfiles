@@ -4142,7 +4142,7 @@ class ReportListPriceEquivTests(OcwMeterTestCase):
         data = json.loads(run_meter(["report", "--month", "2026-08", "--json"], self.home).stdout)
         self.assertIsNone(data["capacity"]["list_price_equiv_usd"])
 
-    def test_pre_august_month_explains_null_as_no_collection_yet(self):
+    def test_null_month_before_any_quota_sample_explains_null_as_no_collection_yet(self):
         # quota.sample が1件も無い月は list_price_equiv_usd が null になり、
         # ノートに理由が添えられる。理由の文言は「記録開始前」「該当セッションが
         # 無かった」のどちらか特定のマシン日付を主張しない（レビュー指摘 最終PR
@@ -4151,6 +4151,22 @@ class ReportListPriceEquivTests(OcwMeterTestCase):
         self.assertIsNone(data["capacity"]["list_price_equiv_usd"])
         self.assertIn("quota.sampleの記録が始まる前の期間", data["capacity"]["list_price_equiv_note"])
         self.assertNotIn("2026-08-01", data["capacity"]["list_price_equiv_note"])
+
+    def test_null_month_after_collection_started_still_gets_the_note(self):
+        # レビュー指摘 最終PRラウンド2 新規1: 判定条件を month<"2026-08" から
+        # list_price_equiv_usd is None のみに一本化した結果、「記録開始後だが
+        # この月はたまたまanthropicセッションが無かった」ケースにも注記が付く
+        # ようになった。この挙動自体をテストで固定する — 月による絞り込みを
+        # 誰かが復活させると、このテストだけが検知できる。
+        self._quota_sample("q1", "sess-has-data", 10.0, "2026-08-05T09:00:00.000Z")
+        data = json.loads(run_meter(["report", "--month", "2026-08", "--json"], self.home).stdout)
+        self.assertAlmostEqual(data["capacity"]["list_price_equiv_usd"], 10.0)
+        self.assertEqual(data["capacity"]["list_price_equiv_note"].count(
+            "quota.sampleの記録が始まる前の期間"), 0)
+
+        data = json.loads(run_meter(["report", "--month", "2026-12", "--json"], self.home).stdout)
+        self.assertIsNone(data["capacity"]["list_price_equiv_usd"])
+        self.assertIn("quota.sampleの記録が始まる前の期間", data["capacity"]["list_price_equiv_note"])
 
     def test_list_price_equiv_appears_in_pr_report(self):
         run_meter(["event", "run.start", "--idempotency-key", "r1", "--run-id", "run-lp1",
