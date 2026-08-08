@@ -39,20 +39,71 @@ completion criteria this maps to (idempotency, message.id dedup,
 message.content non-exposure, cost formula, price-table versioning).
 """
 
+import atexit
 import concurrent.futures
+import hashlib
 import json
 import os
 import pathlib
 import pty
+import shutil
 import stat
 import subprocess
 import sys
 import tempfile
 import time
 import unittest
+from datetime import datetime, timedelta, timezone
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
 OCW_METER = REPO_ROOT / "bin" / "ocw-meter"
+
+# ocw-meter's OWN fallback logic (emit_meter_error, the worktree-refusal
+# suppression cache) derives paths from real $HOME whenever OCW_METER_HOME
+# itself is refused (resolves inside a Git worktree) — not just from
+# OCW_METER_HOME. A test that forgets to override $HOME too therefore
+# silently writes into the developer's REAL ~/.local/state/ocw-meter
+# whenever it exercises that path (found live on this machine — see
+# docs/planning/DOC-2608081456_..._計画.md【4】: 37 stale worktree-refusal
+# entries and 6 meter-error diagnostics, all test-shaped).
+#
+# run_meter/run_snapshot_quota default $HOME (whenever a caller doesn't
+# explicitly pass its own via extra_env) to a directory keyed off `home`
+# (the OCW_METER_HOME argument), under this ONE scratch root — not a
+# single directory shared process-wide, and not a plain sibling of
+# `home` either (孫1 round-1 review findings 7 and 9, plus a round-2
+# fix for a bug the first attempt at finding 9 introduced):
+#
+# - **Independence** (finding 9): a single shared fallback directory let
+#   one test's write silently satisfy another, unrelated test's
+#   `idempotency_key`-deduped assertion (`emit_meter_error`'s dedup key
+#   is `meter-error:<stage>:<YYYY-MM-DD>` — two tests hitting the same
+#   stage on the same day only ever produce ONE line, written by
+#   whichever ran first). Keying the fallback directory off `home`,
+#   which is unique per call site in this file, means each test's own
+#   write path is what actually gets exercised and asserted on.
+# - **Cleanup** (finding 7): a single `atexit`-registered scratch root
+#   covers every per-`home` subdirectory ever created, however many
+#   distinct `home` values this file uses, instead of leaking one
+#   never-cleaned directory per test run.
+# - A first attempt at this made the fallback a plain SIBLING of `home`
+#   (`<home>-home-env-fallback`) to piggyback on `self.tmpdir`'s own
+#   cleanup. That breaks for exactly the tests worth having (the
+#   worktree-refusal ones): when `home` sits inside a throwaway Git repo
+#   (e.g. `repo_dir / "ocw-meter-home"`), a sibling of `home` sits
+#   inside that SAME repo, so `default_storage_root()` built from it
+#   resolves inside a Git worktree too — `emit_meter_error`'s own
+#   `in_git_worktree(target_root)` guard then refuses to write the
+#   diagnostic at all, silently defeating the very scenario under test.
+#   Hashing `home` into a name under a fixed, git-free scratch root
+#   sidesteps that entirely.
+_HOME_FALLBACK_SCRATCH_ROOT = tempfile.mkdtemp(prefix="ocw-meter-test-home-fallbacks-")
+atexit.register(shutil.rmtree, _HOME_FALLBACK_SCRATCH_ROOT, ignore_errors=True)
+
+
+def _default_home_for(home):
+    digest = hashlib.sha1(str(home).encode("utf-8")).hexdigest()[:16]
+    return str(pathlib.Path(_HOME_FALLBACK_SCRATCH_ROOT) / digest)
 
 
 def run_meter(args, home, extra_env=None, timeout=30, cwd=None):
@@ -62,6 +113,8 @@ def run_meter(args, home, extra_env=None, timeout=30, cwd=None):
     # under, so assertions about "unset -> null" stay meaningful.
     for key in ("OCW_RUN_ID", "OCW_ROLE", "HERDR_WORKSPACE_ID", "HERDR_PANE_ID"):
         env.pop(key, None)
+    if not extra_env or "HOME" not in extra_env:
+        env["HOME"] = _default_home_for(home)
     if extra_env:
         env.update(extra_env)
     return subprocess.run(
@@ -82,6 +135,8 @@ def run_snapshot_quota(stdin_text, home, extra_env=None, timeout=30):
     env["OCW_METER_HOME"] = str(home)
     for key in ("OCW_RUN_ID", "OCW_ROLE", "HERDR_WORKSPACE_ID", "HERDR_PANE_ID"):
         env.pop(key, None)
+    if not extra_env or "HOME" not in extra_env:
+        env["HOME"] = _default_home_for(home)
     if extra_env:
         env.update(extra_env)
     return subprocess.run(
@@ -93,6 +148,37 @@ def run_snapshot_quota(stdin_text, home, extra_env=None, timeout=30):
         text=True,
         timeout=timeout,
     )
+
+
+def real_ocw_meter_home_contamination_fingerprint():
+    """A NARROW fingerprint of the developer's REAL
+    ~/.local/state/ocw-meter — deliberately NOT a full directory
+    snapshot (孫1 round-1 review finding 5): Claude Code's own statusLine
+    hook calls the real `ocw-meter snapshot-quota` roughly every 60s
+    independently of this test run, touching
+    events/YYYY-MM-DD.jsonl / state/quota-last-sample.json /
+    state/seen-keys/YYYY-MM.txt on this developer's machine — legitimate
+    activity a before/after full-tree equality check flags as a false
+    positive. This instead looks only at what a HOME-isolation bug in
+    THIS test file could plausibly cause: new test-shaped keys appearing
+    in quota-worktree-refusal.json, or meter-errors.jsonl growing."""
+    root = pathlib.Path(os.path.expanduser("~")) / ".local" / "state" / "ocw-meter"
+    refusal_path = root / "state" / "quota-worktree-refusal.json"
+    test_like_refusal_keys = set()
+    if refusal_path.exists():
+        try:
+            data = json.loads(refusal_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            data = {}
+        if isinstance(data, dict):
+            test_like_refusal_keys = {k for k in data if "ocw-meter-home" in k}
+    meter_errors_path = root / "state" / "meter-errors.jsonl"
+    meter_errors_line_count = 0
+    if meter_errors_path.exists():
+        meter_errors_line_count = len(
+            [line for line in meter_errors_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+        )
+    return test_like_refusal_keys, meter_errors_line_count
 
 
 def read_events(home):
@@ -168,6 +254,12 @@ def write_transcript(projects_dir, slug, session_id, line_dicts):
     return path
 
 
+def write_price_table(price_dir, filename, table):
+    price_dir = pathlib.Path(price_dir)
+    price_dir.mkdir(parents=True, exist_ok=True)
+    (price_dir / filename).write_text(json.dumps(table, ensure_ascii=False), encoding="utf-8")
+
+
 def make_ocw_style_worktree(tmp_root, run_id):
     """Creates a throwaway git repo + linked worktree and writes
     `run_id` to `<worktree's git-dir>/ocw-run-id`, mirroring bin/ocw's
@@ -208,6 +300,21 @@ def run_ingest(home, projects_dir, args=None, price_dir=None, extra_env=None, ti
     if extra_env:
         env.update(extra_env)
     return run_meter(["ingest", *(args or [])], home, extra_env=env, timeout=timeout)
+
+
+def run_report(home, projects_dir=None, args=None, price_dir=None, extra_env=None, timeout=60):
+    """Like `run_ingest`, but drives `report` (whose automatic ingest —
+    計画書 DOC-2608081456孫2 — is what most callers of this helper mean
+    to exercise) instead of `ingest` directly."""
+    env = {
+        "OCW_METER_PRICE_DIR": str(price_dir if price_dir is not None else REPO_PRICE_DIR),
+        "OCW_METER_INGEST_USE_GH": "0",
+    }
+    if projects_dir is not None:
+        env["OCW_METER_CLAUDE_PROJECTS_DIR"] = str(projects_dir)
+    if extra_env:
+        env.update(extra_env)
+    return run_meter(["report", *(args or [])], home, extra_env=env, timeout=timeout)
 
 
 class OcwMeterTestCase(unittest.TestCase):
@@ -1779,6 +1886,595 @@ class IngestTests(OcwMeterTestCase):
         self.assertFalse(events_file.read_text(encoding="utf-8").endswith("\n"))
 
 
+class TimeOfDayPricingTests(OcwMeterTestCase):
+    """計画書 DOC-2608081456孫3: time-of-day price table extension. All
+    windows below use `tz_offset: "+08:00"` (Beijing time, matching
+    DeepSeek's own announced windows) with a deliberately simple
+    base/window price pair (1.0 / 2.0 per token) so cost assertions
+    don't need to reproduce the real formula's arithmetic.
+
+    `time_of_day_basis` uses basis-neutral values (`in_window` /
+    `base_rate`, not `peak` / `off_peak` — レビュー指摘4: this schema
+    can't know which side is actually more expensive)."""
+
+    def setUp(self):
+        super().setUp()
+        self.projects_dir = pathlib.Path(self.tmpdir.name) / "claude-projects"
+        self.projects_dir.mkdir(parents=True, exist_ok=True)
+        self.price_dir = pathlib.Path(self.tmpdir.name) / "prices-tod"
+
+    def _tod_table(self, version="deepseek-2026-08-01-tod"):
+        return {
+            "price_table_version": version,
+            "effective_date": "2026-08-01",
+            "models": {
+                "deepseek-v4-pro": {"cache_hit_in": 0, "cache_miss_in": 1.0, "out": 0},
+            },
+            "time_of_day_pricing": {
+                "tz_offset": "+08:00",
+                "boundary": "start_inclusive_end_exclusive",
+                "windows": [
+                    {"start": "09:00", "end": "12:00",
+                     "models": {"deepseek-v4-pro": {"cache_hit_in": 0, "cache_miss_in": 2.0, "out": 0}}},
+                    {"start": "14:00", "end": "18:00",
+                     "models": {"deepseek-v4-pro": {"cache_hit_in": 0, "cache_miss_in": 2.0, "out": 0}}},
+                ],
+            },
+        }
+
+    def _ingest_one(self, timestamp, table=None, session="sess-tod"):
+        write_price_table(self.price_dir, "deepseek-tod.json", table or self._tod_table())
+        write_transcript(self.projects_dir, "proj", session, [
+            assistant_line(session, "m1", model="deepseek-v4-pro", timestamp=timestamp,
+                            input_tokens=1_000_000, cache_read_input_tokens=0,
+                            cache_creation_input_tokens=0, output_tokens=0),
+        ])
+        result = run_ingest(self.home, self.projects_dir, price_dir=self.price_dir)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return read_events(self.home)[0]
+
+    # -- backward compatibility --------------------------------------------
+
+    def test_table_without_time_of_day_pricing_is_unaffected(self):
+        # Uses the real, unmodified bin/prices/deepseek-2026-08-01.json —
+        # the primary evidence this feature is backward compatible (孫3
+        # プロンプト §テスト "既存のテストが無改変で通ることが主要な根拠").
+        write_transcript(self.projects_dir, "proj", "sess-compat", [
+            assistant_line("sess-compat", "m1", model="deepseek-v4-pro",
+                            timestamp="2026-08-05T02:00:00.000Z",  # Beijing 10:00 — would be "in_window" if defined
+                            input_tokens=1000, cache_read_input_tokens=2000, output_tokens=300),
+        ])
+        result = run_ingest(self.home, self.projects_dir)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        event = read_events(self.home)[0]
+        self.assertEqual(event["time_of_day_basis"], "not_applicable")
+        self.assertIsNotNone(event["cost_estimate_usd"])
+
+    # -- in_window / base_rate -----------------------------------------------
+
+    def test_timestamp_inside_window_gets_window_price(self):
+        # Beijing 10:00 (UTC 02:00) is inside the 09:00-12:00 window.
+        event = self._ingest_one("2026-08-05T02:00:00.000Z")
+        self.assertEqual(event["time_of_day_basis"], "in_window")
+        self.assertAlmostEqual(event["cost_estimate_usd"], 2.0)
+
+    def test_timestamp_outside_every_window_gets_base_price(self):
+        # Beijing 13:00 (UTC 05:00) is between the two windows.
+        event = self._ingest_one("2026-08-05T05:00:00.000Z")
+        self.assertEqual(event["time_of_day_basis"], "base_rate")
+        self.assertAlmostEqual(event["cost_estimate_usd"], 1.0)
+
+    # -- boundary handling -----------------------------------------------
+
+    def test_window_start_boundary_is_inclusive(self):
+        # Beijing 09:00:00 exactly (UTC 01:00:00) -- start of the window.
+        event = self._ingest_one("2026-08-05T01:00:00.000Z")
+        self.assertEqual(event["time_of_day_basis"], "in_window")
+        self.assertAlmostEqual(event["cost_estimate_usd"], 2.0)
+
+    def test_window_end_boundary_is_exclusive(self):
+        # Beijing 12:00:00 exactly (UTC 04:00:00) -- end of the window.
+        event = self._ingest_one("2026-08-05T04:00:00.000Z")
+        self.assertEqual(event["time_of_day_basis"], "base_rate")
+        self.assertAlmostEqual(event["cost_estimate_usd"], 1.0)
+
+    def test_boundary_field_mismatching_the_only_supported_rule_is_unusable(self):
+        # レビュー指摘5: `boundary` is a real, validated field now, not a
+        # documented-but-ignored one -- a table that claims a boundary
+        # rule this file doesn't implement must be treated as unusable,
+        # not silently computed with the (opposite) hardcoded rule.
+        table = self._tod_table()
+        table["time_of_day_pricing"]["boundary"] = "start_exclusive_end_inclusive"
+        event = self._ingest_one("2026-08-05T02:00:00.000Z", table=table)  # otherwise squarely in-window
+        self.assertEqual(event["time_of_day_basis"], "not_applicable")
+        self.assertAlmostEqual(event["cost_estimate_usd"], 1.0)
+
+    # -- UTC -> Beijing conversion, including a date rollover --------------
+
+    def test_utc_timestamp_is_converted_to_beijing_window_across_date_boundary(self):
+        # A window entirely inside "the day after" from UTC's point of
+        # view: Beijing 00:00-03:00 (UTC+8) only exists as UTC 16:00-
+        # 19:00 of the PREVIOUS calendar date -- exactly the "UTC 深夜 =
+        # 北京の朝" case 孫3プロンプト's test list requires. If the
+        # implementation ever forgot to actually convert timezones (e.g.
+        # read `ts_dt.hour` instead of `ts_dt.astimezone(tz).hour`), this
+        # message (2026-07-14 UTC) would be judged against the WRONG
+        # calendar date's window matching (still base_rate by accident,
+        # since the naive UTC hour 16 isn't in 00:00-03:00 either) —
+        # the assertion below instead pins the actual local hour (00:30)
+        # produced by a correct astimezone() conversion.
+        table = self._tod_table()
+        table["time_of_day_pricing"]["windows"] = [{
+            "start": "00:00", "end": "03:00",
+            "models": {"deepseek-v4-pro": {"cache_hit_in": 0, "cache_miss_in": 2.0, "out": 0}},
+        }]
+        # 2026-07-14T16:30:00Z + 08:00 = 2026-07-15T00:30:00 (next date).
+        event = self._ingest_one("2026-07-14T16:30:00.000Z", table=table)
+        self.assertEqual(event["time_of_day_basis"], "in_window")
+        self.assertAlmostEqual(event["cost_estimate_usd"], 2.0)
+
+    # -- missing timestamp -------------------------------------------------
+
+    def test_missing_timestamp_falls_back_to_base_price_without_crashing(self):
+        write_price_table(self.price_dir, "deepseek-tod.json", self._tod_table())
+        line = assistant_line("sess-notime", "m1", model="deepseek-v4-pro",
+                               input_tokens=1_000_000, cache_read_input_tokens=0,
+                               cache_creation_input_tokens=0, output_tokens=0)
+        line["timestamp"] = None
+        write_transcript(self.projects_dir, "proj", "sess-notime", [line])
+        result = run_ingest(self.home, self.projects_dir, price_dir=self.price_dir)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        event = read_events(self.home)[0]
+        self.assertEqual(event["time_of_day_basis"], "unknown_timestamp")
+        self.assertAlmostEqual(event["cost_estimate_usd"], 1.0)  # base price, not guessed in/out of window
+
+    # -- a model absent from every window is unaffected ---------------------
+
+    def test_model_not_listed_in_any_window_is_not_applicable(self):
+        table = self._tod_table()
+        table["models"]["deepseek-v4-flash"] = {"cache_hit_in": 0, "cache_miss_in": 1.0, "out": 0}
+        write_price_table(self.price_dir, "deepseek-tod.json", table)
+        write_transcript(self.projects_dir, "proj", "sess-flash", [
+            # Beijing 10:00 -- inside the pro-only window, but this
+            # message uses -flash, which has no window override.
+            assistant_line("sess-flash", "m1", model="deepseek-v4-flash", timestamp="2026-08-05T02:00:00.000Z",
+                            input_tokens=1_000_000, cache_read_input_tokens=0,
+                            cache_creation_input_tokens=0, output_tokens=0),
+        ])
+        result = run_ingest(self.home, self.projects_dir, price_dir=self.price_dir)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        event = read_events(self.home)[0]
+        self.assertEqual(event["time_of_day_basis"], "not_applicable")
+        self.assertAlmostEqual(event["cost_estimate_usd"], 1.0)
+
+    # -- malformed time_of_day_pricing never crashes ingest -----------------
+
+    def test_missing_tz_offset_does_not_crash_ingest(self):
+        table = self._tod_table()
+        # No tz_offset at all -- the whole block must be treated as
+        # unusable (not_applicable), not raise.
+        del table["time_of_day_pricing"]["tz_offset"]
+        event = self._ingest_one("2026-08-05T02:00:00.000Z", table=table)
+        self.assertEqual(event["time_of_day_basis"], "not_applicable")
+        self.assertAlmostEqual(event["cost_estimate_usd"], 1.0)
+
+    def test_out_of_range_tz_offset_does_not_crash_ingest(self):
+        # レビュー指摘1の回帰テスト: `timezone()` raises ValueError for a
+        # >=24h magnitude offset. This used to propagate all the way up
+        # through `_time_of_day_spec` -> `_select_prices_for_model` ->
+        # `compute_cost` -> the list comprehension in the ingest routine
+        # that calls `build_usage_event` for every candidate, with no
+        # try/except anywhere in that chain -- `ingest` exited 1 and
+        # wrote ZERO events (including unrelated messages), directly
+        # violating `compute_cost`'s own "Never raises" docstring.
+        table = self._tod_table()
+        table["time_of_day_pricing"]["tz_offset"] = "+25:00"
+        event = self._ingest_one("2026-08-05T02:00:00.000Z", table=table)
+        self.assertEqual(event["time_of_day_basis"], "not_applicable")
+        self.assertAlmostEqual(event["cost_estimate_usd"], 1.0)
+
+    def test_out_of_range_minutes_in_tz_offset_does_not_silently_normalize(self):
+        # "+08:75" must not silently become UTC+09:15 -- minutes are
+        # range-checked exactly like `_parse_hhmm_to_minutes` already
+        # checks window boundaries.
+        table = self._tod_table()
+        table["time_of_day_pricing"]["tz_offset"] = "+08:75"
+        event = self._ingest_one("2026-08-05T02:00:00.000Z", table=table)
+        self.assertEqual(event["time_of_day_basis"], "not_applicable")
+        self.assertAlmostEqual(event["cost_estimate_usd"], 1.0)
+
+    def test_tz_database_name_is_rejected_not_crashed_on(self):
+        # zoneinfo names are deliberately unsupported (孫3プロンプト §1:
+        # tzdata isn't guaranteed present) -- must fall back cleanly.
+        table = self._tod_table()
+        table["time_of_day_pricing"]["tz_offset"] = "Asia/Shanghai"
+        event = self._ingest_one("2026-08-05T02:00:00.000Z", table=table)
+        self.assertEqual(event["time_of_day_basis"], "not_applicable")
+        self.assertAlmostEqual(event["cost_estimate_usd"], 1.0)
+
+    def test_non_list_windows_does_not_crash_ingest(self):
+        table = self._tod_table()
+        table["time_of_day_pricing"]["windows"] = {"start": "09:00", "end": "12:00"}
+        event = self._ingest_one("2026-08-05T02:00:00.000Z", table=table)
+        self.assertEqual(event["time_of_day_basis"], "not_applicable")
+        self.assertAlmostEqual(event["cost_estimate_usd"], 1.0)
+
+    def test_non_dict_time_of_day_pricing_does_not_crash_ingest(self):
+        table = self._tod_table()
+        table["time_of_day_pricing"] = ["not", "a", "dict"]
+        event = self._ingest_one("2026-08-05T02:00:00.000Z", table=table)
+        self.assertEqual(event["time_of_day_basis"], "not_applicable")
+        self.assertAlmostEqual(event["cost_estimate_usd"], 1.0)
+
+    def test_malformed_hhmm_window_bounds_never_match_but_do_not_crash(self):
+        table = self._tod_table()
+        table["time_of_day_pricing"]["windows"] = [{
+            "start": "9:00", "end": "12:00",  # single-digit hour: not "HH:MM"
+            "models": {"deepseek-v4-pro": {"cache_hit_in": 0, "cache_miss_in": 2.0, "out": 0}},
+        }]
+        event = self._ingest_one("2026-08-05T02:00:00.000Z", table=table)  # would be in-window if parsed
+        self.assertEqual(event["time_of_day_basis"], "base_rate")
+        self.assertAlmostEqual(event["cost_estimate_usd"], 1.0)
+
+    def test_cross_midnight_window_never_matches_but_does_not_crash(self):
+        table = self._tod_table()
+        table["time_of_day_pricing"]["windows"] = [{
+            "start": "22:00", "end": "02:00",  # start >= end after normalization: unsupported
+            "models": {"deepseek-v4-pro": {"cache_hit_in": 0, "cache_miss_in": 2.0, "out": 0}},
+        }]
+        event = self._ingest_one("2026-08-05T15:30:00.000Z", table=table)  # Beijing 23:30
+        self.assertEqual(event["time_of_day_basis"], "base_rate")
+        self.assertAlmostEqual(event["cost_estimate_usd"], 1.0)
+
+    # -- present-but-unusable time_of_day_pricing is diagnosed, not silent --
+
+    def test_present_but_unusable_time_of_day_pricing_emits_a_meter_error(self):
+        # レビュー指摘3: a table that predates this feature (no
+        # `time_of_day_pricing` key at all) and one that tried and got
+        # the shape wrong must not be indistinguishable -- the latter
+        # records a `meter.error` diagnostic (already surfaced in
+        # `report`'s footer), the former does not.
+        table = self._tod_table()
+        del table["time_of_day_pricing"]["tz_offset"]
+        self._ingest_one("2026-08-05T02:00:00.000Z", table=table)
+        errors = read_meter_errors(self.home)
+        stages = [e.get("stage") for e in errors]
+        self.assertIn("price_table_time_of_day_pricing_unusable", stages)
+
+    def test_table_without_any_time_of_day_pricing_key_does_not_emit_a_meter_error(self):
+        write_transcript(self.projects_dir, "proj", "sess-no-tod-key", [
+            assistant_line("sess-no-tod-key", "m1", model="deepseek-v4-pro", timestamp="2026-08-05T10:00:00.000Z"),
+        ])
+        result = run_ingest(self.home, self.projects_dir)  # real REPO_PRICE_DIR table: no time_of_day_pricing key
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(read_meter_errors(self.home), [])
+
+
+class PriceTableFallbackWarningTests(OcwMeterTestCase):
+    """計画書 DOC-2608081456孫3 §3 / 罠5: 該当する価格表が無い期間を黙らせない。"""
+
+    def setUp(self):
+        super().setUp()
+        self.projects_dir = pathlib.Path(self.tmpdir.name) / "claude-projects"
+        self.projects_dir.mkdir(parents=True, exist_ok=True)
+        self.price_dir = pathlib.Path(self.tmpdir.name) / "prices-fallback"
+        write_price_table(self.price_dir, "deepseek-2026-08-01.json", {
+            "price_table_version": "deepseek-2026-08-01", "effective_date": "2026-08-01",
+            "models": {"deepseek-v4-pro": {"cache_hit_in": 0.003625, "cache_miss_in": 0.435, "out": 0.87}},
+        })
+
+    def test_footer_warns_when_price_table_took_effect_after_the_message(self):
+        # July message, only an August table exists -> fallback.
+        write_transcript(self.projects_dir, "proj", "sess-july", [
+            assistant_line("sess-july", "m1", model="deepseek-v4-pro", timestamp="2026-07-15T10:00:00.000Z"),
+        ])
+        result = run_report(self.home, self.projects_dir, args=["--json"], price_dir=self.price_dir)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        data = json.loads(result.stdout)
+        self.assertEqual(data["price_table_fallback_count"], 1)
+        self.assertIn("took effect AFTER their own message date", data["price_table"])
+
+    def test_footer_does_not_warn_when_price_table_covers_the_message(self):
+        # August message, August table applies as intended -> no fallback.
+        write_transcript(self.projects_dir, "proj", "sess-aug", [
+            assistant_line("sess-aug", "m1", model="deepseek-v4-pro", timestamp="2026-08-05T10:00:00.000Z"),
+        ])
+        result = run_report(self.home, self.projects_dir, args=["--json"], price_dir=self.price_dir)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        data = json.loads(result.stdout)
+        self.assertEqual(data["price_table_fallback_count"], 0)
+        self.assertNotIn("took effect AFTER", data["price_table"])
+
+    def test_month_report_flags_price_table_effective_after_the_month(self):
+        write_transcript(self.projects_dir, "proj", "sess-july2", [
+            assistant_line("sess-july2", "m1", model="deepseek-v4-pro", timestamp="2026-07-15T10:00:00.000Z"),
+        ])
+        result = run_report(self.home, self.projects_dir, args=["--month", "2026-07", "--json"], price_dir=self.price_dir)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        data = json.loads(result.stdout)
+        applied = data["cash_cost"]["price_tables_applied"]
+        self.assertEqual(len(applied), 1)
+        self.assertEqual(applied[0]["price_table_version"], "deepseek-2026-08-01")
+        self.assertEqual(applied[0]["effective_date"], "2026-08-01")
+        self.assertTrue(applied[0]["is_fallback"])
+        self.assertEqual(applied[0]["event_count"], 1)
+        self.assertEqual(applied[0]["fallback_event_count"], 1)
+
+    def test_month_report_does_not_flag_price_table_covering_the_month(self):
+        write_transcript(self.projects_dir, "proj", "sess-aug2", [
+            assistant_line("sess-aug2", "m1", model="deepseek-v4-pro", timestamp="2026-08-05T10:00:00.000Z"),
+        ])
+        result = run_report(self.home, self.projects_dir, args=["--month", "2026-08", "--json"], price_dir=self.price_dir)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        data = json.loads(result.stdout)
+        applied = data["cash_cost"]["price_tables_applied"]
+        self.assertEqual(len(applied), 1)
+        self.assertFalse(applied[0]["is_fallback"])
+        self.assertEqual(applied[0]["event_count"], 1)
+        self.assertEqual(applied[0]["fallback_event_count"], 0)
+
+    def test_month_report_flags_a_same_month_fallback(self):
+        # レビュー指摘2の回帰テスト: the sole price table is effective
+        # 2026-08-15 -- LATER in the SAME month as the message it's
+        # applied to (2026-08-05). Month-granularity comparison
+        # (`"2026-08" > "2026-08"`) missed this; day-granularity
+        # (reusing `_price_table_predates_message`) must catch it, and
+        # must agree with the footer's own (day-granularity) verdict in
+        # the same JSON response.
+        price_dir = pathlib.Path(self.tmpdir.name) / "prices-same-month-fallback"
+        write_price_table(price_dir, "deepseek-2026-08-15.json", {
+            "price_table_version": "deepseek-2026-08-15", "effective_date": "2026-08-15",
+            "models": {"deepseek-v4-pro": {"cache_hit_in": 0.003625, "cache_miss_in": 0.435, "out": 0.87}},
+        })
+        write_transcript(self.projects_dir, "proj", "sess-samemonth", [
+            assistant_line("sess-samemonth", "m1", model="deepseek-v4-pro", timestamp="2026-08-05T10:00:00.000Z"),
+        ])
+        result = run_report(self.home, self.projects_dir, args=["--month", "2026-08", "--json"], price_dir=price_dir)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        data = json.loads(result.stdout)
+        applied = data["cash_cost"]["price_tables_applied"]
+        self.assertEqual(len(applied), 1)
+        self.assertTrue(applied[0]["is_fallback"])
+        # Must agree with the footer's own (independently computed) verdict.
+        self.assertEqual(data["price_table_fallback_count"], 1)
+
+    def test_month_report_flags_a_mixed_fallback_and_covered_month(self):
+        # レビュー指摘8の回帰テスト: the sole price table is effective
+        # 2026-08-15. One message (08-05) predates it (fallback); another
+        # (08-20) is genuinely covered by it. Both are priced by the SAME
+        # `price_table_version`, so a single per-version boolean can't
+        # honestly describe the month -- `fallback_event_count` must be
+        # 1 out of `event_count` 2, not "all" or "none".
+        price_dir = pathlib.Path(self.tmpdir.name) / "prices-mixed-month"
+        write_price_table(price_dir, "deepseek-2026-08-15.json", {
+            "price_table_version": "deepseek-2026-08-15", "effective_date": "2026-08-15",
+            "models": {"deepseek-v4-pro": {"cache_hit_in": 0.003625, "cache_miss_in": 0.435, "out": 0.87}},
+        })
+        write_transcript(self.projects_dir, "proj", "sess-mixed", [
+            assistant_line("sess-mixed", "m1", model="deepseek-v4-pro", timestamp="2026-08-05T10:00:00.000Z"),
+            assistant_line("sess-mixed", "m2", model="deepseek-v4-pro", timestamp="2026-08-20T10:00:00.000Z"),
+        ])
+        result = run_report(self.home, self.projects_dir, args=["--month", "2026-08", "--json"], price_dir=price_dir)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        data = json.loads(result.stdout)
+        applied = data["cash_cost"]["price_tables_applied"]
+        self.assertEqual(len(applied), 1)
+        self.assertEqual(applied[0]["event_count"], 2)
+        self.assertEqual(applied[0]["fallback_event_count"], 1)
+        self.assertTrue(applied[0]["is_fallback"])
+        self.assertEqual(data["price_table_fallback_count"], 1)
+        # Text output must say "2件中1件" (partial), not claim the whole
+        # month (2件) is a fallback.
+        text_result = run_report(self.home, self.projects_dir, args=["--month", "2026-08"], price_dir=price_dir)
+        self.assertIn("2件中1件", text_result.stdout)
+
+    def test_month_report_text_output_shows_the_fallback_marker(self):
+        # レビュー指摘6: only --json was ever asserted on for this view;
+        # the text renderer builds its marker string independently
+        # (bin/ocw-meter's _report_month_standalone) and could silently
+        # diverge from the JSON without any test catching it.
+        write_transcript(self.projects_dir, "proj", "sess-july3", [
+            assistant_line("sess-july3", "m1", model="deepseek-v4-pro", timestamp="2026-07-15T10:00:00.000Z"),
+        ])
+        result = run_report(self.home, self.projects_dir, args=["--month", "2026-07"], price_dir=self.price_dir)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("price_tables_applied:", result.stdout)
+        self.assertIn("deepseek-2026-08-01 (effective 2026-08-01)", result.stdout)
+        self.assertIn("フォールバック", result.stdout)
+        # Full-month fallback (1件全て), not the mixed-case wording.
+        self.assertIn("1件全て", result.stdout)
+
+    def test_month_report_text_output_has_no_fallback_marker_when_covered(self):
+        write_transcript(self.projects_dir, "proj", "sess-aug3", [
+            assistant_line("sess-aug3", "m1", model="deepseek-v4-pro", timestamp="2026-08-05T10:00:00.000Z"),
+        ])
+        result = run_report(self.home, self.projects_dir, args=["--month", "2026-08"], price_dir=self.price_dir)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("deepseek-2026-08-01 (effective 2026-08-01)", result.stdout)
+        self.assertNotIn("フォールバック", result.stdout)
+
+
+class ReportAutoIngestTests(OcwMeterTestCase):
+    """計画書 DOC-2608081456孫2: `report` auto-runs `ingest` at the top of
+    every view (DOC-2608021229-a:440 documented this from the start, but
+    `cmd_report` never actually called it — 4 days / 11.4% of events
+    silently missing on the real machine)."""
+
+    def setUp(self):
+        super().setUp()
+        self.projects_dir = pathlib.Path(self.tmpdir.name) / "claude-projects"
+        self.projects_dir.mkdir(parents=True, exist_ok=True)
+
+    def test_report_auto_ingests_transcripts_without_an_explicit_ingest_call(self):
+        write_transcript(self.projects_dir, "proj", "sess-auto", [assistant_line("sess-auto", "m1")])
+        self.assertEqual(read_events(self.home), [])
+
+        result = run_report(self.home, self.projects_dir)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        usage_events = [e for e in read_events(self.home) if e["event_type"] == "usage.message"]
+        self.assertEqual(len(usage_events), 1)
+
+    def test_no_ingest_flag_skips_the_automatic_ingest(self):
+        write_transcript(self.projects_dir, "proj", "sess-skip", [assistant_line("sess-skip", "m1")])
+        result = run_report(self.home, self.projects_dir, args=["--no-ingest"])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(read_events(self.home), [])
+        self.assertIn("ingest (this run): skipped (--no-ingest)", result.stdout)
+        # PR #57 review round 2 finding "新規2": the "no events yet"
+        # messages must not assert anything about whether ingest ran —
+        # round 1's own fix for finding 1 made them unconditionally claim
+        # "ingest already ran automatically", which is false right here
+        # under --no-ingest. Whether it ran is the freshness footer's
+        # `ingest (this run):` line's job alone (asserted above).
+        self.assertNotIn("ingest already ran automatically", result.stdout)
+        self.assertIn("no usage.message events found in transcripts", result.stdout)
+
+        reconcile_result = run_report(self.home, self.projects_dir, args=["--reconcile", "--no-ingest"])
+        self.assertEqual(reconcile_result.returncode, 0, reconcile_result.stderr)
+        self.assertNotIn("ingest already ran automatically", reconcile_result.stdout)
+
+    def test_invalid_month_fails_before_running_the_automatic_ingest(self):
+        # PR #57 review round 1 finding 7: argument validation (a
+        # malformed --month) used to run AFTER the automatic ingest call,
+        # so a request that was always going to fail loud still wrote a
+        # live ingest-cursor.json/events first.
+        write_transcript(self.projects_dir, "proj", "sess-bad-month", [assistant_line("sess-bad-month", "m1")])
+        result = run_report(self.home, self.projects_dir, args=["--reconcile", "--month", "2026-13"])
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse((self.home / "state" / "ingest-cursor.json").exists())
+        self.assertEqual(read_events(self.home), [])
+
+    def test_auto_ingest_runs_for_every_report_view(self):
+        # 計画書「1つでも漏れると、そのビューだけ古いデータを見る」: each
+        # view gets its OWN isolated home/projects_dir so a prior view's
+        # ingest can't accidentally satisfy this one's assertion.
+        view_cases = [
+            [], ["--phase"], ["--model"], ["--role"], ["--window"],
+            ["--month", "2026-07"], ["--reconcile", "--month", "2026-07"],
+        ]
+        for i, view_args in enumerate(view_cases):
+            with self.subTest(view=view_args):
+                home = pathlib.Path(self.tmpdir.name) / f"view-home-{i}"
+                projects_dir = pathlib.Path(self.tmpdir.name) / f"view-projects-{i}"
+                projects_dir.mkdir()
+                write_transcript(projects_dir, "proj", f"sess-view-{i}", [
+                    assistant_line(f"sess-view-{i}", "m1", timestamp="2026-07-15T10:00:00.000Z"),
+                ])
+                result = run_report(home, projects_dir, args=view_args)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                usage_events = [e for e in read_events(home) if e["event_type"] == "usage.message"]
+                self.assertEqual(len(usage_events), 1, f"view {view_args} did not auto-ingest: {result.stdout}")
+
+    def test_ingest_failure_does_not_crash_report_and_is_shown_in_the_footer(self):
+        # An empty HOME makes claude_projects_dir() unable to resolve a
+        # projects directory (and OCW_METER_CLAUDE_PROJECTS_DIR is
+        # deliberately not passed) — perform_ingest's own "could not
+        # determine" refusal, exercised without needing a git-worktree
+        # storage root (report's own top-level worktree guard would
+        # short-circuit before auto-ingest ever runs for that case).
+        run_meter(["event", "run.start", "--idempotency-key", "k1"], self.home)
+        result = run_meter(["report"], self.home, extra_env={"HOME": ""})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("total events:  1", result.stdout)
+        self.assertIn("ingest (this run): failed: could not determine the Claude projects directory", result.stdout)
+
+    def test_json_output_stays_pure_json_even_when_auto_ingest_runs(self):
+        write_transcript(self.projects_dir, "proj", "sess-json", [assistant_line("sess-json", "m1")])
+        result = run_report(self.home, self.projects_dir, args=["--json"])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        summary = json.loads(result.stdout)  # raises if anything besides JSON hit stdout
+        self.assertEqual(summary["total_events"], 1)
+
+    def test_footer_shows_last_ingest_timestamp_after_a_successful_run(self):
+        write_transcript(self.projects_dir, "proj", "sess-fresh", [assistant_line("sess-fresh", "m1")])
+        result = run_report(self.home, self.projects_dir)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("last_ingest_at: unknown", result.stdout)
+        cursor = json.loads((self.home / "state" / "ingest-cursor.json").read_text(encoding="utf-8"))
+        self.assertIn("last_ingest_at", cursor)
+        # The raw RFC3339 the footer's --json field (last_ingest_at_rfc3339)
+        # must carry, unmodified, for a machine consumer (PR #57 review
+        # round 1 finding 6) — round-trips through the text footer too.
+        self.assertIn(f"last_ingest_at_rfc3339: {cursor['last_ingest_at']}", result.stdout)
+
+    def test_old_format_ingest_cursor_without_last_ingest_at_shows_unknown(self):
+        state_dir = self.home / "state"
+        state_dir.mkdir(parents=True, exist_ok=True)
+        (state_dir / "ingest-cursor.json").write_text(json.dumps({"files": {}}), encoding="utf-8")
+        result = run_meter(["report", "--no-ingest"], self.home)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("last_ingest_at: unknown", result.stdout)
+        self.assertIn("last_ingest_at_rfc3339: unknown", result.stdout)
+
+    def test_freshness_warning_only_appears_past_the_staleness_threshold(self):
+        # PR #57 review round 1 finding 4: the threshold comparison is
+        # `>=` (inclusive — see ingest_freshness_footer's comment, chosen
+        # because the plan's own wording "一定時間以上経っていたら" is
+        # inclusive). This test cannot pin the literal single-instant
+        # edge (age_seconds == INGEST_STALE_THRESHOLD_SECONDS exactly):
+        # this is a black-box subprocess test built on real wall-clock
+        # `datetime.now()`, and the round trip between writing the
+        # fixture timestamp here and `ingest_freshness_footer` reading
+        # "now" always adds strictly positive latency — so any nominal
+        # age computed here always reads back slightly HIGHER once the
+        # subprocess evaluates it, which makes `>` and `>=` behave
+        # identically in practice (verified: reverting to `>` still
+        # passes every case below). Matches this file's existing
+        # precedent for other 24h-based staleness checks
+        # (WorktreeRefusalPruningTests uses a 1h/25h margin, not an
+        # exact-instant one, for the same reason).
+        state_dir = self.home / "state"
+        state_dir.mkdir(parents=True, exist_ok=True)
+
+        def cursor_at_age(**age_kwargs):
+            ts = (datetime.now(timezone.utc) - timedelta(**age_kwargs)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+            (state_dir / "ingest-cursor.json").write_text(
+                json.dumps({"files": {}, "last_ingest_at": ts}), encoding="utf-8",
+            )
+            return run_meter(["report", "--no-ingest"], self.home)
+
+        fresh_result = cursor_at_age(minutes=5)
+        self.assertEqual(fresh_result.returncode, 0, fresh_result.stderr)
+        self.assertIn("ingest_freshness_warning: (none)", fresh_result.stdout)
+
+        just_under_result = cursor_at_age(hours=23, minutes=59)
+        self.assertEqual(just_under_result.returncode, 0, just_under_result.stderr)
+        self.assertIn("ingest_freshness_warning: (none)", just_under_result.stdout)
+
+        just_over_result = cursor_at_age(hours=24, minutes=1)
+        self.assertEqual(just_over_result.returncode, 0, just_over_result.stderr)
+        self.assertNotIn("ingest_freshness_warning: (none)", just_over_result.stdout)
+        self.assertIn("経過しています", just_over_result.stdout)
+
+        stale_result = cursor_at_age(hours=25)
+        self.assertEqual(stale_result.returncode, 0, stale_result.stderr)
+        self.assertNotIn("ingest_freshness_warning: (none)", stale_result.stdout)
+        self.assertIn("経過しています", stale_result.stdout)
+
+    def test_json_output_includes_freshness_footer_keys_for_every_view(self):
+        # PR #57 review round 1 finding 3: `footer_freshness` is `**`-
+        # expanded into 4 separate JSON summary dicts
+        # (cmd_report/_print_grouped_report/_report_month_standalone/
+        # _report_reconcile) — a dropped `**footer_freshness` in any ONE
+        # of them would otherwise go undetected, since every other
+        # existing test only checks the text footer's print lines.
+        write_transcript(self.projects_dir, "proj", "sess-json-fresh", [
+            assistant_line("sess-json-fresh", "m1", timestamp="2026-07-15T10:00:00.000Z"),
+        ])
+        freshness_keys = {"last_ingest_at", "last_ingest_at_rfc3339", "ingest_this_run", "ingest_freshness_warning"}
+        view_cases = [
+            [], ["--phase"], ["--model"], ["--role"], ["--window"],
+            ["--month", "2026-07"], ["--reconcile", "--month", "2026-07"],
+        ]
+        for view_args in view_cases:
+            with self.subTest(view=view_args):
+                result = run_report(self.home, self.projects_dir, args=[*view_args, "--json"])
+                self.assertEqual(result.returncode, 0, result.stderr)
+                summary = json.loads(result.stdout)
+                missing = freshness_keys - summary.keys()
+                self.assertFalse(missing, f"view {view_args} --json is missing freshness keys: {missing}")
+
+
 class SymlinkInvocationTests(OcwMeterTestCase):
     """ADR DOC-2608040229 §2.6: deploy.sh installs this script as a
     symlink (e.g. ~/bin/ocw-meter). `dirname` on an unresolved
@@ -1973,6 +2669,21 @@ class ReportReconcileTests(OcwMeterTestCase):
         self.assertEqual(data["transcript_lines_quarantined"], 1)
         self.assertEqual(data["quarantined_lines"], 0)
 
+    def test_reconcile_with_month_works_outside_any_git_repo(self):
+        # PR #57 review round 2 finding "新規1": moving the repo-
+        # resolution-needed check earlier (round 1 finding 7, to run
+        # before the automatic-ingest side effect) accidentally exposed
+        # `--reconcile --month` to it for the first time — previously
+        # `_report_reconcile`'s early return made the check dead code on
+        # this path. `_report_reconcile` never takes (or needs) a `repo`
+        # argument at all, so this combination must keep working from
+        # outside any git repo, exactly like it always has (this is a
+        # documented workflow — docs/reference/DOC-2608021229-b_...).
+        no_git_dir = pathlib.Path(self.tmpdir.name) / "not-a-git-repo-reconcile"
+        no_git_dir.mkdir()
+        result = run_meter(["report", "--reconcile", "--month", "2026-07"], self.home, cwd=no_git_dir)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
 
 CLAUDE_STATUSLINE_SAMPLE = {
     "session_id": "756f06ff-28b8-412d-92db-cbd9dcece939",
@@ -2147,6 +2858,13 @@ class SnapshotQuotaBasicsTests(OcwMeterTestCase):
         self.assertEqual(event["raw_ref"], str(raw_files[0]))
 
     def test_git_worktree_home_refuses_write_but_still_prints_display(self):
+        # 孫1 (計画書 DOC-2608081456【4】): this test deliberately does NOT
+        # pass its own extra_env={"HOME": ...} — it exists specifically to
+        # exercise run_snapshot_quota's DEFAULT isolation (see
+        # _default_home_for above). Before that fix, the meter.error
+        # fallback this triggers landed in this developer's real
+        # ~/.local/state/ocw-meter every single test run.
+        real_home_before = real_ocw_meter_home_contamination_fingerprint()
         repo_dir = pathlib.Path(self.tmpdir.name) / "repo"
         subprocess.run(["git", "init", "-q", str(repo_dir)], check=True)
         bad_home = repo_dir / "ocw-meter-home"
@@ -2155,6 +2873,424 @@ class SnapshotQuotaBasicsTests(OcwMeterTestCase):
         self.assertEqual(result.stdout.strip(), "5h:37% 7d:12% ctx:24%")
         self.assertIn("resolves inside a Git worktree", result.stderr)
         self.assertFalse((bad_home / "events").exists())
+
+        # The refusal's meter.error self-diagnostic must land under the
+        # isolated $HOME the helper substituted for THIS call (derived
+        # from bad_home — round-1 review finding 9's per-call
+        # isolation), not the real one.
+        fallback_root = pathlib.Path(_default_home_for(bad_home)) / ".local" / "state" / "ocw-meter"
+        diagnostics = read_meter_errors(fallback_root)
+        self.assertTrue(
+            any(d["stage"] == "storage_home_inside_git_worktree" for d in diagnostics),
+            "expected the worktree-refusal meter.error under the isolated $HOME fallback",
+        )
+        self.assertEqual(real_ocw_meter_home_contamination_fingerprint(), real_home_before)
+
+
+class HomeIsolationContractTests(OcwMeterTestCase):
+    """孫1 (計画書 DOC-2608081456【4】): a contract test for run_meter/
+    run_snapshot_quota themselves, not for ocw-meter — any test in this
+    file that forgets to override $HOME must still never touch the
+    developer's real ~/.local/state/ocw-meter, because the helpers
+    default it to a throwaway directory unless a test opts out."""
+
+    def test_run_snapshot_quota_never_touches_the_real_home_without_an_explicit_override(self):
+        before = real_ocw_meter_home_contamination_fingerprint()
+        repo_dir = pathlib.Path(self.tmpdir.name) / "repo-for-home-isolation-contract"
+        subprocess.run(["git", "init", "-q", str(repo_dir)], check=True)
+        bad_home = repo_dir / "ocw-meter-home"
+        # Triggers the one code path (worktree-refusal fallback) that
+        # ever reads $HOME at all — anything less would pass trivially.
+        result = run_snapshot_quota(json.dumps(CLAUDE_STATUSLINE_SAMPLE), bad_home)
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(real_ocw_meter_home_contamination_fingerprint(), before)
+
+    def test_run_meter_never_touches_the_real_home_without_an_explicit_override(self):
+        before = real_ocw_meter_home_contamination_fingerprint()
+        repo_dir = pathlib.Path(self.tmpdir.name) / "repo-for-home-isolation-contract-2"
+        subprocess.run(["git", "init", "-q", str(repo_dir)], check=True)
+        bad_home = repo_dir / "ocw-meter-home"
+        result = run_meter(["event", "run.start", "--idempotency-key", "k1"], bad_home)
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(real_ocw_meter_home_contamination_fingerprint(), before)
+
+
+def _iso(dt):
+    return dt.strftime("%Y-%m-%dT%H:%M:%S.") + f"{dt.microsecond // 1000:03d}Z"
+
+
+def _write_worktree_refusal_state(home, entries):
+    # The refusal cache lives at the DEFAULT storage root
+    # ($HOME/.local/state/ocw-meter), not at $HOME itself — mirrors
+    # default_storage_root() in bin/ocw-meter.
+    state_dir = pathlib.Path(home) / ".local" / "state" / "ocw-meter" / "state"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    path = state_dir / "quota-worktree-refusal.json"
+    path.write_text(json.dumps(entries), encoding="utf-8")
+    return path
+
+
+class WorktreeRefusalPruningTests(OcwMeterTestCase):
+    """孫1 (計画書 DOC-2608081456【6】): quota-worktree-refusal.json used to
+    only drop entries older than QUOTA_SESSION_STATE_MAX_AGE_SECONDS (24h)
+    at the moment a NEW refusal was recorded — once refusals stopped
+    happening, stale entries sat in the file forever (37 of them, all
+    >24h old, found on this machine's real store). Pruning must now also
+    happen on every READ, so a normal (non-refusing) `snapshot-quota`
+    call cleans them up too."""
+
+    def _fresh_default_home(self):
+        # The refusal cache always lives at the DEFAULT ($HOME-derived)
+        # root, never at OCW_METER_HOME itself (see
+        # load_and_prune_worktree_refusal_state's docstring in
+        # bin/ocw-meter) — this must be a directory distinct from
+        # self.home (OCW_METER_HOME) for that caching code path to
+        # engage at all.
+        default_home = pathlib.Path(self.tmpdir.name) / "fake-home-for-pruning"
+        default_home.mkdir()
+        return default_home
+
+    def _call(self, default_home):
+        return run_snapshot_quota(
+            json.dumps(CLAUDE_STATUSLINE_SAMPLE),
+            self.home,
+            extra_env={"HOME": str(default_home), "OCW_METER_QUOTA_INTERVAL": "0"},
+        )
+
+    def test_stale_entries_are_pruned_when_ocw_meter_home_is_unset_matching_the_default_root(self):
+        # round-1 review finding 1: THE single most common real
+        # configuration is OCW_METER_HOME unset entirely, in which case
+        # bin/ocw-meter's own bash wrapper defaults it to
+        # `$HOME/.local/state/ocw-meter` — i.e. `storage_root() ==
+        # default_storage_root()`. An earlier version of the read-time
+        # pruning fix additionally required the two to DIFFER before
+        # even loading (and therefore pruning) the file, which silently
+        # skipped pruning in exactly this configuration — the one this
+        # machine's real 37 stale entries needed. This reproduces that
+        # configuration directly (OCW_METER_HOME left unset, unlike
+        # every other test in this class, which always sets it via
+        # run_snapshot_quota's `home` argument).
+        home = pathlib.Path(self.tmpdir.name) / "home-for-unset-ocw-meter-home"
+        home.mkdir()
+        old_ts = _iso(datetime.now(timezone.utc) - timedelta(hours=25))
+        state_path = _write_worktree_refusal_state(home, {"/some/old/bad/root": old_ts})
+
+        env = dict(os.environ)
+        env.pop("OCW_METER_HOME", None)
+        env["HOME"] = str(home)
+        env["OCW_METER_QUOTA_INTERVAL"] = "0"
+        for key in ("OCW_RUN_ID", "OCW_ROLE", "HERDR_WORKSPACE_ID", "HERDR_PANE_ID"):
+            env.pop(key, None)
+        result = subprocess.run(
+            [str(OCW_METER), "snapshot-quota"],
+            cwd=str(REPO_ROOT),
+            env=env,
+            input=json.dumps(CLAUDE_STATUSLINE_SAMPLE),
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(json.loads(state_path.read_text(encoding="utf-8")), {})
+
+    def test_stale_entries_are_pruned_on_a_normal_non_refusing_call(self):
+        default_home = self._fresh_default_home()
+        old_ts = _iso(datetime.now(timezone.utc) - timedelta(hours=25))
+        state_path = _write_worktree_refusal_state(default_home, {"/some/old/bad/root": old_ts})
+
+        result = self._call(default_home)
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(json.loads(state_path.read_text(encoding="utf-8")), {})
+
+    def test_entries_within_24h_are_kept(self):
+        default_home = self._fresh_default_home()
+        recent_ts = _iso(datetime.now(timezone.utc) - timedelta(hours=1))
+        state_path = _write_worktree_refusal_state(default_home, {"/some/recent/bad/root": recent_ts})
+
+        result = self._call(default_home)
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(
+            json.loads(state_path.read_text(encoding="utf-8")),
+            {"/some/recent/bad/root": recent_ts},
+        )
+
+    def test_stale_and_fresh_entries_mixed_only_stale_ones_are_dropped(self):
+        default_home = self._fresh_default_home()
+        old_ts = _iso(datetime.now(timezone.utc) - timedelta(hours=25))
+        recent_ts = _iso(datetime.now(timezone.utc) - timedelta(hours=1))
+        state_path = _write_worktree_refusal_state(
+            default_home, {"/old/root": old_ts, "/recent/root": recent_ts}
+        )
+
+        result = self._call(default_home)
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(
+            json.loads(state_path.read_text(encoding="utf-8")),
+            {"/recent/root": recent_ts},
+        )
+
+    def test_mtime_is_unchanged_when_nothing_needs_pruning(self):
+        # No wasted write-back on the common case: snapshot-quota is
+        # called on essentially every statusLine tick (~60s throttle), so
+        # a machine with zero or all-fresh refusal entries must not pay
+        # for a rewrite on every single call.
+        default_home = self._fresh_default_home()
+        recent_ts = _iso(datetime.now(timezone.utc) - timedelta(hours=1))
+        state_path = _write_worktree_refusal_state(default_home, {"/recent/root": recent_ts})
+        mtime_before = state_path.stat().st_mtime_ns
+
+        result = self._call(default_home)
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(state_path.stat().st_mtime_ns, mtime_before)
+
+
+def _write_meter_errors(home, event_dicts):
+    state_dir = pathlib.Path(home) / "state"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    path = state_dir / "meter-errors.jsonl"
+    path.write_text("".join(json.dumps(d, ensure_ascii=False) + "\n" for d in event_dicts), encoding="utf-8")
+    return path
+
+
+def _write_refusal_state_at_default_root(ocw_meter_home, entries):
+    # round-1 review finding 2: quota-worktree-refusal.json is ALWAYS at
+    # the DEFAULT ($HOME-derived) root, never under a custom
+    # OCW_METER_HOME — same as WorktreeRefusalPruningTests'
+    # _write_worktree_refusal_state above. run_meter (used without an
+    # explicit extra_env={"HOME": ...} override here) defaults $HOME to
+    # `_default_home_for(ocw_meter_home)`, so that is where
+    # prune-diagnostics will actually look.
+    default_home = _default_home_for(ocw_meter_home)
+    state_dir = pathlib.Path(default_home) / ".local" / "state" / "ocw-meter" / "state"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    path = state_dir / "quota-worktree-refusal.json"
+    path.write_text(json.dumps(entries), encoding="utf-8")
+    return path
+
+
+class PruneDiagnosticsTests(OcwMeterTestCase):
+    """孫1 (計画書 DOC-2608081456【4】の後始末): `ocw-meter prune-diagnostics`
+    cleans up state/meter-errors.jsonl and state/quota-worktree-
+    refusal.json only, dry-run by default."""
+
+    def _seed(self):
+        old_ts = _iso(datetime.now(timezone.utc) - timedelta(days=31))
+        new_ts = _iso(datetime.now(timezone.utc) - timedelta(days=1))
+        errors_path = _write_meter_errors(
+            self.home,
+            [
+                {
+                    "schema_version": 1, "event_type": "meter.error",
+                    "idempotency_key": "meter-error:storage_home_inside_git_worktree:old",
+                    "ts": old_ts, "stage": "storage_home_inside_git_worktree", "completeness": "unknown",
+                },
+                {
+                    "schema_version": 1, "event_type": "meter.error",
+                    "idempotency_key": "meter-error:storage_home_inside_git_worktree:new",
+                    "ts": new_ts, "stage": "storage_home_inside_git_worktree", "completeness": "unknown",
+                },
+            ],
+        )
+        refusal_path = _write_refusal_state_at_default_root(
+            self.home, {"/old/root": old_ts, "/new/root": new_ts}
+        )
+        return old_ts, new_ts, errors_path, refusal_path
+
+    def test_dry_run_default_removes_nothing_but_reports_counts(self):
+        old_ts, new_ts, errors_path, refusal_path = self._seed()
+
+        result = run_meter(["prune-diagnostics"], self.home)
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("dry-run", result.stdout)
+        self.assertIn("would remove 1, kept 1", result.stdout)
+
+        self.assertEqual(len(errors_path.read_text(encoding="utf-8").splitlines()), 2)
+        self.assertEqual(len(json.loads(refusal_path.read_text(encoding="utf-8"))), 2)
+
+    def test_apply_removes_only_old_entries(self):
+        old_ts, new_ts, errors_path, refusal_path = self._seed()
+
+        result = run_meter(["prune-diagnostics", "--apply"], self.home)
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("applied", result.stdout)
+        self.assertIn("removed 1, kept 1", result.stdout)
+
+        remaining_errors = [
+            json.loads(line) for line in errors_path.read_text(encoding="utf-8").splitlines() if line.strip()
+        ]
+        self.assertEqual(len(remaining_errors), 1)
+        self.assertEqual(remaining_errors[0]["ts"], new_ts)
+
+        self.assertEqual(json.loads(refusal_path.read_text(encoding="utf-8")), {"/new/root": new_ts})
+
+    def test_older_than_overrides_the_default_retention(self):
+        old_ts, new_ts, errors_path, refusal_path = self._seed()
+        # new_ts is 1 day old; --older-than 0 makes even that eligible.
+        result = run_meter(["prune-diagnostics", "--older-than", "0", "--apply"], self.home)
+        self.assertEqual(result.returncode, 0)
+        # Every entry was eligible, so the emptied meter-errors.jsonl is
+        # removed outright rather than left behind as a 0-byte file.
+        self.assertFalse(errors_path.exists())
+        self.assertEqual(json.loads(refusal_path.read_text(encoding="utf-8")), {})
+
+    def test_events_directory_is_never_touched(self):
+        old_ts, _new_ts, _errors_path, _refusal_path = self._seed()
+        # A real event, well outside the retention window, in events/ —
+        # must survive byte-for-byte. Deleting observation events is
+        # `prune`'s territory (deliberately unimplemented); this
+        # subcommand must never touch events/*.jsonl.
+        run_meter(["event", "run.start", "--idempotency-key", "k1", "--ts", old_ts], self.home)
+        events_dir = self.home / "events"
+        before = {p.name: p.read_bytes() for p in events_dir.glob("*.jsonl")}
+        self.assertTrue(before)
+
+        result = run_meter(["prune-diagnostics", "--apply"], self.home)
+        self.assertEqual(result.returncode, 0)
+
+        after = {p.name: p.read_bytes() for p in events_dir.glob("*.jsonl")}
+        self.assertEqual(before, after)
+
+    def test_missing_target_files_report_zero_and_exit_zero(self):
+        result = run_meter(["prune-diagnostics"], self.home)
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("would remove 0, kept 0", result.stdout)
+
+        result_apply = run_meter(["prune-diagnostics", "--apply"], self.home)
+        self.assertEqual(result_apply.returncode, 0)
+        self.assertIn("removed 0, kept 0", result_apply.stdout)
+
+    def test_corrupt_refusal_json_is_reported_as_corrupt_not_silently_treated_as_empty(self):
+        # round-1 review finding 8: silently treating a corrupt file as
+        # {} (load_json_state_file's normal, correct behavior for every
+        # OTHER caller) let this subcommand report "kept 0" for a file
+        # that, in fact, was still sitting there unreadable. The dry-run
+        # output must say so, and --apply must repair it (replace with a
+        # valid empty state), not just avoid crashing.
+        default_home = _default_home_for(self.home)
+        refusal_path = pathlib.Path(default_home) / ".local" / "state" / "ocw-meter" / "state" / "quota-worktree-refusal.json"
+        refusal_path.parent.mkdir(parents=True, exist_ok=True)
+        refusal_path.write_text("{not valid json", encoding="utf-8")
+
+        result = run_meter(["prune-diagnostics"], self.home)
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("could not parse", result.stdout)
+        # Untouched in dry-run.
+        self.assertEqual(refusal_path.read_text(encoding="utf-8"), "{not valid json")
+
+        result_apply = run_meter(["prune-diagnostics", "--apply"], self.home)
+        self.assertEqual(result_apply.returncode, 0)
+        self.assertIn("replaced with an empty state", result_apply.stdout)
+        self.assertEqual(json.loads(refusal_path.read_text(encoding="utf-8")), {})
+
+    def test_meter_errors_under_the_default_root_fallback_are_also_cleaned(self):
+        # round-1 review finding 2: emit_meter_error falls back to the
+        # DEFAULT ($HOME-derived) root whenever OCW_METER_HOME itself is
+        # refused for resolving inside a Git worktree — this subcommand
+        # must reach diagnostics stored there too, not only under
+        # OCW_METER_HOME (which, in this exact scenario, cannot hold
+        # ANY of ocw-meter's own files at all).
+        repo_dir = pathlib.Path(self.tmpdir.name) / "repo-for-default-root-fallback"
+        subprocess.run(["git", "init", "-q", str(repo_dir)], check=True)
+        bad_home = repo_dir / "ocw-meter-home"
+        fake_home = pathlib.Path(self.tmpdir.name) / "fake-home-for-default-root-fallback"
+        fake_home.mkdir()
+        old_ts = _iso(datetime.now(timezone.utc) - timedelta(days=31))
+        errors_path = _write_meter_errors(
+            fake_home / ".local" / "state" / "ocw-meter",
+            [
+                {
+                    "schema_version": 1, "event_type": "meter.error",
+                    "idempotency_key": "meter-error:storage_home_inside_git_worktree:old",
+                    "ts": old_ts, "stage": "storage_home_inside_git_worktree", "completeness": "unknown",
+                },
+            ],
+        )
+
+        result = run_meter(["prune-diagnostics", "--apply"], bad_home, extra_env={"HOME": str(fake_home)})
+        self.assertEqual(result.returncode, 0)
+        self.assertFalse(errors_path.exists())
+
+    def test_trailing_slash_ocw_meter_home_does_not_double_count_meter_errors(self):
+        # round-2 review finding 2: storage_root() and
+        # default_storage_root() were deduped by bare string equality —
+        # a trailing slash on OCW_METER_HOME made the SAME real
+        # directory look like two distinct roots, so meter-errors.jsonl
+        # got read (and reported) twice, and dry-run/--apply disagreed.
+        fake_home = pathlib.Path(self.tmpdir.name) / "fake-home-for-trailing-slash"
+        fake_home.mkdir()
+        default_root = fake_home / ".local" / "state" / "ocw-meter"
+        old_ts = _iso(datetime.now(timezone.utc) - timedelta(days=31))
+        errors_path = _write_meter_errors(
+            default_root,
+            [
+                {
+                    "schema_version": 1, "event_type": "meter.error",
+                    "idempotency_key": "meter-error:storage_home_inside_git_worktree:old",
+                    "ts": old_ts, "stage": "storage_home_inside_git_worktree", "completeness": "unknown",
+                },
+            ],
+        )
+        # Same real directory as default_storage_root() would compute,
+        # spelled with a trailing slash as OCW_METER_HOME.
+        ocw_meter_home_with_slash = str(default_root) + "/"
+
+        result = run_meter(["prune-diagnostics"], ocw_meter_home_with_slash, extra_env={"HOME": str(fake_home)})
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("would remove 1, kept 0", result.stdout)
+
+        result_apply = run_meter(
+            ["prune-diagnostics", "--apply"], ocw_meter_home_with_slash, extra_env={"HOME": str(fake_home)}
+        )
+        self.assertEqual(result_apply.returncode, 0)
+        self.assertIn("removed 1, kept 0", result_apply.stdout)
+        # The only entry was dropped, so the file is removed outright
+        # (same convention as an emptied meter-errors.jsonl elsewhere) —
+        # if it had instead been double-counted, this would still exist
+        # with the second, incorrectly-kept "copy" of the entry.
+        self.assertFalse(errors_path.exists())
+
+    def test_per_root_breakdown_shown_when_both_roots_have_meter_errors(self):
+        # round-2 review finding 4: once meter-errors.jsonl could live
+        # under either root, the aggregate count alone no longer says
+        # which physical file(s) actually get rewritten.
+        fake_home = pathlib.Path(self.tmpdir.name) / "fake-home-for-breakdown"
+        fake_home.mkdir()
+        default_root = fake_home / ".local" / "state" / "ocw-meter"
+        old_ts = _iso(datetime.now(timezone.utc) - timedelta(days=31))
+        _write_meter_errors(
+            default_root,
+            [
+                {
+                    "schema_version": 1, "event_type": "meter.error",
+                    "idempotency_key": "meter-error:storage_home_inside_git_worktree:default",
+                    "ts": old_ts, "stage": "storage_home_inside_git_worktree", "completeness": "unknown",
+                },
+            ],
+        )
+        _write_meter_errors(
+            self.home,
+            [
+                {
+                    "schema_version": 1, "event_type": "meter.error",
+                    "idempotency_key": "meter-error:write_event_lock_timeout:custom",
+                    "ts": old_ts, "stage": "write_event_lock_timeout", "completeness": "unknown",
+                },
+            ],
+        )
+
+        result = run_meter(["prune-diagnostics"], self.home, extra_env={"HOME": str(fake_home)})
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("would remove 2, kept 0", result.stdout)
+        self.assertIn(str(pathlib.Path(default_root).resolve()), result.stdout)
+        self.assertIn(str(pathlib.Path(self.home).resolve()), result.stdout)
+
+    def test_negative_older_than_is_rejected(self):
+        result = run_meter(["prune-diagnostics", "--older-than", "-1"], self.home)
+        self.assertNotEqual(result.returncode, 0)
+
+    def test_non_numeric_older_than_is_rejected(self):
+        result = run_meter(["prune-diagnostics", "--older-than", "not-a-number"], self.home)
+        self.assertNotEqual(result.returncode, 0)
 
 
 class SnapshotQuotaThrottleTests(OcwMeterTestCase):
@@ -2802,6 +3938,271 @@ class ReportMonthStandaloneTests(OcwMeterTestCase):
         self.assertNotEqual(result.returncode, 0)
 
 
+class ReportListPriceEquivTests(OcwMeterTestCase):
+    """docs/planning/DOC-2608081456_..._計画.md 孫4プロンプト:
+    `quota.sample`'s `session_cost_usd` aggregated into
+    `list_price_equiv_usd` by `report_capacity_list_price()`."""
+
+    def _quota_sample(self, idem_key, session_id, cost, ts, provider="anthropic", extra=None):
+        args = ["event", "quota.sample", "--idempotency-key", idem_key,
+                "--plan-source", "statusline", "--provider", provider, "--ts", ts]
+        if session_id is not None:
+            args += ["--session-id", session_id]
+        if cost is not None:
+            args += ["--session-cost-usd", str(cost)]
+        if extra:
+            args += extra
+        return run_meter(args, self.home)
+
+    # -- 罠3: 正の差分の総和。max() ではない --
+
+    def test_non_monotonic_session_sums_positive_deltas_not_max(self):
+        # 10 -> 20 -> 5 -> 15: max() だと20だが、正しくは
+        # 10 + (20-10) + max(0, 5-20) + (15-5) = 10+10+0+10 = 30。
+        for i, (cost, minute) in enumerate([(10, "00"), (20, "01"), (5, "02"), (15, "03")]):
+            self._quota_sample(f"q{i}", "sess-nonmono", cost, f"2026-08-05T09:{minute}:00.000Z")
+        data = json.loads(run_meter(["report", "--month", "2026-08", "--json"], self.home).stdout)
+        self.assertAlmostEqual(data["capacity"]["list_price_equiv_usd"], 30.0)
+
+    def test_monotonic_session_equals_final_value(self):
+        for i, (cost, minute) in enumerate([(5, "00"), (10, "01"), (20, "02")]):
+            self._quota_sample(f"q{i}", "sess-mono", cost, f"2026-08-05T09:{minute}:00.000Z")
+        data = json.loads(run_meter(["report", "--month", "2026-08", "--json"], self.home).stdout)
+        self.assertAlmostEqual(data["capacity"]["list_price_equiv_usd"], 20.0)
+
+    def test_single_sample_session_uses_its_value_as_is(self):
+        self._quota_sample("q1", "sess-single", 7.5, "2026-08-05T09:00:00.000Z")
+        data = json.loads(run_meter(["report", "--month", "2026-08", "--json"], self.home).stdout)
+        self.assertAlmostEqual(data["capacity"]["list_price_equiv_usd"], 7.5)
+
+    # -- 罠2: deepseek混入除外 --
+
+    def test_deepseek_session_cost_is_fully_excluded(self):
+        self._quota_sample("q1", "sess-anthropic", 12.0, "2026-08-05T09:00:00.000Z", provider="anthropic")
+        self._quota_sample("q2", "sess-deepseek", 93.35, "2026-08-05T09:01:00.000Z", provider="deepseek")
+        data = json.loads(run_meter(["report", "--month", "2026-08", "--json"], self.home).stdout)
+        # 93.35 が1セントも混じっていないことを、合計が anthropic 分の
+        # 12.0 ちょうどであることで確認する。
+        self.assertAlmostEqual(data["capacity"]["list_price_equiv_usd"], 12.0)
+
+    def test_rate_limits_less_deepseek_shaped_samples_are_excluded(self):
+        # 罠2は「providerフィールドが deepseek 文字列であること」ではなく
+        # 「rate_limitsを持たない実際のDeepSeek/claude-ds形状のstatusLine
+        # JSONが、その書き込み経路(snapshot-quota)を通って provider を
+        # 正しく推論され、結果として除外されること」を確認する必要がある
+        # (round-1レビュー指摘4: 直接 --provider を叩くだけのテストは
+        # rate_limits の有無がproviderに効かなくなっても緑のままだった)。
+        self._quota_sample("q1", "sess-a", 1.0, "2026-08-05T09:00:00.000Z", provider="anthropic")
+        run_snapshot_quota(json.dumps({
+            "session_id": "sess-ds-shaped", "cwd": "/tmp",
+            "model": {"id": "deepseek-v4-pro[1m]"},
+            "cost": {"total_cost_usd": 999.0},
+        }), self.home)
+        data = json.loads(run_meter(["report", "--month", "2026-08", "--json"], self.home).stdout)
+        self.assertAlmostEqual(data["capacity"]["list_price_equiv_usd"], 1.0)
+        self.assertEqual(data["capacity"]["list_price_equiv_excluded_deepseek_count"], 1)
+
+    def test_provider_unresolved_samples_are_excluded_and_counted_separately(self):
+        # round-1レビュー指摘3: model名もrate_limitsも無いサンプルは
+        # provider: null で書かれる(deepseekと判定されたわけではない)。
+        # anthropicとして合算してはいけないが、除外したこと自体は
+        # deepseekの除外とは別カウンタで報告する。
+        self._quota_sample("q1", "sess-a", 1.0, "2026-08-05T09:00:00.000Z", provider="anthropic")
+        run_snapshot_quota(json.dumps({
+            "session_id": "sess-unresolved", "cwd": "/tmp",
+            "cost": {"total_cost_usd": 999.0},
+        }), self.home)
+        event = next(e for e in read_events(self.home) if e["session_id"] == "sess-unresolved")
+        self.assertIsNone(event["provider"])
+        data = json.loads(run_meter(["report", "--month", "2026-08", "--json"], self.home).stdout)
+        self.assertAlmostEqual(data["capacity"]["list_price_equiv_usd"], 1.0)
+        self.assertEqual(data["capacity"]["list_price_equiv_excluded_other_provider_count"], 1)
+        self.assertEqual(data["capacity"]["list_price_equiv_excluded_deepseek_count"], 0)
+
+    # -- round-1レビュー指摘1: セッションがスコープをまたぐと持ち越し分を
+    # 二重計上してはいけない --
+
+    def test_window_scoped_session_does_not_double_count_carryover_from_a_prior_window(self):
+        # セッションS1: W1で 10 -> 20、W2で 30 -> 40。
+        # 真の消費は W1=20, W2=20 (合計40)。バグ版はW2の初項に30を
+        # まるごと足すため W2=40 になり、合計が60に膨らむ。
+        self._quota_sample("q1", "sess-carry", 10, "2026-08-05T09:00:00.000Z", extra=["--window-id", "winA"])
+        self._quota_sample("q2", "sess-carry", 20, "2026-08-05T09:01:00.000Z", extra=["--window-id", "winA"])
+        self._quota_sample("q3", "sess-carry", 30, "2026-08-05T10:00:00.000Z", extra=["--window-id", "winB"])
+        self._quota_sample("q4", "sess-carry", 40, "2026-08-05T10:01:00.000Z", extra=["--window-id", "winB"])
+        data = json.loads(run_meter(["report", "--window", "--json"], self.home).stdout)
+        self.assertAlmostEqual(data["by_window"]["winA"]["list_price_equiv_usd"], 20.0)
+        self.assertAlmostEqual(data["by_window"]["winB"]["list_price_equiv_usd"], 20.0)
+
+    def test_pr_scoped_session_does_not_double_count_carryover_from_a_prior_pr(self):
+        # セッションS1: PR#301で 10 -> 20、PR#302で 30 -> 45。
+        # 真の消費は #301=20, #302=25。
+        run_meter(["event", "run.start", "--idempotency-key", "r301", "--run-id", "run-301",
+                   "--ts", "2026-08-05T09:00:00.000Z"], self.home)
+        run_meter(["bind-pr", "--run", "run-301", "--pr", "301"], self.home)
+        run_meter(["event", "run.start", "--idempotency-key", "r302", "--run-id", "run-302",
+                   "--ts", "2026-08-05T10:00:00.000Z"], self.home)
+        run_meter(["bind-pr", "--run", "run-302", "--pr", "302"], self.home)
+        self._quota_sample("q1", "sess-carry-pr", 10, "2026-08-05T09:00:00.000Z",
+                            extra=["--run-id", "run-301", "--pr-number", "301"])
+        self._quota_sample("q2", "sess-carry-pr", 20, "2026-08-05T09:01:00.000Z",
+                            extra=["--run-id", "run-301", "--pr-number", "301"])
+        self._quota_sample("q3", "sess-carry-pr", 30, "2026-08-05T10:00:00.000Z",
+                            extra=["--run-id", "run-302", "--pr-number", "302"])
+        self._quota_sample("q4", "sess-carry-pr", 45, "2026-08-05T10:01:00.000Z",
+                            extra=["--run-id", "run-302", "--pr-number", "302"])
+        data301 = json.loads(run_meter(["report", "--pr", "301", "--json"], self.home).stdout)
+        data302 = json.loads(run_meter(["report", "--pr", "302", "--json"], self.home).stdout)
+        self.assertAlmostEqual(data301["pr_detail"]["list_price_equiv_usd"], 20.0)
+        self.assertAlmostEqual(data302["pr_detail"]["list_price_equiv_usd"], 25.0)
+
+    def test_window_and_pr_filter_combined_does_not_double_count_carryover(self):
+        # round-2レビュー持ち越し指摘: セッションS1が W1/PR#101(10->20)、
+        # W2/PR#102(30->45) とまたぐケースで、`--window` 単体・`--pr` 単体
+        # はround-1の修正で直ったが、`--window --pr <n>` の併用だけ
+        # report_by_window() が自分の受け取った引数(PRで絞られた
+        # filtered)からquota_contributionsを計算していたため、
+        # まったく同じ二重計上が残っていた。真の消費は #102=25。
+        run_meter(["event", "run.start", "--idempotency-key", "r101", "--run-id", "run-101",
+                   "--ts", "2026-08-05T09:00:00.000Z"], self.home)
+        run_meter(["bind-pr", "--run", "run-101", "--pr", "101"], self.home)
+        run_meter(["event", "run.start", "--idempotency-key", "r102", "--run-id", "run-102",
+                   "--ts", "2026-08-05T10:00:00.000Z"], self.home)
+        run_meter(["bind-pr", "--run", "run-102", "--pr", "102"], self.home)
+        self._quota_sample("q1", "sess-carry-both", 10, "2026-08-05T09:00:00.000Z",
+                            extra=["--run-id", "run-101", "--pr-number", "101", "--window-id", "winX"])
+        self._quota_sample("q2", "sess-carry-both", 20, "2026-08-05T09:01:00.000Z",
+                            extra=["--run-id", "run-101", "--pr-number", "101", "--window-id", "winX"])
+        self._quota_sample("q3", "sess-carry-both", 30, "2026-08-05T10:00:00.000Z",
+                            extra=["--run-id", "run-102", "--pr-number", "102", "--window-id", "winY"])
+        self._quota_sample("q4", "sess-carry-both", 45, "2026-08-05T10:01:00.000Z",
+                            extra=["--run-id", "run-102", "--pr-number", "102", "--window-id", "winY"])
+        data = json.loads(run_meter(["report", "--window", "--pr", "102", "--json"], self.home).stdout)
+        self.assertAlmostEqual(data["by_window"]["winY"]["list_price_equiv_usd"], 25.0)
+
+    def test_month_view_still_sums_the_whole_session_across_windows(self):
+        # 上のwindowテストと同じセッションでも、--monthはウィンドウを
+        # またいでも変わらず正しい合計(40)を返す(こちらは元々スコープが
+        # 月全体なのでバグの対象外だったことの回帰確認)。
+        self._quota_sample("q1", "sess-carry-month", 10, "2026-08-05T09:00:00.000Z", extra=["--window-id", "winA"])
+        self._quota_sample("q2", "sess-carry-month", 20, "2026-08-05T09:01:00.000Z", extra=["--window-id", "winA"])
+        self._quota_sample("q3", "sess-carry-month", 30, "2026-08-05T10:00:00.000Z", extra=["--window-id", "winB"])
+        self._quota_sample("q4", "sess-carry-month", 40, "2026-08-05T10:01:00.000Z", extra=["--window-id", "winB"])
+        data = json.loads(run_meter(["report", "--month", "2026-08", "--json"], self.home).stdout)
+        self.assertAlmostEqual(data["capacity"]["list_price_equiv_usd"], 40.0)
+
+    # -- round-1レビュー指摘5: null と 下限 は同時に成立しない --
+
+    def test_is_lower_bound_is_null_not_true_when_value_is_null(self):
+        data = json.loads(run_meter(["report", "--month", "2026-08", "--json"], self.home).stdout)
+        self.assertIsNone(data["capacity"]["list_price_equiv_usd"])
+        self.assertIsNone(data["capacity"]["list_price_equiv_is_lower_bound"])
+
+    # -- round-1レビュー指摘2: --prのテキスト出力でも除外件数を出す --
+
+    def test_pr_text_output_includes_exclusion_counts(self):
+        run_meter(["event", "run.start", "--idempotency-key", "r400", "--run-id", "run-400",
+                   "--ts", "2026-08-05T09:00:00.000Z"], self.home)
+        run_meter(["bind-pr", "--run", "run-400", "--pr", "400"], self.home)
+        run_meter(["event", "quota.sample", "--idempotency-key", "q1",
+                   "--plan-source", "statusline", "--provider", "anthropic",
+                   "--session-cost-usd", "5.0", "--run-id", "run-400", "--pr-number", "400",
+                   "--ts", "2026-08-05T09:05:00.000Z"], self.home)
+        result = run_meter(["report", "--pr", "400"], self.home)
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("list_price_equiv_excluded_no_session_id_count:", result.stdout)
+        self.assertIn("list_price_equiv_excluded_null_cost_count:", result.stdout)
+        self.assertIn("list_price_equiv_excluded_deepseek_count:", result.stdout)
+        self.assertIn("list_price_equiv_excluded_other_provider_count:", result.stdout)
+
+    # -- round-1レビュー指摘6: --windowのテキスト出力で説明文を行ごとに繰り返さない --
+
+    def test_window_text_output_prints_the_note_once_not_per_row(self):
+        self._quota_sample("q1", "sess-win-a", 1.0, "2026-08-05T09:00:00.000Z", extra=["--window-id", "winA"])
+        self._quota_sample("q2", "sess-win-b", 2.0, "2026-08-05T10:00:00.000Z", extra=["--window-id", "winB"])
+        result = run_meter(["report", "--window"], self.home)
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(result.stdout.count("list_price_equiv_note:"), 1)
+
+    # -- 表示と境界 --
+
+    def test_list_price_equiv_is_a_separate_key_from_cash_cost(self):
+        self._quota_sample("q1", "sess-a", 5.0, "2026-08-05T09:00:00.000Z")
+        data = json.loads(run_meter(["report", "--month", "2026-08", "--json"], self.home).stdout)
+        self.assertNotIn("list_price_equiv_usd", data["cash_cost"])
+        self.assertIn("list_price_equiv_usd", data["capacity"])
+        self.assertAlmostEqual(data["capacity"]["list_price_equiv_usd"], 5.0)
+
+    def test_no_anthropic_quota_sample_in_scope_is_null_not_zero(self):
+        data = json.loads(run_meter(["report", "--month", "2026-08", "--json"], self.home).stdout)
+        self.assertIsNone(data["capacity"]["list_price_equiv_usd"])
+        # deepseek-onlyなquota.sampleがあっても、anthropicデータが無い
+        # 事実は変わらない — $0.00 ではなく null のまま。
+        self._quota_sample("q1", "sess-ds", 3.0, "2026-08-05T09:00:00.000Z", provider="deepseek")
+        data = json.loads(run_meter(["report", "--month", "2026-08", "--json"], self.home).stdout)
+        self.assertIsNone(data["capacity"]["list_price_equiv_usd"])
+
+    def test_null_month_before_any_quota_sample_explains_null_as_no_collection_yet(self):
+        # quota.sample が1件も無い月は list_price_equiv_usd が null になり、
+        # ノートに理由が添えられる。理由の文言は「記録開始前」「該当セッションが
+        # 無かった」のどちらか特定のマシン日付を主張しない（レビュー指摘 最終PR
+        # ラウンド1 finding 3: 絶対日付をハードコードしない）。
+        data = json.loads(run_meter(["report", "--month", "2026-07", "--json"], self.home).stdout)
+        self.assertIsNone(data["capacity"]["list_price_equiv_usd"])
+        self.assertIn("quota.sampleの記録が始まる前の期間", data["capacity"]["list_price_equiv_note"])
+        self.assertNotIn("2026-08-01", data["capacity"]["list_price_equiv_note"])
+
+    def test_null_month_after_collection_started_still_gets_the_note(self):
+        # レビュー指摘 最終PRラウンド2 新規1: 判定条件を month<"2026-08" から
+        # list_price_equiv_usd is None のみに一本化した結果、「記録開始後だが
+        # この月はたまたまanthropicセッションが無かった」ケースにも注記が付く
+        # ようになった。この挙動自体をテストで固定する — 月による絞り込みを
+        # 誰かが復活させると、このテストだけが検知できる。
+        self._quota_sample("q1", "sess-has-data", 10.0, "2026-08-05T09:00:00.000Z")
+        data = json.loads(run_meter(["report", "--month", "2026-08", "--json"], self.home).stdout)
+        self.assertAlmostEqual(data["capacity"]["list_price_equiv_usd"], 10.0)
+        self.assertEqual(data["capacity"]["list_price_equiv_note"].count(
+            "quota.sampleの記録が始まる前の期間"), 0)
+
+        data = json.loads(run_meter(["report", "--month", "2026-12", "--json"], self.home).stdout)
+        self.assertIsNone(data["capacity"]["list_price_equiv_usd"])
+        self.assertIn("quota.sampleの記録が始まる前の期間", data["capacity"]["list_price_equiv_note"])
+
+    def test_list_price_equiv_appears_in_pr_report(self):
+        run_meter(["event", "run.start", "--idempotency-key", "r1", "--run-id", "run-lp1",
+                   "--ts", "2026-08-05T09:00:00.000Z"], self.home)
+        run_meter(["bind-pr", "--run", "run-lp1", "--pr", "200"], self.home)
+        self._quota_sample("q1", "sess-pr", 8.25, "2026-08-05T09:05:00.000Z",
+                            extra=["--run-id", "run-lp1", "--pr-number", "200"])
+        data = json.loads(run_meter(["report", "--pr", "200", "--json"], self.home).stdout)
+        self.assertAlmostEqual(data["pr_detail"]["list_price_equiv_usd"], 8.25)
+        self.assertTrue(data["pr_detail"]["list_price_equiv_is_lower_bound"])
+
+    def test_list_price_equiv_appears_in_window_report(self):
+        self._quota_sample("q1", "sess-win", 6.5, "2026-08-05T09:00:00.000Z",
+                            extra=["--window-id", "win-lp1"])
+        data = json.loads(run_meter(["report", "--window", "--json"], self.home).stdout)
+        self.assertAlmostEqual(data["by_window"]["win-lp1"]["list_price_equiv_usd"], 6.5)
+
+    def test_excludes_samples_without_session_id_or_with_null_cost_without_crashing(self):
+        # session_idが無いサンプル(cost自体は有り)。
+        run_meter(["event", "quota.sample", "--idempotency-key", "q1",
+                   "--plan-source", "statusline", "--provider", "anthropic",
+                   "--session-cost-usd", "50.0", "--ts", "2026-08-05T09:00:00.000Z"], self.home)
+        # session_cost_usdが無い(null)サンプル(session_idは有り)。
+        run_meter(["event", "quota.sample", "--idempotency-key", "q2",
+                   "--plan-source", "statusline", "--provider", "anthropic",
+                   "--session-id", "sess-nullcost", "--ts", "2026-08-05T09:01:00.000Z"], self.home)
+        # 有効なサンプル。
+        self._quota_sample("q3", "sess-valid", 4.0, "2026-08-05T09:02:00.000Z")
+        result = run_meter(["report", "--month", "2026-08", "--json"], self.home)
+        self.assertEqual(result.returncode, 0)
+        data = json.loads(result.stdout)
+        self.assertAlmostEqual(data["capacity"]["list_price_equiv_usd"], 4.0)
+        self.assertEqual(data["capacity"]["list_price_equiv_excluded_no_session_id_count"], 1)
+        self.assertEqual(data["capacity"]["list_price_equiv_excluded_null_cost_count"], 1)
+
+
 # ── Round 1 review regression tests ─────────────────────────────────────
 # https://github.com/manemone/dotfiles/pull/28 round-1 review findings.
 
@@ -3075,6 +4476,482 @@ class SnapshotQuotaRoundTwoReviewTests(OcwMeterTestCase):
             capture_output=True, text=True, check=True,
         )
         self.assertEqual(status.stdout.strip(), "", "suppression cache must not write inside $HOME's own git worktree")
+
+
+class SessionAttributionTests(OcwMeterTestCase):
+    """docs/planning/DOC-2608081456_..._計画.md 孫5プロンプン: session_id
+    joinによるrun_id/roleの帰属解決(B: ingest側フォールバック / A: report
+    側join)と、attribution行。
+
+    quota.sample events here are written directly via `ocw-meter event
+    quota.sample ...` (bypassing `snapshot-quota`'s statusLine-JSON
+    parsing entirely) — this phase's own scope is the session_id join
+    logic itself, not statusLine ingestion (already covered by
+    SnapshotQuotaBasicsTests etc.), and `event` is the same forward-
+    compatible primitive `_seed_full_pr` above already uses for the same
+    reason."""
+
+    def setUp(self):
+        super().setUp()
+        self.projects_dir = pathlib.Path(self.tmpdir.name) / "claude-projects"
+        self.projects_dir.mkdir(parents=True, exist_ok=True)
+
+    # -- B: ingest側フォールバック --
+
+    def test_ingest_run_id_resolved_via_session_id_join_when_ocw_run_id_file_absent(self):
+        session_id = "sess-join-1"
+        run_meter(["event", "quota.sample", "--idempotency-key", "q1", "--plan-source", "statusline",
+                   "--session-id", session_id, "--run-id", "run-from-session",
+                   "--ts", "2026-08-01T09:00:00.000Z"], self.home)
+        write_transcript(self.projects_dir, "proj", session_id, [
+            assistant_line(session_id, "m1", cwd="/nonexistent/not-a-worktree", timestamp="2026-08-01T09:05:00.000Z"),
+        ])
+        result = run_ingest(self.home, self.projects_dir, extra_env={"PATH": "/usr/bin:/bin"})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        event = next(e for e in read_events(self.home) if e["event_type"] == "usage.message")
+        self.assertEqual(event["run_id"], "run-from-session")
+        self.assertEqual(event["run_id_source"], "session_id")
+
+    def test_ingest_run_id_prefers_ocw_run_id_file_over_session_join(self):
+        session_id = "sess-join-2"
+        worktree_dir = make_ocw_style_worktree(self.tmpdir.name, run_id="run-direct")
+        run_meter(["event", "quota.sample", "--idempotency-key", "q2", "--plan-source", "statusline",
+                   "--session-id", session_id, "--run-id", "run-from-session",
+                   "--ts", "2026-08-01T09:00:00.000Z"], self.home)
+        write_transcript(self.projects_dir, "proj", session_id, [
+            assistant_line(session_id, "m1", cwd=str(worktree_dir), timestamp="2026-08-01T09:05:00.000Z"),
+        ])
+        result = run_ingest(self.home, self.projects_dir)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        event = next(e for e in read_events(self.home) if e["event_type"] == "usage.message")
+        self.assertEqual(event["run_id"], "run-direct")
+        self.assertEqual(event["run_id_source"], "direct")
+
+    def test_ingest_role_resolved_via_session_id_join_when_herdr_unavailable(self):
+        session_id = "sess-join-role"
+        run_meter(["event", "quota.sample", "--idempotency-key", "q3", "--plan-source", "statusline",
+                   "--session-id", session_id, "--role", "implementer",
+                   "--ts", "2026-08-01T09:00:00.000Z"], self.home)
+        write_transcript(self.projects_dir, "proj", session_id, [
+            assistant_line(session_id, "m1", timestamp="2026-08-01T09:05:00.000Z"),
+        ])
+        result = run_ingest(self.home, self.projects_dir, extra_env={"PATH": "/usr/bin:/bin"})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        event = next(e for e in read_events(self.home) if e["event_type"] == "usage.message")
+        self.assertEqual(event["role"], "implementer")
+        self.assertEqual(event["role_source"], "session_id")
+
+    def test_ingest_role_prefers_herdr_live_over_session_join(self):
+        session_id = "sess-join-role-2"
+        write_transcript(self.projects_dir, "proj", session_id, [assistant_line(session_id, "m1")])
+        run_meter(["event", "quota.sample", "--idempotency-key", "q4", "--plan-source", "statusline",
+                   "--session-id", session_id, "--role", "reviewer",
+                   "--ts", "2026-08-01T09:00:00.000Z"], self.home)
+
+        pane_json = json.dumps({"panes": [{
+            "pane_id": "w1:p2", "label": "implementer", "workspace_id": "w1",
+            "agent_session": {"agent": "claude", "kind": "id", "value": session_id},
+            "cwd": "/whatever",
+        }]})
+        fake_bin = pathlib.Path(self.tmpdir.name) / "fake-bin"
+        fake_bin.mkdir()
+        herdr_script = fake_bin / "herdr"
+        herdr_script.write_text(
+            "#!/usr/bin/env bash\n"
+            'if [ "$1" = "status" ] && [ "$2" = "server" ]; then exit 0; fi\n'
+            'if [ "$1" = "workspace" ] && [ "$2" = "list" ]; then echo \'{"workspaces":[{"workspace_id":"w1"}]}\'; exit 0; fi\n'
+            f"if [ \"$1\" = \"pane\" ] && [ \"$2\" = \"list\" ]; then echo '{pane_json}'; exit 0; fi\n"
+            "exit 1\n",
+            encoding="utf-8",
+        )
+        herdr_script.chmod(0o755)
+        path_with_fake_herdr_first = f"{fake_bin}:{os.environ.get('PATH', '')}"
+
+        result = run_ingest(self.home, self.projects_dir, extra_env={"PATH": path_with_fake_herdr_first})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        event = next(e for e in read_events(self.home) if e["event_type"] == "usage.message")
+        self.assertEqual(event["role"], "implementer")
+        self.assertEqual(event["role_source"], "direct")
+
+    def test_ingest_role_falls_back_to_session_join_when_herdr_label_is_the_string_unknown(self):
+        # レビュー指摘5: `"unknown"`はこのスキーマ全体で「未解決」を表す
+        # 文字列センチネル。Herdrのペインlabelは`herdr pane rename`で人間が
+        # 自由に付けられるため、labelがたまたま`"unknown"`だった場合に
+        # それを「directで解決済み」と誤認してsession joinへの
+        # フォールバックを飛ばしてはいけない。
+        session_id = "sess-join-role-unknown-label"
+        write_transcript(self.projects_dir, "proj", session_id, [assistant_line(session_id, "m1")])
+        run_meter(["event", "quota.sample", "--idempotency-key", "q5", "--plan-source", "statusline",
+                   "--session-id", session_id, "--role", "reviewer",
+                   "--ts", "2026-08-01T09:00:00.000Z"], self.home)
+
+        pane_json = json.dumps({"panes": [{
+            "pane_id": "w1:p2", "label": "unknown", "workspace_id": "w1",
+            "agent_session": {"agent": "claude", "kind": "id", "value": session_id},
+            "cwd": "/whatever",
+        }]})
+        fake_bin = pathlib.Path(self.tmpdir.name) / "fake-bin-unknown-label"
+        fake_bin.mkdir()
+        herdr_script = fake_bin / "herdr"
+        herdr_script.write_text(
+            "#!/usr/bin/env bash\n"
+            'if [ "$1" = "status" ] && [ "$2" = "server" ]; then exit 0; fi\n'
+            'if [ "$1" = "workspace" ] && [ "$2" = "list" ]; then echo \'{"workspaces":[{"workspace_id":"w1"}]}\'; exit 0; fi\n'
+            f"if [ \"$1\" = \"pane\" ] && [ \"$2\" = \"list\" ]; then echo '{pane_json}'; exit 0; fi\n"
+            "exit 1\n",
+            encoding="utf-8",
+        )
+        herdr_script.chmod(0o755)
+        path_with_fake_herdr_first = f"{fake_bin}:{os.environ.get('PATH', '')}"
+
+        result = run_ingest(self.home, self.projects_dir, extra_env={"PATH": path_with_fake_herdr_first})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        event = next(e for e in read_events(self.home) if e["event_type"] == "usage.message")
+        self.assertEqual(event["role"], "reviewer")
+        self.assertEqual(event["role_source"], "session_id")
+
+    def test_ingest_run_id_and_role_stay_unresolved_without_any_source(self):
+        session_id = "sess-none"
+        write_transcript(self.projects_dir, "proj", session_id, [
+            assistant_line(session_id, "m1", timestamp="2026-08-01T09:05:00.000Z"),
+        ])
+        result = run_ingest(self.home, self.projects_dir, extra_env={"PATH": "/usr/bin:/bin"})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        event = next(e for e in read_events(self.home) if e["event_type"] == "usage.message")
+        self.assertIsNone(event["run_id"])
+        self.assertIsNone(event["run_id_source"])
+        self.assertEqual(event["role"], "unknown")
+        self.assertIsNone(event["role_source"])
+
+    def test_ingest_run_id_and_role_from_session_join_can_come_from_different_samples(self):
+        # quota.sampleはOCW_RUN_ID/OCW_ROLEを独立に持ちうる(片方だけ
+        # 設定されている、あるいは無い場合がある) — run_idとroleを
+        # それぞれ別サンプルの「最も時刻が近いもの」から独立に解決する。
+        session_id = "sess-split-fields"
+        run_meter(["event", "quota.sample", "--idempotency-key", "split-q1", "--plan-source", "statusline",
+                   "--session-id", session_id, "--run-id", "run-split",
+                   "--ts", "2026-08-01T09:00:00.000Z"], self.home)
+        run_meter(["event", "quota.sample", "--idempotency-key", "split-q2", "--plan-source", "statusline",
+                   "--session-id", session_id, "--role", "commander",
+                   "--ts", "2026-08-01T09:01:00.000Z"], self.home)
+        write_transcript(self.projects_dir, "proj", session_id, [
+            assistant_line(session_id, "m1", timestamp="2026-08-01T09:02:00.000Z"),
+        ])
+        result = run_ingest(self.home, self.projects_dir, extra_env={"PATH": "/usr/bin:/bin"})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        event = next(e for e in read_events(self.home) if e["event_type"] == "usage.message")
+        self.assertEqual(event["run_id"], "run-split")
+        self.assertEqual(event["role"], "commander")
+
+    # -- 罠1: session_id由来のrun_idにrun.start逆転チェックを適用しない --
+
+    def test_session_join_run_id_not_subject_to_run_start_reversal_check(self):
+        # ocw-run-idファイル経由なら、メッセージがそのrun_idのrun.startより
+        # 前なら捨てられる(test_ingest_run_id_not_misattributed_when_
+        # worktree_path_is_reusedで確認済み)。session_id由来のrun_idは
+        # worktreeパスのように再利用されることが無いため、同じチェックを
+        # 適用してはいけない(計画書DOC-2608081456 罠1)。
+        session_id = "sess-trap1"
+        run_meter(["event", "run.start", "--idempotency-key", "trap1-start", "--run-id", "run-trap1",
+                   "--ts", "2026-08-01T12:00:00.000Z", "--base-ref", "master", "--command", "claude"],
+                  self.home)
+        run_meter(["event", "quota.sample", "--idempotency-key", "trap1-q", "--plan-source", "statusline",
+                   "--session-id", session_id, "--run-id", "run-trap1",
+                   "--ts", "2026-08-01T09:00:00.000Z"], self.home)
+        # メッセージ(09:05)はrun-trap1のrun.start(12:00)より前。
+        write_transcript(self.projects_dir, "proj", session_id, [
+            assistant_line(session_id, "m1", timestamp="2026-08-01T09:05:00.000Z"),
+        ])
+        result = run_ingest(self.home, self.projects_dir)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        event = next(e for e in read_events(self.home) if e["event_type"] == "usage.message")
+        self.assertEqual(event["run_id"], "run-trap1")
+        self.assertEqual(event["run_id_source"], "session_id")
+
+    def test_direct_run_id_still_subject_to_run_start_reversal_check_regression(self):
+        # 罠1修正の対偶: ocw-run-idファイル経由の逆転チェック自体は
+        # 従来どおり効いたまま — session_id側の除外がdirect側にまで
+        # 波及していないことの回帰確認。
+        worktree_dir = make_ocw_style_worktree(self.tmpdir.name, run_id="run-trap1-direct")
+        run_meter(["event", "run.start", "--idempotency-key", "trap1d-start", "--run-id", "run-trap1-direct",
+                   "--ts", "2026-08-01T12:00:00.000Z", "--base-ref", "master", "--command", "claude"],
+                  self.home)
+        write_transcript(self.projects_dir, "proj", "sess-trap1-direct", [
+            assistant_line("sess-trap1-direct", "m1", cwd=str(worktree_dir), timestamp="2026-08-01T09:05:00.000Z"),
+        ])
+        result = run_ingest(self.home, self.projects_dir)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        event = next(e for e in read_events(self.home) if e["event_type"] == "usage.message")
+        self.assertIsNone(event["run_id"])
+
+    # -- 曖昧なケース: 1つのsession_idに複数のrun_id/roleが紐づく --
+
+    def test_ambiguous_session_run_id_resolves_to_nearest_in_time_sample(self):
+        session_id = "sess-ambiguous"
+        run_meter(["event", "quota.sample", "--idempotency-key", "amb-q1", "--plan-source", "statusline",
+                   "--session-id", session_id, "--run-id", "run-early",
+                   "--ts", "2026-08-01T09:00:00.000Z"], self.home)
+        run_meter(["event", "quota.sample", "--idempotency-key", "amb-q2", "--plan-source", "statusline",
+                   "--session-id", session_id, "--run-id", "run-late",
+                   "--ts", "2026-08-01T11:00:00.000Z"], self.home)
+        run_meter(["event", "phase.start", "--idempotency-key", "amb-ps-early", "--run-id", "run-early",
+                   "--phase", "fix", "--round", "1", "--ts", "2026-08-01T08:00:00.000Z"], self.home)
+        run_meter(["event", "phase.end", "--idempotency-key", "amb-pe-early", "--run-id", "run-early",
+                   "--phase", "fix", "--round", "1", "--ts", "2026-08-01T23:59:00.000Z"], self.home)
+        run_meter(["event", "phase.start", "--idempotency-key", "amb-ps-late", "--run-id", "run-late",
+                   "--phase", "review", "--round", "1", "--ts", "2026-08-01T08:00:00.000Z"], self.home)
+        run_meter(["event", "phase.end", "--idempotency-key", "amb-pe-late", "--run-id", "run-late",
+                   "--phase", "review", "--round", "1", "--ts", "2026-08-01T23:59:00.000Z"], self.home)
+        # メッセージのtsはrun-earlyのサンプル(09:00, 差110分)よりrun-late
+        # のサンプル(11:00, 差10分)に近い — run-lateに解決されるはず。
+        write_transcript(self.projects_dir, "proj", session_id, [
+            assistant_line(session_id, "m1", timestamp="2026-08-01T10:50:00.000Z"),
+        ])
+        result = run_ingest(self.home, self.projects_dir)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        data = json.loads(run_meter(["report", "--phase", "--json"], self.home).stdout)
+        self.assertEqual(data["by_phase"]["review"]["messages"], 1)
+        self.assertEqual(data["by_phase"]["fix"]["messages"], 0)
+
+    def test_ambiguous_session_role_resolves_to_nearest_in_time_sample(self):
+        session_id = "sess-ambiguous-role"
+        run_meter(["event", "quota.sample", "--idempotency-key", "ambr-q1", "--plan-source", "statusline",
+                   "--session-id", session_id, "--role", "commander",
+                   "--ts", "2026-08-01T09:00:00.000Z"], self.home)
+        run_meter(["event", "quota.sample", "--idempotency-key", "ambr-q2", "--plan-source", "statusline",
+                   "--session-id", session_id, "--role", "reviewer",
+                   "--ts", "2026-08-01T11:00:00.000Z"], self.home)
+        run_meter(["event", "usage.message", "--idempotency-key", "ambr-u1", "--message-id", "m-ambiguous-role",
+                   "--session-id", session_id, "--model", "deepseek-v4-pro", "--cost-basis", "estimated",
+                   "--ts", "2026-08-01T10:50:00.000Z"], self.home)
+        data = json.loads(run_meter(["report", "--role", "--json"], self.home).stdout)
+        self.assertEqual(data["by_role"]["reviewer"]["messages"], 1)
+        # "commander"バケット自体はcommanderサンプルのquota.sample自身の
+        # roleフィールドで存在する(total_events)が、usage.messageは
+        # そちら側には計上されない。
+        self.assertEqual(data["by_role"].get("commander", {}).get("messages", 0), 0)
+
+    def test_session_join_tie_break_prefers_earlier_sample(self):
+        session_id = "sess-tie"
+        run_meter(["event", "quota.sample", "--idempotency-key", "tie-q1", "--plan-source", "statusline",
+                   "--session-id", session_id, "--run-id", "run-tie-early",
+                   "--ts", "2026-08-01T09:00:00.000Z"], self.home)
+        run_meter(["event", "quota.sample", "--idempotency-key", "tie-q2", "--plan-source", "statusline",
+                   "--session-id", session_id, "--run-id", "run-tie-late",
+                   "--ts", "2026-08-01T11:00:00.000Z"], self.home)
+        # メッセージは2つのサンプルのちょうど中間 -> 同点。仕様上、前方
+        # (早い方)のサンプルを優先する。
+        write_transcript(self.projects_dir, "proj", session_id, [
+            assistant_line(session_id, "m1", timestamp="2026-08-01T10:00:00.000Z"),
+        ])
+        result = run_ingest(self.home, self.projects_dir)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        event = next(e for e in read_events(self.home) if e["event_type"] == "usage.message")
+        self.assertEqual(event["run_id"], "run-tie-early")
+
+    # -- A: report側join --
+
+    def test_report_backfills_null_run_id_and_unknown_role_without_touching_stored_file(self):
+        session_id = "sess-report-join"
+        run_meter(["event", "quota.sample", "--idempotency-key", "rq1", "--plan-source", "statusline",
+                   "--session-id", session_id, "--run-id", "run-report-1", "--role", "implementer",
+                   "--ts", "2026-08-01T09:00:00.000Z"], self.home)
+        run_meter(["event", "usage.message", "--idempotency-key", "ru1", "--message-id", "m-report-1",
+                   "--session-id", session_id, "--model", "deepseek-v4-pro", "--cost-basis", "estimated",
+                   "--ts", "2026-08-01T09:05:00.000Z"], self.home)
+
+        data = json.loads(run_meter(["report", "--role", "--json"], self.home).stdout)
+        self.assertEqual(data["by_role"]["implementer"]["messages"], 1)
+
+        # 保存済みイベントファイル自体は一切書き換わっていない
+        # (read-time解決のみ)。
+        stored = next(e for e in read_events(self.home) if e["event_type"] == "usage.message")
+        self.assertIsNone(stored["run_id"])
+        self.assertEqual(stored["role"], "unknown")
+
+    def test_report_side_join_feeds_phase_view(self):
+        session_id = "sess-report-phase"
+        run_meter(["event", "quota.sample", "--idempotency-key", "rp-q1", "--plan-source", "statusline",
+                   "--session-id", session_id, "--run-id", "run-report-phase",
+                   "--ts", "2026-08-01T09:00:00.000Z"], self.home)
+        run_meter(["event", "phase.start", "--idempotency-key", "rp-ps", "--run-id", "run-report-phase",
+                   "--phase", "fix", "--round", "1", "--ts", "2026-08-01T09:00:00.000Z"], self.home)
+        run_meter(["event", "phase.end", "--idempotency-key", "rp-pe", "--run-id", "run-report-phase",
+                   "--phase", "fix", "--round", "1", "--ts", "2026-08-01T09:10:00.000Z"], self.home)
+        run_meter(["event", "usage.message", "--idempotency-key", "rp-u1", "--message-id", "m-report-phase",
+                   "--session-id", session_id, "--model", "deepseek-v4-pro", "--cost-basis", "estimated",
+                   "--ts", "2026-08-01T09:05:00.000Z"], self.home)
+        data = json.loads(run_meter(["report", "--phase", "--json"], self.home).stdout)
+        self.assertEqual(data["by_phase"]["fix"]["messages"], 1)
+        self.assertNotIn("(unassigned)", data["by_phase"])
+
+    def test_report_side_join_lets_events_for_pr_and_pr_review_summary_match_backfilled_run_id(self):
+        session_id = "sess-report-pr"
+        run_meter(["event", "quota.sample", "--idempotency-key", "rpr-q1", "--plan-source", "statusline",
+                   "--session-id", session_id, "--run-id", "run-report-pr",
+                   "--ts", "2026-08-01T09:00:00.000Z"], self.home)
+        run_meter(["bind-pr", "--run", "run-report-pr", "--pr", "77"], self.home)
+        run_meter(["event", "usage.message", "--idempotency-key", "rpr-u1", "--message-id", "m-report-pr",
+                   "--session-id", session_id, "--model", "deepseek-v4-pro", "--cost-basis", "estimated",
+                   "--cost-estimate-usd", "0.05",
+                   "--ts", "2026-08-01T09:05:00.000Z"], self.home)
+        data = json.loads(run_meter(["report", "--pr", "77", "--json"], self.home).stdout)
+        self.assertAlmostEqual(data["pr_detail"]["cash_cost_usd"], 0.05)
+
+    def test_report_side_join_backfills_pr_number_symmetric_with_ingest_side(self):
+        # レビュー指摘2: B(ingest側フォールバック)はrun_idが決まると
+        # pr_number/pr_urlも一緒に埋める(build_usage_eventの
+        # `pr_info = binds.get(run_id)`)。A(report側join)がrun_idだけ
+        # 補完してpr_numberを埋めないと、report_by_windowのpr_ranges
+        # (`e.get("pr_number")`が非nullのイベントだけからPRの時刻レンジを
+        # 作る)が「session joinのrun_idを最初から持っていたか
+        # (ingest側で解決済み)、read-timeに初めて解決したか」で
+        # prs_time_overlapの中身が変わってしまう。
+        session_id = "sess-report-pr-window"
+        run_meter(["event", "quota.sample", "--idempotency-key", "rprw-q1", "--plan-source", "statusline",
+                   "--session-id", session_id, "--run-id", "run-report-pr-window",
+                   "--window-id", "win-report-pr-window",
+                   "--ts", "2026-08-01T09:00:00.000Z"], self.home)
+        run_meter(["event", "quota.sample", "--idempotency-key", "rprw-q2", "--plan-source", "statusline",
+                   "--session-id", session_id, "--run-id", "run-report-pr-window",
+                   "--window-id", "win-report-pr-window",
+                   "--ts", "2026-08-01T09:10:00.000Z"], self.home)
+        run_meter(["bind-pr", "--run", "run-report-pr-window", "--pr", "88"], self.home)
+        # session_idのみ(run_id/pr_numberは無し) — Aがrun_idをsession
+        # joinで解決した後、それをbindsに引いてpr_numberも埋める必要が
+        # ある。
+        run_meter(["event", "usage.message", "--idempotency-key", "rprw-u1", "--message-id", "m-report-pr-window",
+                   "--session-id", session_id, "--model", "deepseek-v4-pro", "--cost-basis", "estimated",
+                   "--ts", "2026-08-01T09:05:00.000Z"], self.home)
+        data = json.loads(run_meter(["report", "--window", "--json"], self.home).stdout)
+        self.assertIn(88, data["by_window"]["win-report-pr-window"]["prs_time_overlap"])
+
+    def test_report_side_pr_number_backfill_is_scoped_to_repo(self):
+        # レビュー指摘(ラウンド2 新規1): `pr_binds_from_events()`が`repo`
+        # でスコープしないと、別リポジトリでbindされたPR番号が
+        # read-timeにこのイベントのpr_numberとして焼き込まれ、
+        # `events_for_pr()`の直接マッチ(pr_number一致 + repo一致)を
+        # すり抜けて別リポジトリの費用が混入してしまう。`run_id`は
+        # グローバルに一意な値なので、このセッションのrun_idと別
+        # リポジトリのpr.bindのrun_idを衝突させて再現する。
+        session_id = "sess-cross-repo"
+        run_meter(["event", "pr.bind", "--idempotency-key", "cross-repo-bind",
+                   "--run-id", "run-cross-repo", "--pr-number", "55",
+                   "--repo", "someone/other-repo"], self.home)
+        run_meter(["event", "quota.sample", "--idempotency-key", "cross-repo-q1", "--plan-source", "statusline",
+                   "--session-id", session_id, "--run-id", "run-cross-repo",
+                   "--ts", "2026-08-01T09:00:00.000Z"], self.home)
+        # 自リポジトリ(このテストの実行cwdから自動解決される)の
+        # usage.message。session_idのみでrun_id/pr_numberは無い —
+        # session joinでrun_idを"run-cross-repo"に解決した後、修正前は
+        # そのrun_idを(repoでスコープせず)binds に引いてpr_number=55を
+        # 焼き込んでしまっていた。
+        run_meter(["event", "usage.message", "--idempotency-key", "cross-repo-u1", "--message-id", "m-cross-repo",
+                   "--session-id", session_id, "--model", "deepseek-v4-pro", "--cost-basis", "estimated",
+                   "--cost-estimate-usd", "999.0",
+                   "--ts", "2026-08-01T09:05:00.000Z"], self.home)
+        data = json.loads(run_meter(["report", "--pr", "55", "--json"], self.home).stdout)
+        # このリポジトリにはPR55への直接紐づけも無いはずなので、上の
+        # usage.message(別リポジトリのPR55にbindされたrun_id経由)は
+        # 一切拾われてはいけない。
+        self.assertIsNone(data["pr_detail"]["cash_cost_usd"])
+
+    def test_report_side_join_does_not_overwrite_already_resolved_run_id(self):
+        session_id = "sess-report-nooverwrite"
+        run_meter(["event", "quota.sample", "--idempotency-key", "rno-q1", "--plan-source", "statusline",
+                   "--session-id", session_id, "--run-id", "run-from-session-should-not-be-used",
+                   "--ts", "2026-08-01T09:00:00.000Z"], self.home)
+        run_meter(["event", "usage.message", "--idempotency-key", "rno-u1", "--message-id", "m-noover",
+                   "--session-id", session_id, "--run-id", "run-already-direct",
+                   "--model", "deepseek-v4-pro", "--cost-basis", "estimated",
+                   "--ts", "2026-08-01T09:05:00.000Z"], self.home)
+        data = json.loads(run_meter(["report", "--json"], self.home).stdout)
+        self.assertEqual(data["attribution_run_id_counts"], {"direct": 1, "session_id": 0, "unresolved": 0})
+
+    def test_report_side_join_does_not_overwrite_already_resolved_role(self):
+        session_id = "sess-role-noover"
+        run_meter(["event", "quota.sample", "--idempotency-key", "rrn-q1", "--plan-source", "statusline",
+                   "--session-id", session_id, "--role", "reviewer",
+                   "--ts", "2026-08-01T09:00:00.000Z"], self.home)
+        run_meter(["event", "usage.message", "--idempotency-key", "rrn-u1", "--message-id", "m-role-noover",
+                   "--session-id", session_id, "--role", "implementer",
+                   "--model", "deepseek-v4-pro", "--cost-basis", "estimated",
+                   "--ts", "2026-08-01T09:05:00.000Z"], self.home)
+        data = json.loads(run_meter(["report", "--role", "--json"], self.home).stdout)
+        self.assertEqual(data["by_role"]["implementer"]["messages"], 1)
+        # "reviewer"バケット自体はquota.sample自身のroleフィールドで
+        # 存在する(total_events)が、usage.messageは上書きされずimplementer
+        # のまま — そちら側には計上されない。
+        self.assertEqual(data["by_role"].get("reviewer", {}).get("messages", 0), 0)
+
+    # -- attribution行 --
+
+    def test_attribution_footer_present_on_empty_storage(self):
+        data = json.loads(run_meter(["report", "--json"], self.home).stdout)
+        self.assertEqual(data["attribution_run_id"], "n/a (no usage.message events)")
+        self.assertEqual(data["attribution_role"], "n/a (no usage.message events)")
+
+    def test_attribution_known_limits_present_in_text_and_json(self):
+        # 孫5プロンプト §4「残る限界を出力または文書に書く」/ レビュー
+        # 指摘1: session_id joinを入れても100%解決には到達しない構造的な
+        # 理由を、attribution行と一緒に毎回出す。
+        # レビュー指摘(ラウンド2 新規2): 絶対日付(2026-08-01)はこの
+        # マシン固有の事実であり、`bin/ocw-meter`は各マシンへ個別に
+        # デプロイされるツールの出力として断言してはいけない。ここでは
+        # マシン非依存の構造的な言い回しの一部だけを固定する。
+        data = json.loads(run_meter(["report", "--json"], self.home).stdout)
+        self.assertIn("quota.sampleの記録が始まるより前の期間は", data["attribution_known_limits"])
+        self.assertNotIn("2026-08-01", data["attribution_known_limits"])
+        text = run_meter(["report"], self.home).stdout
+        self.assertIn("attribution_known_limits:", text)
+
+    def test_attribution_footer_counts_direct_session_and_unresolved_and_sums_to_total(self):
+        # direct: run_idが直接設定されている(session join不要)。
+        run_meter(["event", "usage.message", "--idempotency-key", "att-direct", "--message-id", "m-direct",
+                   "--run-id", "run-direct-x", "--model", "deepseek-v4-pro", "--cost-basis", "estimated",
+                   "--ts", "2026-08-01T09:00:00.000Z"], self.home)
+        # via session_id: quota.sampleとのjoinで解決。
+        session_id = "sess-attribution"
+        run_meter(["event", "quota.sample", "--idempotency-key", "att-q1", "--plan-source", "statusline",
+                   "--session-id", session_id, "--run-id", "run-session-x", "--role", "reviewer",
+                   "--ts", "2026-08-01T09:00:00.000Z"], self.home)
+        run_meter(["event", "usage.message", "--idempotency-key", "att-session", "--message-id", "m-session",
+                   "--session-id", session_id, "--model", "deepseek-v4-pro", "--cost-basis", "estimated",
+                   "--ts", "2026-08-01T09:05:00.000Z"], self.home)
+        # unresolved: どちらの手段でも解決できない。
+        run_meter(["event", "usage.message", "--idempotency-key", "att-unresolved", "--message-id", "m-unresolved",
+                   "--model", "deepseek-v4-pro", "--cost-basis", "estimated",
+                   "--ts", "2026-08-01T09:10:00.000Z"], self.home)
+
+        data = json.loads(run_meter(["report", "--json"], self.home).stdout)
+        run_id_counts = data["attribution_run_id_counts"]
+        self.assertEqual(run_id_counts, {"direct": 1, "session_id": 1, "unresolved": 1})
+        self.assertEqual(sum(run_id_counts.values()), 3)
+        self.assertIn("direct 33.3%", data["attribution_run_id"])
+        self.assertIn("via session_id 33.3%", data["attribution_run_id"])
+        self.assertIn("unresolved 33.3%", data["attribution_run_id"])
+
+        # role: session joinで解決したメッセージ(reviewer)のみ埋まる。
+        role_counts = data["attribution_role_counts"]
+        self.assertEqual(role_counts, {"direct": 0, "session_id": 1, "unresolved": 2})
+
+        text = run_meter(["report"], self.home).stdout
+        self.assertIn("attribution (run_id):", text)
+        self.assertIn("attribution (role):", text)
+
+    def test_reconcile_view_omits_attribution_entirely_in_text_and_json(self):
+        # レビュー指摘4: `--reconcile`はvalid_events構築・session_id join
+        # を経由しないためattributionを計算していない。「computeしていない
+        # ものは出さない」をテキスト・--json両方で徹底し、"n/a"のような
+        # フォールバック文字列で欠落をごまかさない。
+        text_result = run_meter(["report", "--reconcile"], self.home)
+        self.assertEqual(text_result.returncode, 0, text_result.stderr)
+        self.assertNotIn("attribution", text_result.stdout)
+
+        json_result = run_meter(["report", "--reconcile", "--json"], self.home)
+        self.assertEqual(json_result.returncode, 0, json_result.stderr)
+        data = json.loads(json_result.stdout)
+        self.assertFalse(any(key.startswith("attribution") for key in data))
 
 
 if __name__ == "__main__":
