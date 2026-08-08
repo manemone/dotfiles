@@ -94,7 +94,7 @@ subcommands:
     automatic run entirely (read-only use, or when you want to control
     exactly what `report` sees). The footer also always includes the
     last successful ingest's timestamp, this run's own ingest outcome,
-    and a staleness warning once that timestamp is more than 24h old.
+    and a staleness warning once that timestamp is 24h old or older.
 
     Otherwise prints an event-count / completeness / coverage summary,
     including total estimated cost and which price_table_version(s)/
