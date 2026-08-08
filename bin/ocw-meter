@@ -26,13 +26,13 @@ usage:
   ocw-meter snapshot-quota
   ocw-meter prune-diagnostics [--older-than <days>] [--apply]
   ocw-meter validate [--file <path>]
-  ocw-meter report [--pr <n>] [--repo <owner>/<name>] [--json]
-  ocw-meter report --phase [--pr <n>] [--repo <owner>/<name>] [--json]
-  ocw-meter report --model [--pr <n>] [--repo <owner>/<name>] [--json]
-  ocw-meter report --role [--pr <n>] [--repo <owner>/<name>] [--json]
-  ocw-meter report --window [--pr <n>] [--repo <owner>/<name>] [--json]
-  ocw-meter report --month [YYYY-MM] [--repo <owner>/<name>] [--json]
-  ocw-meter report --reconcile [--month <YYYY-MM>] [--provider-total <model>=<tokens> ...] [--json]
+  ocw-meter report [--pr <n>] [--repo <owner>/<name>] [--no-ingest] [--json]
+  ocw-meter report --phase [--pr <n>] [--repo <owner>/<name>] [--no-ingest] [--json]
+  ocw-meter report --model [--pr <n>] [--repo <owner>/<name>] [--no-ingest] [--json]
+  ocw-meter report --role [--pr <n>] [--repo <owner>/<name>] [--no-ingest] [--json]
+  ocw-meter report --window [--pr <n>] [--repo <owner>/<name>] [--no-ingest] [--json]
+  ocw-meter report --month [YYYY-MM] [--repo <owner>/<name>] [--no-ingest] [--json]
+  ocw-meter report --reconcile [--month <YYYY-MM>] [--provider-total <model>=<tokens> ...] [--no-ingest] [--json]
   ocw-meter help
 
 subcommands:
@@ -84,12 +84,24 @@ subcommands:
     non-zero on unexpected failure.
 
   report
-    Prints an event-count / completeness / coverage summary, including
-    total estimated cost and which price_table_version(s)/cost_basis
-    were applied once usage.message events exist. With `--pr <n>`, also
-    prints review-round/human-intervention/final-result/cash-cost
-    detail for that one PR and its same-5-hour-window-completion
-    verdict (孫5).
+    Runs `ingest` automatically before reading stored events (every
+    view below does this, at the very top of `report` — 計画書
+    DOC-2608081456孫2), so a `report` right after Claude Code activity
+    doesn't need a manual `ocw-meter ingest` first. An ingest failure
+    (including refusing to run inside a Git worktree) never aborts
+    `report` itself — it's shown as a footer line and `report` still
+    serves whatever was already stored. `--no-ingest` skips the
+    automatic run entirely (read-only use, or when you want to control
+    exactly what `report` sees). The footer also always includes the
+    last successful ingest's timestamp, this run's own ingest outcome,
+    and a staleness warning once that timestamp is more than 24h old.
+
+    Otherwise prints an event-count / completeness / coverage summary,
+    including total estimated cost and which price_table_version(s)/
+    cost_basis were applied once usage.message events exist. With
+    `--pr <n>`, also prints review-round/human-intervention/final-
+    result/cash-cost detail for that one PR and its same-5-hour-
+    window-completion verdict (孫5).
 
   report --phase / --model / --role / --window
     Grouped breakdowns (孫5), each combinable with `--pr <n>` to scope
