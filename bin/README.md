@@ -337,13 +337,25 @@ ocw-meter report --reconcile [--month <YYYY-MM>] [--provider-total <model>=<toke
 
 # statusLineコマンドとして呼ばれ、stdinのJSONからquota.sampleを1行append、表示文字列をstdoutへ返す
 ocw-meter snapshot-quota
+
+# state/meter-errors.jsonl・state/quota-worktree-refusal.jsonの古いエントリを掃除する（events/には触れない）。
+# 既定はdry-run。--applyで実削除、--older-than <日数>で保持期間指定（既定30日）
+ocw-meter prune-diagnostics [--older-than <days>] [--apply]
 ```
 
 | サブコマンド | 失敗時の挙動 |
 |---|---|
 | `event` / `bind-pr` | **常に exit 0**。stderrに1行warnのみ。本番フローを止めない |
 | `snapshot-quota` | **常に exit 0 かつ必ずstdoutに表示文字列を出す**（statusLineが壊れて画面が崩れる事態を絶対に避ける。event/bind-pr以上に厳格なfail-open） |
-| `validate` / `report` / `ingest` | 失敗したら非ゼロで落ちる（壊れたデータを黙って集計しない） |
+| `validate` / `report` / `ingest` / `prune-diagnostics` | 失敗したら非ゼロで落ちる（壊れたデータを黙って集計しない） |
+
+**`prune-diagnostics` の既定保持期間（30日）について**: これは運用上のリテンションポリシーであり、
+「今すぐ全部消す」既定ではない。数日〜1週間前にできたばかりのエントリ（一時的な設定ミスの記録など）を
+今すぐ後始末したい場合は、`--older-than` に小さい値を明示する（例:
+`ocw-meter prune-diagnostics --older-than 1 --apply`）。
+`OCW_METER_HOME`（またはその既定値）と `$HOME` 由来の既定rootの両方を調べる
+（`state/quota-worktree-refusal.json` は常に既定rootにしか書かれないため。片方がGitワークツリー内で
+使えなくても、もう片方が生きていれば処理を続ける）。
 
 **`--repo <owner>/<name>`（`--pr`・standalone `--month`専用。孫5後半で追加）**:
 
@@ -489,7 +501,9 @@ rm ~/.local/state/ocw-meter/events/2026-01-*.jsonl
 `state/session-pr-links.json`（`ingest`がtranscriptの`pr-link`行から学習したsession→PRの対応。
 増分実行をまたいで保持される）/
 `state/meter-errors.jsonl`（`meter.error`自己診断専用。
-`events/`とは別ファイルにすることで、後勝ちdedupによるイベントファイル書き換えと競合せずlock無しで追記できる）/
+`events/`とは別ファイルにすることで、後勝ちdedupによるイベントファイル書き換えと競合せずlock無しで追記できる。
+ただし `ocw-meter prune-diagnostics --apply` はこのファイルを丸ごと書き換える唯一の例外で、
+書き換えの瞬間と重なった追記1行を失う可能性がある）/
 `state/quota-last-sample.json`（`snapshot-quota`のサンプリング間隔自制・同一window内の異常値検知に使う
 直近サンプルの状態）/
 `raw/YYYY-MM-DD/*.json`（`OCW_METER_RAW=1`のときのみ。`snapshot-quota`が保存するredaction済みの

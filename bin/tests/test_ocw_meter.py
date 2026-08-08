@@ -39,20 +39,71 @@ completion criteria this maps to (idempotency, message.id dedup,
 message.content non-exposure, cost formula, price-table versioning).
 """
 
+import atexit
 import concurrent.futures
+import hashlib
 import json
 import os
 import pathlib
 import pty
+import shutil
 import stat
 import subprocess
 import sys
 import tempfile
 import time
 import unittest
+from datetime import datetime, timedelta, timezone
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
 OCW_METER = REPO_ROOT / "bin" / "ocw-meter"
+
+# ocw-meter's OWN fallback logic (emit_meter_error, the worktree-refusal
+# suppression cache) derives paths from real $HOME whenever OCW_METER_HOME
+# itself is refused (resolves inside a Git worktree) — not just from
+# OCW_METER_HOME. A test that forgets to override $HOME too therefore
+# silently writes into the developer's REAL ~/.local/state/ocw-meter
+# whenever it exercises that path (found live on this machine — see
+# docs/planning/DOC-2608081456_..._計画.md【4】: 37 stale worktree-refusal
+# entries and 6 meter-error diagnostics, all test-shaped).
+#
+# run_meter/run_snapshot_quota default $HOME (whenever a caller doesn't
+# explicitly pass its own via extra_env) to a directory keyed off `home`
+# (the OCW_METER_HOME argument), under this ONE scratch root — not a
+# single directory shared process-wide, and not a plain sibling of
+# `home` either (孫1 round-1 review findings 7 and 9, plus a round-2
+# fix for a bug the first attempt at finding 9 introduced):
+#
+# - **Independence** (finding 9): a single shared fallback directory let
+#   one test's write silently satisfy another, unrelated test's
+#   `idempotency_key`-deduped assertion (`emit_meter_error`'s dedup key
+#   is `meter-error:<stage>:<YYYY-MM-DD>` — two tests hitting the same
+#   stage on the same day only ever produce ONE line, written by
+#   whichever ran first). Keying the fallback directory off `home`,
+#   which is unique per call site in this file, means each test's own
+#   write path is what actually gets exercised and asserted on.
+# - **Cleanup** (finding 7): a single `atexit`-registered scratch root
+#   covers every per-`home` subdirectory ever created, however many
+#   distinct `home` values this file uses, instead of leaking one
+#   never-cleaned directory per test run.
+# - A first attempt at this made the fallback a plain SIBLING of `home`
+#   (`<home>-home-env-fallback`) to piggyback on `self.tmpdir`'s own
+#   cleanup. That breaks for exactly the tests worth having (the
+#   worktree-refusal ones): when `home` sits inside a throwaway Git repo
+#   (e.g. `repo_dir / "ocw-meter-home"`), a sibling of `home` sits
+#   inside that SAME repo, so `default_storage_root()` built from it
+#   resolves inside a Git worktree too — `emit_meter_error`'s own
+#   `in_git_worktree(target_root)` guard then refuses to write the
+#   diagnostic at all, silently defeating the very scenario under test.
+#   Hashing `home` into a name under a fixed, git-free scratch root
+#   sidesteps that entirely.
+_HOME_FALLBACK_SCRATCH_ROOT = tempfile.mkdtemp(prefix="ocw-meter-test-home-fallbacks-")
+atexit.register(shutil.rmtree, _HOME_FALLBACK_SCRATCH_ROOT, ignore_errors=True)
+
+
+def _default_home_for(home):
+    digest = hashlib.sha1(str(home).encode("utf-8")).hexdigest()[:16]
+    return str(pathlib.Path(_HOME_FALLBACK_SCRATCH_ROOT) / digest)
 
 
 def run_meter(args, home, extra_env=None, timeout=30, cwd=None):
@@ -62,6 +113,8 @@ def run_meter(args, home, extra_env=None, timeout=30, cwd=None):
     # under, so assertions about "unset -> null" stay meaningful.
     for key in ("OCW_RUN_ID", "OCW_ROLE", "HERDR_WORKSPACE_ID", "HERDR_PANE_ID"):
         env.pop(key, None)
+    if not extra_env or "HOME" not in extra_env:
+        env["HOME"] = _default_home_for(home)
     if extra_env:
         env.update(extra_env)
     return subprocess.run(
@@ -82,6 +135,8 @@ def run_snapshot_quota(stdin_text, home, extra_env=None, timeout=30):
     env["OCW_METER_HOME"] = str(home)
     for key in ("OCW_RUN_ID", "OCW_ROLE", "HERDR_WORKSPACE_ID", "HERDR_PANE_ID"):
         env.pop(key, None)
+    if not extra_env or "HOME" not in extra_env:
+        env["HOME"] = _default_home_for(home)
     if extra_env:
         env.update(extra_env)
     return subprocess.run(
@@ -93,6 +148,37 @@ def run_snapshot_quota(stdin_text, home, extra_env=None, timeout=30):
         text=True,
         timeout=timeout,
     )
+
+
+def real_ocw_meter_home_contamination_fingerprint():
+    """A NARROW fingerprint of the developer's REAL
+    ~/.local/state/ocw-meter — deliberately NOT a full directory
+    snapshot (孫1 round-1 review finding 5): Claude Code's own statusLine
+    hook calls the real `ocw-meter snapshot-quota` roughly every 60s
+    independently of this test run, touching
+    events/YYYY-MM-DD.jsonl / state/quota-last-sample.json /
+    state/seen-keys/YYYY-MM.txt on this developer's machine — legitimate
+    activity a before/after full-tree equality check flags as a false
+    positive. This instead looks only at what a HOME-isolation bug in
+    THIS test file could plausibly cause: new test-shaped keys appearing
+    in quota-worktree-refusal.json, or meter-errors.jsonl growing."""
+    root = pathlib.Path(os.path.expanduser("~")) / ".local" / "state" / "ocw-meter"
+    refusal_path = root / "state" / "quota-worktree-refusal.json"
+    test_like_refusal_keys = set()
+    if refusal_path.exists():
+        try:
+            data = json.loads(refusal_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            data = {}
+        if isinstance(data, dict):
+            test_like_refusal_keys = {k for k in data if "ocw-meter-home" in k}
+    meter_errors_path = root / "state" / "meter-errors.jsonl"
+    meter_errors_line_count = 0
+    if meter_errors_path.exists():
+        meter_errors_line_count = len(
+            [line for line in meter_errors_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+        )
+    return test_like_refusal_keys, meter_errors_line_count
 
 
 def read_events(home):
@@ -2147,6 +2233,13 @@ class SnapshotQuotaBasicsTests(OcwMeterTestCase):
         self.assertEqual(event["raw_ref"], str(raw_files[0]))
 
     def test_git_worktree_home_refuses_write_but_still_prints_display(self):
+        # 孫1 (計画書 DOC-2608081456【4】): this test deliberately does NOT
+        # pass its own extra_env={"HOME": ...} — it exists specifically to
+        # exercise run_snapshot_quota's DEFAULT isolation (see
+        # _default_home_for above). Before that fix, the meter.error
+        # fallback this triggers landed in this developer's real
+        # ~/.local/state/ocw-meter every single test run.
+        real_home_before = real_ocw_meter_home_contamination_fingerprint()
         repo_dir = pathlib.Path(self.tmpdir.name) / "repo"
         subprocess.run(["git", "init", "-q", str(repo_dir)], check=True)
         bad_home = repo_dir / "ocw-meter-home"
@@ -2155,6 +2248,424 @@ class SnapshotQuotaBasicsTests(OcwMeterTestCase):
         self.assertEqual(result.stdout.strip(), "5h:37% 7d:12% ctx:24%")
         self.assertIn("resolves inside a Git worktree", result.stderr)
         self.assertFalse((bad_home / "events").exists())
+
+        # The refusal's meter.error self-diagnostic must land under the
+        # isolated $HOME the helper substituted for THIS call (derived
+        # from bad_home — round-1 review finding 9's per-call
+        # isolation), not the real one.
+        fallback_root = pathlib.Path(_default_home_for(bad_home)) / ".local" / "state" / "ocw-meter"
+        diagnostics = read_meter_errors(fallback_root)
+        self.assertTrue(
+            any(d["stage"] == "storage_home_inside_git_worktree" for d in diagnostics),
+            "expected the worktree-refusal meter.error under the isolated $HOME fallback",
+        )
+        self.assertEqual(real_ocw_meter_home_contamination_fingerprint(), real_home_before)
+
+
+class HomeIsolationContractTests(OcwMeterTestCase):
+    """孫1 (計画書 DOC-2608081456【4】): a contract test for run_meter/
+    run_snapshot_quota themselves, not for ocw-meter — any test in this
+    file that forgets to override $HOME must still never touch the
+    developer's real ~/.local/state/ocw-meter, because the helpers
+    default it to a throwaway directory unless a test opts out."""
+
+    def test_run_snapshot_quota_never_touches_the_real_home_without_an_explicit_override(self):
+        before = real_ocw_meter_home_contamination_fingerprint()
+        repo_dir = pathlib.Path(self.tmpdir.name) / "repo-for-home-isolation-contract"
+        subprocess.run(["git", "init", "-q", str(repo_dir)], check=True)
+        bad_home = repo_dir / "ocw-meter-home"
+        # Triggers the one code path (worktree-refusal fallback) that
+        # ever reads $HOME at all — anything less would pass trivially.
+        result = run_snapshot_quota(json.dumps(CLAUDE_STATUSLINE_SAMPLE), bad_home)
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(real_ocw_meter_home_contamination_fingerprint(), before)
+
+    def test_run_meter_never_touches_the_real_home_without_an_explicit_override(self):
+        before = real_ocw_meter_home_contamination_fingerprint()
+        repo_dir = pathlib.Path(self.tmpdir.name) / "repo-for-home-isolation-contract-2"
+        subprocess.run(["git", "init", "-q", str(repo_dir)], check=True)
+        bad_home = repo_dir / "ocw-meter-home"
+        result = run_meter(["event", "run.start", "--idempotency-key", "k1"], bad_home)
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(real_ocw_meter_home_contamination_fingerprint(), before)
+
+
+def _iso(dt):
+    return dt.strftime("%Y-%m-%dT%H:%M:%S.") + f"{dt.microsecond // 1000:03d}Z"
+
+
+def _write_worktree_refusal_state(home, entries):
+    # The refusal cache lives at the DEFAULT storage root
+    # ($HOME/.local/state/ocw-meter), not at $HOME itself — mirrors
+    # default_storage_root() in bin/ocw-meter.
+    state_dir = pathlib.Path(home) / ".local" / "state" / "ocw-meter" / "state"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    path = state_dir / "quota-worktree-refusal.json"
+    path.write_text(json.dumps(entries), encoding="utf-8")
+    return path
+
+
+class WorktreeRefusalPruningTests(OcwMeterTestCase):
+    """孫1 (計画書 DOC-2608081456【6】): quota-worktree-refusal.json used to
+    only drop entries older than QUOTA_SESSION_STATE_MAX_AGE_SECONDS (24h)
+    at the moment a NEW refusal was recorded — once refusals stopped
+    happening, stale entries sat in the file forever (37 of them, all
+    >24h old, found on this machine's real store). Pruning must now also
+    happen on every READ, so a normal (non-refusing) `snapshot-quota`
+    call cleans them up too."""
+
+    def _fresh_default_home(self):
+        # The refusal cache always lives at the DEFAULT ($HOME-derived)
+        # root, never at OCW_METER_HOME itself (see
+        # load_and_prune_worktree_refusal_state's docstring in
+        # bin/ocw-meter) — this must be a directory distinct from
+        # self.home (OCW_METER_HOME) for that caching code path to
+        # engage at all.
+        default_home = pathlib.Path(self.tmpdir.name) / "fake-home-for-pruning"
+        default_home.mkdir()
+        return default_home
+
+    def _call(self, default_home):
+        return run_snapshot_quota(
+            json.dumps(CLAUDE_STATUSLINE_SAMPLE),
+            self.home,
+            extra_env={"HOME": str(default_home), "OCW_METER_QUOTA_INTERVAL": "0"},
+        )
+
+    def test_stale_entries_are_pruned_when_ocw_meter_home_is_unset_matching_the_default_root(self):
+        # round-1 review finding 1: THE single most common real
+        # configuration is OCW_METER_HOME unset entirely, in which case
+        # bin/ocw-meter's own bash wrapper defaults it to
+        # `$HOME/.local/state/ocw-meter` — i.e. `storage_root() ==
+        # default_storage_root()`. An earlier version of the read-time
+        # pruning fix additionally required the two to DIFFER before
+        # even loading (and therefore pruning) the file, which silently
+        # skipped pruning in exactly this configuration — the one this
+        # machine's real 37 stale entries needed. This reproduces that
+        # configuration directly (OCW_METER_HOME left unset, unlike
+        # every other test in this class, which always sets it via
+        # run_snapshot_quota's `home` argument).
+        home = pathlib.Path(self.tmpdir.name) / "home-for-unset-ocw-meter-home"
+        home.mkdir()
+        old_ts = _iso(datetime.now(timezone.utc) - timedelta(hours=25))
+        state_path = _write_worktree_refusal_state(home, {"/some/old/bad/root": old_ts})
+
+        env = dict(os.environ)
+        env.pop("OCW_METER_HOME", None)
+        env["HOME"] = str(home)
+        env["OCW_METER_QUOTA_INTERVAL"] = "0"
+        for key in ("OCW_RUN_ID", "OCW_ROLE", "HERDR_WORKSPACE_ID", "HERDR_PANE_ID"):
+            env.pop(key, None)
+        result = subprocess.run(
+            [str(OCW_METER), "snapshot-quota"],
+            cwd=str(REPO_ROOT),
+            env=env,
+            input=json.dumps(CLAUDE_STATUSLINE_SAMPLE),
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(json.loads(state_path.read_text(encoding="utf-8")), {})
+
+    def test_stale_entries_are_pruned_on_a_normal_non_refusing_call(self):
+        default_home = self._fresh_default_home()
+        old_ts = _iso(datetime.now(timezone.utc) - timedelta(hours=25))
+        state_path = _write_worktree_refusal_state(default_home, {"/some/old/bad/root": old_ts})
+
+        result = self._call(default_home)
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(json.loads(state_path.read_text(encoding="utf-8")), {})
+
+    def test_entries_within_24h_are_kept(self):
+        default_home = self._fresh_default_home()
+        recent_ts = _iso(datetime.now(timezone.utc) - timedelta(hours=1))
+        state_path = _write_worktree_refusal_state(default_home, {"/some/recent/bad/root": recent_ts})
+
+        result = self._call(default_home)
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(
+            json.loads(state_path.read_text(encoding="utf-8")),
+            {"/some/recent/bad/root": recent_ts},
+        )
+
+    def test_stale_and_fresh_entries_mixed_only_stale_ones_are_dropped(self):
+        default_home = self._fresh_default_home()
+        old_ts = _iso(datetime.now(timezone.utc) - timedelta(hours=25))
+        recent_ts = _iso(datetime.now(timezone.utc) - timedelta(hours=1))
+        state_path = _write_worktree_refusal_state(
+            default_home, {"/old/root": old_ts, "/recent/root": recent_ts}
+        )
+
+        result = self._call(default_home)
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(
+            json.loads(state_path.read_text(encoding="utf-8")),
+            {"/recent/root": recent_ts},
+        )
+
+    def test_mtime_is_unchanged_when_nothing_needs_pruning(self):
+        # No wasted write-back on the common case: snapshot-quota is
+        # called on essentially every statusLine tick (~60s throttle), so
+        # a machine with zero or all-fresh refusal entries must not pay
+        # for a rewrite on every single call.
+        default_home = self._fresh_default_home()
+        recent_ts = _iso(datetime.now(timezone.utc) - timedelta(hours=1))
+        state_path = _write_worktree_refusal_state(default_home, {"/recent/root": recent_ts})
+        mtime_before = state_path.stat().st_mtime_ns
+
+        result = self._call(default_home)
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(state_path.stat().st_mtime_ns, mtime_before)
+
+
+def _write_meter_errors(home, event_dicts):
+    state_dir = pathlib.Path(home) / "state"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    path = state_dir / "meter-errors.jsonl"
+    path.write_text("".join(json.dumps(d, ensure_ascii=False) + "\n" for d in event_dicts), encoding="utf-8")
+    return path
+
+
+def _write_refusal_state_at_default_root(ocw_meter_home, entries):
+    # round-1 review finding 2: quota-worktree-refusal.json is ALWAYS at
+    # the DEFAULT ($HOME-derived) root, never under a custom
+    # OCW_METER_HOME — same as WorktreeRefusalPruningTests'
+    # _write_worktree_refusal_state above. run_meter (used without an
+    # explicit extra_env={"HOME": ...} override here) defaults $HOME to
+    # `_default_home_for(ocw_meter_home)`, so that is where
+    # prune-diagnostics will actually look.
+    default_home = _default_home_for(ocw_meter_home)
+    state_dir = pathlib.Path(default_home) / ".local" / "state" / "ocw-meter" / "state"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    path = state_dir / "quota-worktree-refusal.json"
+    path.write_text(json.dumps(entries), encoding="utf-8")
+    return path
+
+
+class PruneDiagnosticsTests(OcwMeterTestCase):
+    """孫1 (計画書 DOC-2608081456【4】の後始末): `ocw-meter prune-diagnostics`
+    cleans up state/meter-errors.jsonl and state/quota-worktree-
+    refusal.json only, dry-run by default."""
+
+    def _seed(self):
+        old_ts = _iso(datetime.now(timezone.utc) - timedelta(days=31))
+        new_ts = _iso(datetime.now(timezone.utc) - timedelta(days=1))
+        errors_path = _write_meter_errors(
+            self.home,
+            [
+                {
+                    "schema_version": 1, "event_type": "meter.error",
+                    "idempotency_key": "meter-error:storage_home_inside_git_worktree:old",
+                    "ts": old_ts, "stage": "storage_home_inside_git_worktree", "completeness": "unknown",
+                },
+                {
+                    "schema_version": 1, "event_type": "meter.error",
+                    "idempotency_key": "meter-error:storage_home_inside_git_worktree:new",
+                    "ts": new_ts, "stage": "storage_home_inside_git_worktree", "completeness": "unknown",
+                },
+            ],
+        )
+        refusal_path = _write_refusal_state_at_default_root(
+            self.home, {"/old/root": old_ts, "/new/root": new_ts}
+        )
+        return old_ts, new_ts, errors_path, refusal_path
+
+    def test_dry_run_default_removes_nothing_but_reports_counts(self):
+        old_ts, new_ts, errors_path, refusal_path = self._seed()
+
+        result = run_meter(["prune-diagnostics"], self.home)
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("dry-run", result.stdout)
+        self.assertIn("would remove 1, kept 1", result.stdout)
+
+        self.assertEqual(len(errors_path.read_text(encoding="utf-8").splitlines()), 2)
+        self.assertEqual(len(json.loads(refusal_path.read_text(encoding="utf-8"))), 2)
+
+    def test_apply_removes_only_old_entries(self):
+        old_ts, new_ts, errors_path, refusal_path = self._seed()
+
+        result = run_meter(["prune-diagnostics", "--apply"], self.home)
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("applied", result.stdout)
+        self.assertIn("removed 1, kept 1", result.stdout)
+
+        remaining_errors = [
+            json.loads(line) for line in errors_path.read_text(encoding="utf-8").splitlines() if line.strip()
+        ]
+        self.assertEqual(len(remaining_errors), 1)
+        self.assertEqual(remaining_errors[0]["ts"], new_ts)
+
+        self.assertEqual(json.loads(refusal_path.read_text(encoding="utf-8")), {"/new/root": new_ts})
+
+    def test_older_than_overrides_the_default_retention(self):
+        old_ts, new_ts, errors_path, refusal_path = self._seed()
+        # new_ts is 1 day old; --older-than 0 makes even that eligible.
+        result = run_meter(["prune-diagnostics", "--older-than", "0", "--apply"], self.home)
+        self.assertEqual(result.returncode, 0)
+        # Every entry was eligible, so the emptied meter-errors.jsonl is
+        # removed outright rather than left behind as a 0-byte file.
+        self.assertFalse(errors_path.exists())
+        self.assertEqual(json.loads(refusal_path.read_text(encoding="utf-8")), {})
+
+    def test_events_directory_is_never_touched(self):
+        old_ts, _new_ts, _errors_path, _refusal_path = self._seed()
+        # A real event, well outside the retention window, in events/ —
+        # must survive byte-for-byte. Deleting observation events is
+        # `prune`'s territory (deliberately unimplemented); this
+        # subcommand must never touch events/*.jsonl.
+        run_meter(["event", "run.start", "--idempotency-key", "k1", "--ts", old_ts], self.home)
+        events_dir = self.home / "events"
+        before = {p.name: p.read_bytes() for p in events_dir.glob("*.jsonl")}
+        self.assertTrue(before)
+
+        result = run_meter(["prune-diagnostics", "--apply"], self.home)
+        self.assertEqual(result.returncode, 0)
+
+        after = {p.name: p.read_bytes() for p in events_dir.glob("*.jsonl")}
+        self.assertEqual(before, after)
+
+    def test_missing_target_files_report_zero_and_exit_zero(self):
+        result = run_meter(["prune-diagnostics"], self.home)
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("would remove 0, kept 0", result.stdout)
+
+        result_apply = run_meter(["prune-diagnostics", "--apply"], self.home)
+        self.assertEqual(result_apply.returncode, 0)
+        self.assertIn("removed 0, kept 0", result_apply.stdout)
+
+    def test_corrupt_refusal_json_is_reported_as_corrupt_not_silently_treated_as_empty(self):
+        # round-1 review finding 8: silently treating a corrupt file as
+        # {} (load_json_state_file's normal, correct behavior for every
+        # OTHER caller) let this subcommand report "kept 0" for a file
+        # that, in fact, was still sitting there unreadable. The dry-run
+        # output must say so, and --apply must repair it (replace with a
+        # valid empty state), not just avoid crashing.
+        default_home = _default_home_for(self.home)
+        refusal_path = pathlib.Path(default_home) / ".local" / "state" / "ocw-meter" / "state" / "quota-worktree-refusal.json"
+        refusal_path.parent.mkdir(parents=True, exist_ok=True)
+        refusal_path.write_text("{not valid json", encoding="utf-8")
+
+        result = run_meter(["prune-diagnostics"], self.home)
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("could not parse", result.stdout)
+        # Untouched in dry-run.
+        self.assertEqual(refusal_path.read_text(encoding="utf-8"), "{not valid json")
+
+        result_apply = run_meter(["prune-diagnostics", "--apply"], self.home)
+        self.assertEqual(result_apply.returncode, 0)
+        self.assertIn("replaced with an empty state", result_apply.stdout)
+        self.assertEqual(json.loads(refusal_path.read_text(encoding="utf-8")), {})
+
+    def test_meter_errors_under_the_default_root_fallback_are_also_cleaned(self):
+        # round-1 review finding 2: emit_meter_error falls back to the
+        # DEFAULT ($HOME-derived) root whenever OCW_METER_HOME itself is
+        # refused for resolving inside a Git worktree — this subcommand
+        # must reach diagnostics stored there too, not only under
+        # OCW_METER_HOME (which, in this exact scenario, cannot hold
+        # ANY of ocw-meter's own files at all).
+        repo_dir = pathlib.Path(self.tmpdir.name) / "repo-for-default-root-fallback"
+        subprocess.run(["git", "init", "-q", str(repo_dir)], check=True)
+        bad_home = repo_dir / "ocw-meter-home"
+        fake_home = pathlib.Path(self.tmpdir.name) / "fake-home-for-default-root-fallback"
+        fake_home.mkdir()
+        old_ts = _iso(datetime.now(timezone.utc) - timedelta(days=31))
+        errors_path = _write_meter_errors(
+            fake_home / ".local" / "state" / "ocw-meter",
+            [
+                {
+                    "schema_version": 1, "event_type": "meter.error",
+                    "idempotency_key": "meter-error:storage_home_inside_git_worktree:old",
+                    "ts": old_ts, "stage": "storage_home_inside_git_worktree", "completeness": "unknown",
+                },
+            ],
+        )
+
+        result = run_meter(["prune-diagnostics", "--apply"], bad_home, extra_env={"HOME": str(fake_home)})
+        self.assertEqual(result.returncode, 0)
+        self.assertFalse(errors_path.exists())
+
+    def test_trailing_slash_ocw_meter_home_does_not_double_count_meter_errors(self):
+        # round-2 review finding 2: storage_root() and
+        # default_storage_root() were deduped by bare string equality —
+        # a trailing slash on OCW_METER_HOME made the SAME real
+        # directory look like two distinct roots, so meter-errors.jsonl
+        # got read (and reported) twice, and dry-run/--apply disagreed.
+        fake_home = pathlib.Path(self.tmpdir.name) / "fake-home-for-trailing-slash"
+        fake_home.mkdir()
+        default_root = fake_home / ".local" / "state" / "ocw-meter"
+        old_ts = _iso(datetime.now(timezone.utc) - timedelta(days=31))
+        errors_path = _write_meter_errors(
+            default_root,
+            [
+                {
+                    "schema_version": 1, "event_type": "meter.error",
+                    "idempotency_key": "meter-error:storage_home_inside_git_worktree:old",
+                    "ts": old_ts, "stage": "storage_home_inside_git_worktree", "completeness": "unknown",
+                },
+            ],
+        )
+        # Same real directory as default_storage_root() would compute,
+        # spelled with a trailing slash as OCW_METER_HOME.
+        ocw_meter_home_with_slash = str(default_root) + "/"
+
+        result = run_meter(["prune-diagnostics"], ocw_meter_home_with_slash, extra_env={"HOME": str(fake_home)})
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("would remove 1, kept 0", result.stdout)
+
+        result_apply = run_meter(
+            ["prune-diagnostics", "--apply"], ocw_meter_home_with_slash, extra_env={"HOME": str(fake_home)}
+        )
+        self.assertEqual(result_apply.returncode, 0)
+        self.assertIn("removed 1, kept 0", result_apply.stdout)
+        # The only entry was dropped, so the file is removed outright
+        # (same convention as an emptied meter-errors.jsonl elsewhere) —
+        # if it had instead been double-counted, this would still exist
+        # with the second, incorrectly-kept "copy" of the entry.
+        self.assertFalse(errors_path.exists())
+
+    def test_per_root_breakdown_shown_when_both_roots_have_meter_errors(self):
+        # round-2 review finding 4: once meter-errors.jsonl could live
+        # under either root, the aggregate count alone no longer says
+        # which physical file(s) actually get rewritten.
+        fake_home = pathlib.Path(self.tmpdir.name) / "fake-home-for-breakdown"
+        fake_home.mkdir()
+        default_root = fake_home / ".local" / "state" / "ocw-meter"
+        old_ts = _iso(datetime.now(timezone.utc) - timedelta(days=31))
+        _write_meter_errors(
+            default_root,
+            [
+                {
+                    "schema_version": 1, "event_type": "meter.error",
+                    "idempotency_key": "meter-error:storage_home_inside_git_worktree:default",
+                    "ts": old_ts, "stage": "storage_home_inside_git_worktree", "completeness": "unknown",
+                },
+            ],
+        )
+        _write_meter_errors(
+            self.home,
+            [
+                {
+                    "schema_version": 1, "event_type": "meter.error",
+                    "idempotency_key": "meter-error:write_event_lock_timeout:custom",
+                    "ts": old_ts, "stage": "write_event_lock_timeout", "completeness": "unknown",
+                },
+            ],
+        )
+
+        result = run_meter(["prune-diagnostics"], self.home, extra_env={"HOME": str(fake_home)})
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("would remove 2, kept 0", result.stdout)
+        self.assertIn(str(pathlib.Path(default_root).resolve()), result.stdout)
+        self.assertIn(str(pathlib.Path(self.home).resolve()), result.stdout)
+
+    def test_negative_older_than_is_rejected(self):
+        result = run_meter(["prune-diagnostics", "--older-than", "-1"], self.home)
+        self.assertNotEqual(result.returncode, 0)
+
+    def test_non_numeric_older_than_is_rejected(self):
+        result = run_meter(["prune-diagnostics", "--older-than", "not-a-number"], self.home)
+        self.assertNotEqual(result.returncode, 0)
 
 
 class SnapshotQuotaThrottleTests(OcwMeterTestCase):

@@ -24,6 +24,7 @@ usage:
   ocw-meter bind-pr --run <run_id> --pr <n> [--url <url>]
   ocw-meter ingest [--since <rfc3339-ts>]
   ocw-meter snapshot-quota
+  ocw-meter prune-diagnostics [--older-than <days>] [--apply]
   ocw-meter validate [--file <path>]
   ocw-meter report [--pr <n>] [--repo <owner>/<name>] [--json]
   ocw-meter report --phase [--pr <n>] [--repo <owner>/<name>] [--json]
@@ -169,6 +170,41 @@ subcommands:
     samples sharing the same `window_id` is flagged (completeness:
     "partial", stderr warning) rather than silently trusted.
 
+  prune-diagnostics [--older-than <days>] [--apply]
+    Cleans up ocw-meter's OWN diagnostic/state sidecar files —
+    state/meter-errors.jsonl and state/quota-worktree-refusal.json —
+    ONLY. Never touches events/*.jsonl (deleting events is `prune`'s
+    territory, and `prune` remains deliberately unimplemented — see
+    notes below). Default is dry-run: reports how many entries in each
+    file are older than --older-than days (default 30) without
+    modifying either file; pass --apply to actually rewrite them. A
+    SMALLER --older-than is usually needed to clean up entries left
+    over from a recent one-off misconfiguration (they will not be that
+    old yet) — this is a retention policy for ongoing hygiene, not a
+    "clean everything now" default.
+
+    Checks BOTH OCW_METER_HOME (or its own default when unset) and the
+    $HOME-derived default root: quota-worktree-refusal.json is ALWAYS
+    written under the latter regardless of OCW_METER_HOME, and
+    meter-errors.jsonl can end up under either (emit_meter_error falls
+    back to the default root whenever OCW_METER_HOME itself is refused
+    for resolving inside a Git worktree). A root that itself resolves
+    inside a Git worktree is skipped, not fatal, as long as the other
+    one is reachable. The two roots are compared by RESOLVED path, so a
+    trailing slash or a symlink does not make the same real directory
+    look like two roots and get double-counted. The roots actually
+    checked are always printed, and meter-errors.jsonl gets a per-root
+    breakdown whenever more than one contributed to the total. A
+    corrupt (unparseable, or not a JSON object) quota-worktree-
+    refusal.json is reported as such, not silently treated as empty;
+    --apply replaces it with a fresh empty state.
+
+    Always reports both a removed count and a kept count, plus (as
+    informational-only text, never as a deletion criterion) how many of
+    the removed entries look test-derived by path shape. Fail-loud
+    (non-zero exit) on unexpected failure, like validate/report/ingest
+    — unlike event/bind-pr/snapshot-quota's fail-open contract.
+
 environment:
   OCW_METER_HOME
     default: $HOME/.local/state/ocw-meter
@@ -275,7 +311,7 @@ case "$cmd" in
     usage
     exit 0
     ;;
-  event | bind-pr | validate | report | ingest | snapshot-quota)
+  event | bind-pr | validate | report | ingest | snapshot-quota | prune-diagnostics)
     ;;
   *)
     usage >&2
@@ -392,7 +428,7 @@ import sys
 import tempfile
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 SCHEMA_VERSION = 1
 # Bumped whenever `ingest`'s transcript-line -> usage.message extraction
@@ -688,6 +724,18 @@ class Paths:
         # the main lock made the write_event_lock_timeout diagnostic
         # self-defeating: it would need the very lock it's reporting as
         # unavailable).
+        #
+        # ONE exception (孫1, 計画書 DOC-2608081456【4】後始末, round-1
+        # review finding 4): `cmd_prune_diagnostics --apply` rewrites
+        # this file wholesale (mkstemp + os.replace) to drop aged-out
+        # lines. That is a deliberate, human-invoked, infrequent hygiene
+        # operation, not a background writer — `emit_meter_error` itself
+        # still never touches the main lock for this file. The narrow
+        # accepted risk: an `emit_meter_error` append landing in the
+        # exact instant between prune-diagnostics reading the old inode
+        # and replacing it is lost (one low-value diagnostic line, not
+        # silently corrupted data — os.replace is atomic, so readers
+        # never see a half-written file).
         self.meter_errors_file = self.state_dir / "meter-errors.jsonl"
 
 
@@ -3813,8 +3861,44 @@ def save_quota_state(paths, state):
     save_json_state_file(paths, QUOTA_STATE_FILENAME, state)
 
 
-def load_worktree_refusal_state(paths):
-    return load_json_state_file(paths, QUOTA_WORKTREE_REFUSAL_FILENAME)
+def load_and_prune_worktree_refusal_state(paths, now=None):
+    """Reads quota-worktree-refusal.json and prunes entries older than
+    QUOTA_SESSION_STATE_MAX_AGE_SECONDS on every read, not only when a
+    NEW refusal is about to be recorded (孫1, 計画書 DOC-2608081456【6】:
+    previously the only pruning happened inside the write-a-new-refusal
+    branch below, so once a misconfiguration stopped happening the last
+    stale entries sat in the file forever — 37 of them, all >24h old, on
+    this machine's real store).
+
+    Named `load_and_prune_*`, not `load_*`, on purpose (孫1 round-1
+    review finding 9): every other `load_*` function in this file
+    (`load_json_state_file` / `load_quota_state` / `load_ingest_cursor` /
+    `load_session_pr_links`) is a pure read, and this one is not — it
+    can write. `cmd_prune_diagnostics` deliberately calls
+    `load_json_state_file` directly instead of this function, precisely
+    to avoid that write side effect; the name difference is what makes
+    that choice legible at the call site.
+
+    If pruning actually dropped something, the pruned result is written
+    straight back so the file shrinks on the very next call after the
+    misconfiguration stops (no NEW refusal is needed to trigger cleanup
+    anymore). The overwhelmingly common case — nothing has ever been
+    refused, or nothing here has expired yet — stays a pure read with no
+    write I/O: `snapshot-quota` calls this on essentially every
+    statusLine tick (~60s throttle), so paying for a write on every call
+    would be wasteful for machines that never hit this path at all."""
+    raw = load_json_state_file(paths, QUOTA_WORKTREE_REFUSAL_FILENAME)
+    if now is None:
+        now = datetime.now(timezone.utc)
+    pruned = {}
+    for bad_root, checked_at in raw.items():
+        checked_ts = parse_ts(checked_at) if isinstance(checked_at, str) else None
+        if checked_ts is not None and (now - checked_ts).total_seconds() <= QUOTA_SESSION_STATE_MAX_AGE_SECONDS:
+            pruned[bad_root] = checked_at
+    if len(pruned) != len(raw):
+        with contextlib.suppress(Exception):
+            save_worktree_refusal_state(paths, pruned)
+    return pruned
 
 
 def save_worktree_refusal_state(paths, state):
@@ -3974,20 +4058,50 @@ def record_quota_sample(obj):
     # worktree, there is nowhere left to cache the refusal — `root`
     # simply gets re-checked every call in that (rare, doubly-
     # misconfigured) case, same as before this suppression existed.
+    #
+    # 孫1 round-1 review finding 1: this used to additionally require
+    # `default_root != root` before even LOADING (and therefore
+    # pruning) the file — which meant the read-time pruning added
+    # above never ran in the single most common configuration of all:
+    # OCW_METER_HOME unset, so `storage_root()` and
+    # `default_storage_root()` resolve to the identical path. That is
+    # exactly the "misconfiguration has stopped" state 計画書
+    # DOC-2608081456【6】 is about, so the 37 stale entries found on
+    # this machine's real store would never have actually been pruned.
+    # Dropping that equality check is safe: the only reason it existed
+    # was to avoid writing the cache INTO the very root being refused,
+    # and that is already fully handled by the `not
+    # in_git_worktree(default_root)` check alone — if `default_root ==
+    # root` and `root` is refused, `default_root` is refused too (same
+    # path), so `refusal_paths` still ends up None via that check, no
+    # new paradox introduced.
     default_root = default_storage_root()
-    refusal_paths = (
-        Paths(default_root)
-        if (default_root and default_root != root and not in_git_worktree(default_root))
-        else None
-    )
+    # 孫1 round-2 review finding 1: `default_root == root` is exactly the
+    # common case the round-1 fix above stopped short-circuiting on
+    # (OCW_METER_HOME unset) — so `in_git_worktree(default_root)` below
+    # and `in_git_worktree(root)` a few lines down were now hitting the
+    # SAME path with two separate `git rev-parse --is-inside-work-tree`
+    # subprocess calls per `snapshot-quota` invocation, exactly the
+    # doubled cost this function's own docstring and the comment on the
+    # per-session throttle check above both say to avoid. Evaluate it
+    # ONCE here and reuse the result for `root` whenever the two paths
+    # are identical.
+    default_root_is_worktree = bool(default_root) and in_git_worktree(default_root)
+    refusal_paths = Paths(default_root) if (default_root and not default_root_is_worktree) else None
+    refusal_state = {}
     if refusal_paths is not None:
-        refusal_state = load_worktree_refusal_state(refusal_paths)
+        # Already pruned of anything >24h old (see load_and_prune_
+        # worktree_refusal_state's own docstring) — reused below instead
+        # of re-loading, so a refusal doesn't pay for reading+pruning the
+        # file twice.
+        refusal_state = load_and_prune_worktree_refusal_state(refusal_paths, now)
         last_refused_at = refusal_state.get(root)
         last_refused_at = parse_ts(last_refused_at) if isinstance(last_refused_at, str) else None
         if last_refused_at is not None and (now - last_refused_at).total_seconds() < interval:
             return  # still within the suppression window from a previous refusal
 
-    if in_git_worktree(root):
+    root_is_worktree = default_root_is_worktree if (default_root and default_root == root) else in_git_worktree(root)
+    if root_is_worktree:
         print(
             f"warning: OCW_METER_HOME ({root}) resolves inside a Git worktree; "
             "refusing to write there (no quota.sample recorded)",
@@ -3996,11 +4110,7 @@ def record_quota_sample(obj):
         emit_meter_error(root, "storage_home_inside_git_worktree", None)
         if refusal_paths is not None:
             with contextlib.suppress(Exception):
-                updated = {}
-                for bad_root, checked_at in load_worktree_refusal_state(refusal_paths).items():
-                    checked_ts = parse_ts(checked_at) if isinstance(checked_at, str) else None
-                    if checked_ts is not None and (now - checked_ts).total_seconds() <= QUOTA_SESSION_STATE_MAX_AGE_SECONDS:
-                        updated[bad_root] = checked_at
+                updated = dict(refusal_state)
                 updated[root] = iso_utc(now)
                 save_worktree_refusal_state(refusal_paths, updated)
         return
@@ -4190,6 +4300,314 @@ def cmd_snapshot_quota(args):
     return 0
 
 
+# ── subcommand: prune-diagnostics (孫1, 計画書 DOC-2608081456【4】【6】) ──
+
+PRUNE_DIAGNOSTICS_DEFAULT_OLDER_THAN_DAYS = 30
+
+# Best-effort heuristic ONLY — see _looks_test_derived below. Never used
+# to decide what actually gets deleted (age is the only deletion
+# criterion); shown in dry-run/apply output purely as extra context.
+_TEST_ARTIFACT_PATH_HINT = "ocw-meter-home"
+
+
+def _looks_test_derived(text):
+    """Real test fixtures across bin/tests/test_ocw_meter.py always name
+    their throwaway storage root literally "...ocw-meter-home" (see
+    OcwMeterTestCase.home and every `bad_home = <repo>/ocw-meter-home`
+    variant used to exercise the worktree-refusal path) — a name a real
+    misconfiguration is very unlikely to coincidentally share. False
+    negatives (a differently-named test fixture) are expected and fine:
+    this is informational only, never a deletion criterion (計画書
+    DOC-2608081456 孫1プロンプト: 「削除条件にはしない」)."""
+    return isinstance(text, str) and _TEST_ARTIFACT_PATH_HINT in text
+
+
+def _parse_prune_diagnostics_args(args):
+    apply_changes = False
+    older_than_days = PRUNE_DIAGNOSTICS_DEFAULT_OLDER_THAN_DAYS
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        if arg == "--apply":
+            apply_changes = True
+            i += 1
+        elif arg == "--older-than":
+            if i + 1 >= len(args):
+                raise ValueError("--older-than requires a value")
+            raw = args[i + 1]
+            try:
+                older_than_days = int(raw)
+            except ValueError:
+                raise ValueError(f"--older-than expects an integer number of days, got: {raw}") from None
+            if older_than_days < 0:
+                raise ValueError("--older-than must not be negative")
+            i += 2
+        else:
+            raise ValueError(f"unrecognized argument: {arg}")
+    return apply_changes, older_than_days
+
+
+def _resolve_path_str(path):
+    """Same normalization `in_git_worktree` applies internally (resolve,
+    falling back to the original on OSError) — used here so dedup
+    compares REAL locations, not surface path spelling."""
+    p = pathlib.Path(path)
+    try:
+        return str(p.resolve())
+    except OSError:
+        return str(p)
+
+
+def _diagnostic_target_roots():
+    """The distinct, reachable storage roots ocw-meter's OWN diagnostics
+    can actually live under (孫1 round-1 review finding 2):
+    `storage_root()` (OCW_METER_HOME, or its own default when unset) is
+    where `emit_meter_error` normally appends state/meter-errors.jsonl,
+    and `default_storage_root()` ($HOME-derived) is BOTH where
+    `emit_meter_error` falls back to whenever `storage_root()` itself is
+    refused for resolving inside a Git worktree, AND the ONLY place
+    state/quota-worktree-refusal.json is ever written (see
+    load_and_prune_worktree_refusal_state's docstring) — never under a
+    custom OCW_METER_HOME. A root that itself resolves inside a Git
+    worktree is skipped, not fatal for the whole subcommand: the other
+    root may still be reachable and worth cleaning.
+
+    Dedup compares RESOLVED paths (孫1 round-2 review finding 2): a bare
+    string comparison let a trailing slash or a symlink hop make
+    `storage_root()` and `default_storage_root()` look like two
+    different roots when they were the same real directory, so
+    `state/meter-errors.jsonl` got read (and counted) twice — dry-run
+    and `--apply` then disagreed on how many lines would be removed.
+    The RESOLVED path is also what gets returned and used to build
+    `Paths(...)` downstream, so every consumer sees the same
+    canonicalized root `in_git_worktree` itself already compares
+    against."""
+    roots = []
+    seen = set()
+    for candidate in (storage_root(), default_storage_root()):
+        if not candidate:
+            continue
+        resolved = _resolve_path_str(candidate)
+        if resolved in seen:
+            continue
+        if in_git_worktree(resolved):
+            continue
+        seen.add(resolved)
+        roots.append(resolved)
+    return roots
+
+
+def _split_meter_errors_by_age(raw_text, now, max_age):
+    kept = []
+    dropped = 0
+    dropped_test_like = 0
+    for line in raw_text.splitlines():
+        if not line.strip():
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            # Not this subcommand's job to quarantine malformed lines —
+            # that is `validate`'s contract, and it only applies to
+            # events/*.jsonl. Keep anything unparseable rather than
+            # guess whether it is stale.
+            kept.append(line)
+            continue
+        ts = parse_ts(event.get("ts")) if isinstance(event, dict) else None
+        if ts is not None and (now - ts) > max_age:
+            dropped += 1
+            if _looks_test_derived(line):
+                dropped_test_like += 1
+        else:
+            kept.append(line)
+    return kept, dropped, dropped_test_like
+
+
+def _rewrite_meter_errors_file(paths, kept_lines):
+    if kept_lines:
+        ensure_dir(paths.state_dir, 0o700)
+        tmp_fd, tmp_path = tempfile.mkstemp(dir=str(paths.state_dir), prefix=".tmp-", suffix=".jsonl")
+        try:
+            with os.fdopen(tmp_fd, "w", encoding="utf-8") as fh:
+                fh.write("\n".join(kept_lines) + "\n")
+            os.chmod(tmp_path, 0o600)
+            os.replace(tmp_path, paths.meter_errors_file)
+        except Exception:
+            with contextlib.suppress(OSError):
+                os.unlink(tmp_path)
+            raise
+    else:
+        paths.meter_errors_file.unlink()
+
+
+def _read_worktree_refusal_state_raw(paths):
+    """Like load_json_state_file, but distinguishes "absent/empty" from
+    "present but unparseable" (孫1 round-1 review finding 8) — silently
+    treating a corrupt file as `{}` (load_json_state_file's own
+    contract, correct for every OTHER caller) let prune-diagnostics
+    report "kept 0" for a file that, in fact, was still sitting there
+    corrupt and untouched. Returns (data, was_corrupt)."""
+    path = paths.state_dir / QUOTA_WORKTREE_REFUSAL_FILENAME
+    if not path.exists():
+        return {}, False
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return {}, True
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        return {}, True
+    return (data, False) if isinstance(data, dict) else ({}, True)
+
+
+def cmd_prune_diagnostics(args):
+    """Cleans up ocw-meter's OWN diagnostic/state sidecar files —
+    state/meter-errors.jsonl and state/quota-worktree-refusal.json —
+    and ONLY those two. Deliberately never touches events/*.jsonl:
+    deleting observation events is `prune`'s territory, and `prune`
+    stays intentionally unimplemented (bin/README.md) — this subcommand
+    does not revisit that decision (計画書 DOC-2608081456【6】).
+
+    Checks BOTH `storage_root()` (OCW_METER_HOME, or its default) and
+    `default_storage_root()` ($HOME-derived) — see
+    _diagnostic_target_roots — since ocw-meter's own diagnostics can
+    legitimately end up at either, and quota-worktree-refusal.json is
+    ALWAYS at the default root regardless of OCW_METER_HOME. A root
+    that resolves inside a Git worktree is skipped, not fatal: the
+    other root may still be reachable. The two are compared by
+    RESOLVED path, so a trailing slash or a symlink hop never makes the
+    same real directory look like two different roots (which would
+    otherwise double-count state/meter-errors.jsonl). The roots
+    actually selected are always printed, and state/meter-errors.jsonl
+    gets a per-root breakdown whenever more than one of them
+    contributed to the total.
+
+    Default is dry-run: reports counts without writing anything. Only
+    --apply rewrites the files, and only entries older than
+    --older-than days (default 30 — long enough that a human skimming
+    `report`'s "meter.error diagnostics: N lines" footer roughly once a
+    month still sees a genuine problem before it becomes eligible for
+    cleanup, short enough that a one-off misconfiguration from months
+    ago does not linger forever) are ever removed. This default will
+    NOT immediately clean up entries only a few days old — pass a
+    smaller --older-than for that (see bin/README.md). Fail-loud
+    (non-zero on unexpected error) like validate/report/ingest, not
+    fail-open like event/bind-pr/snapshot-quota — silently swallowing a
+    failure here would hide whether cleanup actually ran."""
+    try:
+        apply_changes, older_than_days = _parse_prune_diagnostics_args(args)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+    now = datetime.now(timezone.utc)
+    max_age = timedelta(days=older_than_days)
+    target_roots = _diagnostic_target_roots()
+
+    mode = "applied" if apply_changes else "dry-run (pass --apply to actually delete)"
+    print(f"prune-diagnostics: {mode}, --older-than {older_than_days}d")
+
+    if not target_roots:
+        print(
+            "  no reachable storage root (OCW_METER_HOME and the default "
+            "$HOME-derived root are both unset or resolve inside a Git "
+            "worktree) — nothing to clean",
+            file=sys.stderr,
+        )
+        return 0
+
+    # 孫1 round-2 review finding 4: with two files now possibly spread
+    # across two DIFFERENT physical directories, a single aggregate
+    # count no longer says which store actually gets rewritten. Always
+    # print which roots `_diagnostic_target_roots()` actually selected.
+    print(f"  checked roots: {', '.join(target_roots)}")
+
+    def _report(label, dropped, kept_count, dropped_test_like):
+        verb = "removed" if apply_changes else "would remove"
+        suffix = f" ({dropped_test_like} of those look test-derived, heuristic only)" if dropped_test_like else ""
+        print(f"  {label}: {verb} {dropped}, kept {kept_count}{suffix}")
+
+    errors_dropped_total = 0
+    errors_kept_total = 0
+    errors_dropped_test_like_total = 0
+    per_root_error_reports = []
+    for root in target_roots:
+        paths = Paths(root)
+        if not paths.meter_errors_file.exists():
+            continue
+        try:
+            raw_text = paths.meter_errors_file.read_text(encoding="utf-8")
+        except OSError as exc:
+            print(f"error: could not read {paths.meter_errors_file}: {exc}", file=sys.stderr)
+            return 1
+        kept, dropped, dropped_test_like = _split_meter_errors_by_age(raw_text, now, max_age)
+        if apply_changes and dropped:
+            try:
+                _rewrite_meter_errors_file(paths, kept)
+            except OSError as exc:
+                print(f"error: failed to rewrite {paths.meter_errors_file}: {exc}", file=sys.stderr)
+                return 1
+        per_root_error_reports.append((root, dropped, len(kept), dropped_test_like))
+        errors_dropped_total += dropped
+        errors_kept_total += len(kept)
+        errors_dropped_test_like_total += dropped_test_like
+    _report("state/meter-errors.jsonl", errors_dropped_total, errors_kept_total, errors_dropped_test_like_total)
+    if len(per_root_error_reports) > 1:
+        # More than one physical file actually contributed to the total
+        # above — break it down so it is clear which store each part
+        # came (or will come) from.
+        verb = "removed" if apply_changes else "would remove"
+        for root, dropped, kept_count, dropped_test_like in per_root_error_reports:
+            suffix = f" ({dropped_test_like} test-derived)" if dropped_test_like else ""
+            print(f"    {root}: {verb} {dropped}, kept {kept_count}{suffix}")
+
+    default_root = default_storage_root()
+    default_root = _resolve_path_str(default_root) if default_root else None
+    if default_root is None or default_root not in target_roots:
+        print("  state/quota-worktree-refusal.json: default storage root unreachable — 0 removed, 0 kept")
+        return 0
+
+    refusal_paths = Paths(default_root)
+    refusal_raw, corrupt = _read_worktree_refusal_state_raw(refusal_paths)
+    if corrupt:
+        if apply_changes:
+            try:
+                save_worktree_refusal_state(refusal_paths, {})
+            except OSError as exc:
+                print(f"error: failed to rewrite quota-worktree-refusal.json: {exc}", file=sys.stderr)
+                return 1
+            print("  state/quota-worktree-refusal.json: could not parse (corrupt or not a JSON object) — replaced with an empty state")
+        else:
+            print(
+                "  state/quota-worktree-refusal.json: could not parse (corrupt or not a JSON object) "
+                "— pass --apply to replace it with an empty state"
+            )
+        return 0
+
+    refusal_kept = {}
+    refusal_dropped = 0
+    refusal_dropped_test_like = 0
+    for bad_root, checked_at in refusal_raw.items():
+        checked_ts = parse_ts(checked_at) if isinstance(checked_at, str) else None
+        if checked_ts is not None and (now - checked_ts) > max_age:
+            refusal_dropped += 1
+            if _looks_test_derived(bad_root):
+                refusal_dropped_test_like += 1
+        else:
+            refusal_kept[bad_root] = checked_at
+
+    if apply_changes and refusal_dropped:
+        try:
+            save_worktree_refusal_state(refusal_paths, refusal_kept)
+        except OSError as exc:
+            print(f"error: failed to rewrite quota-worktree-refusal.json: {exc}", file=sys.stderr)
+            return 1
+
+    _report("state/quota-worktree-refusal.json", refusal_dropped, len(refusal_kept), refusal_dropped_test_like)
+    return 0
+
+
 # ── entry point ──────────────────────────────────────────────────────
 
 def main():
@@ -4236,13 +4654,15 @@ def main():
                 emit_meter_error(storage_root(), "cmd_snapshot_quota_unexpected_exception", exc)
             return 0
 
-    if cmd in ("validate", "report", "ingest"):
+    if cmd in ("validate", "report", "ingest", "prune-diagnostics"):
         try:
             if cmd == "validate":
                 return cmd_validate(rest)
             if cmd == "report":
                 return cmd_report(rest)
-            return cmd_ingest(rest)
+            if cmd == "ingest":
+                return cmd_ingest(rest)
+            return cmd_prune_diagnostics(rest)
         except Exception as exc:
             print(f"error: ocw-meter {cmd} failed: {redact_text(f'{type(exc).__name__}: {exc}')}", file=sys.stderr)
             return 1
