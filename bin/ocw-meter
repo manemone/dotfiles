@@ -1628,6 +1628,21 @@ def _attribution_line(counts, total):
     )
 
 
+# 孫5プロンプト §4「残る限界を出力または文書に書く」/ レビュー指摘1:
+# session_id joinを入れても100%解決には到達しない構造的な理由を、
+# 「直った」と誤読されないよう毎回のattribution行に添える。数値
+# （実測時点のrun_id 61.6%/role 72.1%等）はこの定数に埋め込まない —
+# 母数が変わるたびに嘘になるため、実測値は毎回のattribution行自体に
+# 出る。ここに書くのは変わらない構造的な理由のみ。
+ATTRIBUTION_KNOWN_LIMITS = (
+    "quota.sampleの記録は2026-08-01開始のため、それより前の期間はsession_id "
+    "joinによる復元ができない。以降の期間でも100%には到達しない — claude-ds "
+    "セッションやstatusLineが一度も走らなかったセッションはrun_id/roleとも "
+    "復元不能。roleのunknownの一部はHerdr外で起動したClaudeであり原理的に "
+    "取得不能(推測で埋めない方針を維持)。"
+)
+
+
 def usage_cost_footer(usage_events):
     """The cost/coverage/price_table portion of the required per-plan-
     §10.4 footer, shared by every `report` view (孫5 §1: "coverage 併記が
@@ -1699,6 +1714,7 @@ def usage_cost_footer(usage_events):
         "attribution_role": attribution_role,
         "attribution_run_id_counts": run_id_counts,
         "attribution_role_counts": role_counts,
+        "attribution_known_limits": ATTRIBUTION_KNOWN_LIMITS,
     }
 
 
@@ -1808,7 +1824,17 @@ def ingest_freshness_footer(cursor, ingest_run):
     }
 
 
-def print_footer_text(footer_completeness, footer_cost, footer_freshness, total):
+def print_footer_text(footer_completeness, footer_cost, footer_freshness, total, attribution=True):
+    """レビュー指摘4: `attribution`はキーワード専用の明示フラグ
+    (既定True) — 以前は`footer_cost.get('attribution_run_id', 'n/a ...')`
+    で欠落を暗黙に許容していたが、これだと将来 `footer_cost` を手組みする
+    ビューが増えたとき「computed し忘れている」ことに誰も気づけないまま
+    "n/a" が出力され続ける。ここでは逆に、attribution行を出さないビュー
+    （`--reconcile`。孫5のスコープ外で、session_id joinを経由しない）だけ
+    が明示的に`attribution=False`を渡す。`attribution=True`（既定）の
+    ときは`footer_cost['attribution_run_id']`を直接インデックスし、
+    無ければKeyErrorで即座に落ちる — 呼び出し側がこの行を足し忘れたまま
+    サイレントに"n/a"を出し続けることを防ぐ。"""
     def pct(n):
         return (100.0 * n / total) if total else 0.0
 
@@ -1827,12 +1853,10 @@ def print_footer_text(footer_completeness, footer_cost, footer_freshness, total)
     print(f"price_table:   {footer_cost['price_table']}")
     print(f"cost_basis:    {footer_cost['cost_basis']}")
     print(f"cost_estimate: {footer_cost['cost_estimate_usd']}")
-    # `--reconcile` (孫5スコープ外の既存ビュー) はここに渡す前の
-    # `valid_events` 構築・session_id join を経由しないので
-    # attribution_run_id/roleを持たない — `.get()`で欠落を許容する
-    # （他の全ビューはusage_cost_footer()経由で必ず持つ）。
-    print(f"attribution (run_id): {footer_cost.get('attribution_run_id', 'n/a (not computed for this view)')}")
-    print(f"attribution (role):   {footer_cost.get('attribution_role', 'n/a (not computed for this view)')}")
+    if attribution:
+        print(f"attribution (run_id): {footer_cost['attribution_run_id']}")
+        print(f"attribution (role):   {footer_cost['attribution_role']}")
+        print(f"attribution_known_limits: {footer_cost['attribution_known_limits']}")
     print(f"last_ingest_at: {footer_freshness['last_ingest_at']}")
     print(f"last_ingest_at_rfc3339: {footer_freshness['last_ingest_at_rfc3339'] or 'unknown'}")
     print(f"ingest (this run): {footer_freshness['ingest_this_run']}")
@@ -2731,6 +2755,13 @@ def _report_reconcile(paths, month, provider_totals, as_json, footer_freshness):
         },
         footer_freshness,
         total_messages,
+        # レビュー指摘4: `--reconcile`（孫5のスコープ外の既存ビュー）は
+        # `valid_events`構築・session_id joinを一切経由しないため
+        # attributionを計算していない。「計算していないので出さない」を
+        # テキスト・--json両方で徹底する — 欠落キーに"n/a"のフォールバック
+        # 文字列を充てると、attributionを計算し忘れた将来のビューが
+        # あっても気づけないまま同じ"n/a"が出続けてしまう。
+        attribution=False,
     )
     print(f"known_gaps:    {summary['known_gaps']}")
     return 0
@@ -2866,7 +2897,25 @@ def auto_ingest_for_report(root, no_ingest):
     return {"status": "ran", "stats": result}
 
 
-def backfill_run_id_and_role_via_session(usage_events, session_attrs):
+def pr_binds_from_events(events):
+    """report側(A)用: 既にデコード済みのイベント列(`valid_events`)から
+    run_id -> pr.bind情報を組み立てる。ingest側(B)の
+    `load_local_pr_binds_and_run_starts`が返す`binds`と同じ形
+    (`{"pr_number": ..., "pr_url": ...}`) — `backfill_run_id_and_role_
+    via_session`がB側の`build_usage_event`の`pr_info = binds.get(run_id)`
+    と同じ補完をread-time側でも行うために使う(レビュー指摘2)。"""
+    binds = {}
+    for e in events:
+        if e.get("event_type") != "pr.bind":
+            continue
+        run_id = e.get("run_id")
+        pr_number = e.get("pr_number")
+        if run_id and isinstance(pr_number, int):
+            binds[run_id] = {"pr_number": pr_number, "pr_url": e.get("pr_url")}
+    return binds
+
+
+def backfill_run_id_and_role_via_session(usage_events, session_attrs, binds):
     """孫5プロンプト §2 (A: report側join): session_id joinで、まだ
     run_id/roleが解決できていない`usage.message`だけを読み取り時に補完
     する。**保存済みイベントファイルは一切書き換えない** — mutates the
@@ -2884,25 +2933,39 @@ def backfill_run_id_and_role_via_session(usage_events, session_attrs):
     report側どちらのjoinで埋まったかを区別せず「via session_id」として
     一括で数えられるようにする(古い、この機能より前にingestされた
     イベントは両フィールドとも欠落しており、run_idが埋まっていれば
-    それは常にdirect解決だったとみなせる)。"""
+    それは常にdirect解決だったとみなせる)。
+
+    レビュー指摘2: `pr_number`/`pr_url`も、B側の`build_usage_event`が
+    `pr_info = binds.get(run_id)`で無条件に行っているのと同じ補完を
+    ここでも行う。これをしないと「session joinでrun_idを持つように
+    なったのに、ingestより後に読まれたか先に読まれたかでpr_numberの
+    有無が変わる」という非対称が生じ、`report_by_window`の`pr_ranges`
+    （`e.get("pr_number")`が非nullのイベントだけからPRの時刻レンジを
+    作る）がingestタイミング依存になる。run_idがこの関数の対象外
+    （元から埋まっていた）イベントも含め、run_idがありpr_numberが無い
+    全usage.messageに対して行う — B側と全く同じ「run_idが決まれば
+    pr_numberも決まる」という関係を保つため。"""
     for e in usage_events:
         if e.get("event_type") != "usage.message":
             continue
         session_id = e.get("session_id")
-        if not session_id:
-            continue
-        needs_run_id = e.get("run_id") is None
-        needs_role = e.get("role") in (None, "unknown")
-        if not needs_run_id and not needs_role:
-            continue
-        ts = parse_ts(e.get("ts"))
-        session_run_id, session_role = resolve_session_attrs(session_attrs, session_id, ts)
-        if needs_run_id and session_run_id is not None:
-            e["run_id"] = session_run_id
-            e["run_id_source"] = "session_id"
-        if needs_role and session_role is not None:
-            e["role"] = session_role
-            e["role_source"] = "session_id"
+        if session_id:
+            needs_run_id = e.get("run_id") is None
+            needs_role = e.get("role") in (None, "unknown")
+            if needs_run_id or needs_role:
+                ts = parse_ts(e.get("ts"))
+                session_run_id, session_role = resolve_session_attrs(session_attrs, session_id, ts)
+                if needs_run_id and session_run_id is not None:
+                    e["run_id"] = session_run_id
+                    e["run_id_source"] = "session_id"
+                if needs_role and session_role is not None:
+                    e["role"] = session_role
+                    e["role_source"] = "session_id"
+        if e.get("pr_number") is None:
+            pr_info = binds.get(e.get("run_id")) if e.get("run_id") else None
+            if pr_info is not None:
+                e["pr_number"] = pr_info.get("pr_number")
+                e["pr_url"] = pr_info.get("pr_url")
 
 
 def cmd_report(args):
@@ -3107,8 +3170,10 @@ def cmd_report(args):
     # `_quota_session_contributions`'s own full-store requirement), and
     # applied before ANY view-specific filtering (`events_for_pr` below
     # included) so every view — default/--pr/--phase/--role/--model/
-    # --window/--month — sees the same backfilled run_id/role.
-    backfill_run_id_and_role_via_session(valid_events, session_attrs_from_events(valid_events))
+    # --window/--month — sees the same backfilled run_id/role/pr_number.
+    backfill_run_id_and_role_via_session(
+        valid_events, session_attrs_from_events(valid_events), pr_binds_from_events(valid_events)
+    )
 
     if month_flag_present and view is None:
         return _report_month_standalone(paths, valid_events, malformed, month, repo, as_json, footer_freshness)
@@ -4045,9 +4110,19 @@ def _accumulate_session_attr_sample(raw, event):
 
 
 def _finalize_session_attrs(raw):
+    """レビュー指摘3: `_nearest_sample_value`はbisectのため`times`列を
+    その場で作っていたが、この関数は補完対象のusage.messageごと・
+    run_id/roleで1回ずつ呼ばれる(実ストア実測で1回のreportあたり
+    877,012要素分の再構築)。ここでソート済みの(ts, value)を
+    `{"ts": [...], "values": [...]}`の2並列リストに1回だけ変換して
+    持たせ、`_nearest_sample_value`側の再構築を無くす。"""
     for entry in raw.values():
-        entry["run_id"].sort(key=lambda item: item[0])
-        entry["role"].sort(key=lambda item: item[0])
+        for field in ("run_id", "role"):
+            entry[field].sort(key=lambda item: item[0])
+            entry[field] = {
+                "ts": [item[0] for item in entry[field]],
+                "values": [item[1] for item in entry[field]],
+            }
     return raw
 
 
@@ -4062,25 +4137,27 @@ def session_attrs_from_events(events):
     return _finalize_session_attrs(raw)
 
 
-def _nearest_sample_value(samples, ts):
-    """`samples`: ts昇順にソート済みの [(ts, value), ...]。`ts`に時刻が
-    最も近いサンプルのvalueを返す(前後どちらでもよい — quota.sampleは
-    60秒スロットルの定期ポーリングであり、対象メッセージの前後どちらの
-    状態が「そのときのrun_id/role」かを決める根拠は無い)。同点は前方
-    (`ts`より前)のサンプルを優先する — 決定的にするためだけの選択で、
-    後方を優先すべき積極的な理由は無い。1つのsession_idに複数の
+def _nearest_sample_value(times_values, ts):
+    """`times_values`: `_finalize_session_attrs`が組んだ
+    `{"ts": [ts昇順...], "values": [...]}`(同じ長さの2並列リスト)。
+    `ts`に時刻が最も近いサンプルのvalueを返す(前後どちらでもよい —
+    quota.sampleは60秒スロットルの定期ポーリングであり、対象メッセージ
+    の前後どちらの状態が「そのときのrun_id/role」かを決める根拠は無い)。
+    同点は前方(`ts`より前)のサンプルを優先する — 決定的にするためだけの
+    選択で、後方を優先すべき積極的な理由は無い。1つのsession_idに複数の
     run_id/roleが紐づく場合(同じセッションでworktreeを移った等)も、
     「一意でなければ解決しない」ではなくこの時刻近傍則で1つに定める
     方針とした(計画書 DOC-2608081456 孫5プロンプト §1)。"""
-    if not samples or ts is None:
+    times = times_values["ts"]
+    if not times or ts is None:
         return None
-    times = [t for t, _ in samples]
+    values = times_values["values"]
     idx = bisect.bisect_left(times, ts)
     candidates = []
-    if idx < len(samples):
-        candidates.append(samples[idx])
+    if idx < len(times):
+        candidates.append((times[idx], values[idx]))
     if idx > 0:
-        candidates.append(samples[idx - 1])
+        candidates.append((times[idx - 1], values[idx - 1]))
     best = min(candidates, key=lambda item: (abs((item[0] - ts).total_seconds()), item[0]))
     return best[1]
 
@@ -4295,6 +4372,15 @@ def build_usage_event(candidate, price_tables, today_str, role_map, binds, run_s
             direct_run_id = None
 
     direct_role = (role_info or {}).get("role")
+    # レビュー指摘5: "unknown"はこのスキーマ全体で「未解決」を表す文字列
+    # センチネル(`_accumulate_session_attr_sample`/`_attribution_source_
+    # counts`と同じ判定基準)。`resolve_herdr_role_map()`はHerdrペインの
+    # `label`をそのまま`role`に入れる(人間が`herdr pane rename`で自由に
+    # 付けられ、"unknown"という名前も付けうる)ため、正規化せずに真偽値
+    # 判定へ渡すと"unknown"が「directで解決済み」と誤認され、本来通す
+    # べきsession joinへのフォールバックが飛ばされてしまう。
+    if direct_role == "unknown":
+        direct_role = None
 
     # 孫5プロンプト §1 (B: ingest側フォールバック / 計画書「【2】【3】の鍵」):
     # direct resolution (ocw-run-id file / Herdr live pane list) failed to

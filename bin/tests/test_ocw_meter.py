@@ -4554,6 +4554,43 @@ class SessionAttributionTests(OcwMeterTestCase):
         self.assertEqual(event["role"], "implementer")
         self.assertEqual(event["role_source"], "direct")
 
+    def test_ingest_role_falls_back_to_session_join_when_herdr_label_is_the_string_unknown(self):
+        # レビュー指摘5: `"unknown"`はこのスキーマ全体で「未解決」を表す
+        # 文字列センチネル。Herdrのペインlabelは`herdr pane rename`で人間が
+        # 自由に付けられるため、labelがたまたま`"unknown"`だった場合に
+        # それを「directで解決済み」と誤認してsession joinへの
+        # フォールバックを飛ばしてはいけない。
+        session_id = "sess-join-role-unknown-label"
+        write_transcript(self.projects_dir, "proj", session_id, [assistant_line(session_id, "m1")])
+        run_meter(["event", "quota.sample", "--idempotency-key", "q5", "--plan-source", "statusline",
+                   "--session-id", session_id, "--role", "reviewer",
+                   "--ts", "2026-08-01T09:00:00.000Z"], self.home)
+
+        pane_json = json.dumps({"panes": [{
+            "pane_id": "w1:p2", "label": "unknown", "workspace_id": "w1",
+            "agent_session": {"agent": "claude", "kind": "id", "value": session_id},
+            "cwd": "/whatever",
+        }]})
+        fake_bin = pathlib.Path(self.tmpdir.name) / "fake-bin-unknown-label"
+        fake_bin.mkdir()
+        herdr_script = fake_bin / "herdr"
+        herdr_script.write_text(
+            "#!/usr/bin/env bash\n"
+            'if [ "$1" = "status" ] && [ "$2" = "server" ]; then exit 0; fi\n'
+            'if [ "$1" = "workspace" ] && [ "$2" = "list" ]; then echo \'{"workspaces":[{"workspace_id":"w1"}]}\'; exit 0; fi\n'
+            f"if [ \"$1\" = \"pane\" ] && [ \"$2\" = \"list\" ]; then echo '{pane_json}'; exit 0; fi\n"
+            "exit 1\n",
+            encoding="utf-8",
+        )
+        herdr_script.chmod(0o755)
+        path_with_fake_herdr_first = f"{fake_bin}:{os.environ.get('PATH', '')}"
+
+        result = run_ingest(self.home, self.projects_dir, extra_env={"PATH": path_with_fake_herdr_first})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        event = next(e for e in read_events(self.home) if e["event_type"] == "usage.message")
+        self.assertEqual(event["role"], "reviewer")
+        self.assertEqual(event["role_source"], "session_id")
+
     def test_ingest_run_id_and_role_stay_unresolved_without_any_source(self):
         session_id = "sess-none"
         write_transcript(self.projects_dir, "proj", session_id, [
@@ -4742,6 +4779,34 @@ class SessionAttributionTests(OcwMeterTestCase):
         data = json.loads(run_meter(["report", "--pr", "77", "--json"], self.home).stdout)
         self.assertAlmostEqual(data["pr_detail"]["cash_cost_usd"], 0.05)
 
+    def test_report_side_join_backfills_pr_number_symmetric_with_ingest_side(self):
+        # レビュー指摘2: B(ingest側フォールバック)はrun_idが決まると
+        # pr_number/pr_urlも一緒に埋める(build_usage_eventの
+        # `pr_info = binds.get(run_id)`)。A(report側join)がrun_idだけ
+        # 補完してpr_numberを埋めないと、report_by_windowのpr_ranges
+        # (`e.get("pr_number")`が非nullのイベントだけからPRの時刻レンジを
+        # 作る)が「session joinのrun_idを最初から持っていたか
+        # (ingest側で解決済み)、read-timeに初めて解決したか」で
+        # prs_time_overlapの中身が変わってしまう。
+        session_id = "sess-report-pr-window"
+        run_meter(["event", "quota.sample", "--idempotency-key", "rprw-q1", "--plan-source", "statusline",
+                   "--session-id", session_id, "--run-id", "run-report-pr-window",
+                   "--window-id", "win-report-pr-window",
+                   "--ts", "2026-08-01T09:00:00.000Z"], self.home)
+        run_meter(["event", "quota.sample", "--idempotency-key", "rprw-q2", "--plan-source", "statusline",
+                   "--session-id", session_id, "--run-id", "run-report-pr-window",
+                   "--window-id", "win-report-pr-window",
+                   "--ts", "2026-08-01T09:10:00.000Z"], self.home)
+        run_meter(["bind-pr", "--run", "run-report-pr-window", "--pr", "88"], self.home)
+        # session_idのみ(run_id/pr_numberは無し) — Aがrun_idをsession
+        # joinで解決した後、それをbindsに引いてpr_numberも埋める必要が
+        # ある。
+        run_meter(["event", "usage.message", "--idempotency-key", "rprw-u1", "--message-id", "m-report-pr-window",
+                   "--session-id", session_id, "--model", "deepseek-v4-pro", "--cost-basis", "estimated",
+                   "--ts", "2026-08-01T09:05:00.000Z"], self.home)
+        data = json.loads(run_meter(["report", "--window", "--json"], self.home).stdout)
+        self.assertIn(88, data["by_window"]["win-report-pr-window"]["prs_time_overlap"])
+
     def test_report_side_join_does_not_overwrite_already_resolved_run_id(self):
         session_id = "sess-report-nooverwrite"
         run_meter(["event", "quota.sample", "--idempotency-key", "rno-q1", "--plan-source", "statusline",
@@ -4777,6 +4842,16 @@ class SessionAttributionTests(OcwMeterTestCase):
         self.assertEqual(data["attribution_run_id"], "n/a (no usage.message events)")
         self.assertEqual(data["attribution_role"], "n/a (no usage.message events)")
 
+    def test_attribution_known_limits_present_in_text_and_json(self):
+        # 孫5プロンプト §4「残る限界を出力または文書に書く」/ レビュー
+        # 指摘1: session_id joinを入れても100%解決には到達しない構造的な
+        # 理由(quota.sampleが2026-08-01開始であること等)を、attribution行
+        # と一緒に毎回出す。
+        data = json.loads(run_meter(["report", "--json"], self.home).stdout)
+        self.assertIn("2026-08-01", data["attribution_known_limits"])
+        text = run_meter(["report"], self.home).stdout
+        self.assertIn("attribution_known_limits:", text)
+
     def test_attribution_footer_counts_direct_session_and_unresolved_and_sums_to_total(self):
         # direct: run_idが直接設定されている(session join不要)。
         run_meter(["event", "usage.message", "--idempotency-key", "att-direct", "--message-id", "m-direct",
@@ -4811,11 +4886,19 @@ class SessionAttributionTests(OcwMeterTestCase):
         self.assertIn("attribution (run_id):", text)
         self.assertIn("attribution (role):", text)
 
-    def test_reconcile_view_omits_attribution_gracefully(self):
-        result = run_meter(["report", "--reconcile"], self.home)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("attribution (run_id): n/a", result.stdout)
-        self.assertIn("attribution (role):   n/a", result.stdout)
+    def test_reconcile_view_omits_attribution_entirely_in_text_and_json(self):
+        # レビュー指摘4: `--reconcile`はvalid_events構築・session_id join
+        # を経由しないためattributionを計算していない。「computeしていない
+        # ものは出さない」をテキスト・--json両方で徹底し、"n/a"のような
+        # フォールバック文字列で欠落をごまかさない。
+        text_result = run_meter(["report", "--reconcile"], self.home)
+        self.assertEqual(text_result.returncode, 0, text_result.stderr)
+        self.assertNotIn("attribution", text_result.stdout)
+
+        json_result = run_meter(["report", "--reconcile", "--json"], self.home)
+        self.assertEqual(json_result.returncode, 0, json_result.stderr)
+        data = json.loads(json_result.stdout)
+        self.assertFalse(any(key.startswith("attribution") for key in data))
 
 
 if __name__ == "__main__":
