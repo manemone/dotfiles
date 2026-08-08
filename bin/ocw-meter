@@ -2205,12 +2205,20 @@ def report_month_process_efficiency(valid_events, month, repo):
     }
 
 
-def _price_tables_applied_for_month(usage_month, month):
+def _price_tables_applied_for_month(usage_month):
     """孫3プロンプト §3: which `price_table_version`(s) actually priced
-    this month's usage.message events, and whether ANY event priced by
-    that version was a fallback — `_price_table_predates_message`'s same
+    this month's usage.message events, and how many of THOSE specific
+    events were a fallback — `_price_table_predates_message`'s same
     per-event, day-granularity check `usage_cost_footer` already uses,
-    not a month-granularity comparison.
+    not a month-granularity comparison. Takes only the month's own
+    events (round-2 review finding 9: an earlier version also took
+    `month` as a second argument, but the per-event check needs no
+    month boundary at all — every date comparison it makes is against
+    that SAME event's own `ts`/`price_effective_date`, never against the
+    reported month string. `month` had become a dead parameter, kept
+    only because a docstring described it; the caller,
+    `report_month_cash_and_capacity`, already pre-filters `usage_month`
+    to the target month before calling this).
 
     Round-1 review finding 2: an earlier version compared
     `effective_date[:7] > month` (month-granularity), which MISSES a
@@ -2227,21 +2235,37 @@ def _price_tables_applied_for_month(usage_month, month):
     stored fields, just aggregated differently (per version vs. summed
     across all versions).
 
+    Round-2 review finding 8: per-event granularity also means a single
+    version can price a MIX of fallback and correctly-covered events
+    within the same month (e.g. a table effective mid-month covers the
+    back half correctly but was fallback-applied to the front half) —
+    `fallback_event_count` (out of this version's own `event_count`)
+    lets a caller distinguish "this whole month's worth of this version
+    is a rough estimate" from "only part of it is", instead of one
+    boolean forced to describe a mixed month either way.
+
     Sorted by version for a stable, deterministic order."""
     seen = {}
     for e in usage_month:
         version = e.get("price_table_version")
         if not version:
             continue
-        entry = seen.setdefault(version, {"effective_date": e.get("price_effective_date"), "is_fallback": False})
+        entry = seen.setdefault(version, {
+            "effective_date": e.get("price_effective_date"),
+            "event_count": 0,
+            "fallback_event_count": 0,
+        })
+        entry["event_count"] += 1
         if _price_table_predates_message(e):
-            entry["is_fallback"] = True
+            entry["fallback_event_count"] += 1
     applied = []
     for version, info in sorted(seen.items()):
         applied.append({
             "price_table_version": version,
             "effective_date": info["effective_date"],
-            "is_fallback": info["is_fallback"],
+            "event_count": info["event_count"],
+            "fallback_event_count": info["fallback_event_count"],
+            "is_fallback": info["fallback_event_count"] > 0,
         })
     return applied
 
@@ -2280,7 +2304,7 @@ def report_month_cash_and_capacity(valid_events, month):
     return {
         "usage_message_count": len(usage_month),
         "cash_cost_usd": cash_cost if has_cash else None,
-        "price_tables_applied": _price_tables_applied_for_month(usage_month, month),
+        "price_tables_applied": _price_tables_applied_for_month(usage_month),
         "capacity_message_count": capacity_message_count,
         "quota_sample_count": len(quota_month),
         "five_hour_used_pct_max": max(five_hour_vals) if five_hour_vals else None,
@@ -2906,7 +2930,20 @@ def _report_month_standalone(paths, valid_events, malformed, month, repo, as_jso
     if price_tables_applied:
         print("  price_tables_applied:")
         for pt in price_tables_applied:
-            marker = " (フォールバック — この期間にはまだ発効していなかった価格表。実際の単価とは異なる可能性)" if pt["is_fallback"] else ""
+            # Round-2 review finding 8: `is_fallback` is per-EVENT, not
+            # per-month — a version can price a mix of fallback and
+            # correctly-covered events within the same month (e.g. its
+            # own effective_date falls mid-month). The count out of
+            # event_count says exactly how much of this version's usage
+            # this month was a fallback, instead of one boolean forced
+            # to describe a mixed month either way.
+            fallback_n, total_n = pt["fallback_event_count"], pt["event_count"]
+            if fallback_n == 0:
+                marker = ""
+            elif fallback_n == total_n:
+                marker = f" (フォールバック — この期間の{total_n}件全てが、まだ発効していなかった価格表。実際の単価とは異なる可能性)"
+            else:
+                marker = f" (フォールバック — この期間の{total_n}件中{fallback_n}件が、まだ発効していなかった価格表。実際の単価とは異なる可能性)"
             print(f"    {pt['price_table_version']} (effective {pt['effective_date']}){marker}")
     else:
         print("  price_tables_applied: (none)")

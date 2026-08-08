@@ -2197,6 +2197,8 @@ class PriceTableFallbackWarningTests(OcwMeterTestCase):
         self.assertEqual(applied[0]["price_table_version"], "deepseek-2026-08-01")
         self.assertEqual(applied[0]["effective_date"], "2026-08-01")
         self.assertTrue(applied[0]["is_fallback"])
+        self.assertEqual(applied[0]["event_count"], 1)
+        self.assertEqual(applied[0]["fallback_event_count"], 1)
 
     def test_month_report_does_not_flag_price_table_covering_the_month(self):
         write_transcript(self.projects_dir, "proj", "sess-aug2", [
@@ -2208,6 +2210,8 @@ class PriceTableFallbackWarningTests(OcwMeterTestCase):
         applied = data["cash_cost"]["price_tables_applied"]
         self.assertEqual(len(applied), 1)
         self.assertFalse(applied[0]["is_fallback"])
+        self.assertEqual(applied[0]["event_count"], 1)
+        self.assertEqual(applied[0]["fallback_event_count"], 0)
 
     def test_month_report_flags_a_same_month_fallback(self):
         # レビュー指摘2の回帰テスト: the sole price table is effective
@@ -2234,6 +2238,36 @@ class PriceTableFallbackWarningTests(OcwMeterTestCase):
         # Must agree with the footer's own (independently computed) verdict.
         self.assertEqual(data["price_table_fallback_count"], 1)
 
+    def test_month_report_flags_a_mixed_fallback_and_covered_month(self):
+        # レビュー指摘8の回帰テスト: the sole price table is effective
+        # 2026-08-15. One message (08-05) predates it (fallback); another
+        # (08-20) is genuinely covered by it. Both are priced by the SAME
+        # `price_table_version`, so a single per-version boolean can't
+        # honestly describe the month -- `fallback_event_count` must be
+        # 1 out of `event_count` 2, not "all" or "none".
+        price_dir = pathlib.Path(self.tmpdir.name) / "prices-mixed-month"
+        write_price_table(price_dir, "deepseek-2026-08-15.json", {
+            "price_table_version": "deepseek-2026-08-15", "effective_date": "2026-08-15",
+            "models": {"deepseek-v4-pro": {"cache_hit_in": 0.003625, "cache_miss_in": 0.435, "out": 0.87}},
+        })
+        write_transcript(self.projects_dir, "proj", "sess-mixed", [
+            assistant_line("sess-mixed", "m1", model="deepseek-v4-pro", timestamp="2026-08-05T10:00:00.000Z"),
+            assistant_line("sess-mixed", "m2", model="deepseek-v4-pro", timestamp="2026-08-20T10:00:00.000Z"),
+        ])
+        result = run_report(self.home, self.projects_dir, args=["--month", "2026-08", "--json"], price_dir=price_dir)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        data = json.loads(result.stdout)
+        applied = data["cash_cost"]["price_tables_applied"]
+        self.assertEqual(len(applied), 1)
+        self.assertEqual(applied[0]["event_count"], 2)
+        self.assertEqual(applied[0]["fallback_event_count"], 1)
+        self.assertTrue(applied[0]["is_fallback"])
+        self.assertEqual(data["price_table_fallback_count"], 1)
+        # Text output must say "1件中1件" (partial), not claim the whole
+        # month (2件) is a fallback.
+        text_result = run_report(self.home, self.projects_dir, args=["--month", "2026-08"], price_dir=price_dir)
+        self.assertIn("2件中1件", text_result.stdout)
+
     def test_month_report_text_output_shows_the_fallback_marker(self):
         # レビュー指摘6: only --json was ever asserted on for this view;
         # the text renderer builds its marker string independently
@@ -2247,6 +2281,8 @@ class PriceTableFallbackWarningTests(OcwMeterTestCase):
         self.assertIn("price_tables_applied:", result.stdout)
         self.assertIn("deepseek-2026-08-01 (effective 2026-08-01)", result.stdout)
         self.assertIn("フォールバック", result.stdout)
+        # Full-month fallback (1件全て), not the mixed-case wording.
+        self.assertIn("1件全て", result.stdout)
 
     def test_month_report_text_output_has_no_fallback_marker_when_covered(self):
         write_transcript(self.projects_dir, "proj", "sess-aug3", [
