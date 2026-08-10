@@ -71,6 +71,7 @@
 | DOC-2608021229-a | [ai-llm-cost-observability_計画.md](planning/DOC-2608021229-a_ai-llm-cost-observability_計画.md) | LLM費用・Claude利用枠の観測基盤（`ocw-meter`）構築計画（傘 `ai/llm-cost-observability`、全孫マージ済。旧ID: `DOC-003`） |
 | DOC-2608040234 | [ai-deploy-stability_計画.md](planning/DOC-2608040234_ai-deploy-stability_計画.md) | デプロイ配布方式の安定化の傘ブランチ計画書（傘 `ai/deploy-stability`）。ADR DOC-2608040229 で確定した配布実体方式を6本の孫へ分解したもの |
 | DOC-2608062259 | [ai-ocw-naming-and-layout_計画.md](planning/DOC-2608062259_ai-ocw-naming-and-layout_計画.md) | `ocw` のワークツリー命名とリポジトリレイアウト外部化の傘ブランチ計画書（傘 `ai/ocw-naming-and-layout`）。ADR DOC-2608062258 で確定した方式を4本の孫へ分解したもの |
+| DOC-2608081456 | [ocw-meter-accuracy_計画.md](planning/DOC-2608081456_ocw-meter-accuracy_計画.md) | `ocw-meter` の計測精度是正の傘ブランチ計画書（傘 `ocw-meter-accuracy`）。実ストア突合で判明した6件の計測ズレ（ingest 欠測・費用メトリクスの空洞化・帰属不能・テストによるストア汚染・価格表のズレ・退避キャッシュのプルーニング漏れ）を6本の孫へ分解したもの |
 
 ### reference/ — 運用リファレンス
 
