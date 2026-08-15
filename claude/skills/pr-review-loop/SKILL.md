@@ -120,7 +120,7 @@ fi
 
 サイクル開始時に1回だけ実行:
 
-**工程計測についての注記（このPhase以降で共通）**: `$ROUND` はシェル変数ではない。本スキルの各コードブロックは独立したBashツール呼び出しとして実行され、シェル変数は呼び出しをまたいで保持されない。`$ROUND` は「エージェントが追跡している現在のレビューサイクル数（1始まり。Phase 7の報告項目にある『レビューサイクル数』と同じ値、安全制約の『6サイクル』のカウントと同じ値）」を指す記法であり、`--round` を実行する際は、この時点のサイクル数をリテラルな整数値として埋めること。`$PR` / `$HEAD_SHA` / `$FINDINGS_COUNT` / `$URL` / `$OCW_RUN_ID` も同様に、直前に取得・保持した実際の値をその場でリテラルに埋め込む記法であり、新しいシェル変数を宣言する意味ではない。
+**工程計測についての注記（このPhase以降で共通）**: `$ROUND` はシェル変数ではない。本スキルの各コードブロックは独立したBashツール呼び出しとして実行され、シェル変数は呼び出しをまたいで保持されない。`$ROUND` は「エージェントが追跡している現在のレビューサイクル数（1始まり。Phase 7の報告項目にある『レビューサイクル数』と同じ値、安全制約の『6サイクル』のカウントと同じ値）」を指す記法であり、`--round` を実行する際は、この時点のサイクル数をリテラルな整数値として埋めること。`$PR` / `$HEAD_SHA` / `$FINDINGS_COUNT` / `$URL` / `$OCW_RUN_ID` / `$REVIEW_REQUEST`（Phase 2 Step 1 で決めるレビュー指示ファイルの絶対パス）も同様に、直前に取得・保持した実際の値をその場でリテラルに埋め込む記法であり、新しいシェル変数を宣言する意味ではない。**特に `$REVIEW_REQUEST` は `herdr pane run` でレビュワーへ渡す文字列の中に入る。** レビュワーのペインは別プロセスでこちらのシェル変数を参照できないため、必ずリテラルな絶対パスとして埋めること。
 
 工程計測（サイクル1周目の開始）:
 
@@ -375,6 +375,33 @@ command -v ocw-meter >/dev/null && ocw-meter event phase.start --phase review_re
 
 ### Step 1: レビュー指示ファイルを作成
 
+#### 置き場所
+
+```bash
+mkdir -p /tmp/pr-review-loop
+gh repo view --json nameWithOwner -q .nameWithOwner    # 例: manemone/dotfiles
+```
+
+得られた `owner/repo` の `/` を `-` に置き換え、次のパスを `$REVIEW_REQUEST` とする
+（`$PR` などと同じ記法。以降このファイルを指すときは、この**絶対パス**をリテラルに埋める）。
+
+```
+/tmp/pr-review-loop/<owner>-<repo>-<PR番号>.md
+```
+
+**リポジトリ名をファイル名に含めるのは必須。** PR番号だけだと、別リポジトリの同番号のPRを
+並行して回したときに同じファイルを取り合い、レビュワーが**別リポジトリのレビュー依頼を読む**。
+
+作業中のリポジトリの中には置かない。このスキルは任意のリポジトリで動くため、`tmp/` のような
+ディレクトリはそのリポジトリで既に意味を持っていることがあり、既存ファイルを壊す。
+また、無視されないまま Phase 5 の `git add -A` を通れば PR に混入する。
+
+`$TMPDIR` も使わない。書く側（このペイン）と読む側（レビュワーペイン）は別プロセスであり、
+macOS のようにセッションごとに `TMPDIR` が異なる環境ではパスがズレて解決できなくなる。
+ベタ書きの `/tmp` は、両者が同じ値を見ることを保証するためのものである。
+
+#### テンプレートの置換
+
 テンプレート内の `{{...}}` は実際の値で置換する。`CONVENTION_DOCS` が空なら該当行を削除する。
 
 `{{LINT_CMD}}` / `{{TEST_CMD}}` には、Phase 0.5 で**解決済みの**コマンド文字列をそのまま入れる。
@@ -395,7 +422,7 @@ command -v ocw-meter >/dev/null && ocw-meter event phase.start --phase review_re
   `テストは「コード・分岐・受け入れ条件」の数ではなく、` の段落から末尾までを貼る。
 
 ```bash
-cat > /tmp/review-request-$PR.md << 'REVIEW_EOF'
+cat > "$REVIEW_REQUEST" << 'REVIEW_EOF'
 # PR #{{PR}} レビュー依頼
 
 対象PR: {{URL}}
@@ -613,7 +640,7 @@ herdr pane read "$REVIEWER_PANE" --source detection --lines 3
 Claude が `idle` または `done`（どちらも待機状態）であることを確認した上で、短いコマンドで依頼を送信する:
 
 ```bash
-herdr pane run "$REVIEWER_PANE" "以下を読んでPRレビューを実行してください。レビュー指示: /tmp/review-request-$PR.md"
+herdr pane run "$REVIEWER_PANE" "以下を読んでPRレビューを実行してください。レビュー指示: $REVIEW_REQUEST"
 ```
 
 ### Step 4: 配信確認
@@ -891,16 +918,25 @@ command -v ocw-meter >/dev/null && ocw-meter event phase.start --phase rereview_
 4. **最小限の**再レビュー依頼を送信。修正内容を列挙するな。レビュワーはGitHubのコメントを読む。
    ただし次の2つは必ず渡す:
 
-   - **レビュー指示ファイルのパス**（Phase 2 Step 1 で作った `/tmp/review-request-$PR.md`）。
+   - **レビュー指示ファイルの絶対パス**（Phase 2 Step 1 で作った `$REVIEW_REQUEST`）。
      finding の判定基準・テスト不足の判定基準・ラウンド別のテスト実行方針は**このファイルにしか
      書かれていない**。レビュワーペインの Claude は、ラウンドの合間に終了して Phase 2 Step 2 の
      手順で起動し直されることがあり、そのときの新しいレビュワーはこのファイルを一度も読んでいない。
-     パスを渡さないと、素の Claude として nit を出し full suite を回すレビューに戻る
+     パスを渡さないと、素の Claude として nit を出し full suite を回すレビューに戻る。
+
+     **送信前に存在を確認し、無ければ Phase 2 Step 1 の手順で作り直す。** `/tmp` は再起動で
+     消え、環境によっては古いファイルが定期的に掃除される。レビューサイクルは複数ラウンドに
+     わたり、`/autopilot` の無人運用では日をまたぐこともある。消えたまま送ると、レビュワーは
+     読めないファイルを指されて基準を持たないまま進む:
+
+     ```bash
+     test -f "$REVIEW_REQUEST" && echo OK || echo "MISSING — Phase 2 Step 1 で再生成する"
+     ```
    - **差分の起点となる前回レビュー対象SHA**（このラウンドの `$HEAD_SHA`）。レビュワーはこの
      区間の差分を分類してから検証範囲を決めるため、起点が無いと full suite を回し直すことになる
 
 ```bash
-herdr pane run "$REVIEWER_PANE" "PR #$PR 再レビュー依頼。レビュー指示: /tmp/review-request-$PR.md 全指摘に対応コメント書きました。前回レビュー対象: $HEAD_SHA → 現HEAD: $NEW_HEAD_SHA"
+herdr pane run "$REVIEWER_PANE" "PR #$PR 再レビュー依頼。レビュー指示: $REVIEW_REQUEST 全指摘に対応コメント書きました。前回レビュー対象: $HEAD_SHA → 現HEAD: $NEW_HEAD_SHA"
 ```
 
    送信前に、Phase 2 Step 2 と同じ手順でレビュワーの状態を確認する。**ラウンドの合間に
