@@ -158,8 +158,10 @@ subcommands:
     "command": "ocw-meter snapshot-quota"}}). Reads one statusLine JSON
     object from stdin, appends one `quota.sample` event (rate_limits /
     context usage / session cost — plan §8.5, DOC-2608021229 §2.1/§8), and
-    ALWAYS prints a short display string to stdout (e.g. "5h:37% 7d:12%
-    ctx:24%") and exits 0 — no matter what: empty stdin, malformed
+    ALWAYS prints a short display string to stdout (e.g.
+    "5h:37%→04:10 7d:12% ctx:24%", where the `→HH:MM` suffix is the local
+    time the 5-hour window resets — omitted when `resets_at` is missing
+    or already past) and exits 0 — no matter what: empty stdin, malformed
     JSON, a missing `rate_limits` (every DeepSeek/claude-ds session —
     DOC-2608021229 §2.1), python3 itself being unavailable, or an unexpected
     exception. A broken statusLine command would blank out or corrupt
