@@ -145,15 +145,20 @@ cd ~/.dotfiles && ./deploy-all.sh --only claude  # 自動検出されて symlink
 ### 3.4 statusLine — Claude 利用枠スナップショット
 
 `ocw-meter snapshot-quota`（`bin/README.md` §3.3 参照）を `statusLine` コマンドとして配線し、
-Claude Code のステータスバーに 5時間枠 / 週間枠 / コンテキスト使用率を表示する。
+Claude Code のステータスバーに 5時間枠（使用率とリセット時刻）/ 週間枠 / コンテキスト使用率を表示する。
 詳細設計は `docs/planning/DOC-2608021229-a_ai-llm-cost-observability_計画.md` 第5.6章・第8.5章、
 `docs/adr/DOC-2608021229_llm-cost-observability-collection-method.md` §2.1・§8 を参照。
 
 **表示内容**（例）:
 
 ```
-5h:37% 7d:12% ctx:24%
+5h:37%→04:10 7d:12% ctx:24%
 ```
+
+`5h:` の `→04:10` は**5時間枠がリセットされる時刻**（`rate_limits.five_hour.resets_at` を
+ローカルタイムの `HH:MM` に変換したもの）。週間枠には併記しない（日付まで書かないと読めず、
+statusLine には長すぎるため）。`resets_at` が取得できない場合、および既に過ぎた時刻
+（stale 値）が来た場合は併記を省いて `5h:37%` に戻る。
 
 取得できない項目は表示しない（例: `claude-ds`（DeepSeek）セッションでは `rate_limits` が
 一切来ないため `5h:`/`7d:` は出ず、`ctx:` のみになるか、コンテキスト情報も無ければ完全に空になる）。

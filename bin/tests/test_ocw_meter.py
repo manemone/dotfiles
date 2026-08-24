@@ -130,9 +130,17 @@ def run_meter(args, home, extra_env=None, timeout=30, cwd=None):
 def run_snapshot_quota(stdin_text, home, extra_env=None, timeout=30):
     """Like run_meter, but feeds `stdin_text` to `ocw-meter snapshot-quota`
     on its own real stdin (via subprocess input=) — this is the one
-    subcommand that reads real stdin data, not CLI flags."""
+    subcommand that reads real stdin data, not CLI flags.
+
+    Pins TZ=UTC (overridable per call via extra_env) because the display
+    string now carries the 5h window's reset time as a LOCAL clock time:
+    without pinning, every expected `5h:NN%\u2192HH:MM` in this file would
+    read differently on a developer's machine (JST here) than in CI (UTC),
+    which is a test harness bug, not a product one. Tests that care about
+    the conversion itself pass their own TZ explicitly."""
     env = dict(os.environ)
     env["OCW_METER_HOME"] = str(home)
+    env["TZ"] = "UTC"
     for key in ("OCW_RUN_ID", "OCW_ROLE", "HERDR_WORKSPACE_ID", "HERDR_PANE_ID"):
         env.pop(key, None)
     if not extra_env or "HOME" not in extra_env:
@@ -2733,7 +2741,7 @@ class SnapshotQuotaBasicsTests(OcwMeterTestCase):
     def test_claude_session_prints_display_and_records_complete_sample(self):
         result = run_snapshot_quota(json.dumps(CLAUDE_STATUSLINE_SAMPLE), self.home)
         self.assertEqual(result.returncode, 0)
-        self.assertEqual(result.stdout.strip(), "5h:37% 7d:12% ctx:24%")
+        self.assertEqual(result.stdout.strip(), "5h:37%→09:46 7d:12% ctx:24%")
 
         events = read_events(self.home)
         self.assertEqual(len(events), 1)
@@ -2794,7 +2802,7 @@ class SnapshotQuotaBasicsTests(OcwMeterTestCase):
         }
         result = run_snapshot_quota(json.dumps(obj), self.home)
         self.assertEqual(result.returncode, 0)
-        self.assertEqual(result.stdout.strip(), "5h:5%")
+        self.assertEqual(result.stdout.strip(), "5h:5%→09:46")
         event = read_events(self.home)[0]
         self.assertEqual(event["context_used_pct"], 25.0)
 
@@ -2804,12 +2812,12 @@ class SnapshotQuotaBasicsTests(OcwMeterTestCase):
             "context_window": {"used_percentage": 25},
         }
         result = run_snapshot_quota(json.dumps(obj), self.home)
-        self.assertEqual(result.stdout.strip(), "5h:5% ctx:25%")
+        self.assertEqual(result.stdout.strip(), "5h:5%→09:46 ctx:25%")
 
     def test_context_used_pct_null_when_no_fallback_possible(self):
         obj = {"rate_limits": {"five_hour": {"used_percentage": 5, "resets_at": 99999999999}}}
         result = run_snapshot_quota(json.dumps(obj), self.home)
-        self.assertEqual(result.stdout.strip(), "5h:5%")
+        self.assertEqual(result.stdout.strip(), "5h:5%→09:46")
         event = read_events(self.home)[0]
         self.assertIsNone(event["context_used_pct"])
 
@@ -2822,7 +2830,7 @@ class SnapshotQuotaBasicsTests(OcwMeterTestCase):
         obj["rate_limits"]["some_new_window"] = {"used_percentage": 99}
         result = run_snapshot_quota(json.dumps(obj), self.home)
         self.assertEqual(result.returncode, 0)
-        self.assertEqual(result.stdout.strip(), "5h:37% 7d:12% ctx:24%")
+        self.assertEqual(result.stdout.strip(), "5h:37%→09:46 7d:12% ctx:24%")
         self.assertEqual(read_events(self.home)[0]["completeness"], "complete")
 
     def test_known_keys_missing_does_not_crash(self):
@@ -2870,7 +2878,7 @@ class SnapshotQuotaBasicsTests(OcwMeterTestCase):
         bad_home = repo_dir / "ocw-meter-home"
         result = run_snapshot_quota(json.dumps(CLAUDE_STATUSLINE_SAMPLE), bad_home)
         self.assertEqual(result.returncode, 0)
-        self.assertEqual(result.stdout.strip(), "5h:37% 7d:12% ctx:24%")
+        self.assertEqual(result.stdout.strip(), "5h:37%→09:46 7d:12% ctx:24%")
         self.assertIn("resolves inside a Git worktree", result.stderr)
         self.assertFalse((bad_home / "events").exists())
 
@@ -3301,8 +3309,8 @@ class SnapshotQuotaThrottleTests(OcwMeterTestCase):
         self.assertEqual(r2.returncode, 0)
         # Both calls still print a display string — throttling only
         # skips the storage write, never the stdout contract.
-        self.assertEqual(r1.stdout.strip(), "5h:37% 7d:12% ctx:24%")
-        self.assertEqual(r2.stdout.strip(), "5h:37% 7d:12% ctx:24%")
+        self.assertEqual(r1.stdout.strip(), "5h:37%→09:46 7d:12% ctx:24%")
+        self.assertEqual(r2.stdout.strip(), "5h:37%→09:46 7d:12% ctx:24%")
         self.assertEqual(len(read_events(self.home)), 1)
 
     def test_interval_zero_disables_throttling(self):
@@ -3314,6 +3322,89 @@ class SnapshotQuotaThrottleTests(OcwMeterTestCase):
         run_snapshot_quota(json.dumps(CLAUDE_STATUSLINE_SAMPLE), self.home, extra_env={"OCW_METER_QUOTA_INTERVAL": "not-a-number"})
         run_snapshot_quota(json.dumps(CLAUDE_STATUSLINE_SAMPLE), self.home, extra_env={"OCW_METER_QUOTA_INTERVAL": "not-a-number"})
         self.assertEqual(len(read_events(self.home)), 1)
+
+
+class FiveHourResetDisplayTests(OcwMeterTestCase):
+    """statusLine に 5h 枠のリセット時刻を併記する側（`5h:37%\u219209:46`）。
+    記録側の `five_hour_resets_at`（epoch 秒のまま保存）を扱う
+    SnapshotQuotaWindowTests とは別物で、こちらは「人間が読む文字列に
+    何を出すか / 出さないか」だけを見る。"""
+
+    # 99999999999 = 5138-11-16 09:46:39 UTC. run_snapshot_quota pins
+    # TZ=UTC, so this is 09:46 regardless of the developer's own zone.
+    FAR_FUTURE = 99999999999
+
+    def test_reset_time_is_appended_to_the_five_hour_segment(self):
+        obj = {"rate_limits": {"five_hour": {"used_percentage": 37, "resets_at": self.FAR_FUTURE}}}
+        result = run_snapshot_quota(json.dumps(obj), self.home)
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(result.stdout.strip(), "5h:37%\u219209:46")
+
+    def test_reset_time_is_rendered_in_the_local_timezone(self):
+        # The whole point of the value is "何時まで待てばいいか" read off a
+        # wall clock, so it follows TZ rather than being pinned to UTC.
+        obj = {"rate_limits": {"five_hour": {"used_percentage": 37, "resets_at": self.FAR_FUTURE}}}
+        result = run_snapshot_quota(json.dumps(obj), self.home, extra_env={"TZ": "Asia/Tokyo"})
+        self.assertEqual(result.stdout.strip(), "5h:37%\u219218:46")  # 09:46 UTC + 9h
+
+    def test_stale_reset_time_is_omitted_but_the_percentage_stays(self):
+        # DOC-2608021229 §2.1 saw an already-past resets_at in 3/8 real
+        # samples. Printing it would park a past clock time in the status
+        # bar and read as "the window already reset" — same reason the
+        # recording side refuses to adopt it as a window_id.
+        obj = {"rate_limits": {"five_hour": {"used_percentage": 37, "resets_at": 1}}}
+        result = run_snapshot_quota(json.dumps(obj), self.home)
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(result.stdout.strip(), "5h:37%")
+
+    def test_missing_reset_time_is_omitted(self):
+        obj = {"rate_limits": {"five_hour": {"used_percentage": 37}}}
+        result = run_snapshot_quota(json.dumps(obj), self.home)
+        self.assertEqual(result.stdout.strip(), "5h:37%")
+
+    def test_non_numeric_reset_time_is_omitted(self):
+        obj = {"rate_limits": {"five_hour": {"used_percentage": 37, "resets_at": "2026-08-25T04:10:00Z"}}}
+        result = run_snapshot_quota(json.dumps(obj), self.home)
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(result.stdout.strip(), "5h:37%")
+
+    def test_out_of_range_reset_time_is_omitted_and_does_not_crash(self):
+        # Same upstream format change SnapshotQuotaRoundOneReviewTests
+        # guards the RECORDING side against (resets_at in milliseconds):
+        # datetime.fromtimestamp() raises, and format_quota_display's
+        # "never raises" contract must hold on the display side too.
+        obj = {"rate_limits": {"five_hour": {"used_percentage": 37, "resets_at": 1785562800000}}}
+        result = run_snapshot_quota(json.dumps(obj), self.home)
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(result.stdout.strip(), "5h:37%")
+
+    def test_negative_reset_time_is_omitted(self):
+        obj = {"rate_limits": {"five_hour": {"used_percentage": 37, "resets_at": -99999999999999}}}
+        result = run_snapshot_quota(json.dumps(obj), self.home)
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(result.stdout.strip(), "5h:37%")
+
+    def test_reset_time_alone_does_not_produce_a_five_hour_segment(self):
+        # used_percentage is what the segment IS; the reset time is only
+        # ever a suffix on it (unchanged pre-existing behaviour).
+        obj = {
+            "rate_limits": {"five_hour": {"resets_at": self.FAR_FUTURE}},
+            "context_window": {"used_percentage": 24},
+        }
+        result = run_snapshot_quota(json.dumps(obj), self.home)
+        self.assertEqual(result.stdout.strip(), "ctx:24%")
+
+    def test_seven_day_window_gets_no_reset_time(self):
+        # 7d は「何日の何時か」まで書かないと読めず statusLine には長すぎる
+        # ため、意図的に併記しない。
+        obj = {
+            "rate_limits": {
+                "five_hour": {"used_percentage": 37, "resets_at": self.FAR_FUTURE},
+                "seven_day": {"used_percentage": 12, "resets_at": self.FAR_FUTURE},
+            },
+        }
+        result = run_snapshot_quota(json.dumps(obj), self.home)
+        self.assertEqual(result.stdout.strip(), "5h:37%\u219209:46 7d:12%")
 
 
 class SnapshotQuotaWindowTests(OcwMeterTestCase):
@@ -4315,8 +4406,8 @@ class SnapshotQuotaRoundOneReviewTests(OcwMeterTestCase):
         # Both calls still print the display string — the point of the
         # fix is suppressing the wasted git subprocess call and stderr
         # noise, never the stdout contract.
-        self.assertEqual(r1.stdout.strip(), "5h:37% 7d:12% ctx:24%")
-        self.assertEqual(r2.stdout.strip(), "5h:37% 7d:12% ctx:24%")
+        self.assertEqual(r1.stdout.strip(), "5h:37%→09:46 7d:12% ctx:24%")
+        self.assertEqual(r2.stdout.strip(), "5h:37%→09:46 7d:12% ctx:24%")
 
     def test_cwd_is_recorded_on_the_event(self):
         # Finding 4: `json_cwd` was already extracted (to resolve git
