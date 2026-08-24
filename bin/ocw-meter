@@ -5028,7 +5028,40 @@ def _fmt_pct(value):
     return f"{n:.0f}" if n is not None else None
 
 
-def format_quota_display(obj):
+def format_five_hour_reset(five_hour_resets_at, now=None):
+    """`rate_limits.five_hour.resets_at`（epoch 秒）を、statusLine に併記する
+    ローカル時刻 "HH:MM" へ変換する。取れなければ None を返す
+    （`format_quota_display` の「取れなかったものは placeholder を出さず
+    黙って省く」方針をそのまま踏襲する）。
+
+    stale 判定は `resolve_five_hour_window()` に委譲する。DOC-2608021229
+    §2.1 が実データ 8 件中 3 件で観測した「既に過ぎた `resets_at`」をその
+    まま出すと、ステータスバーに過去の時刻が居座り「もう枠は戻ったはず」と
+    読み違える — 記録側がそれを window_id として採用しないのと同じ理由で、
+    表示側でも省く。
+
+    ローカルタイムで出すのは、これが人間が「あと何時まで待つか」を読むため
+    の値だから（記録側の `five_hour_resets_at` は epoch 秒のまま保存され、
+    そちらは一切変えていない）。"""
+    resets_at = _as_int(five_hour_resets_at)
+    if resets_at is None:
+        return None
+    if now is None:
+        now = datetime.now(timezone.utc)
+    stale, _window_id = resolve_five_hour_window(resets_at, now)
+    if stale:
+        return None
+    try:
+        return datetime.fromtimestamp(resets_at, tz=timezone.utc).astimezone().strftime("%H:%M")
+    except (ValueError, OverflowError, OSError):
+        # resolve_five_hour_window() が同じ変換を通せた後なのでここには
+        # 来ないはずだが、format_quota_display の "Never raises" 契約を
+        # 他関数の実装詳細に依存させない（round-1 review finding 1 が
+        # まさにこの変換の例外伝播だった）。
+        return None
+
+
+def format_quota_display(obj, now=None):
     """Builds the minimal statusLine text (DOC-2608021229 §8 instruction 7:
     "5h:37% 7d:12% ctx:24%" 程度に。`context_window.used_percentage` が
     nullの場合は `ctx` を非表示にする) — omits whatever wasn't obtainable
@@ -5046,11 +5079,24 @@ def format_quota_display(obj):
     the status bar rather than show a number the instruction explicitly
     says to omit (round-1 review: these were conflated, showing a
     fallback-derived `ctx:25%` even when the instruction called for no
-    `ctx` segment at all)."""
+    `ctx` segment at all).
+
+    The 5h segment additionally carries the window's reset time as a
+    local clock time (`5h:37%\u219204:10`, see `format_five_hour_reset`) —
+    an addition to DOC-2608021229 §8-7's example string, not a
+    replacement of it: the instruction's point was "keep it minimal",
+    and the one thing the percentage alone can't answer is 何時まで待てば
+    枠が戻るのか. `now` is injectable for testing; production callers
+    leave it None."""
     parts = []
     five_hour_pct = _as_number(_get(obj, "rate_limits", "five_hour", "used_percentage"))
     if five_hour_pct is not None:
-        parts.append(f"5h:{_fmt_pct(five_hour_pct)}%")
+        # 5h 枠だけリセット時刻を併記する（7d 枠は「何日の何時か」まで
+        # 書かないと読めず statusLine には長すぎるうえ、待って回復を狙う
+        # 単位でもない）。`resets_at` が無い/stale なら "%" だけに戻る。
+        reset_hhmm = format_five_hour_reset(_get(obj, "rate_limits", "five_hour", "resets_at"), now)
+        suffix = f"\u2192{reset_hhmm}" if reset_hhmm else ""
+        parts.append(f"5h:{_fmt_pct(five_hour_pct)}%{suffix}")
     seven_day_pct = _as_number(_get(obj, "rate_limits", "seven_day", "used_percentage"))
     if seven_day_pct is not None:
         parts.append(f"7d:{_fmt_pct(seven_day_pct)}%")
