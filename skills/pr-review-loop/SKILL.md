@@ -1,11 +1,17 @@
 ---
 name: pr-review-loop
-description: "PRレビューサイクルを自動化。Herdrワークスペースのreviewerエージェントと連携してレビュー→修正→返信→再レビューを承認まで繰り返す。自動発動はしない。/pr-review-loop で明示的に起動。"
+description: "PRレビューサイクルを自動化。Herdrワークスペースのreviewerペインと連携してレビュー→修正→返信→再レビューを承認まで繰り返す。AI 不問（Claude Code / Codex / OpenCode）。自動発動はしない。/pr-review-loop で明示的に起動。"
 ---
 
 # PRレビューループ
 
-Herdrワークスペース内の `reviewer` Claude Codeペインと連携してPRレビューサイクルを自動化する。
+Herdrワークスペース内の `reviewer` ペインと連携してPRレビューサイクルを自動化する。
+
+**AI 不問。** 司令官（このスキルを読んでいる側）もレビュワーも、特定の AI コーディング
+エージェントを前提としない。Herdr が対応するエージェント（`herdr integration status` で
+一覧できる。Claude Code / Codex / OpenCode など）であれば、`agent_status` による状態
+取得と `herdr pane run` による依頼送信という本スキルの2つの接点はどれも同じように使える。
+司令官とレビュワーが別のエージェントであってもよい。
 
 本スキルには工程計測用の `ocw-meter` 呼び出しが含まれる。すべて fail-open であり、
 `ocw-meter` が存在しない環境でも本スキルは完全に動作する。
@@ -20,6 +26,13 @@ test "${HERDR_ENV:-}" = 1
 ```
 
 失敗したら「Herdr内ではありません」と報告して停止。
+
+レビュワーペインで動くエージェントについては、Herdr の agent 連携がインストール済みで
+あること。未インストールだと `agent_status` が常に取れず、Phase 3 の完了待ちが機能しない:
+
+```bash
+herdr integration status
+```
 
 ## 呼び出し
 
@@ -36,7 +49,7 @@ gh pr view --json number,url
 
 ## Phase 0: reviewerペインの特定
 
-推測するな。neighborsやagent detectionや位置レイアウトを使うな。
+推測するな。neighborsや位置レイアウトを使うな。
 
 ```bash
 herdr pane list --workspace "$HERDR_WORKSPACE_ID"
@@ -44,10 +57,24 @@ herdr pane list --workspace "$HERDR_WORKSPACE_ID"
 
 `label` が `"reviewer"` と完全一致するペインを1つだけ探す。その `pane_id` を使う。
 
-- 0件 → 停止。「'reviewer' ラベルのペインがありません。`herdr pane split --current --direction right --no-focus` で分割、`herdr pane rename <id> reviewer` でリネーム、claudeを起動してください」と伝える。
+- 0件 → 停止。「'reviewer' ラベルのペインがありません。`herdr pane split --current --direction right --no-focus` で分割、`herdr pane rename <id> reviewer` でリネーム、レビュー役に使う AI エージェント（`claude` / `codex` / `opencode` など）を起動してください」と伝える。
 - 2件以上 → 停止。「'reviewer' ラベルのペインが複数あります。1つだけ残してリネームしてください」と伝える。
 
 レビュワーペインIDを `$REVIEWER_PANE` に保存（例: `w4:p3`）。
+
+### レビュワーのエージェント種別を記録する
+
+**推測するな。ペイン自身が報告している値を読む。**
+
+```bash
+herdr pane get "$REVIEWER_PANE" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['result']['pane'].get('agent') or '')"
+```
+
+得られた値（`claude` / `codex` / `opencode` など）を `$REVIEWER_AGENT` として保存する。
+Phase 2 Step 2 で、終了していたレビュワーを再起動するときの起動コマンドに使う。
+
+空だった場合（そのペインでまだエージェントが起動していない、または agent 連携が未導入）は
+`$REVIEWER_AGENT` を空のままにし、Phase 2 Step 2 の「起動コマンドの決定」に従う。
 
 ## Phase 0.5: プロジェクト設定の読み取り
 
@@ -56,6 +83,10 @@ herdr pane list --workspace "$HERDR_WORKSPACE_ID"
 1. `.claude/pr-review.yml`（あれば最優先）
 2. リポジトリ構成からの自動検出
 3. スキル内蔵のデフォルト値
+
+**`.claude/` というディレクトリ名だが、これは Claude Code の設定ではない。** このファイルを
+読むのは本スキル自身であり、どの AI エージェントから実行しても同じように読める。既存の
+リポジトリに配置済みのものを尊重するため、パスはこのまま維持している。
 
 ### Step 1: 設定ファイルの確認
 
@@ -77,6 +108,7 @@ markers:
   approved: "🤖✅ 承認"
   changes_requested: "🤖🔍 レビュー指摘"
   reply: "🤖💬 対応報告"
+reviewer_cmd: "claude"            # レビュワーペインでエージェントを起動し直すコマンド
 ```
 
 **設定ファイルがない場合**、リポジトリ構成から自動検出:
@@ -110,17 +142,23 @@ fi
 
 **convention_docs** が未設定の場合、このスキル自体のレビュー規約を唯一の情報源とする。
 
+**reviewer_cmd** が未設定なら、Phase 0 で読み取った `$REVIEWER_AGENT` をそのまま起動
+コマンドとして使う（Herdr が報告する agent 名は `claude` / `codex` / `opencode` のように
+起動コマンドと一致するのが通例）。`$REVIEWER_AGENT` も空なら、Phase 2 Step 2 の
+「起動コマンドの決定」に従う。
+
 以降のフェーズでは、解決した設定値を以下の変数で参照する:
 
 - `LINT_CMD` / `TEST_CMD` — コマンド（空または `null` ならスキップ）
 - `APPROVED_MARKER` / `CHANGES_REQUESTED_MARKER` / `REPLY_MARKER` — マーカー文字列
 - `CONVENTION_DOCS` — 規約docのパスリスト（空ならスキル内蔵規約のみ）
+- `REVIEWER_CMD` — レビュワーを再起動するコマンド（空なら Phase 2 Step 2 で決める）
 
 ## Phase 1: コンテキスト収集
 
 サイクル開始時に1回だけ実行:
 
-**工程計測についての注記（このPhase以降で共通）**: `$ROUND` はシェル変数ではない。本スキルの各コードブロックは独立したBashツール呼び出しとして実行され、シェル変数は呼び出しをまたいで保持されない。`$ROUND` は「エージェントが追跡している現在のレビューサイクル数（1始まり。Phase 7の報告項目にある『レビューサイクル数』と同じ値、安全制約の『6サイクル』のカウントと同じ値）」を指す記法であり、`--round` を実行する際は、この時点のサイクル数をリテラルな整数値として埋めること。`$PR` / `$HEAD_SHA` / `$FINDINGS_COUNT` / `$URL` / `$OCW_RUN_ID` / `$REVIEW_REQUEST`（Phase 2 Step 1 で決めるレビュー指示ファイルの絶対パス）も同様に、直前に取得・保持した実際の値をその場でリテラルに埋め込む記法であり、新しいシェル変数を宣言する意味ではない。**特に `$REVIEW_REQUEST` は `herdr pane run` でレビュワーへ渡す文字列の中に入る。** レビュワーのペインは別プロセスでこちらのシェル変数を参照できないため、必ずリテラルな絶対パスとして埋めること。
+**工程計測についての注記（このPhase以降で共通）**: `$ROUND` はシェル変数ではない。本スキルの各コードブロックは独立したBashツール呼び出しとして実行され、シェル変数は呼び出しをまたいで保持されない。`$ROUND` は「エージェントが追跡している現在のレビューサイクル数（1始まり。Phase 7の報告項目にある『レビューサイクル数』と同じ値、安全制約の『6サイクル』のカウントと同じ値）」を指す記法であり、`--round` を実行する際は、この時点のサイクル数をリテラルな整数値として埋めること。`$PR` / `$HEAD_SHA` / `$FINDINGS_COUNT` / `$URL` / `$OCW_RUN_ID` / `$REVIEW_REQUEST`（Phase 2 Step 1 で決めるレビュー指示ファイルの絶対パス）/ `$REVIEWER_PANE` / `$REVIEWER_AGENT` / `$REVIEWER_CMD` も同様に、直前に取得・保持した実際の値をその場でリテラルに埋め込む記法であり、新しいシェル変数を宣言する意味ではない。**特に `$REVIEW_REQUEST` は `herdr pane run` でレビュワーへ渡す文字列の中に入る。** レビュワーのペインは別プロセスでこちらのシェル変数を参照できないため、必ずリテラルな絶対パスとして埋めること。
 
 工程計測（サイクル1周目の開始）:
 
@@ -609,35 +647,65 @@ REVIEW_EOF
 
 ### Step 2: レビュワーの状態確認と起動
 
-**すべての `herdr pane run` の前にこの手順を実行すること。`agent_status=None` を「Claude未起動」と思い込むな。**
+**すべての `herdr pane run` の前にこの手順を実行すること。`agent_status=None` を「エージェント未起動」と思い込むな。**
 
 ```bash
 STATUS=$(herdr pane get "$REVIEWER_PANE" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['result']['pane'].get('agent_status',''))")
 ```
 
+`agent_status` は Herdr がエージェント種別によらず同じ語彙で返す値であり、レビュワーが
+どのエージェントでもこの表がそのまま使える。
+
 | status | 意味 | 取るべき行動 |
 |--------|------|-------------|
-| `idle` | Claude起動中、待機状態 | Step 3へ |
+| `idle` | エージェント起動中、待機状態 | Step 3へ |
 | `done` | 前ラウンドの完了結果が未読のまま。待機状態であることは `idle` と同じ | Step 3へ |
-| `working` | Claudeが処理中 | Phase 3a と同じループ（`--status done` を60秒刻みで待ち、`idle`/`blocked` も完了として拾う）で完了を待ってからStep 3へ。無人の背面ペインは完了しても `done` で止まり自動では `idle` にならないため、単発の `--status idle` 待ちは10分空転する |
+| `working` | エージェントが処理中 | Phase 3a と同じループ（`--status done` を60秒刻みで待ち、`idle`/`blocked` も完了として拾う）で完了を待ってからStep 3へ。無人の背面ペインは完了しても `done` で止まり自動では `idle` にならないため、単発の `--status idle` 待ちは10分空転する |
 | `blocked` | 判断待ちで停止 | ペイン出力を読んで可能なら回答。人手が必要ならユーザーに伝える |
-| `unknown` / `None` または空 | 要確認。ClaudeがINSERTモードで動いている可能性がある | 以下の「None時の確認手順」を実行 |
+| `unknown` / `None` または空 | 要確認。エージェントが入力待ち状態で動いている可能性がある | 以下の「None時の確認手順」を実行 |
 
 **None時の確認手順:**
 
-`agent_status=None` でも Claude は動いていることがある。必ず目視で確認する:
+`agent_status=None` でもエージェントは動いていることがある。必ず目視で確認する:
 
 ```bash
 herdr pane read "$REVIEWER_PANE" --source detection --lines 3
 ```
 
-- **INSERTモード表示**（`-- INSERT --`、`accept edits on`、`← for agents`）→ Claudeは起動済みでペースト確認待ち。`herdr pane send-keys "$REVIEWER_PANE" Enter` で確定させ、`idle` または `done` になってから Step 3 へ。
-- **シェルプロンプト**（`$` や `❯` で終わる行、Claudeの応答がない）→ Claudeは終了している。`herdr pane run "$REVIEWER_PANE" "claude"` で起動し、`herdr wait agent-status "$REVIEWER_PANE" --status idle --timeout 30000` で起動完了を待つ。
-- **Claudeの応答が表示されている**（`●` や `✻` で始まる行）→ 実は起動中。`herdr pane get` を再実行して状態を再確認。
+判定は**エージェント固有の飾りではなく、次の3つのどれに当たるか**で行う:
+
+- **エージェントが入力欄に本文を抱えたまま確定待ち**（入力モードやペースト確認の表示が出ている）
+  → 起動済み。`herdr pane send-keys "$REVIEWER_PANE" Enter` で確定させ、`idle` または `done`
+  になってから Step 3 へ。
+- **シェルプロンプト**（`$` や `❯` で終わる行だけがあり、エージェントの応答が無い）
+  → エージェントは終了している。下記「起動コマンドの決定」に従って起動し直し、
+  `herdr wait agent-status "$REVIEWER_PANE" --status idle --timeout 30000` で起動完了を待つ。
+- **エージェントの応答が表示されている**（直近の行がエージェントの出力）→ 実は起動中。
+  `herdr pane get` を再実行して状態を再確認。
+
+エージェント別の見え方の例（参考。この一覧に無い表示でも上の3分類で判断する）:
+
+| エージェント | 確定待ちの表示例 | 応答中の表示例 |
+|---|---|---|
+| Claude Code | `-- INSERT --`, `accept edits on`, `← for agents` | `●` や `✻` で始まる行 |
+
+**起動コマンドの決定:**
+
+1. `REVIEWER_CMD`（Phase 0.5 の `reviewer_cmd`）があればそれを使う
+2. 無ければ Phase 0 で読み取った `$REVIEWER_AGENT` をコマンド名として使う
+3. どちらも空なら**推測して起動しない。** 停止してユーザーに
+   「レビュワーペインのエージェントが終了しており、起動コマンドが特定できません。
+   `.claude/pr-review.yml` に `reviewer_cmd` を設定するか、ペインで手動で起動してください」
+   と伝える。誤ったコマンドを撃つとシェルにゴミが流れ、以降の状態判定が壊れる。
+
+```bash
+herdr pane run "$REVIEWER_PANE" "$REVIEWER_CMD"
+herdr wait agent-status "$REVIEWER_PANE" --status idle --timeout 30000
+```
 
 ### Step 3: 依頼を送信
 
-Claude が `idle` または `done`（どちらも待機状態）であることを確認した上で、短いコマンドで依頼を送信する:
+レビュワーが `idle` または `done`（どちらも待機状態）であることを確認した上で、短いコマンドで依頼を送信する:
 
 ```bash
 herdr pane run "$REVIEWER_PANE" "以下を読んでPRレビューを実行してください。レビュー指示: $REVIEW_REQUEST"
@@ -866,8 +934,13 @@ command -v ocw-meter >/dev/null && ocw-meter event phase.start --phase fix --sou
 git add -A
 git commit -m "fix: <修正内容の要約>
 
-Co-Authored-By: Claude <noreply@anthropic.com>"
+<自分の Co-Authored-By トレーラ>"
 ```
+
+`Co-Authored-By` には、**この修正を実際に書いているエージェント自身**を書く。
+自分が何であるかを他のエージェントの名前で騙らない。リポジトリやエージェントの規約で
+トレーラの書式が決まっている場合はそれに従い、決まっていなければトレーラを省略してよい
+（例: Claude Code なら `Co-Authored-By: Claude <noreply@anthropic.com>`）。
 
 6. 通常プッシュ（force push禁止）:
 
@@ -920,9 +993,9 @@ command -v ocw-meter >/dev/null && ocw-meter event phase.start --phase rereview_
 
    - **レビュー指示ファイルの絶対パス**（Phase 2 Step 1 で作った `$REVIEW_REQUEST`）。
      finding の判定基準・テスト不足の判定基準・ラウンド別のテスト実行方針は**このファイルにしか
-     書かれていない**。レビュワーペインの Claude は、ラウンドの合間に終了して Phase 2 Step 2 の
+     書かれていない**。レビュワーペインのエージェントは、ラウンドの合間に終了して Phase 2 Step 2 の
      手順で起動し直されることがあり、そのときの新しいレビュワーはこのファイルを一度も読んでいない。
-     パスを渡さないと、素の Claude として nit を出し full suite を回すレビューに戻る。
+     パスを渡さないと、基準を持たない素のエージェントとして nit を出し full suite を回すレビューに戻る。
 
      **送信前に存在を確認し、無ければ Phase 2 Step 1 の手順で作り直す。** `/tmp` は再起動で
      消え、環境によっては古いファイルが定期的に掃除される。レビューサイクルは複数ラウンドに
@@ -940,7 +1013,7 @@ herdr pane run "$REVIEWER_PANE" "PR #$PR 再レビュー依頼。レビュー指
 ```
 
    送信前に、Phase 2 Step 2 と同じ手順でレビュワーの状態を確認する。**ラウンドの合間に
-   Claude が終了していることがあり**、そのまま `herdr pane run` を撃つとプロンプトが
+   エージェントが終了していることがあり**、そのまま `herdr pane run` を撃つとプロンプトが
    シェルへ流れて依頼が届かない。`idle` / `done` を確認してから送ること。
 
 5. 配信確認（Phase 2 Step 4と同様。`agent_status` が `working` にならなければ
