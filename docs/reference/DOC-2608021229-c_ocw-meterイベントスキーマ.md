@@ -63,11 +63,11 @@ quarantineしない設計。計画書§9.1「未知フィールドは保持す�
 |---|---|---|---|
 | `run.start` | `bin/ocw`（`ocw <name>` / `ocw -H <name>` 実行時） | `base_ref`, `command` | ✅ 実装済み・実際に発火する |
 | `run.end` | `bin/ocw`（`ocw rm` 実行時。`-f`強制削除時は`outcome: failure`） | `outcome` | ✅ 実装済み・実際に発火する |
-| `phase.start` | `claude/skills/pr-review-loop/SKILL.md`（各Phaseの開始時） | `phase` | ✅ 実装済み。**ただし`implement`と`verdict`はphase.start/endのペアを一切発火しない**（下記§2.3参照） |
+| `phase.start` | `skills/pr-review-loop/SKILL.md`（各Phaseの開始時） | `phase` | ✅ 実装済み。**ただし`implement`と`verdict`はphase.start/endのペアを一切発火しない**（下記§2.3参照） |
 | `phase.end` | 同上（各Phaseの終了時） | `phase` | ✅ 同上。`outcome`（`success`/`failure`/`blocked`）は**`done`フェーズのみ**実際に渡される（他フェーズのphase.endは`outcome`無しで発火する） |
-| `pr.bind` | `claude/skills/pr-review-loop/SKILL.md`（Phase 2、PR作成直後） / `ocw-meter bind-pr` CLI | `pr_number` | ✅ 実装済み。**この型だけ`idempotency_key`が明示的に決定論的**（§3参照） |
-| `review.round` | `claude/skills/pr-review-loop/SKILL.md`（Phase 4、判定確定時） | `round`, `verdict`, `findings_count` | ✅ 実装済み。`verdict`は`approved`/`changes_requested`/`ambiguous`のみ |
-| `human.intervention` | `claude/skills/pr-review-loop/SKILL.md`（規約上の停止条件に到達したとき） | `reason` | ✅ 実装済み |
+| `pr.bind` | `skills/pr-review-loop/SKILL.md`（Phase 2、PR作成直後） / `ocw-meter bind-pr` CLI | `pr_number` | ✅ 実装済み。**この型だけ`idempotency_key`が明示的に決定論的**（§3参照） |
+| `review.round` | `skills/pr-review-loop/SKILL.md`（Phase 4、判定確定時） | `round`, `verdict`, `findings_count` | ✅ 実装済み。`verdict`は`approved`/`changes_requested`/`ambiguous`のみ |
+| `human.intervention` | `skills/pr-review-loop/SKILL.md`（規約上の停止条件に到達したとき） | `reason` | ✅ 実装済み |
 | `usage.message` | `ocw-meter ingest`（transcript走査） | `message_id`, `input_tokens`, `cache_read_input_tokens`, `cache_creation_input_tokens`, `output_tokens`, `cost_basis` | ✅ 実装済み。**`phase`/`round`は常に`null`**（上記参照） |
 | `quota.sample` | `ocw-meter snapshot-quota`（statusLineコマンドとして呼ばれる） | `plan_source` | ✅ 実装済み |
 | `block.start` | （未実装） | `cause` | ❌ **未実装** — スキーマ（`EVENT_PAYLOAD_REQUIRED`のenum制約含む）は定義されているが、これを発火する呼び出しはリポジトリ内のどこにも存在しない。計画書§8.2で「best-effort」と明記された通り、5時間枠blockedの検出は現状statusLineの`rate_limits`スナップショットからの間接推測（`quota.sample`側）のみで、専用イベントとしては未収集 |
@@ -192,8 +192,8 @@ phase.start/phase.endとして発火されない**:
 | `review.round` | `round` | int | 必須 | envelopeの`round`と同じ値 |
 | | `verdict` | string | 必須 | `approved`/`changes_requested`/`ambiguous`（enum制約あり、§2.2） |
 | | `findings_count` | int | 必須 | 未解決指摘の件数（承認なら0） |
-| | `reviewed_head_sha` | string | 任意（スキーマ定義のみ・実質常に存在） | レビュー対象のHEAD SHA。`EVENT_PAYLOAD_REQUIRED`には無いが、`claude/skills/pr-review-loop/SKILL.md`の実際の埋め込みは毎回渡しており、実ストアでも**10/10件**に存在する。本PR（孫5）が新設した`report --pr <n> --json`の`pr_detail.review_rounds[].reviewed_head_sha`としてこの値を出力する |
-| `human.intervention` | `reason` | string | 必須 | 停止条件の短い識別子（自由文字列。`claude/skills/pr-review-loop/SKILL.md`の「停止してユーザーに報告する条件」の一覧に対応する識別子を渡す想定だが、値そのものにenum制約は無い） |
+| | `reviewed_head_sha` | string | 任意（スキーマ定義のみ・実質常に存在） | レビュー対象のHEAD SHA。`EVENT_PAYLOAD_REQUIRED`には無いが、`skills/pr-review-loop/SKILL.md`の実際の埋め込みは毎回渡しており、実ストアでも**10/10件**に存在する。本PR（孫5）が新設した`report --pr <n> --json`の`pr_detail.review_rounds[].reviewed_head_sha`としてこの値を出力する |
+| `human.intervention` | `reason` | string | 必須 | 停止条件の短い識別子（自由文字列。`skills/pr-review-loop/SKILL.md`の「停止してユーザーに報告する条件」の一覧に対応する識別子を渡す想定だが、値そのものにenum制約は無い） |
 | `meter.error` | `stage` | string | 必須 | 自己診断が発生した処理段階（例 `ingest`） |
 | | `message` | string | 任意（スキーマ定義のみ・実質常に存在） | 例外メッセージ等の短い説明。**入力データそのものは含めない**（第9.2節「`meter.error`の`message`も例外文字列のみで、入力データを含めない」）。redactionは他フィールドと同じ規則が適用される |
 | `block.start` | `cause` | string | 必須（型は定義済みだが未実装） | `rate_limit`/`api_error`/`unknown`（enum制約あり）。**発火する呼び出しがリポジトリ内に無い**（§2参照） |
@@ -212,7 +212,7 @@ phase.start/phase.endとして発火されない**:
 | `usage.message`（`ingest`由来） | `msg:<message.id>` | ✅ 決定論的。同じtranscript行を何度ingestしても1件に収束する（第5.3節の重複行問題への対策） |
 | `pr.bind` | `bind:<run_id>:<pr_number>` | ✅ 決定論的（`ocw-meter bind-pr`のCLIコードと`pr-review-loop`の呼び出し双方が明示的に指定） |
 | `meter.error` | `meter-error:<stage>:<YYYY-MM-DD>` | ✅ 決定論的（1日1stage1件に自然にまとまる。自己診断が同じ理由で1日に何度も記録されないようにするため） |
-| `run.start` / `run.end` / `phase.start` / `phase.end` / `review.round` / `human.intervention` | `auto:<event_id>`（`event_id`はランダムuuid4） | ❌ **ランダム。呼び出し側が`--idempotency-key`を明示的に渡さない限り重複排除は効かない。** `claude/skills/pr-review-loop/SKILL.md`・`bin/ocw`のいずれもこれらの型に`--idempotency-key`を渡していない（実際のコードを確認済み） |
+| `run.start` / `run.end` / `phase.start` / `phase.end` / `review.round` / `human.intervention` | `auto:<event_id>`（`event_id`はランダムuuid4） | ❌ **ランダム。呼び出し側が`--idempotency-key`を明示的に渡さない限り重複排除は効かない。** `skills/pr-review-loop/SKILL.md`・`bin/ocw`のいずれもこれらの型に`--idempotency-key`を渡していない（実際のコードを確認済み） |
 | `quota.sample` | `auto:<event_id>`（同上） | ❌ ランダム。ただし呼び出し元の`snapshot-quota`サブコマンド自体が`state/quota-last-sample.json`によるスロットリング（既定60秒に1回まで）を`record_quota_sample`呼び出しの手前で行っているため、**実質的に「同じ内容が重複して書かれる」ことは起きない**（idempotency_keyでの重複排除ではなく、呼び出し頻度そのものの抑制で同じ目的を達成している） |
 
 **実務上の含意**: `run.start`/`phase.start`/`phase.end`/`review.round`/`human.intervention`は、

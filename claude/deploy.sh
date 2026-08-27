@@ -19,10 +19,14 @@ FAIL=0
 
 # --- Ensure ~/.claude exists with correct permissions ---
 CLAUDE_DIR="$HOME/.claude"
+# The mode comes from shared/helpers.sh rather than a literal here: skills/
+# creates this same directory when it is missing (see agent_home_mode), and
+# 0700 — ~/.claude may contain credentials — must not drift between the two.
+CLAUDE_DIR_MODE="$(agent_home_mode claude)"
 
 if [ ! -d "$CLAUDE_DIR" ]; then
   if [ "${DRY_RUN:-0}" -eq 1 ]; then
-    log_info "[DRY-RUN] Would create directory: $CLAUDE_DIR with mode 700"
+    log_info "[DRY-RUN] Would create directory: $CLAUDE_DIR with mode $CLAUDE_DIR_MODE"
   else
     log_info "Creating directory: $CLAUDE_DIR"
     mkdir -p "$CLAUDE_DIR" || {
@@ -33,11 +37,11 @@ if [ ! -d "$CLAUDE_DIR" ]; then
   fi
 fi
 
-# Enforce 700 permissions (~/.claude may contain credentials)
+# Enforce the mode on every run (~/.claude may contain credentials)
 if [ "${DRY_RUN:-0}" -eq 1 ]; then
-  log_info "[DRY-RUN] Would chmod 700 $CLAUDE_DIR"
+  log_info "[DRY-RUN] Would chmod $CLAUDE_DIR_MODE $CLAUDE_DIR"
 else
-  chmod 700 "$CLAUDE_DIR" || log_warn "Failed to chmod 700 $CLAUDE_DIR"
+  chmod "$CLAUDE_DIR_MODE" "$CLAUDE_DIR" || log_warn "Failed to chmod $CLAUDE_DIR_MODE $CLAUDE_DIR"
 fi
 
 # --- Symlink CLAUDE.md ---
@@ -47,11 +51,11 @@ symlink_backup "$DOTFILES_DEPLOY_SRC/claude/CLAUDE.md" "$CLAUDE_DIR/CLAUDE.md" |
 # symlink_backup (used for CLAUDE.md above) always links through
 # DOTFILES_DEPLOY_SRC regardless of DRY_RUN — its DRY-RUN branch only prints
 # a planned `ln -fs`, so the source never needs to exist yet. But the code
-# below branches on "-f $MACHINE_SRC" / "-d $SKILLS_SRC_DIR" to decide what
-# to do, and in DRY_RUN mode DOTFILES_DEPLOY_SRC/claude may not exist yet
-# (current not switched, or create_generation's own DRY-RUN branch never
-# actually copies anything) — so those existence checks would silently see
-# "nothing to merge" / "no skills" even when the real run will create both.
+# below branches on "-f $MACHINE_SRC" to decide what to do, and in DRY_RUN
+# mode DOTFILES_DEPLOY_SRC/claude may not exist yet (current not switched,
+# or create_generation's own DRY-RUN branch never actually copies anything)
+# — so that existence check would silently see "nothing to merge" even when
+# the real run will merge.
 # A generation is a cp -a snapshot of the working tree (see
 # create_generation), so the working tree is what the plan should describe.
 if [ "${DRY_RUN:-0}" -eq 1 ]; then
@@ -200,183 +204,19 @@ else
   fi
 fi
 
-# --- Deploy skills (individual symlinks per skill) ---
-# Directory-wide symlink (~/.claude/skills → repo/claude/skills) is forbidden
-# because it would wipe out Herdr-managed and user-owned skills.
-# Instead, each skill directory is symlinked individually so they coexist.
+# --- Skills ---
+# Skills are NOT deployed here. They moved to the top-level skills/ tool,
+# which distributes the same skill directories to every supported agent
+# (Claude Code, Codex, OpenCode) rather than to ~/.claude alone — see ADR
+# DOC-2608272128. ~/.claude/skills is therefore written by skills/deploy.sh.
 #
-# Uses an independent _skills_fail flag so that a prior failure in CLAUDE.md
-# or settings.json does not silently skip skill deployment.
-SKILLS_SRC_DIR="$CLAUDE_SRC_DIR/skills"
-# Distinct from SKILLS_SRC_DIR on purpose: SKILLS_SRC_DIR is only the
-# enumeration input (which skills exist, per CLAUDE_SRC_DIR's DRY_RUN
-# branching above). SKILLS_DEPLOY_DIR is what symlinks actually get pointed
-# at, and that must always be the real distribution source regardless of
-# DRY_RUN — otherwise a dry-run plan would propose linking through the
-# working tree, which is exactly the pre-migration scheme this PR retires.
-SKILLS_DEPLOY_DIR="$DOTFILES_DEPLOY_SRC/claude/skills"
-SKILLS_DST_DIR="$CLAUDE_DIR/skills"
-SKILLS_BACKUP_DIR="$CLAUDE_DIR/skills-backup"
-_skills_fail=0
-
-# Guard: ~/.claude/skills must NOT be a directory-wide symlink.
-# If it is, the per-skill symlink logic below would mv files out of the
-# repo (since $_skill_dst and $_skill_src resolve to the same path) and
-# the stale-cleanup pass would delete the repo-side SKILL.md files.
-if [ -L "$SKILLS_DST_DIR" ]; then
-  log_error "$SKILLS_DST_DIR is a symlink — directory-wide skill symlinks are not supported."
-  log_error "Remove it first: rm \"$SKILLS_DST_DIR\""
-  log_error "Then re-run deploy.  Herdr-managed and user-owned skills will be untouched."
-  _skills_fail=1
-fi
-
-if [ -d "$SKILLS_SRC_DIR" ]; then
-  log_hr
-  log_info "Deploying: claude/skills"
-
-  if [ ! -d "$SKILLS_DST_DIR" ]; then
-    if [ "${DRY_RUN:-0}" -eq 1 ]; then
-      log_info "[DRY-RUN] Would create directory: $SKILLS_DST_DIR"
-    else
-      log_info "Creating skills directory: $SKILLS_DST_DIR"
-      mkdir -p "$SKILLS_DST_DIR" || {
-        log_error "Failed to create skills directory: $SKILLS_DST_DIR"
-        _skills_fail=1
-      }
-    fi
-  fi
-
-  if [ "$_skills_fail" -eq 0 ]; then
-    _skill_count=0
-    for _skill_dir in "$SKILLS_SRC_DIR"/*/; do
-      [ -d "$_skill_dir" ] || continue
-      _skill_name=$(basename "$_skill_dir")
-      # Use $SKILLS_DEPLOY_DIR/$_skill_name (no trailing slash) so the
-      # symlink target is clean and consistent with other links (e.g.
-      # CLAUDE.md). Deliberately SKILLS_DEPLOY_DIR, not SKILLS_SRC_DIR — see
-      # the SKILLS_DEPLOY_DIR comment above.
-      _skill_src="$SKILLS_DEPLOY_DIR/$_skill_name"
-      _skill_dst="$SKILLS_DST_DIR/$_skill_name"
-
-      # Safety: if dst and src resolve to the same path, skip to avoid
-      # moving repo-side files or creating self-referential symlinks.
-      if [ "$_skill_dst" = "$_skill_src" ]; then
-        log_warn "Skipping $_skill_name — destination equals source (possible directory-wide symlink?)."
-        log_warn "  Remove the symlink at $SKILLS_DST_DIR first, then re-run deploy."
-        continue
-      fi
-
-      # Already correct symlink?
-      if [ -L "$_skill_dst" ] && [ "$(readlink "$_skill_dst")" = "$_skill_src" ]; then
-        log_info "Already linked: $_skill_dst → $_skill_src"
-        _skill_count=$((_skill_count + 1))
-        continue
-      fi
-
-      # If an existing file / directory / different symlink is in the way,
-      # back it up OUTSIDE skills/ so it isn't picked up as a duplicate skill.
-      # Exception: a symlink left over from a previous deploy (either the
-      # old direct-to-worktree scheme or a stale current-scheme link) is not
-      # user data — replace it without backup, the same treatment
-      # symlink_backup gives CLAUDE.md above (ADR §4.10 / DOC-2608040229).
-      # Without this check, every pre-migration skill symlink would get
-      # "backed up" here as if it were the user's original skill, and a
-      # later uninstall would restore that backup as if it were real data.
-      if [ -e "$_skill_dst" ] || [ -L "$_skill_dst" ]; then
-        if _dotfiles_symlink_is_repo_owned "$_skill_dst" "$(dirname "$SCRIPT_DIR")"; then
-          if [ "${DRY_RUN:-0}" -eq 1 ]; then
-            log_info "[DRY-RUN] Would replace repo-owned skill symlink (no backup): $_skill_dst"
-          else
-            log_info "Replacing repo-owned skill symlink (no backup needed): $_skill_dst"
-            rm -f "$_skill_dst" || {
-              log_error "Failed to remove: $_skill_dst"
-              _skills_fail=1
-              continue
-            }
-          fi
-        elif [ "${DRY_RUN:-0}" -eq 1 ]; then
-          log_info "[DRY-RUN] Would back up existing: $_skill_dst → $SKILLS_BACKUP_DIR/"
-        else
-          mkdir -p "$SKILLS_BACKUP_DIR" || {
-            log_error "Failed to create backup directory: $SKILLS_BACKUP_DIR"
-            _skills_fail=1
-            continue
-          }
-          _backup_name="${_skill_name}.$(date +%Y%m%d%H%M%S).$$"
-          log_warn "Backing up existing skill: $_skill_dst → $SKILLS_BACKUP_DIR/$_backup_name"
-          mv "$_skill_dst" "$SKILLS_BACKUP_DIR/$_backup_name" || {
-            log_error "Failed to back up: $_skill_dst"
-            _skills_fail=1
-            continue
-          }
-          log_info "  To restore: mv $SKILLS_BACKUP_DIR/$_backup_name $_skill_dst"
-        fi
-      fi
-
-      # Create symlink
-      if [ "${DRY_RUN:-0}" -eq 1 ]; then
-        log_info "[DRY-RUN] Would symlink: $_skill_dst → $_skill_src"
-        _skill_count=$((_skill_count + 1))
-      else
-        ln -fs "$_skill_src" "$_skill_dst" || {
-          log_error "Failed to symlink: $_skill_src → $_skill_dst"
-          _skills_fail=1
-          continue
-        }
-        log_ok "Linked: $_skill_dst → $_skill_src"
-        _skill_count=$((_skill_count + 1))
-      fi
-    done
-
-    if [ "$_skill_count" -eq 0 ]; then
-      log_warn "No skill directories found in $SKILLS_SRC_DIR"
-    else
-      log_ok "Deployed $_skill_count skill(s)"
-    fi
-
-    # Clean up stale symlinks inside ~/.claude/skills/ that point into
-    # SKILLS_DEPLOY_DIR but whose targets no longer exist (renamed /
-    # removed). Uses SKILLS_DEPLOY_DIR, not SKILLS_SRC_DIR, for the same
-    # reason the symlink target above does: in DRY_RUN mode SKILLS_SRC_DIR
-    # is the working tree, so matching against it would miss stale
-    # current-scheme links (the ones this deploy actually created) and the
-    # plan would silently propose nothing to sweep. Also recognizes the
-    # pre-migration direct-to-worktree scheme ($SCRIPT_DIR/skills/<name>)
-    # so skills removed/renamed before this machine adopted the
-    # current-scheme distribution still get swept (ADR §4.8 /
-    # DOC-2608040229 asks uninstall.sh's ownership check to recognize both
-    # schemes for the same reason). Only touches symlinks whose target
-    # starts with one of these two prefixes, leaving user-owned and
-    # Herdr-managed symlinks alone.
-    for _dst_link in "$SKILLS_DST_DIR"/*; do
-      [ -L "$_dst_link" ] || continue
-      _target=$(readlink "$_dst_link")
-      case "$_target" in
-        "$SKILLS_DEPLOY_DIR"/* | "$SCRIPT_DIR/skills"/*)
-          if [ ! -d "$_target" ]; then
-            if [ "${DRY_RUN:-0}" -eq 1 ]; then
-              log_info "[DRY-RUN] Would remove stale skill symlink: $_dst_link → $_target"
-            else
-              log_warn "Removing stale skill symlink: $_dst_link → $_target"
-              rm -f "$_dst_link" || {
-                log_error "Failed to remove stale symlink: $_dst_link"
-                _skills_fail=1
-              }
-            fi
-          fi
-          ;;
-      esac
-    done
-  fi
-else
-  log_info "No skills directory — skipping skill deployment."
-fi
-
-# Merge skills failure into main FAIL flag (do NOT exit early — settings.json
-# may have succeeded even if skills had an issue, and vice versa).
-if [ "$_skills_fail" -ne 0 ]; then
-  FAIL=1
-fi
+# AVAILABLE_TOOLS lists `skills` after `claude` so the tool that owns
+# ~/.claude gets to create it first, but that ordering is presentational,
+# not load-bearing: skills/deploy.sh creates ~/.claude itself when it is
+# missing, using the mode agent_home_mode() returns (the same one this
+# script reads above). Do not read the ordering as a guarantee this script
+# has already run — `--only skills` and every --dry-run depend on it not
+# being one.
 
 if [ "$FAIL" -ne 0 ]; then
   log_error "claude deployment completed with errors."

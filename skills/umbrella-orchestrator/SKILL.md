@@ -687,7 +687,7 @@ herdr 自身の公式ドキュメント（`herdr` skill）によれば、`idle` 
 を使うことがあり、この待機は**（そのペインをフォーカスしない限り）成立せずタイムアウトまで
 空回りする**。孫1で1回発生した（約10分ロス。§3.2 実測表と同じ事例）。
 
-**注記**: `pr-review-loop` スキル（`claude/skills/pr-review-loop/SKILL.md` Phase 3a）も
+**注記**: `pr-review-loop` スキル（`skills/pr-review-loop/SKILL.md` Phase 3a）も
 同じ仕組みに基づき、`idle` ではなく `done` を待つ形に修正済み（本PRで対応）。
 
 **待ち方は1種類ではない。** 孫3では `herdr wait` を使わず

@@ -3,7 +3,7 @@
 ## 概要
 
 クロスプラットフォーム（macOS / Linux / WSL2）対応の dotfiles。mise でランタイムを固定し、
-各ツールディレクトリ（`zsh/` `nvim/` `tmux/` `bin/` `claude/`）の `deploy.sh` が、配布実体
+各ツールディレクトリ（`zsh/` `nvim/` `tmux/` `bin/` `claude/` `skills/`）の `deploy.sh` が、配布実体
 （世代ディレクトリ + `current` シンボリックリンク。詳細は「デプロイの仕組み」節）を経由して
 ユーザーの `$HOME` に symlink を張ることで設定を配布する。
 
@@ -46,7 +46,8 @@
 | `nvim/` | NeoVim 設定（lazy.nvim でプラグイン管理） |
 | `tmux/` | tmux 設定 |
 | `bin/` | スタンドアロンの CLI ツール（`ocw`, `claude-ds`, `ocw-meter`）。`bin/tests/` は `ocw-meter` 等の Python テスト、`bin/prices/` は費用計算用の価格表 |
-| `claude/` | Claude Code 向け配布物（設定・スキル） |
+| `claude/` | Claude Code 向け配布物（`CLAUDE.md` / `settings.json`） |
+| `skills/` | AI コーディングエージェント向けのスキル。Claude Code だけでなく Codex・OpenCode にも同じ実体を配る（ADR DOC-2608272128） |
 | `shared/` | 全 deploy スクリプトが共有するヘルパー（`helpers.sh`） |
 | `docs/` | このリポジトリ自体の設計文書・ADR・計画書・運用リファレンス。`design/`（現役の規約）・`adr/`（確定した技術決定の記録）・`planning/`（傘ブランチ計画書）・`reference/`（運用中に繰り返し引く事実）の4フォルダに分かれる。詳細は [docs/README.md](docs/README.md) を参照 |
 | `tools/` | このリポジトリ自体の開発を支援するツール（`doc-id` など）。`bin/` と異なり `$HOME` へは配布しない |
@@ -58,7 +59,8 @@
 
 | 対象 | 正体 | 誰が読むか |
 |---|---|---|
-| `claude/CLAUDE.md`, `claude/settings.json`, `claude/skills/` | **配布される成果物。** `claude/deploy.sh` がユーザーの `~/.claude/` 配下へ配置する（`CLAUDE.md` と `skills/` は symlink、`settings.json` は生成。詳細は「デプロイの仕組み」参照） | このリポジトリを使う人間のマシンの Claude Code |
+| `claude/CLAUDE.md`, `claude/settings.json` | **配布される成果物。** `claude/deploy.sh` がユーザーの `~/.claude/` 配下へ配置する（`CLAUDE.md` は symlink、`settings.json` は生成。詳細は「デプロイの仕組み」参照） | このリポジトリを使う人間のマシンの Claude Code |
+| `skills/` | **配布される成果物。** `skills/deploy.sh` が各 AI エージェントのスキルディレクトリへスキルごとに symlink する | このリポジトリを使う人間のマシンの Claude Code / Codex / OpenCode |
 | ルート `AGENTS.md` / `CLAUDE.md`（このファイル） | **このリポジトリを開発するためのルール** | このリポジトリで作業する AI |
 | `.claude/settings.json` | リポジトリで作業する AI 向けの permissions を置く場所 | このリポジトリで作業する Claude Code |
 
@@ -131,7 +133,7 @@
   `git diff` で確認・コミットしたうえで改めて通常の deploy を実行する
 
 `$HOME` 側の配布先一覧は `shared/helpers.sh` の `links_for_tool()`（symlink 系のツール）と
-`claude_skill_links()`（`claude/skills/` の個別 symlink）に一元化されており、`uninstall.sh` と
+`skill_links()`（`skills/` の個別 symlink。全エージェント分）に一元化されており、`uninstall.sh` と
 `deploy-all.sh --status` の両方がここを参照する。リストを二重管理すると片方だけ更新される
 事故が起きる（`uninstall.sh` 側から `ocw-meter` が漏れていた過去の不具合がまさにこれ）。
 
@@ -162,8 +164,8 @@ uninstall 側の対応関数。ただし退避の前提は次の3点で崩れる
   配下）であれば、退避せず張り替える。旧方式（作業ツリー直リンク）の symlink がそのまま
   `.backup` として残り、後日 `uninstall.sh` がそれを「ユーザーの元設定」として誤って復元するのを
   防ぐための判定
-- `claude/skills/` は `symlink_backup` を通らない。`claude/deploy.sh` がスキルごとに
-  個別に symlink を張り、退避先も `~/.claude/skills-backup/<名前>.<日時>.<PID>` になる
+- `skills/` は `symlink_backup` を通らない。`skills/deploy.sh` がスキルごとに
+  個別に symlink を張り、退避先も `<エージェントのホーム>/skills-backup/<名前>.<日時>.<PID>` になる
 
 ### claude の例外
 
@@ -229,7 +231,7 @@ uninstall を行い、symlink・既存ファイルの退避・冪等性・
 `claude/settings.json` の実ファイル生成に加えて、世代の作成と GC・
 ソースツリー消失耐性・編集分離・`--rollback`・`--dev`・
 配布実体（世代 + `current`）の後片付けを検証する（既定の対象は
-`bin,claude`。デプロイの検証は必ずこのサンドボックス経由で行い、
+`bin,claude,skills`。デプロイの検証は必ずこのサンドボックス経由で行い、
 人間の実 `$HOME` に対して直接実行しない。詳細は
 [docs/design/DOC-2608020715-b_テスト方針.md](docs/design/DOC-2608020715-b_テスト方針.md)
 を参照）。
@@ -297,6 +299,18 @@ PR を作る前に
   ままループが継続するため）。この場合、警告なしに `_links` 側の symlink だけが撤去されずに
   残る。`deploy-all.sh --status` のリンク健全性スキャンには arm 忘れに対する警告経路が無く、
   その分の `$HOME` リンクが静かにレポートから抜け落ちる点にも注意する。
+  `skills` はこの `links_for_tool()` に arm を**持たない**唯一のツールである。配布先が
+  「スキルごと × エージェントごと」で可変なため固定リストにできず、`skill_links()` が
+  一次情報源になっている。`uninstall.sh` の「No link list defined」ガードは
+  `_links` / `_generated` / `_skills_src` の3つが揃って空のときだけ発火するので、
+  この判定順を崩さないこと（`_skills_src` をガードより後で解決すると、`skills` が
+  警告付きで丸ごとスキップされる）。
+- スキルを増やすときは `skills/` にディレクトリを作るだけでよい。`skills/deploy.sh` が
+  自動検出する。配布先のエージェントを増やすときは `shared/helpers.sh` の
+  `skill_agents()` に名前を足し、`skill_agent_home()` と `skill_dir_for_agent()` に
+  arm を追加する。そのエージェントの設定ディレクトリをこのリポジトリが作ってよい場合は
+  `agent_home_mode()` にも arm を足す（足さなければ「ディレクトリが実在するときだけ配る」
+  という既定の扱いになる。詳細は ADR DOC-2608272128 §2.3）。
 - ツールが `$HOME` 側の symlink 経由で世代ディレクトリへ書き戻すファイル（`nvim/lazy-lock.json`
   のような状態ファイル。詳細は「状態ファイル」節）を持つ場合は、`shared/helpers.sh` の
   `state_files_for_tool()` にも arm を追加する。ここに追加し忘れると、デプロイ時の検知・

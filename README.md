@@ -10,7 +10,8 @@ Easily deployable, cross-platform dotfiles managed with [mise](https://mise.jdx.
 | **NeoVim** | Editor | [lazy.nvim](https://github.com/folke/lazy.nvim) |
 | **tmux** | Terminal multiplexer | — (built-in) |
 | **bin** | Custom CLI tools (ocw, claude-ds, ocw-meter) | — (standalone scripts) |
-| **claude** | Claude Code config & skills | — (built-in) |
+| **claude** | Claude Code config | — (built-in) |
+| **skills** | AI agent skills, shared across Claude Code / Codex / OpenCode | — (built-in) |
 
 ## Supported Platforms
 
@@ -148,7 +149,12 @@ for details. `bin/` changes should additionally be verified with
 │   ├── settings.json          # Claude Code base settings (no machine-specific config)
 │   ├── settings.machine.json.example  # Template for machine-specific overrides
 │   ├── deploy.sh              # claude deployment script
-│   ├── skills/                # Claude Code custom skills (auto-detected)
+│   └── README.md
+├── skills/
+│   ├── pr-review-loop/        # PR review cycle automation
+│   ├── umbrella-orchestrator/ # Umbrella-branch grandchild lifecycle
+│   ├── repo-baseline/         # Applying the repo-baseline copier template
+│   ├── deploy.sh              # skills deployment script (all agents, auto-detected)
 │   └── README.md
 ├── zsh/
 │   ├── .zshrc                 # Shell configuration
@@ -269,7 +275,8 @@ See each tool's deploy script for the full list of files it creates.
 See each tool's README for detailed configuration and troubleshooting:
 
 - [bin/README.md](bin/README.md) — CLI tools (ocw worktree manager, claude-ds DeepSeek wrapper, ocw-meter observability)
-- [claude/README.md](claude/README.md) — Claude Code config, skills, machine-specific customization
+- [claude/README.md](claude/README.md) — Claude Code config, machine-specific customization
+- [skills/README.md](skills/README.md) — AI agent skills and how they reach Claude Code, Codex and OpenCode
 - [zsh/README.md](zsh/README.md) — shell setup, plugin management, aliases, version managers
 - [nvim/README.md](nvim/README.md) — editor setup, LSP servers, keybindings, plugins
 - [tmux/README.md](tmux/README.md) — multiplexer setup, Vim-style keybindings, clipboard

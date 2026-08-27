@@ -147,7 +147,7 @@ EOF
 # never writes a manifest, see cmd_dev), the list of kept generations,
 # any state file writeback (detect_state_writeback, shared/helpers.sh) not
 # yet adopted into this source tree, and a $HOME symlink health scan (via
-# links_for_tool() + claude_skill_links(), shared/helpers.sh) that flags
+# links_for_tool() + skill_links(), shared/helpers.sh) that flags
 # broken symlinks. Returns 1 if current is broken (points at something that
 # no longer exists or isn't a symlink) or any $HOME symlink is broken.
 # Returns 0 otherwise, including when nothing has been deployed yet
@@ -290,16 +290,16 @@ cmd_status() {
     IFS="$_cs_oldifs"
   done
 
-  # claude/skills/<name> symlinks aren't in links_for_tool()/KNOWN_LINKS_claude
-  # — claude/deploy.sh symlinks them individually, one per skill directory
-  # it auto-detects, not as a fixed list — so they need their own pass via
-  # claude_skill_links() (shared/helpers.sh) or they'd be a silent blind
-  # spot in exactly the tool with the most $HOME symlinks of any of them
-  # (ADR DOC-2608040229 §1.1).
+  # Skill symlinks aren't in links_for_tool() — skills/deploy.sh symlinks
+  # them individually, one per skill directory it auto-detects, into every
+  # agent's own skills directory (ADR DOC-2608272128), not as a fixed list
+  # — so they need their own pass via skill_links() (shared/helpers.sh) or
+  # they'd be a silent blind spot in exactly the tool with the most $HOME
+  # symlinks of any of them (ADR DOC-2608040229 §1.1).
   _cs_oldifs="$IFS"
   IFS='
 '
-  for _cs_dst in $(claude_skill_links "$SCRIPT_DIR"); do
+  for _cs_dst in $(skill_links "$SCRIPT_DIR"); do
     IFS="$_cs_oldifs"
     [ -z "$_cs_dst" ] && continue
     if [ -e "$_cs_dst" ]; then

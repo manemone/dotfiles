@@ -112,7 +112,13 @@ is_wsl() {
 
 # Canonical list of available tools.  deploy-all.sh and uninstall.sh
 # both source this file, so the list is defined once.
-AVAILABLE_TOOLS="zsh nvim tmux bin claude"
+#
+# `skills` is listed after `claude` so the tool that owns ~/.claude gets to
+# create it first. That ordering is presentational, not load-bearing:
+# skills/deploy.sh creates a repo-owned agent home itself when it is missing
+# (agent_home_mode), precisely so that `--only skills` and every --dry-run
+# behave the same as a full deploy.
+AVAILABLE_TOOLS="zsh nvim tmux bin claude skills"
 
 # resolve_tools <only_tools> <var_name>
 # Resolves a comma-separated tool filter against AVAILABLE_TOOLS.
@@ -178,8 +184,8 @@ resolve_tools() {
 #
 # A forgotten arm here surfaces as "No link list defined for '<tool>'.
 # Skipping." in uninstall.sh's per-tool loop ONLY when <tool> is in $TOOLS
-# AND has no KNOWN_GENERATED_* entry either (that loop only warns when both
-# _links and _generated come back empty). claude is the one tool where this
+# AND has no KNOWN_GENERATED_* / KNOWN_SKILLS_SRC_* entry either (that loop
+# only warns when all three come back empty). claude is the one tool where this
 # doesn't save you: it has a KNOWN_GENERATED_claude entry
 # (~/.claude/settings.json), so a forgotten claude arm here still leaves
 # _generated non-empty, the warning never fires, and ~/.claude/CLAUDE.md
@@ -188,7 +194,7 @@ resolve_tools() {
 # (a third consumer, added alongside this comment) has no warning path at
 # all for a forgotten arm: the tool's entries are just silently absent from
 # the report, so a broken symlink for that tool goes undetected too — the
-# same blind spot claude_skill_links() below exists to close for skills.
+# same blind spot skill_links() below exists to close for skills.
 #
 # Values are inlined into the case arms (not module-level KNOWN_LINKS_*
 # variables) on purpose: this file is sourced by every interactive zsh
@@ -227,6 +233,14 @@ links_for_tool() {
       printf '%s\n' \
         "$HOME/.claude/CLAUDE.md"
       ;;
+      # skills deliberately has no arm: its $HOME-side links are one per
+      # skill directory auto-detected under skills/, across every agent in
+      # skill_agents() — a set that changes whenever a skill is added or
+      # removed, so it cannot be a fixed list here. skill_links() below is
+      # its single source of truth instead, and both consumers of this
+      # function (uninstall.sh, deploy-all.sh --status) call that too.
+      # uninstall.sh's "No link list defined" warning must therefore not
+      # fire for skills — see the note at its per-tool loop.
   esac
 }
 
@@ -303,49 +317,194 @@ detect_state_writeback() {
   done
 }
 
-# claude_skill_links [repo_root]
-# Print (one per line) the paths under $HOME/.claude/skills/ that are
-# symlinks owned by this repo's distribution. Recognizes three schemes:
-# current-scheme (target under <prefix>/current/claude/skills/), a
-# generation directly (target under <prefix>/generations/*/claude/skills/,
-# e.g. when DOTFILES_DEPLOY_SRC was pointed at one directly), and the
-# pre-migration direct-to-worktree scheme (target under
-# repo_root/claude/skills/, if repo_root is given — see ADR
-# DOC-2608040229 §4.8/§4.10). Deliberately narrower than
-# _dotfiles_symlink_is_repo_owned's generic "anywhere under repo_root"
-# check: a user's own symlink into some other part of the working tree
-# (e.g. a scratch directory) is not a skill this repo distributed, and
-# treating it as one would make uninstall.sh delete a link it doesn't own.
-# Skills aren't in links_for_tool()/KNOWN_LINKS_claude because
-# claude/deploy.sh symlinks them individually, one per skill directory
-# auto-detected under claude/skills/, rather than as a fixed list — but
-# they are still $HOME symlinks this repo creates, and in practice the
-# tool with the most of them (ADR §1.1). Shared by uninstall.sh (needs the
-# list to know what to restore) and deploy-all.sh --status (needs it so
-# its $HOME link-health scan doesn't blind-spot the tool with the most
-# symlinks of any of them). Prints nothing (not an error) if
-# ~/.claude/skills doesn't exist.
-claude_skill_links() {
-  _csl_repo_root="${1:-}"
-  _csl_dir="$HOME/.claude/skills"
-  [ -d "$_csl_dir" ] || return 0
-  _csl_prefix="$(dotfiles_prefix)"
-  for _csl_link in "$_csl_dir"/*; do
-    [ -L "$_csl_link" ] || continue
-    _csl_target=$(readlink "$_csl_link")
-    case "$_csl_target" in
-      "$_csl_prefix/current/claude/skills"/* | "$_csl_prefix/generations"/*/claude/skills/*)
-        printf '%s\n' "$_csl_link"
-        ;;
-      *)
-        if [ -n "$_csl_repo_root" ]; then
-          case "$_csl_target" in
-            "$_csl_repo_root/claude/skills"/*) printf '%s\n' "$_csl_link" ;;
-          esac
-        fi
-        ;;
-    esac
+# ── Skill distribution targets (one per AI coding agent) ───────────────
+#
+# skills/ is distributed to every supported agent, not just Claude Code:
+# all three read the same SKILL.md format (YAML frontmatter with name /
+# description + Markdown body), so one skill directory serves all of them
+# and a symlink per agent is the whole of the "port". See ADR
+# DOC-2608272128.
+#
+# skill_agents
+# Print (one per line) the agents skills/ is distributed to. A function,
+# not a module-level variable, on purpose: this file is sourced by every
+# interactive zsh startup (zsh/.zshrc), and a module-level list would leak
+# into that shell's namespace the way AVAILABLE_TOOLS does — .zshrc
+# already has to `unset AVAILABLE_TOOLS` for exactly that reason, and
+# adding a second name to that list is a drift trap.
+skill_agents() {
+  printf '%s\n' \
+    claude \
+    codex \
+    opencode
+}
+
+# skill_agent_home <agent>
+# Print the agent's own config directory — the one whose existence decides
+# whether this machine uses that agent at all (empty for an unknown
+# agent). skills/deploy.sh deploys into an agent only when this directory
+# already exists, so an agent the user has never installed never gets a
+# directory tree conjured up for it.
+#
+# Read at call time (not stored at source time) so tests can override
+# $HOME / $XDG_CONFIG_HOME / $CODEX_HOME after helpers.sh is sourced —
+# same reasoning as links_for_tool()'s inlined values.
+skill_agent_home() {
+  case "$1" in
+    claude) printf '%s\n' "$HOME/.claude" ;;
+    codex) printf '%s\n' "${CODEX_HOME:-$HOME/.codex}" ;;
+    opencode) printf '%s\n' "${XDG_CONFIG_HOME:-$HOME/.config}/opencode" ;;
+  esac
+}
+
+# agent_home_mode <agent>
+# Print the chmod mode this repo's deploy applies to the agent's config
+# directory, or nothing if this repo must not create that directory at all.
+# The two meanings are deliberately carried by one value: "this repo knows
+# what mode that directory needs" and "this repo owns it enough to create
+# it" are the same fact for every agent in the table.
+#
+# Only claude is creatable: this repo deploys Claude Code's own config
+# (CLAUDE.md, settings.json) unconditionally, so ~/.claude is this repo's
+# own territory rather than evidence that the user installed a particular
+# agent. codex and opencode are the opposite — their config directories
+# exist only because the user installed them, so a missing one means
+# "this machine doesn't use that agent" and must be left alone (ADR
+# DOC-2608272128 §2.3).
+#
+# Without this, `--only skills` and, worse, every --dry-run would silently
+# plan nothing for Claude Code on a machine where ~/.claude does not exist
+# yet: claude/deploy.sh creates it, but its DRY-RUN branch only *prints*
+# that it would, so a dry-run's existence check finds nothing there and the
+# plan under-reports what a real run does — the same dry-run/real
+# divergence claude/deploy.sh's own CLAUDE_SRC_DIR comment guards against.
+#
+# The mode (not just a yes/no) lives here so the 0700 requirement — ~/.claude
+# may contain credentials — has one home; claude/deploy.sh reads it from
+# here too rather than repeating the literal.
+agent_home_mode() {
+  case "$1" in
+    claude) printf '%s\n' 700 ;;
+  esac
+}
+
+# skill_dir_for_agent <agent>
+# Print the directory that agent reads user skills from (empty for an
+# unknown agent). All three happen to use "<agent home>/skills", but they
+# are spelled out per agent rather than derived, because that is a fact
+# about each agent's own contract, not a shared convention we get to
+# assume holds for the next one added here. (OpenCode accepts both
+# `skill/` and `skills/`; `skills/` is used so all three agree.)
+skill_dir_for_agent() {
+  _sdfa_home="$(skill_agent_home "$1")"
+  [ -n "$_sdfa_home" ] || return 0
+  case "$1" in
+    claude | codex | opencode) printf '%s\n' "$_sdfa_home/skills" ;;
+  esac
+}
+
+# skill_backup_dir_for_agent <agent>
+# Print where skills/deploy.sh sets aside a pre-existing, non-repo-owned
+# skill before symlinking over its name. Deliberately a sibling of the
+# skills directory rather than a subdirectory of it: a backup living
+# inside skills/ would be picked up by the agent as a real (duplicate)
+# skill.
+skill_backup_dir_for_agent() {
+  _sbdfa_home="$(skill_agent_home "$1")"
+  [ -n "$_sbdfa_home" ] || return 0
+  printf '%s\n' "$_sbdfa_home/skills-backup"
+}
+
+# skill_backup_dir_for_link <link_path>
+# Print the backup directory skills/deploy.sh would have used for a skill
+# symlink at <link_path> (empty if the link is not directly inside any known
+# agent's skills directory). Exists so uninstall.sh can walk the flat list
+# skill_links() returns and still find each link's own agent's backup
+# directory, without re-deriving "<skills dir> minus 'skills' plus
+# 'skills-backup'" itself — that convention stays owned by
+# skill_backup_dir_for_agent alone.
+skill_backup_dir_for_link() {
+  _sbdfl_dir="$(dirname "$1")"
+
+  _sbdfl_oldifs="$IFS"
+  IFS='
+'
+  for _sbdfl_agent in $(skill_agents); do
+    IFS="$_sbdfl_oldifs"
+    if [ "$_sbdfl_dir" = "$(skill_dir_for_agent "$_sbdfl_agent")" ]; then
+      IFS="$_sbdfl_oldifs"
+      skill_backup_dir_for_agent "$_sbdfl_agent"
+      return 0
+    fi
+    IFS='
+'
   done
+  IFS="$_sbdfl_oldifs"
+}
+
+# skill_links [repo_root]
+# Print (one per line) the paths under every agent's skills directory that
+# are symlinks owned by this repo's distribution. Recognizes, for each
+# agent: current-scheme (target under <prefix>/current/skills/), a
+# generation directly (target under <prefix>/generations/*/skills/, e.g.
+# when DOTFILES_DEPLOY_SRC was pointed at one directly), and the
+# pre-migration direct-to-worktree scheme (target under repo_root/skills/,
+# if repo_root is given — see ADR DOC-2608040229 §4.8/§4.10). Each of the
+# three is also matched in its pre-split .../claude/skills/ spelling, so a
+# machine deployed before skills/ became its own tool still has its links
+# recognized as repo-owned and cleaned up rather than stranded (ADR
+# DOC-2608272128 §4.3).
+#
+# Deliberately narrower than _dotfiles_symlink_is_repo_owned's generic
+# "anywhere under repo_root" check: a user's own symlink into some other
+# part of the working tree (e.g. a scratch directory) is not a skill this
+# repo distributed, and treating it as one would make uninstall.sh delete
+# a link it doesn't own.
+#
+# Skills aren't in links_for_tool() because skills/deploy.sh symlinks them
+# individually, one per skill directory auto-detected under skills/,
+# rather than as a fixed list — but they are still $HOME symlinks this
+# repo creates, and in practice the largest group of them (ADR
+# DOC-2608040229 §1.1). Shared by uninstall.sh (needs the list to know
+# what to restore) and deploy-all.sh --status (needs it so its $HOME
+# link-health scan doesn't blind-spot the tool with the most symlinks of
+# any of them). Prints nothing (not an error) for an agent whose skills
+# directory doesn't exist.
+skill_links() {
+  _sl_repo_root="${1:-}"
+  _sl_prefix="$(dotfiles_prefix)"
+
+  _sl_oldifs="$IFS"
+  IFS='
+'
+  for _sl_agent in $(skill_agents); do
+    IFS="$_sl_oldifs"
+    _sl_dir="$(skill_dir_for_agent "$_sl_agent")"
+    if [ -n "$_sl_dir" ] && [ -d "$_sl_dir" ]; then
+      for _sl_link in "$_sl_dir"/*; do
+        [ -L "$_sl_link" ] || continue
+        _sl_target=$(readlink "$_sl_link")
+        case "$_sl_target" in
+          "$_sl_prefix/current/skills"/* | "$_sl_prefix/generations"/*/skills/* | \
+            "$_sl_prefix/current/claude/skills"/* | "$_sl_prefix/generations"/*/claude/skills/*)
+            printf '%s\n' "$_sl_link"
+            ;;
+          *)
+            if [ -n "$_sl_repo_root" ]; then
+              case "$_sl_target" in
+                "$_sl_repo_root/skills"/* | "$_sl_repo_root/claude/skills"/*)
+                  printf '%s\n' "$_sl_link"
+                  ;;
+              esac
+            fi
+            ;;
+        esac
+      done
+    fi
+    IFS='
+'
+  done
+  IFS="$_sl_oldifs"
 }
 
 # ── Logging (colourised when the output fd is a terminal) ─────────────

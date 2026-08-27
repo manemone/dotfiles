@@ -16,6 +16,7 @@
 | デプロイの運用手順（世代確認・ロールバック・dev モード等）を調べる | [reference/DOC-2608040805_配布実体運用ガイド.md](reference/DOC-2608040805_配布実体運用ガイド.md) | canonical prefix の構造・manifest 全フィールド・移行手順 |
 | なぜ `ocw` の命名・レイアウトを今の形にしたかを知る | [adr/DOC-2608062258_ocw-worktree-naming-and-layout.md](adr/DOC-2608062258_ocw-worktree-naming-and-layout.md) | `ai/` 接頭辞の廃止・ディレクトリのネスト・git config `ocw.*` によるレイアウト表現・squash マージ検出の決定と、却下した案 |
 | なぜ `ocw-meter` をこの設計にしたかを知る | [adr/DOC-2608021229_llm-cost-observability-collection-method.md](adr/DOC-2608021229_llm-cost-observability-collection-method.md) | feasibility probe の実測結果に基づく収集方式の決定記録 |
+| なぜスキルを複数の AI エージェントへ配るようにしたかを知る | [adr/DOC-2608272128_skills-multi-agent-distribution.md](adr/DOC-2608272128_skills-multi-agent-distribution.md) | `skills/` の切り出し・配布先エージェントの決め方・却下した案 |
 | `ocw-meter` のイベントスキーマを調べる | [reference/DOC-2608021229-c_ocw-meterイベントスキーマ.md](reference/DOC-2608021229-c_ocw-meterイベントスキーマ.md) | 全 event_type・全フィールド・費用計算式の一次情報源 |
 | LLM費用のベースラインを測る手順を知る | [reference/DOC-2608021229-b_LLM費用観測ベースライン計測手順.md](reference/DOC-2608021229-b_LLM費用観測ベースライン計測手順.md) | 実PR 5〜10本での計測手順 |
 | 傘ブランチの計画を確認する | [planning/](planning/) 配下の各計画書 | 進行中・完了した傘ブランチの計画書 |
@@ -60,6 +61,7 @@
 | DOC-2608021229 | [llm-cost-observability-collection-method.md](adr/DOC-2608021229_llm-cost-observability-collection-method.md) | LLM費用・Claude利用枠の収集方式決定。孫0のfeasibility probe実測結果（transcriptのmessage.id重複問題、statusLineのrate_limits取得可否、Herdrのrole↔session紐付け等）に基づき、「事後読み取り + 軽量イベント刻み」方式を確定した（旧ID: `ADR-001`） |
 | DOC-2608040229 | [deploy-distribution-method.md](adr/DOC-2608040229_deploy-distribution-method.md) | dotfiles の配布方式の決定。作業ツリーへの直接 symlink をやめ、世代ディレクトリ + `current` シンボリックリンクによる配布実体を1段挟む方式を採用した。実体コピー配布・世代を持たない方式・警告のみの最小案などの却下理由も記録 |
 | DOC-2608062258 | [ocw-worktree-naming-and-layout.md](adr/DOC-2608062258_ocw-worktree-naming-and-layout.md) | `ocw` のワークツリー命名とリポジトリレイアウトの外部化の決定。`ai/` 接頭辞の廃止、スラッシュ入りブランチ名のネストディレクトリ化、git config `ocw.*` によるフルパス雛形1本でのレイアウト表現、squash マージ検出を含むマージ済み判定の再定義を確定した。フラット化・enum によるレイアウト表現・`gh` 依存の判定などの却下理由も記録 |
+| DOC-2608272128 | [skills-multi-agent-distribution.md](adr/DOC-2608272128_skills-multi-agent-distribution.md) | スキルの配布方式の決定。`claude/skills/` を `skills/` へ切り出して独立したツールとし、Claude Code だけでなく Codex・OpenCode のスキルディレクトリへも同じ実体を symlink する方式を採用した。3者が同じ SKILL.md 形式を読むという実機調査が根拠。`claude/deploy.sh` の拡張・スキルごとの配布先指定などの却下理由も記録 |
 
 ### planning/ — ロードマップ・計画
 
