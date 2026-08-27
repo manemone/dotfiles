@@ -208,9 +208,15 @@ fi
 # Skills are NOT deployed here. They moved to the top-level skills/ tool,
 # which distributes the same skill directories to every supported agent
 # (Claude Code, Codex, OpenCode) rather than to ~/.claude alone — see ADR
-# DOC-2608272128. ~/.claude/skills is therefore written by skills/deploy.sh,
-# and AVAILABLE_TOOLS orders `skills` after `claude` so that this script has
-# already created ~/.claude by the time it runs.
+# DOC-2608272128. ~/.claude/skills is therefore written by skills/deploy.sh.
+#
+# AVAILABLE_TOOLS lists `skills` after `claude` so the tool that owns
+# ~/.claude gets to create it first, but that ordering is presentational,
+# not load-bearing: skills/deploy.sh creates ~/.claude itself when it is
+# missing, using the mode agent_home_mode() returns (the same one this
+# script reads above). Do not read the ordering as a guarantee this script
+# has already run — `--only skills` and every --dry-run depend on it not
+# being one.
 
 if [ "$FAIL" -ne 0 ]; then
   log_error "claude deployment completed with errors."
