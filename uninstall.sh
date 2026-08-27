@@ -46,22 +46,25 @@ ONLY_TOOLS=""
 # and keeping one copy is what prevents the drift that let ocw-meter go
 # unlisted here in the first place (see ADR DOC-2608040229 §2.6).
 
-# Skills are symlinked individually by deploy.sh (auto-detected from
-# claude/skills/).  We walk ~/.claude/skills/ at uninstall time and
-# restore any symlink whose target is repo-owned. A symlink counts as
-# repo-owned under either scheme: the current distribution scheme
-# (target under DOTFILES_PREFIX — via `current` or a generations/ dir
-# directly, see resolve_deploy_src) or the pre-migration direct-to-worktree
-# scheme (target under the checkout itself). Both must be recognized so
-# that machines with leftover pre-migration links can still be cleaned up
-# after adopting the new scheme (ADR DOC-2608040229 §4.8/§4.10).
+# Skills are symlinked individually by skills/deploy.sh (auto-detected from
+# skills/), into every agent's own skills directory (ADR DOC-2608272128).
+# We walk each of those directories at uninstall time and restore any
+# symlink whose target is repo-owned. A symlink counts as repo-owned under
+# either scheme: the current distribution scheme (target under
+# DOTFILES_PREFIX — via `current` or a generations/ dir directly, see
+# resolve_deploy_src) or the pre-migration direct-to-worktree scheme (target
+# under the checkout itself), each in both its post-split (skills/) and
+# pre-split (claude/skills/) spelling. All of them must be recognized so
+# that machines with leftover links from an older scheme can still be
+# cleaned up after adopting the current one (ADR DOC-2608040229 §4.8/§4.10,
+# ADR DOC-2608272128 §4.2).
 #
 # This flag is a plain boolean (only its non-emptiness is checked below),
-# not a path — the actual repo-owned-symlink resolution for both schemes
-# lives entirely in claude_skill_links() (shared/helpers.sh). A tool that
-# needs the same "walk $HOME/.claude/skills/ for repo-owned symlinks" logic
-# should get its own arm here.
-KNOWN_SKILLS_SRC_claude=1
+# not a path — the actual repo-owned-symlink resolution for every scheme
+# and every agent lives entirely in skill_links() (shared/helpers.sh). A
+# tool that needs the same "walk the agents' skills directories for
+# repo-owned symlinks" logic should get its own arm here.
+KNOWN_SKILLS_SRC_skills=1
 
 # settings.json is a generated file (not a symlink) — handled separately.
 # symlink_restore would skip it because it's a real file.
@@ -161,16 +164,27 @@ for _tool in $TOOLS; do
   log_info "Uninstalling: $_tool"
 
   # Get the list of known links for this tool via links_for_tool (defined
-  # in shared/helpers.sh). KNOWN_GENERATED_* has only one case arm
-  # (claude), so it isn't worth routing through a helper the way
-  # KNOWN_LINKS_* is.
+  # in shared/helpers.sh). KNOWN_GENERATED_* / KNOWN_SKILLS_SRC_* have only
+  # one case arm each, so they aren't worth routing through a helper the
+  # way KNOWN_LINKS_* is.
   _links="$(links_for_tool "$_tool")"
   _generated=""
   case "$_tool" in
     claude) _generated="$KNOWN_GENERATED_claude" ;;
   esac
 
-  if [ -z "$_links" ] && [ -z "$_generated" ]; then
+  # Resolved before the "nothing to do" guard below, not after: skills is a
+  # tool with no links_for_tool() arm and no generated files by design (its
+  # $HOME-side links are per-skill and per-agent, so skill_links() is their
+  # source of truth — see links_for_tool()'s comment). Leaving it out of the
+  # guard would make the guard's `continue` skip skill removal entirely,
+  # under a "No link list defined" warning that reads like a forgotten arm.
+  _skills_src=""
+  case "$_tool" in
+    skills) _skills_src="$KNOWN_SKILLS_SRC_skills" ;;
+  esac
+
+  if [ -z "$_links" ] && [ -z "$_generated" ] && [ -z "$_skills_src" ]; then
     log_warn "No link list defined for '$_tool'. Skipping."
     continue
   fi
@@ -190,58 +204,69 @@ for _tool in $TOOLS; do
   fi
   IFS="$_OLDIFS"
 
-  # --- claude skills: walk ~/.claude/skills/ for repo-owned symlinks ---
-  _skills_src=""
-  case "$_tool" in
-    claude) _skills_src="$KNOWN_SKILLS_SRC_claude" ;;
-  esac
-
+  # --- skills: walk every agent's skills directory for repo-owned links ---
   if [ -n "$_skills_src" ]; then
     _OLDIFS="$IFS"
     IFS='
 '
-    for _skill_link in $(claude_skill_links "$SCRIPT_DIR"); do
+    for _skill_link in $(skill_links "$SCRIPT_DIR"); do
       IFS="$_OLDIFS"
       [ -z "$_skill_link" ] && continue
       _skill_name=$(basename "$_skill_link")
       symlink_restore "$_skill_link" || OVERALL_OK=1
 
-      # After removing the symlink, try to restore the original skill
-      # that deploy.sh backed up into ~/.claude/skills-backup/.
-      # Pick the oldest backup (first in glob order) — same policy as
-      # symlink_restore for .backup files.
-      for _cand in "$HOME/.claude/skills-backup/$_skill_name".*; do
-        [ -e "$_cand" ] || [ -L "$_cand" ] || continue
-        if [ "${DRY_RUN:-0}" -eq 1 ]; then
-          printf '[DRY-RUN] mv %s %s\n' "$_cand" "$_skill_link"
-        else
-          if mv "$_cand" "$_skill_link"; then
-            log_ok "Restored skill from backup: $_skill_link (from $(basename "$_cand"))"
+      # After removing the symlink, try to restore the original skill that
+      # skills/deploy.sh backed up into that agent's skills-backup/.
+      # Resolved per link rather than per run: skill_links() returns a flat
+      # list spanning every agent, and each agent has its own backup
+      # directory. Pick the oldest backup (first in glob order) — same
+      # policy as symlink_restore for .backup files.
+      _skill_backup_dir="$(skill_backup_dir_for_link "$_skill_link")"
+      if [ -n "$_skill_backup_dir" ]; then
+        for _cand in "$_skill_backup_dir/$_skill_name".*; do
+          [ -e "$_cand" ] || [ -L "$_cand" ] || continue
+          if [ "${DRY_RUN:-0}" -eq 1 ]; then
+            printf '[DRY-RUN] mv %s %s\n' "$_cand" "$_skill_link"
           else
-            log_error "Failed to restore skill backup: $_cand → $_skill_link"
-            OVERALL_OK=1
+            if mv "$_cand" "$_skill_link"; then
+              log_ok "Restored skill from backup: $_skill_link (from $(basename "$_cand"))"
+            else
+              log_error "Failed to restore skill backup: $_cand → $_skill_link"
+              OVERALL_OK=1
+            fi
           fi
-        fi
-        break
-      done
+          break
+        done
+      fi
       IFS='
 '
     done
     IFS="$_OLDIFS"
-  fi
 
-  # skills-backup/ is where deploy.sh set aside pre-existing skills before
-  # symlinking over them (see the claude/deploy.sh backup step). Once every
-  # restorable skill above has been moved back out of it, an empty
-  # directory is the only thing left — clean it up as part of the same
-  # "undo what deploy.sh did" pass, the same way the distribution artifact
-  # cleanup below cleans up what deploy-all.sh created.
-  if [ -n "$_skills_src" ] && [ -d "$HOME/.claude/skills-backup" ]; then
-    if [ "${DRY_RUN:-0}" -eq 1 ]; then
-      printf '[DRY-RUN] rmdir %s (only if empty)\n' "$HOME/.claude/skills-backup"
-    elif rmdir "$HOME/.claude/skills-backup" 2>/dev/null; then
-      log_ok "Removed empty skills-backup directory: $HOME/.claude/skills-backup"
-    fi
+    # skills-backup/ is where skills/deploy.sh set aside pre-existing skills
+    # before symlinking over them (see its backup step). Once every
+    # restorable skill above has been moved back out of it, an empty
+    # directory is the only thing left — clean it up as part of the same
+    # "undo what deploy did" pass, the same way the distribution artifact
+    # cleanup below cleans up what deploy-all.sh created. One per agent: an
+    # agent that never had a name collision never gets a backup directory,
+    # and rmdir on a missing or non-empty one is a no-op either way.
+    IFS='
+'
+    for _skill_agent in $(skill_agents); do
+      IFS="$_OLDIFS"
+      _skill_backup_dir="$(skill_backup_dir_for_agent "$_skill_agent")"
+      if [ -n "$_skill_backup_dir" ] && [ -d "$_skill_backup_dir" ]; then
+        if [ "${DRY_RUN:-0}" -eq 1 ]; then
+          printf '[DRY-RUN] rmdir %s (only if empty)\n' "$_skill_backup_dir"
+        elif rmdir "$_skill_backup_dir" 2>/dev/null; then
+          log_ok "Removed empty skills-backup directory: $_skill_backup_dir"
+        fi
+      fi
+      IFS='
+'
+    done
+    IFS="$_OLDIFS"
   fi
 
   # Handle generated files (real files, not symlinks — e.g. claude/settings.json)
@@ -370,23 +395,31 @@ done
 
 if [ "${DRY_RUN:-0}" -eq 1 ]; then
   case "$_dfu_scope" in
-    *" claude "*) _dfu_check_claude_skills=0 ;; # dry-run: trust claude's skills would be cleared
-    *) _dfu_check_claude_skills=1 ;;
+    *" skills "*) _dfu_check_skills=0 ;; # dry-run: trust the skills would be cleared
+    *) _dfu_check_skills=1 ;;
   esac
 else
-  _dfu_check_claude_skills=1 # real run: always verify against the live filesystem
+  _dfu_check_skills=1 # real run: always verify against the live filesystem
 fi
 
-if [ "$_dfu_still_referenced" -eq 0 ] && [ "$_dfu_check_claude_skills" -eq 1 ] && [ -d "$HOME/.claude/skills" ]; then
-  for _dfu_skill_link in "$HOME/.claude/skills"/*; do
-    [ -L "$_dfu_skill_link" ] || continue
-    case "$(readlink "$_dfu_skill_link")" in
-      "$DOTFILES_PREFIX"/*)
-        _dfu_still_referenced=1
-        [ -n "$_dfu_reason_path" ] || _dfu_reason_path="$_dfu_skill_link"
-        ;;
-    esac
+# skill_links() called without a repo_root argument deliberately: this scan
+# only asks "does anything still resolve through the distribution prefix we
+# are about to delete", and a leftover direct-to-worktree link (which a
+# repo_root argument would add) points at the source tree instead, so it is
+# not a reason to keep the prefix alive.
+if [ "$_dfu_still_referenced" -eq 0 ] && [ "$_dfu_check_skills" -eq 1 ]; then
+  _OLDIFS="$IFS"
+  IFS='
+'
+  for _dfu_skill_link in $(skill_links); do
+    IFS="$_OLDIFS"
+    [ -z "$_dfu_skill_link" ] && continue
+    _dfu_still_referenced=1
+    [ -n "$_dfu_reason_path" ] || _dfu_reason_path="$_dfu_skill_link"
+    IFS='
+'
   done
+  IFS="$_OLDIFS"
 fi
 
 if [ "$_dfu_still_referenced" -ne 0 ]; then
