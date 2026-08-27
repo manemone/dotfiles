@@ -64,7 +64,7 @@ pre-commit run --all-files
 
 **ここで終わりではありません。** `AGENTS.md` の「概要」「ディレクトリ構成」など、このリポジトリ固有の
 判断が要る部分は空欄・TODO のままです。埋め方の判断ガイドは
-`claude/skills/repo-baseline/SKILL.md`（dotfiles から配布され `~/.claude/skills/` に置かれるスキル）
+`skills/repo-baseline/SKILL.md`（dotfiles から配布され `~/.claude/skills/` に置かれるスキル）
 に従ってください。
 
 ## 使い方: 更新
@@ -88,7 +88,7 @@ from .copier-answers.yml.` で失敗します（実際に検証済みです）�
 - **決定論的に配れるもの**（規約文書の骨組み・pre-commit 設定・doc-id ツール・CI）は
   この copier テンプレートが撒きます
 - **判断が要るもの**（このリポジトリ固有のルール、コーディング方針の中身、AGENTS.md の
-  「概要」等）は、撒いた後に `claude/skills/repo-baseline/SKILL.md` を読んだ AI が埋めます
+  「概要」等）は、撒いた後に `skills/repo-baseline/SKILL.md` を読んだ AI が埋めます
 
 ## docs/ フォルダ規約について
 
