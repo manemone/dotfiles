@@ -94,6 +94,13 @@ new_sandbox() {
 # （テスト方針 DOC-2608020715-b が要求する XDG_* / ANTIDOTE_HOME の差し替え
 # が deploy 側にしか効いていないと、uninstall 側は実環境の値のままになり
 # 実 $HOME 配下の設定を触りにいく経路が残ってしまう）。
+#
+# **配布先の解決に使われる環境変数は、$HOME 由来でないものも必ずここへ足す。**
+# CODEX_HOME がその例で、shared/helpers.sh の skill_agent_home() が
+# `${CODEX_HOME:-$HOME/.codex}` として読む。ここに無いと、CODEX_HOME を
+# export している環境では deploy が実ユーザーの Codex 設定ディレクトリへ
+# symlink を張り、uninstall がそれを撤去してしまう（HOME の差し替えでは
+# 防げない経路）。
 sandbox_env() {
   local sbx="$1"
   SANDBOX_ENV=(
@@ -102,6 +109,7 @@ sandbox_env() {
     "XDG_DATA_HOME=$sbx/.local/share"
     "XDG_CACHE_HOME=$sbx/.cache"
     "ANTIDOTE_HOME=$sbx/.antidote"
+    "CODEX_HOME=$sbx/.codex"
   )
 }
 
