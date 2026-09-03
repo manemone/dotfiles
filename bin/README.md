@@ -88,7 +88,7 @@ ocw ls
 - **implementer**: 実装担当（デフォルト: `claude`）
 - **reviewer**: レビュー担当（デフォルト: `claude`）
 
-`--no-commander` を付けると、commander ペインを作らず implementer/reviewer の2ペインだけになる（`-H`/`--herdr` と一緒に使う必要があり、単独では `die` する）。root pane はそのまま implementer になる（commander を起動してから閉じるのではなく、最初から implementer として立てる。commander の `claude` プロセスは1つも起動されない）。`OCW_COMMANDER_COMMAND` はこのモードでは使われない。`umbrella-orchestrator` スキルの `/spawn` が作る孫ワークスペースは、誰も使わない commander ペインの分メモリを浪費していたため、このモードを使う。
+`--no-commander` を付けると、commander ペインを作らず implementer/reviewer の2ペインだけになる（`create` 経路では `-H`/`--herdr` と一緒に使う必要があり、単独では `die` する。`ocw ls`/`ocw rm` では既存の `-H` と同じく黙って無視される）。root pane はそのまま implementer になる（commander を起動してから閉じるのではなく、最初から implementer として立てる。commander の `claude` プロセスは1つも起動されない）。`OCW_COMMANDER_COMMAND` はこのモードでは使われない。`umbrella-orchestrator` スキルの `/spawn` が作る孫ワークスペースは、誰も使わない commander ペインの分メモリを浪費していたため、このモードを使う。
 
 #### 設定（`git config ocw.*`）
 

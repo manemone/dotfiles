@@ -54,7 +54,8 @@ create behavior:
   --no-commander
     with -H/--herdr, create implementer/reviewer panes only (no
     commander pane, no commander claude process)
-    requires -H/--herdr; without it, ocw dies
+    requires -H/--herdr on create; without it, ocw dies
+    ignored by ls/rm, like -H
 
 examples:
   ocw dataset-importer

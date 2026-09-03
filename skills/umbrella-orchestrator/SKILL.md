@@ -606,16 +606,23 @@ test "${HERDR_ENV:-}" = 1
 
 ### 自分のworkspaceの見つけ方
 
+`agent_status == 'working'` で探す方法は使わない。`/autopilot` の巡回中は孫の
+implementerも `working` になっており、複数ヒットして自分のworkspaceを一意に
+特定できない。代わりに、司令官が自分の `pwd`（傘ブランチのワークツリーの
+絶対パス）を知っていることを使い、`herdr pane list` の各pane の `cwd` と突き合わせる:
+
 ```bash
+MY_CWD=$(pwd)
 herdr pane list | python3 -c "
-import sys, json
+import sys, json, os
+my_cwd = os.environ['MY_CWD']
 for p in json.load(sys.stdin)['result']['panes']:
-    if p.get('agent_status') == 'working':
+    if p.get('cwd') == my_cwd:
         print(p['workspace_id'])
 "
 ```
 
-司令官は常に1つだけ `working` なpane。そのworkspace_idが司令官のworkspace。
+司令官の作業ディレクトリと一致するpaneのworkspace_idが司令官のworkspace。
 
 ### `ocw -H` が作るもの
 
@@ -651,8 +658,8 @@ git worktree 作成（<孫ブランチ名> がそのままブランチ名にな�
 出力例（`--no-commander`。`commander:` 行が無いことに注意）:
 ```
 workspace:   w1
-implementer: w1:p2
-reviewer:    w1:p3
+implementer: w1:p1
+reviewer:    w1:p2
 ```
 
 **既定（`--no-commander` を付けない）の `ocw -H` は3ペイン。** 傘（司令官）ワークスペースを
@@ -705,10 +712,13 @@ Herdr ワークスペースの既定ラベルは `<repo_name> :: <slug>`（区�
 **孫の rename**: `ocw -H --no-commander ...` の出力の `workspace:` 行の ID に対して、
 **プロンプト送信より前**に行う（§3.2「/spawn」）。
 
-**傘（司令官スペース）の rename**: 司令官が自分のワークスペースを `herdr workspace list`
-から特定し（「自分のworkspaceの見つけ方」参照）、現在ラベルが**既定形のときだけ**
-rename する。既定形の判定は「` :: ` の右側に非 ASCII 文字が1文字も含まれないこと」。
-人間が既にラベルを日本語で手付けしていれば上書きしない。
+**傘（司令官スペース）の rename**: 次の2段階で行う。
+
+1. 「自分のworkspaceの見つけ方」（§5）の手順で自分の `workspace_id` を特定する
+2. `herdr workspace list`（または `herdr workspace get <workspace_id>`）でその
+   workspaceの現在の `label` を読み、**既定形のときだけ** rename する。既定形の判定は
+   「` :: ` の右側に非 ASCII 文字が1文字も含まれないこと」。人間が既にラベルを日本語で
+   手付けしていれば上書きしない。
 
 **rename が失敗しても警告のみで続行する。** ラベルは表示上の都合であり、spawn や
 finalize のフローを止める理由にならない。
