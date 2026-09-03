@@ -21,13 +21,19 @@ Coverage:
   - pre-existing error paths (missing args, duplicate branch, `ocw ls`,
     unmerged-branch removal without -f) are unaffected by instrumentation
 
-Herdr-mode env var passing (`--env OCW_ROLE=...` / `--env OCW_RUN_ID=...`
-on `herdr workspace create` / `herdr pane split`) is not covered here: it
-requires a running Herdr server and would spawn real terminal panes,
-which is out of scope for a hermetic, no-side-effect unit suite. It was
-verified manually against a live Herdr server (see PR description): a
-throwaway workspace was created with `--env FOO=bar`, and `herdr pane run
-... "echo $FOO"` confirmed the value reached the pane's shell.
+Herdr-mode pane assembly itself (`-H`/`--herdr`, `--no-commander`; docs/planning/
+DOC-2609031400_..._計画.md 孫1 prompt) is covered via write_herdr_shim()'s fake
+`herdr` on PATH (HerdrPaneModeTests / HerdrSetupRollbackTests below) — same
+shim-directory-ahead-of-PATH shape as _CODE_SHIM_DIR / write_git_shim_*
+above, so no real Herdr server or real terminal panes are ever involved.
+That the exact `--env OCW_ROLE=...` / `--env OCW_RUN_ID=...` values bin/ocw
+constructs actually reach a real pane's shell when passed to a real `herdr
+workspace create` / `herdr pane split` was verified once, manually, against
+a live Herdr server (see the PR description for docs/planning/
+DOC-2608021229-a_ai-llm-cost-observability_計画.md's 孫2): a throwaway
+workspace was created with `--env FOO=bar`, and `herdr pane run ... "echo
+$FOO"` confirmed the value reached the pane's shell. That one-time, real-Herdr
+verification is not repeated by anything in this file.
 """
 
 import atexit
@@ -319,6 +325,101 @@ def write_git_shim_redirecting_absolute_git_dir(shim_dir, worktree_dir, redirect
     shim.chmod(0o755)
 
 
+# A fake `herdr` (same shim-directory-ahead-of-PATH shape as _CODE_SHIM_DIR /
+# write_git_shim_* above), so Herdr-mode pane assembly can be exercised
+# without a real Herdr server or real terminal panes. Logs every invocation's
+# argv (tab-separated, one call per line) to $OCW_TEST_HERDR_LOG so tests can
+# assert what bin/ocw actually asked Herdr to do -- not just its own exit
+# code. Responds to the exact subcommands bin/ocw calls (see setup_herdr_workspace(),
+# close_herdr_workspaces_for_checkout(), rollback_created_worktree() in
+# bin/ocw); `workspace create` / `pane split` need a real, if fake, JSON
+# response shaped like the real `{"id":...,"result":{...}}` envelope
+# (bin/ocw's json_nested_field() walks to arbitrary depth, so nesting under
+# "result" isn't strictly required, but staying close to the real shape is
+# what keeps this shim honest about what it's approving).
+#
+# $OCW_TEST_HERDR_FAIL_ON, if set to "<subcommand> <verb>" (e.g. "pane
+# split"), makes that one subcommand fail (after still logging it) --
+# used to drive rollback_created_worktree() without needing a real setup
+# failure.
+HERDR_SHIM_SCRIPT = r"""#!/usr/bin/env bash
+set -euo pipefail
+
+: "${OCW_TEST_HERDR_LOG:?OCW_TEST_HERDR_LOG is required}"
+: "${OCW_TEST_HERDR_COUNTER:?OCW_TEST_HERDR_COUNTER is required}"
+
+{
+  for arg in "$@"; do
+    printf '%s\t' "$arg"
+  done
+  printf '\n'
+} >>"$OCW_TEST_HERDR_LOG"
+
+sub="${1:-} ${2:-}"
+
+if [ -n "${OCW_TEST_HERDR_FAIL_ON:-}" ] && [ "$sub" = "$OCW_TEST_HERDR_FAIL_ON" ]; then
+  exit 1
+fi
+
+next_id() {
+  local n=0
+  [ -f "$OCW_TEST_HERDR_COUNTER" ] && n="$(cat "$OCW_TEST_HERDR_COUNTER")"
+  n=$((n + 1))
+  printf '%s' "$n" >"$OCW_TEST_HERDR_COUNTER"
+  printf '%s' "$n"
+}
+
+case "$sub" in
+  "status server")
+    exit 0
+    ;;
+  "workspace create")
+    id="$(next_id)"
+    printf '{"id":"cli:workspace:create","result":{"workspace":{"workspace_id":"workspace-%s"},"root_pane":{"pane_id":"pane-%s"},"tab":{"tab_id":"tab-%s"}}}\n' "$id" "$id" "$id"
+    ;;
+  "pane split")
+    id="$(next_id)"
+    printf '{"id":"cli:pane:split","result":{"pane":{"pane_id":"pane-%s"}}}\n' "$id"
+    ;;
+  "tab rename" | "pane rename" | "pane run" | "workspace focus" | "workspace close")
+    exit 0
+    ;;
+  "workspace list")
+    printf '{"id":"cli:workspace:list","result":{"workspaces":[]}}\n'
+    ;;
+  "pane list")
+    printf '{"id":"cli:pane:list","result":{"panes":[]}}\n'
+    ;;
+  *)
+    echo "herdr-shim: unhandled command: $*" >&2
+    exit 1
+    ;;
+esac
+"""
+
+
+def write_herdr_shim(shim_dir):
+    shim = pathlib.Path(shim_dir) / "herdr"
+    shim.write_text(HERDR_SHIM_SCRIPT, encoding="utf-8")
+    shim.chmod(0o755)
+
+
+def read_herdr_calls(log_path):
+    """herdr シムのログを、呼び出し順の引数リストのリストとして返す。"""
+    path = pathlib.Path(log_path)
+    if not path.exists():
+        return []
+    calls = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line:
+            continue
+        parts = line.split("\t")
+        if parts and parts[-1] == "":
+            parts = parts[:-1]
+        calls.append(parts)
+    return calls
+
+
 class OcwTestCase(unittest.TestCase):
     def setUp(self):
         self.tmpdir = tempfile.TemporaryDirectory()
@@ -327,6 +428,42 @@ class OcwTestCase(unittest.TestCase):
 
     def tearDown(self):
         self.tmpdir.cleanup()
+
+
+class HerdrOcwTestCase(OcwTestCase):
+    """`herdr` 実サーバー無しで Herdr モード（`-H`/`--no-commander`）のペイン
+    組み立てロジックを検証するための土台。write_herdr_shim() が作る偽 `herdr`
+    を、run_ocw() の既存の path_prepend（git シムと同じ仕組み）で PATH の
+    先頭に差し込む。"""
+
+    def setUp(self):
+        super().setUp()
+        self.herdr_shim_dir = pathlib.Path(self.tmpdir.name) / "herdr-shim"
+        self.herdr_shim_dir.mkdir()
+        write_herdr_shim(self.herdr_shim_dir)
+        self.herdr_log = pathlib.Path(self.tmpdir.name) / "herdr.log"
+        self.herdr_counter = pathlib.Path(self.tmpdir.name) / "herdr-counter"
+
+    def run_herdr_ocw(self, args, cwd=None, fail_on=None, extra_env=None, **kwargs):
+        env = {
+            "OCW_TEST_HERDR_LOG": str(self.herdr_log),
+            "OCW_TEST_HERDR_COUNTER": str(self.herdr_counter),
+        }
+        if fail_on is not None:
+            env["OCW_TEST_HERDR_FAIL_ON"] = fail_on
+        if extra_env:
+            env.update(extra_env)
+
+        return run_ocw(
+            args,
+            cwd if cwd is not None else self.repo_root,
+            extra_env=env,
+            path_prepend=[str(self.herdr_shim_dir)],
+            **kwargs,
+        )
+
+    def herdr_calls(self):
+        return read_herdr_calls(self.herdr_log)
 
 
 class RunIdAndMeterEventsTests(OcwTestCase):
@@ -1558,6 +1695,155 @@ class BareRepoMergeDeterminationTests(unittest.TestCase):
         remove = run_ocw(["rm", "widget-maker"], self.bare_dir)
         self.assertEqual(remove.returncode, 0, remove.stderr)
         self.assertFalse(worktree_dir.exists())
+
+
+class HerdrPaneModeTests(HerdrOcwTestCase):
+    """`-H`/`--herdr` のペイン構成 (計画書「確定事項」表, 孫1プロンプト §1/§2/§4)。
+
+    実 Herdr サーバーの代わりに write_herdr_shim() の偽 `herdr` を使うため、
+    テストファイル冒頭の docstring が挙げていた「Herdr-mode env var passing は
+    実サーバーが要るためカバーしない」という以前の限界は、この偽 herdr の導入
+    により解消されている。
+    """
+
+    def test_default_herdr_still_creates_three_panes_and_starts_commander(self):
+        # 既定の `ocw -H` の3ペイン構成は本傘の前提条件そのものであり、無警告
+        # で壊してはならない (計画書「検証方針」)。
+        result = self.run_herdr_ocw(["-H", "widget-maker"])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("workspace:", result.stdout)
+        self.assertIn("commander:", result.stdout)
+        self.assertIn("implementer:", result.stdout)
+        self.assertIn("reviewer:", result.stdout)
+
+        calls = self.herdr_calls()
+
+        create_call = next(c for c in calls if c[:2] == ["workspace", "create"])
+        self.assertIn("OCW_ROLE=commander", create_call)
+
+        pane_rename_names = [c[3] for c in calls if c[:2] == ["pane", "rename"]]
+        self.assertEqual(pane_rename_names, ["commander", "implementer", "reviewer"])
+
+        pane_run_calls = [c for c in calls if c[:2] == ["pane", "run"]]
+        self.assertEqual(len(pane_run_calls), 3)
+
+        split_calls = [c for c in calls if c[:2] == ["pane", "split"]]
+        self.assertEqual(len(split_calls), 2)
+
+    def test_no_commander_creates_two_panes_with_implementer_as_root(self):
+        result = self.run_herdr_ocw(
+            ["-H", "--no-commander", "widget-maker"],
+            extra_env={"OCW_COMMANDER_COMMAND": "commander-should-never-run"},
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("workspace:", result.stdout)
+        self.assertNotIn("commander:", result.stdout)
+        self.assertIn("implementer:", result.stdout)
+        self.assertIn("reviewer:", result.stdout)
+
+        calls = self.herdr_calls()
+
+        # root pane (workspace create's root_pane) carries OCW_ROLE=implementer,
+        # never commander -- this is what bin/ocw-meter attributes cost to.
+        create_call = next(c for c in calls if c[:2] == ["workspace", "create"])
+        self.assertIn("OCW_ROLE=implementer", create_call)
+        self.assertNotIn("OCW_ROLE=commander", create_call)
+
+        # Exactly one split (root -> reviewer), not two -- there is no
+        # commander pane to split off of.
+        split_calls = [c for c in calls if c[:2] == ["pane", "split"]]
+        self.assertEqual(len(split_calls), 1)
+
+        pane_rename_names = [c[3] for c in calls if c[:2] == ["pane", "rename"]]
+        self.assertEqual(pane_rename_names, ["implementer", "reviewer"])
+
+        # The commander launch command itself is never invoked: it never
+        # appears in any pane run call, nor anywhere else in the log.
+        pane_run_calls = [c for c in calls if c[:2] == ["pane", "run"]]
+        self.assertEqual(len(pane_run_calls), 2)
+        for call in calls:
+            self.assertNotIn("commander-should-never-run", call)
+
+    def test_no_commander_flag_position_is_order_independent(self):
+        # 計画書の孫1プロンプトが等価と定めている4つの並び。
+        variants = [
+            ["-H", "--no-commander", "alpha"],
+            ["--no-commander", "-H", "beta"],
+            ["-H", "--no-commander", "new", "gamma"],
+            ["new", "-H", "--no-commander", "delta"],
+        ]
+        for args in variants:
+            with self.subTest(args=args):
+                result = self.run_herdr_ocw(args)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn("workspace:", result.stdout)
+                self.assertNotIn("commander:", result.stdout)
+                self.assertIn("implementer:", result.stdout)
+                self.assertIn("reviewer:", result.stdout)
+
+
+class NoCommanderRequiresHerdrTests(OcwTestCase):
+    """`-H`/`--herdr` を伴わない `--no-commander` の扱い (計画書「確定事項」表,
+    孫1プロンプト §3)。Herdr を一切使わないため実 herdr シムは不要。"""
+
+    def test_no_commander_without_herdr_dies_with_a_clear_message(self):
+        result = run_ocw(["--no-commander", "widget-maker"], self.repo_root)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("--no-commander", result.stderr)
+        self.assertIn("-H", result.stderr)
+        self.assertFalse((self.repo_root.parent / "widget-maker").exists())
+
+    def test_no_commander_without_herdr_on_ls_is_silently_ignored(self):
+        result = run_ocw(["--no-commander", "ls"], self.repo_root)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_no_commander_without_herdr_on_rm_is_silently_ignored(self):
+        create = run_ocw(["widget-maker"], self.repo_root)
+        self.assertEqual(create.returncode, 0, create.stderr)
+
+        result = run_ocw(["--no-commander", "rm", "widget-maker"], self.repo_root)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse((self.repo_root.parent / "widget-maker").exists())
+
+
+class HerdrSetupRollbackTests(HerdrOcwTestCase):
+    """Herdr セットアップ失敗時のロールバック (`rollback_created_worktree`,
+    孫1プロンプト §6)。3ペイン・2ペインどちらでも worktree・ブランチ・
+    Herdr ワークスペースが残骸として残らないことを固定する。"""
+
+    def test_three_pane_setup_failure_rolls_back_worktree_and_branch(self):
+        result = self.run_herdr_ocw(["-H", "widget-maker"], fail_on="pane run")
+        self.assertNotEqual(result.returncode, 0)
+
+        worktree_dir = self.repo_root.parent / "widget-maker"
+        self.assertFalse(worktree_dir.exists())
+
+        branch_list = _git(["branch", "--list", "widget-maker"], self.repo_root).stdout
+        self.assertNotIn("widget-maker", branch_list)
+
+        calls = self.herdr_calls()
+        self.assertTrue(any(c[:2] == ["workspace", "close"] for c in calls))
+
+    def test_two_pane_setup_failure_rolls_back_worktree_and_branch(self):
+        # Fails mid-setup, before the reviewer pane/rename/run ever happen --
+        # HERDR_SETUP_COMMANDER_PANE_ID stays empty the whole time in
+        # --no-commander mode, and rollback must still complete without it.
+        result = self.run_herdr_ocw(
+            ["-H", "--no-commander", "widget-maker"], fail_on="pane split"
+        )
+        self.assertNotEqual(result.returncode, 0)
+
+        worktree_dir = self.repo_root.parent / "widget-maker"
+        self.assertFalse(worktree_dir.exists())
+
+        branch_list = _git(["branch", "--list", "widget-maker"], self.repo_root).stdout
+        self.assertNotIn("widget-maker", branch_list)
+
+        calls = self.herdr_calls()
+        self.assertTrue(any(c[:2] == ["workspace", "close"] for c in calls))
+        # No commander pane is ever created in --no-commander mode, so
+        # nothing naming one should appear anywhere in the log.
+        self.assertFalse(any("commander" in arg for call in calls for arg in call))
 
 
 if __name__ == "__main__":
