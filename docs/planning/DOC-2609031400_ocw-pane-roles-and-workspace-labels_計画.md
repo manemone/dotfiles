@@ -19,8 +19,16 @@
    付ける方針をやめる。`bin/ocw` は DOC-2608062259 の孫2 で既に接頭辞を自動付与しなくなっており、
    **直すのはスキル文書側に残った前提・例示だけ**である。
 
-要望1が `bin/ocw` の挙動変更、要望2・要望3が `claude/skills/umbrella-orchestrator/SKILL.md` の
+要望1が `bin/ocw` の挙動変更、要望2・要望3が `skills/umbrella-orchestrator/SKILL.md` の
 文書変更で、綺麗に2本に割れる。
+
+> **前提**: 本傘は PR #67「スキルをAIエージェント横断で配布する」（`336b1e5`、ADR
+> DOC-2608272128）を取り込んだ master の上に立っている。この PR で `claude/skills/` は
+> 独立ツール `skills/` へ切り出され、`skills/deploy.sh` が Claude Code
+> （`~/.claude/skills/`）・Codex（`$CODEX_HOME/skills/`）・OpenCode
+> （`~/.config/opencode/skills/`）の3エージェントへ同じ実体を symlink する。
+> **孫2 が編集する SKILL.md は1つのままで3エージェント全部に届く**ため、
+> AI 製品ごとの書き分けは不要である（詳細は次節）。
 
 ## 孫ブランチ進捗
 
@@ -154,15 +162,15 @@ DOC-2608062259 には対になる ADR（DOC-2608062258）があるが、**本傘
 
 - **人間の明示的指示がない限り `git merge` / `git pull` / `git reset --hard` / `git push --force` /
   `gh pr merge` を実行しない。**
-- **deploy スクリプトを実オペレーションで実行しない。** 孫2 は `claude/` 配下を触るが、
-  `claude/deploy.sh` を実行してはならない。`pre-commit` のフックが走らせる
+- **deploy スクリプトを実オペレーションで実行しない。** 孫2 は `skills/` 配下を触るが、
+  `skills/deploy.sh` を実行してはならない。`pre-commit` のフックが走らせる
   `./deploy-all.sh --dry-run` は従来どおりで構わない。
 - **linter の抑制ディレクティブ（`# shellcheck disable=...` 等）を AI の判断で追加しない。**
   指摘が設計上不合理だと判断したら、抑制せず内容・対象・理由を人間に報告する。
   コードの構造を変えて指摘そのものを解消できるならそちらを優先する。
 - **指示された範囲外の機能を先回りして実装しない。**
 - **`claude/CLAUDE.md`（配布物。個人の口調設定が入っている）は編集しない。**
-  本傘で触ってよいのは `claude/skills/umbrella-orchestrator/SKILL.md` だけである。
+  本傘で触ってよいのは `skills/umbrella-orchestrator/SKILL.md` だけである。
 
 ### 2. `bin/ocw` は bash（`#!/usr/bin/env bash`, `set -euo pipefail`）
 
@@ -215,7 +223,7 @@ python3 -m unittest discover -s bin/tests -v
 ## この孫のスコープ
 
 **`bin/ocw` のペイン構成切り替えと、そのテスト、`bin/README.md` の追随だけ。**
-`claude/skills/umbrella-orchestrator/SKILL.md` は孫2の担当なので触らないこと。
+`skills/umbrella-orchestrator/SKILL.md` は孫2の担当なので触らないこと。
 Herdr ワークスペースのラベル文字列も孫2の担当であり、`bin/ocw` の既定ラベル生成
 （`bin/ocw:702` の `workspace_label="${repo_name} :: ${slug}"`）は**変更しない**。
 
@@ -389,7 +397,7 @@ git checkout -b ocw-pane-roles-01-no-commander
 ## 孫2用プロンプト:
 
 ````
-`claude/skills/umbrella-orchestrator/SKILL.md` を3点まとめて更新してください。
+`skills/umbrella-orchestrator/SKILL.md` を3点まとめて更新してください。
 孫の spawn を2ペインモードへ、ワークスペースラベルを日本語へ、そして `ai/` 接頭辞の前提を除去。
 
 ## 最初に読むもの（順番に）
@@ -400,14 +408,27 @@ git checkout -b ocw-pane-roles-01-no-commander
 3. **孫1がマージ済みの `bin/ocw` の実装そのもの**と `bin/README.md`。
    文書は計画書ではなく**実装**に合わせること。食い違いがあれば実装を正とし、
    その食い違い自体を人間に報告する
-4. `claude/skills/umbrella-orchestrator/SKILL.md`（793行。全量読むこと）
+4. `skills/umbrella-orchestrator/SKILL.md`（793行。全量読むこと）
+5. `docs/adr/DOC-2608272128_skills-multi-agent-distribution.md` と `skills/README.md`
+   （このスキルが Claude Code / Codex / OpenCode の3エージェントへ配られる仕組み。
+   下の「AI 非依存を保つこと」に関わる）
 
 ## この孫のスコープ
 
-**`claude/skills/umbrella-orchestrator/SKILL.md` のみ。**
+**`skills/umbrella-orchestrator/SKILL.md` のみ。**
 `bin/ocw` と `bin/tests/test_ocw.py` は変更しない（読んで確認するのが仕事）。
 **`claude/CLAUDE.md` は絶対に触らない**（配布物であり、指示が無い限り編集しない）。
-`claude/deploy.sh` を実行しないこと。
+`skills/deploy.sh` を実行しないこと。
+
+### AI 非依存を保つこと（ADR DOC-2608272128）
+
+`skills/` 配下のスキルは **Claude Code / Codex / OpenCode の3エージェントへ同じ実体が
+配られる**（`skills/deploy.sh`）。SKILL.md 自身も冒頭で「**AI 不問。** YAML frontmatter を
+除き自然言語のみで完結する」と宣言している。
+
+**この性質を壊さないこと。** 今回の追記（`herdr workspace rename` の手順など）は、
+特定の AI 製品にしか無い機能・記法・スラッシュコマンドに依存させず、**シェルコマンドと
+自然言語だけで書く**。既存の本文がそうなっているので、同じ書き方に揃えればよい。
 
 ## 1. 孫の spawn を2ペインモードにする（要望1のスキル反映）
 
@@ -475,7 +496,7 @@ git checkout -b ocw-pane-roles-01-no-commander
 ブランチ名・ワークスペース名に `ai/` 接頭辞を付ける方針をやめた。`bin/ocw` は
 DOC-2608062259 の孫2 で既に接頭辞を自動付与しないので、**直すのは SKILL.md の記述・例示だけ**。
 
-`git grep -n "ai/" claude/skills/umbrella-orchestrator/SKILL.md` で全件を洗い出すこと。
+`git grep -n "ai/" skills/umbrella-orchestrator/SKILL.md` で全件を洗い出すこと。
 変更前の時点では以下に出現する（漏れが無いか自分で確認すること）:
 
 - §2.1 進捗テーブルの例（`ai/ph-00-fix` / `ai/ph-01-feat`）とその直後の
@@ -508,7 +529,7 @@ DOC-2608062259 の孫2 で既に接頭辞を自動付与しないので、**直�
 - 司令官スペースが3ペインであるという前提（`/finalize` が implementer と reviewer を使う）が
   壊れていない
 - `ai/` 接頭辞の除去によって、「完全なブランチ名を渡す」という元の趣旨が失われていない
-- `git grep -n "ai/" claude/skills/umbrella-orchestrator/SKILL.md` の残存が、
+- `git grep -n "ai/" skills/umbrella-orchestrator/SKILL.md` の残存が、
   意図して残したもの（あれば）だけになっている
 - 文書内の相互参照（§番号での参照）が、節を追加・改名した後も正しい先を指している
 
@@ -552,7 +573,7 @@ git checkout -b ocw-pane-roles-02-skill-docs
   commander の起動コマンドを1度も実行しない
 - `bin/tests/test_ocw.py` に Herdr モードのテストが存在する（本傘以前はゼロ件だった）
 - `bin/README.md` が実装と一致している
-- `claude/skills/umbrella-orchestrator/SKILL.md` において:
+- `skills/umbrella-orchestrator/SKILL.md` において:
   - 孫を作る経路（`/spawn` と `/autopilot`）が両方とも2ペインモードを使っている
   - ワークスペースラベルの日本語化手順が、孫・傘の両方について書かれている
   - `ai/` 接頭辞を前提とした記述・例示が残っていない
