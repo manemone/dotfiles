@@ -408,13 +408,16 @@ ok = m and (latest_sha.startswith(m.group(1)) or m.group(1).startswith(latest_sh
 
 **やること**:
 
-1. **司令官自身のワークスペースを特定**
+1. **司令官自身のワークスペースを特定**（§5「自分のworkspaceの見つけ方」と同じ `cwd` 突き合わせ
+   方式。`agent_status=='working'` 方式は使わない。孫のワークスペースは §3.3 のクリーンアップを
+   人間が承認するまで残り、その pane が `working` になりうるため、誤って孫を掴む）
    ```bash
    herdr pane list | python3 -c "
-   import sys, json
-   for p in json.load(sys.stdin)['result']['panes']:
-       if p.get('agent_status') == 'working':
-           print(f'MY_WORKSPACE={p[\"workspace_id\"]}')
+   import sys, json, os
+   my_cwd = os.getcwd()
+   ids = {p['workspace_id'] for p in json.load(sys.stdin)['result']['panes'] if p.get('cwd') == my_cwd}
+   for i in sorted(ids):
+       print(f'MY_WORKSPACE={i}')
    "
    ```
    出力された `MY_WORKSPACE` が司令官のワークスペース。以後このワークスペースの implementer/reviewer を使う。
