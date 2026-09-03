@@ -41,12 +41,13 @@ Herdr があると自動化度が上がるが、必須ではない。
 ```markdown
 | 孫 | ブランチ | 内容 | 状況 |
 |---|---|---|---|
-| 0 | `ai/ph-00-fix` | 修正 | ✅ PR #80 マージ済 |
-| 1 | `ai/ph-01-feat` | 機能 | 🔄 実装中 |
+| 0 | `ph-00-fix` | 修正 | ✅ PR #80 マージ済 |
+| 1 | `ph-01-feat` | 機能 | 🔄 実装中 |
 ```
 
 - 「孫」列: 整数
-- 「ブランチ」列: コードスパンで `` `ai/xxx` ``
+- 「ブランチ」列: コードスパンで完全なブランチ名（`ocw` は接頭辞を一切付けないので、
+  ここに書いた値がそのまま実ブランチ名になる。§5「`ocw -H` が作るもの」参照）
 - 「状況」列: `⬜ 待機中` / `🔄 実装中` / `✅ PR #XX マージ済`
 
 ### 2.2 孫用プロンプト
@@ -157,6 +158,13 @@ ok = m and (latest_sha.startswith(m.group(1)) or m.group(1).startswith(latest_sh
 **implementer が `working` だからといって「承認はまだ出ていない」と推測しないこと。**
 承認の有無は必ず API で確認する（この推測で2回取り逃した実績がある）。
 
+### 2.5 ワークスペースラベル（任意節）
+
+計画書に `## ワークスペースラベル` 節を書くと、司令官が Herdr ワークスペースを
+改名するときの日本語ラベルを即興で作らずに済む（書式・導出規則は §5「ワークスペース
+ラベル」参照）。必須ではない。節が無い計画書では、司令官が計画書の見出しや
+進捗テーブルから機械的に要約を導出する。
+
 ## 3. コマンド
 
 | コマンド | 用途 |
@@ -202,8 +210,11 @@ ok = m and (latest_sha.startswith(m.group(1)) or m.group(1).startswith(latest_sh
 2. **ワークツリーを作成し実装AIを起動**
 
    **Herdr あり（`ocw -H` が使える場合）**:
-   - `ocw -H <孫ブランチ名> <傘ブランチ名>` を叩く
-   - これだけで「git worktree 作成＋Herdr ワークスペース作成＋implementer ペーン＋reviewer ペーン」が全部できる
+   - `ocw -H --no-commander <孫ブランチ名> <傘ブランチ名>` を叩く
+   - これだけで「git worktree 作成＋Herdr ワークスペース作成＋implementer ペーン＋reviewer ペーン」が
+     全部できる（孫ワークスペースに commander ペーンは作らない。§5「ワークスペース階層」参照）
+   - 出力の `workspace:` 行の ID に対して `herdr workspace rename` でラベルを日本語化する
+     （書式・手順は §5「ワークスペースラベル」参照。**プロンプト送信より前**に行う）
    - 起動した implementer ペーンにプロンプトを送信する
 
    **⚠️ herdr pane run の最重要注意点（このルールを破ると毎回実装AIが動かない）**:
@@ -332,8 +343,8 @@ ok = m and (latest_sha.startswith(m.group(1)) or m.group(1).startswith(latest_sh
 4. **未着手の孫を列挙**
 
 5. **クリーンアップ提案**
-   - マージ済み＋検証済みの孫のうち、まだワークツリーが残っているものがあれば `ocw rm <孫ブランチ名>` を提案（**まず `--force` なしで**。§5「`ocw -H` が作るもの」と同じく `ai/xxx` を含む完全なブランチ名を渡す。短縮形は複数一致で停止しうる — 後述の補足を参照）
-   - 例: `ph-00 のワークツリーが残っています。ocw rm ai/ph-00-must-keep しますか？`
+   - マージ済み＋検証済みの孫のうち、まだワークツリーが残っているものがあれば `ocw rm <孫ブランチ名>` を提案（**まず `--force` なしで**。§5「`ocw -H` が作るもの」と同じく進捗テーブルの「ブランチ」列の値をそのまま渡す。短縮形は複数一致で停止しうる — 後述の補足を参照）
+   - 例: `ph-00 のワークツリーが残っています。ocw rm ph-00-must-keep しますか？`
    - `ocw rm` は worktree + Herdr ワークスペース + ブランチをまとめて削除する
    - 未マージの孫は削除しない（`ocw rm` が未マージを拒否するため安全）
    - **`--force` は基本的に不要。** `ocw rm`（`bin/ocw`）のマージ済み判定は
@@ -503,7 +514,10 @@ main へのマージは人間が手動で行う。
       最優先、無ければ言語自動検出。Ruby 固定ではない）
    7. 検証通過後、計画書を「✅ PR #XX マージ済」に更新してcommit+push
    8. 次の未着手の孫があれば spawn:
-      ocw -H <次の孫ブランチ名> <傘ブランチ>
+      ocw -H --no-commander <次の孫ブランチ名> <傘ブランチ>
+      出力の workspace: 行のIDに herdr workspace rename でラベルを日本語化する
+        （書式・手順は §5「ワークスペースラベル」参照。プロンプト送信より前に行う。
+        失敗しても警告のみで続行する）
       implementerにプロンプト送信（末尾に「reviewerはdone状態で完了し完了通知は
         来ないので、待機して停止せず gh pr view をポーリングしてレビューの有無を
         確認してください」を必ず含める。§3.2 注意点3参照）
@@ -570,19 +584,22 @@ test "${HERDR_ENV:-}" = 1
 ### ワークスペース階層（最重要）
 
 ```
-傘ブランチのワークスペース（司令官が常駐）
+傘ブランチのワークスペース（司令官が常駐。3ペイン）
   ├─ commander ← 司令官自身
   ├─ implementer ← /finalize で使う
   └─ reviewer ← /finalize で使う
 
-孫ワークスペース（ocw -H で孫ごとに作成される別workspace）
-  ├─ w2G: 孫0のworkspace
-  ├─ w2H: 孫1のworkspace
-  └─ w2J: 孫2のworkspace
+孫ワークスペース（ocw -H --no-commander で孫ごとに作成される別workspace。2ペイン）
+  ├─ w2H: 孫1のworkspace（implementer / reviewer）
+  └─ w2J: 孫2のworkspace（implementer / reviewer）
 ```
 
 - **司令官は常に傘ブランチのworkspaceにいる。** 孫workspaceではない。
-- **`/spawn`**: `ocw -H` が孫workspaceを**新規作成**し、そこのimplementerに実装させる
+- **傘（司令官）ワークスペースは人間が素の `ocw -H`（3ペイン、`--no-commander` を付けない）
+  で作る。** 司令官は起動後、自分の workspace を見つけて（後述）日本語ラベルへ改名する
+  （§5「ワークスペースラベル」参照）
+- **`/spawn`**: `ocw -H --no-commander` が孫workspaceを**新規作成**し、そこの
+  implementerに実装させる。commander ペインは作らない（誰も使わないため）
 - **`/check`**: 孫workspaceのimplementerを監視
 - **`/finalize`**: **司令官自身のworkspace**のimplementer/reviewerで実行。孫workspaceは使わない
 
@@ -601,51 +618,110 @@ for p in json.load(sys.stdin)['result']['panes']:
 
 ### `ocw -H` が作るもの
 
+孫の spawn では `--no-commander` を付ける。傘（司令官）ワークスペースは付けない
+既定のままにする（3ペインが要る理由は上の「ワークスペース階層」参照）。
+
 ```bash
-ocw -H <孫ブランチ名> <傘ブランチ名>
+ocw -H --no-commander <孫ブランチ名> <傘ブランチ名>
 ```
 
-**`<孫ブランチ名>` は `ai/xxx` を含む完全なブランチ名をそのまま渡すこと。**
-`ocw` はブランチ名に `ai/` 接頭辞を自動で付けない（正規化した入力そのものが
-ブランチ名になる）。計画書の進捗テーブルの「ブランチ」列（§2.1）には元々
-`` `ai/xxx` `` の形で完全名を書く規約なので、そこから取得した値をそのまま渡せば
-一致する。
+**`<孫ブランチ名>` には、進捗テーブルの「ブランチ」列（§2.1）の値をそのまま渡すこと。**
+`ocw` はブランチ名に接頭辞を一切付けない（正規化した入力そのものがブランチ名になる）ので、
+テーブルの値がそのまま実ブランチ名である。これは**新規に作る**孫ブランチの命名方針であり、
+既存の `ai/*` ブランチを遡って改名する話ではない（既存ブランチはそのままでよい）。
 
 これだけで以下が**全部**できる:
 
 ```
 git worktree 作成（<孫ブランチ名> がそのままブランチ名になる。`/` はディレクトリの
   ネストとして温存される）
-  → herdr workspace 作成（ラベルは `<repo_name> :: <slug>`。区切りは `::`）
-  → 3ペーン構成:
-     ┌────────────┬──────────────┬──────────┐
-     │ commander  │ implementer  │ reviewer │
-     │ claude     │ claude       │ claude   │
-     │ (予備)     │ 実装+PR      │ レビュー │
-     └────────────┴──────────────┴──────────┘
+  → herdr workspace 作成（ラベルは既定で `<repo_name> :: <slug>`。区切りは `::`。
+    このあと「ワークスペースラベル」節に従って日本語ラベルへ改名する）
+  → 2ペーン構成（commander は作らない）:
+     ┌──────────────┬──────────┐
+     │ implementer  │ reviewer │
+     │ claude       │ claude   │
+     │ 実装+PR      │ レビュー │
+     └──────────────┴──────────┘
   → 全ペーンでエージェント起動済み
-  → 標準出力に pane ID が出力される
+  → 標準出力に pane ID が出力される（`commander:` 行は出ない）
 ```
 
-3ペーンとも既定の起動コマンドは `claude`（`bin/ocw` の `OCW_COMMANDER_COMMAND` /
-`OCW_IMPLEMENTER_COMMAND` / `OCW_REVIEWER_COMMAND` で個別に上書き可能。§3.2 注意点4）。
-
-出力例:
+出力例（`--no-commander`。`commander:` 行が無いことに注意）:
 ```
 workspace:   w1
-commander:   w1:p1
 implementer: w1:p2
 reviewer:    w1:p3
 ```
 
+**既定（`--no-commander` を付けない）の `ocw -H` は3ペイン。** 傘（司令官）ワークスペースを
+人間が立ち上げるときはこちらを使う。
+
+```
+     ┌────────────┬─────────────┬────────────┐
+     │ commander  │ implementer │ reviewer   │
+     │ claude     │ claude      │ claude     │
+     │ 司令官自身 │ finalize用  │ finalize用 │
+     └────────────┴─────────────┴────────────┘
+```
+
+出力例（既定・3ペイン）:
+```
+workspace:   w0
+commander:   w0:p1
+implementer: w0:p2
+reviewer:    w0:p3
+```
+
+各ペーンの既定の起動コマンドは `claude`（`bin/ocw` の `OCW_COMMANDER_COMMAND` /
+`OCW_IMPLEMENTER_COMMAND` / `OCW_REVIEWER_COMMAND` で個別に上書き可能。§3.2 注意点4。
+`--no-commander` の2ペインモードでは `OCW_COMMANDER_COMMAND` は使われない）。
+
+### ワークスペースラベル
+
+Herdr ワークスペースの既定ラベルは `<repo_name> :: <slug>`（区切りは ` :: `。
+`bin/ocw` が生成する）で、サイドバーからは内容が判別できない。`ocw -H` の直後に
+`herdr workspace rename <workspace_id> <label>` を叩いて日本語ラベルへ改名する。
+
+**書式**:
+
+```
+<repo_name> :: <日本語の説明>
+```
+
+- 傘（司令官スペース）: `<repo_name> :: <傘の日本語要約>`
+- 孫（実装ワークスペース）: `<repo_name> :: <傘の日本語要約> 孫N <孫の日本語要約>`
+
+長さの目安は傘の要約が全角12文字以内、孫の要約が全角16文字以内（サイドバーの幅で
+末尾が切れないように）。
+
+**説明文の作り方（優先順）**:
+
+1. 計画書に `## ワークスペースラベル` 節があれば、そこに書かれた文字列をそのまま使う（§2.5）
+2. 節が無ければ機械的に導出する: 傘の要約＝計画書の H1 見出しから「計画書:」を
+   除いて短縮したもの、孫の要約＝進捗テーブルの「内容」列を短縮したもの
+
+**孫の rename**: `ocw -H --no-commander ...` の出力の `workspace:` 行の ID に対して、
+**プロンプト送信より前**に行う（§3.2「/spawn」）。
+
+**傘（司令官スペース）の rename**: 司令官が自分のワークスペースを `herdr workspace list`
+から特定し（「自分のworkspaceの見つけ方」参照）、現在ラベルが**既定形のときだけ**
+rename する。既定形の判定は「` :: ` の右側に非 ASCII 文字が1文字も含まれないこと」。
+人間が既にラベルを日本語で手付けしていれば上書きしない。
+
+**rename が失敗しても警告のみで続行する。** ラベルは表示上の都合であり、spawn や
+finalize のフローを止める理由にならない。
+
 ### `/spawn` の Herdr ありフロー
 
-1. `ocw -H <孫ブランチ> <傘ブランチ>` を実行
-2. 出力から `implementer:` 行の pane ID を拾う
-3. `herdr pane run <implementer-id> "<prompt>"` でプロンプト送信
-4. `herdr pane get <implementer-id>` で `agent_status` を確認し、`idle` のままなら
+1. `ocw -H --no-commander <孫ブランチ> <傘ブランチ>` を実行
+2. 出力から `workspace:` 行の ID を拾い、`herdr workspace rename` で日本語ラベルへ
+   改名する（§5「ワークスペースラベル」参照。失敗しても警告のみで続行）
+3. 出力から `implementer:` 行の pane ID を拾う
+4. `herdr pane run <implementer-id> "<prompt>"` でプロンプト送信
+5. `herdr pane get <implementer-id>` で `agent_status` を確認し、`idle` のままなら
    `herdr pane send-keys <implementer-id> Enter` を撃って再確認する（§3.2 注意点3）
-5. 以上。reviewer は `/pr-review-loop` が勝手に使うので司令官は触らない
+6. 以上。reviewer は `/pr-review-loop` が勝手に使うので司令官は触らない
 
 ### 状態確認（`/check` から使う）
 
@@ -776,7 +852,7 @@ PRを出すと、**マージ済みの変更が全部もう一度差分に出て�
 ```bash
 git stash                      # 作業中の変更を退避
 git fetch origin
-git checkout -b ai/<追随孫名> origin/<傘ブランチ>
+git checkout -b <追随孫名> origin/<傘ブランチ>
 git stash pop                  # 退避した変更を適用
 ```
 
