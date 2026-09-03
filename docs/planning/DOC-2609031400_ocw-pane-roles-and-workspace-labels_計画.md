@@ -34,7 +34,7 @@
 
 | 孫 | ブランチ | 内容 | 状況 |
 |---|---|---|---|
-| 1 | `ocw-pane-roles-01-no-commander` | `ocw -H` に commander 省略モードを追加（`bin/ocw` 本体・`bin/tests/test_ocw.py` に Herdr シムを新設・`bin/README.md`） | ⬜ 待機中 |
+| 1 | `ocw-pane-roles-01-no-commander` | `ocw -H` に commander 省略モードを追加（`bin/ocw` 本体・`bin/tests/test_ocw.py` に Herdr シムを新設・`bin/README.md`） | 🔄 実装中 |
 | 2 | `ocw-pane-roles-02-skill-docs` | `umbrella-orchestrator` SKILL.md の更新（孫 spawn を2ペインモードへ・ワークスペースラベルの日本語化・`ai/` 接頭辞前提の除去） | ⬜ 待機中 |
 
 > **孫ブランチ名に `ai/` を付けていないのは要望3の方針の適用である。**
