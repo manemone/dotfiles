@@ -74,6 +74,7 @@
 | DOC-2608040234 | [ai-deploy-stability_計画.md](planning/DOC-2608040234_ai-deploy-stability_計画.md) | デプロイ配布方式の安定化の傘ブランチ計画書（傘 `ai/deploy-stability`）。ADR DOC-2608040229 で確定した配布実体方式を6本の孫へ分解したもの |
 | DOC-2608062259 | [ai-ocw-naming-and-layout_計画.md](planning/DOC-2608062259_ai-ocw-naming-and-layout_計画.md) | `ocw` のワークツリー命名とリポジトリレイアウト外部化の傘ブランチ計画書（傘 `ai/ocw-naming-and-layout`）。ADR DOC-2608062258 で確定した方式を4本の孫へ分解したもの |
 | DOC-2608081456 | [ocw-meter-accuracy_計画.md](planning/DOC-2608081456_ocw-meter-accuracy_計画.md) | `ocw-meter` の計測精度是正の傘ブランチ計画書（傘 `ocw-meter-accuracy`）。実ストア突合で判明した6件の計測ズレ（ingest 欠測・費用メトリクスの空洞化・帰属不能・テストによるストア汚染・価格表のズレ・退避キャッシュのプルーニング漏れ）を6本の孫へ分解したもの |
+| DOC-2609031400 | [ocw-pane-roles-and-workspace-labels_計画.md](planning/DOC-2609031400_ocw-pane-roles-and-workspace-labels_計画.md) | `ocw -H` のペイン構成切り替えと Herdr ワークスペースラベル日本語化の傘ブランチ計画書（傘 `ai/ocw-pane-roles`）。commander を省いた2ペインモードの追加、`umbrella-orchestrator` の孫 spawn とラベル付けの更新、スキル文書に残る `ai/` 接頭辞前提の除去を2本の孫へ分解したもの |
 
 ### reference/ — 運用リファレンス
 
