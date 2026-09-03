@@ -526,8 +526,10 @@ main へのマージは人間が手動で行う。
         herdr pane send-keys <implementer-id> Enter で確定させる
       計画書を「🔄 実装中」に更新してcommit+push
    9. 全孫マージ済みなら finalize:
-      司令官自身のworkspaceを特定:
-        herdr pane list | python3 -c "import sys,json; [print(p['workspace_id']) for p in json.load(sys.stdin)['result']['panes'] if p.get('agent_status')=='working']"
+      司令官自身のworkspaceを特定（§5「自分のworkspaceの見つけ方」参照。
+        agent_status=='working' 方式は使わない。この cron 巡回中は孫の
+        implementerも working になっており、誤って孫のworkspaceを掴む）:
+        herdr pane list | python3 -c "import sys,json,os; my_cwd=os.getcwd(); ids={p['workspace_id'] for p in json.load(sys.stdin)['result']['panes'] if p.get('cwd')==my_cwd}; [print(i) for i in sorted(ids)]"
       そのworkspaceのimplementerに送信:
         herdr pane run <impl-pane-id> "最終PRを作成。base:main head:<傘ブランチ>。pr-review-loop起動。reviewerは<同workspaceのreviewer>。mainマージは人間手動。計画書 <計画書の絶対パス> 参照。"
       送信後 herdr pane get で agent_status を確認し、working にならない
@@ -608,21 +610,22 @@ test "${HERDR_ENV:-}" = 1
 
 `agent_status == 'working'` で探す方法は使わない。`/autopilot` の巡回中は孫の
 implementerも `working` になっており、複数ヒットして自分のworkspaceを一意に
-特定できない。代わりに、司令官が自分の `pwd`（傘ブランチのワークツリーの
-絶対パス）を知っていることを使い、`herdr pane list` の各pane の `cwd` と突き合わせる:
+特定できない。代わりに、`python3` が起動時に継承する現在の作業ディレクトリ
+（傘ブランチのワークツリーの絶対パス）を使い、`herdr pane list` の各pane の
+`cwd` と突き合わせる（環境変数の受け渡しは不要）:
 
 ```bash
-MY_CWD=$(pwd)
 herdr pane list | python3 -c "
 import sys, json, os
-my_cwd = os.environ['MY_CWD']
-for p in json.load(sys.stdin)['result']['panes']:
-    if p.get('cwd') == my_cwd:
-        print(p['workspace_id'])
+my_cwd = os.getcwd()
+ids = {p['workspace_id'] for p in json.load(sys.stdin)['result']['panes'] if p.get('cwd') == my_cwd}
+for i in sorted(ids):
+    print(i)
 "
 ```
 
-司令官の作業ディレクトリと一致するpaneのworkspace_idが司令官のworkspace。
+司令官の作業ディレクトリと一致するpaneのworkspace_idが司令官のworkspace。傘
+ワークスペースは複数pane（3ペイン）が同じ`cwd`を持つため、`set` で重複を畳んでいる。
 
 ### `ocw -H` が作るもの
 
