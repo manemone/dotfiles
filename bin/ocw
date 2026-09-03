@@ -7,6 +7,7 @@ set -euo pipefail
 ORIGINAL_INVOCATION="ocw $*"
 
 USE_HERDR=false
+NO_COMMANDER=false
 
 COMMANDER_COMMAND="${OCW_COMMANDER_COMMAND:-claude}"
 IMPLEMENTER_COMMAND="${OCW_IMPLEMENTER_COMMAND:-claude}"
@@ -31,9 +32,9 @@ HERDR_SETUP_REVIEWER_PANE_ID=""
 usage() {
   cat <<'USAGE'
 usage:
-  ocw [-H|--herdr] <worktree-name> [base-ref]
-  ocw [-H|--herdr] new <worktree-name> [base-ref]
-  ocw new [-H|--herdr] <worktree-name> [base-ref]
+  ocw [-H|--herdr] [--no-commander] <worktree-name> [base-ref]
+  ocw [-H|--herdr] [--no-commander] new <worktree-name> [base-ref]
+  ocw new [-H|--herdr] [--no-commander] <worktree-name> [base-ref]
   ocw rm <worktree-name>
   ocw rm -f <worktree-name>
   ocw ls
@@ -50,9 +51,16 @@ create behavior:
     focus the Herdr workspace
     open VS Code
 
+  --no-commander
+    with -H/--herdr, create implementer/reviewer panes only (no
+    commander pane, no commander claude process)
+    requires -H/--herdr on create; without it, ocw dies
+    ignored by ls/rm, like -H
+
 examples:
   ocw dataset-importer
   ocw --herdr optimize-generation
+  ocw --herdr --no-commander optimize-generation
   ocw new --herdr caption-parser origin/main
   ocw rm dataset-importer
   ocw rm -f failed-experiment
@@ -61,6 +69,7 @@ examples:
 environment:
   OCW_COMMANDER_COMMAND
     default: claude
+    unused when --no-commander is given
 
   OCW_IMPLEMENTER_COMMAND
     default: claude
@@ -473,21 +482,34 @@ setup_herdr_workspace() {
   local worktree_dir="$1"
   local workspace_label="$2"
   local run_id="$3"
+  local no_commander="$4"
 
   local open_json=""
   local split_json=""
   local tab_id=""
+  local root_pane_id=""
+  # In --no-commander mode there is no commander pane to make the root
+  # pane, so the root pane becomes implementer directly instead of being
+  # created as commander and later closed (which would still start one
+  # unwanted `claude` process -- exactly what this flag exists to avoid).
+  local root_role="commander"
+  local root_label="commander"
 
   HERDR_SETUP_WORKSPACE_ID=""
   HERDR_SETUP_COMMANDER_PANE_ID=""
   HERDR_SETUP_IMPLEMENTER_PANE_ID=""
   HERDR_SETUP_REVIEWER_PANE_ID=""
 
+  if [ "$no_commander" = "true" ]; then
+    root_role="implementer"
+    root_label="implementer"
+  fi
+
   open_json="$(
     herdr workspace create \
       --cwd "$worktree_dir" \
       --label "$workspace_label" \
-      --env "OCW_ROLE=commander" \
+      --env "OCW_ROLE=${root_role}" \
       --env "OCW_RUN_ID=${run_id}" \
       --no-focus
   )" || return 1
@@ -503,7 +525,7 @@ setup_herdr_workspace() {
     return 1
   }
 
-  HERDR_SETUP_COMMANDER_PANE_ID="$(
+  root_pane_id="$(
     json_nested_field \
       "$open_json" \
       root_pane \
@@ -513,6 +535,12 @@ setup_herdr_workspace() {
     echo "$open_json" >&2
     return 1
   }
+
+  if [ "$no_commander" = "true" ]; then
+    HERDR_SETUP_IMPLEMENTER_PANE_ID="$root_pane_id"
+  else
+    HERDR_SETUP_COMMANDER_PANE_ID="$root_pane_id"
+  fi
 
   tab_id="$(
     json_nested_field \
@@ -529,38 +557,40 @@ setup_herdr_workspace() {
     return 1
 
   herdr pane rename \
-    "$HERDR_SETUP_COMMANDER_PANE_ID" \
-    commander \
+    "$root_pane_id" \
+    "$root_label" \
     >/dev/null ||
     return 1
 
-  # Split commander right → implementer
-  split_json="$(
-    herdr pane split \
-      "$HERDR_SETUP_COMMANDER_PANE_ID" \
-      --direction right \
-      --cwd "$worktree_dir" \
-      --env "OCW_ROLE=implementer" \
-      --env "OCW_RUN_ID=${run_id}" \
-      --no-focus
-  )" || return 1
+  if [ "$no_commander" != "true" ]; then
+    # Split commander right → implementer
+    split_json="$(
+      herdr pane split \
+        "$HERDR_SETUP_COMMANDER_PANE_ID" \
+        --direction right \
+        --cwd "$worktree_dir" \
+        --env "OCW_ROLE=implementer" \
+        --env "OCW_RUN_ID=${run_id}" \
+        --no-focus
+    )" || return 1
 
-  HERDR_SETUP_IMPLEMENTER_PANE_ID="$(
-    json_nested_field \
-      "$split_json" \
-      pane \
-      pane_id
-  )" || {
-    echo "error: could not read implementer pane ID from Herdr response" >&2
-    echo "$split_json" >&2
-    return 1
-  }
+    HERDR_SETUP_IMPLEMENTER_PANE_ID="$(
+      json_nested_field \
+        "$split_json" \
+        pane \
+        pane_id
+    )" || {
+      echo "error: could not read implementer pane ID from Herdr response" >&2
+      echo "$split_json" >&2
+      return 1
+    }
 
-  herdr pane rename \
-    "$HERDR_SETUP_IMPLEMENTER_PANE_ID" \
-    implementer \
-    >/dev/null ||
-    return 1
+    herdr pane rename \
+      "$HERDR_SETUP_IMPLEMENTER_PANE_ID" \
+      implementer \
+      >/dev/null ||
+      return 1
+  fi
 
   # Split implementer right → reviewer
   split_json="$(
@@ -590,11 +620,13 @@ setup_herdr_workspace() {
     >/dev/null ||
     return 1
 
-  herdr pane run \
-    "$HERDR_SETUP_COMMANDER_PANE_ID" \
-    "$COMMANDER_COMMAND" \
-    >/dev/null ||
-    return 1
+  if [ "$no_commander" != "true" ]; then
+    herdr pane run \
+      "$HERDR_SETUP_COMMANDER_PANE_ID" \
+      "$COMMANDER_COMMAND" \
+      >/dev/null ||
+      return 1
+  fi
 
   herdr pane run \
     "$HERDR_SETUP_IMPLEMENTER_PANE_ID" \
@@ -657,6 +689,13 @@ rollback_created_worktree() {
 create_worktree() {
   local task_name="${1:-}"
   local base_ref="${2:-}"
+
+  # --no-commander only means anything alongside -H/--herdr (it removes one
+  # of the panes Herdr mode creates); silently ignoring it outside Herdr
+  # mode would hide a typo'd invocation instead of reporting it.
+  if [ "$NO_COMMANDER" = "true" ] && [ "$USE_HERDR" != "true" ]; then
+    die "--no-commander requires -H/--herdr"
+  fi
 
   if [ -z "$base_ref" ]; then
     base_ref="$(
@@ -774,7 +813,8 @@ create_worktree() {
     setup_herdr_workspace \
       "$worktree_dir" \
       "$workspace_label" \
-      "$run_id"
+      "$run_id" \
+      "$NO_COMMANDER"
     setup_status="$?"
     set -e
 
@@ -788,7 +828,9 @@ create_worktree() {
     fi
 
     echo "workspace:   ${HERDR_SETUP_WORKSPACE_ID}"
-    echo "commander:   ${HERDR_SETUP_COMMANDER_PANE_ID}"
+    if [ "$NO_COMMANDER" != "true" ]; then
+      echo "commander:   ${HERDR_SETUP_COMMANDER_PANE_ID}"
+    fi
     echo "implementer: ${HERDR_SETUP_IMPLEMENTER_PANE_ID}"
     echo "reviewer:    ${HERDR_SETUP_REVIEWER_PANE_ID}"
   else
@@ -1400,10 +1442,20 @@ remove_worktree() {
   fi
 }
 
-while [ "${1:-}" = "-H" ] ||
-  [ "${1:-}" = "--herdr" ]; do
-  USE_HERDR=true
-  shift
+while true; do
+  case "${1:-}" in
+    -H | --herdr)
+      USE_HERDR=true
+      shift
+      ;;
+    --no-commander)
+      NO_COMMANDER=true
+      shift
+      ;;
+    *)
+      break
+      ;;
+  esac
 done
 
 cmd="${1:-}"
@@ -1427,10 +1479,20 @@ case "$cmd" in
   new)
     shift
 
-    while [ "${1:-}" = "-H" ] ||
-      [ "${1:-}" = "--herdr" ]; do
-      USE_HERDR=true
-      shift
+    while true; do
+      case "${1:-}" in
+        -H | --herdr)
+          USE_HERDR=true
+          shift
+          ;;
+        --no-commander)
+          NO_COMMANDER=true
+          shift
+          ;;
+        *)
+          break
+          ;;
+      esac
     done
 
     init_repo_context

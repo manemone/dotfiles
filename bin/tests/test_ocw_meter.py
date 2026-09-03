@@ -4083,13 +4083,19 @@ class ReportListPriceEquivTests(OcwMeterTestCase):
         # 正しく推論され、結果として除外されること」を確認する必要がある
         # (round-1レビュー指摘4: 直接 --provider を叩くだけのテストは
         # rate_limits の有無がproviderに効かなくなっても緑のままだった)。
-        self._quota_sample("q1", "sess-a", 1.0, "2026-08-05T09:00:00.000Z", provider="anthropic")
+        # `run_snapshot_quota` 側のイベントは record_quota_sample() が
+        # 実行時の現在時刻を打つため、`_quota_sample` 側も同じ「今」に
+        # 揃える(固定の過去月だと、集計側のmonthフィルタから外れて
+        # excluded系カウンタが検出前に0のまま落ちる)。
+        now_ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+        this_month = now_ts[:7]
+        self._quota_sample("q1", "sess-a", 1.0, now_ts, provider="anthropic")
         run_snapshot_quota(json.dumps({
             "session_id": "sess-ds-shaped", "cwd": "/tmp",
             "model": {"id": "deepseek-v4-pro[1m]"},
             "cost": {"total_cost_usd": 999.0},
         }), self.home)
-        data = json.loads(run_meter(["report", "--month", "2026-08", "--json"], self.home).stdout)
+        data = json.loads(run_meter(["report", "--month", this_month, "--json"], self.home).stdout)
         self.assertAlmostEqual(data["capacity"]["list_price_equiv_usd"], 1.0)
         self.assertEqual(data["capacity"]["list_price_equiv_excluded_deepseek_count"], 1)
 
@@ -4098,14 +4104,18 @@ class ReportListPriceEquivTests(OcwMeterTestCase):
         # provider: null で書かれる(deepseekと判定されたわけではない)。
         # anthropicとして合算してはいけないが、除外したこと自体は
         # deepseekの除外とは別カウンタで報告する。
-        self._quota_sample("q1", "sess-a", 1.0, "2026-08-05T09:00:00.000Z", provider="anthropic")
+        # 上のテストと同じ理由で、`_quota_sample` 側のタイムスタンプと
+        # 集計対象の月を実行時の「今」に揃える。
+        now_ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+        this_month = now_ts[:7]
+        self._quota_sample("q1", "sess-a", 1.0, now_ts, provider="anthropic")
         run_snapshot_quota(json.dumps({
             "session_id": "sess-unresolved", "cwd": "/tmp",
             "cost": {"total_cost_usd": 999.0},
         }), self.home)
         event = next(e for e in read_events(self.home) if e["session_id"] == "sess-unresolved")
         self.assertIsNone(event["provider"])
-        data = json.loads(run_meter(["report", "--month", "2026-08", "--json"], self.home).stdout)
+        data = json.loads(run_meter(["report", "--month", this_month, "--json"], self.home).stdout)
         self.assertAlmostEqual(data["capacity"]["list_price_equiv_usd"], 1.0)
         self.assertEqual(data["capacity"]["list_price_equiv_excluded_other_provider_count"], 1)
         self.assertEqual(data["capacity"]["list_price_equiv_excluded_deepseek_count"], 0)

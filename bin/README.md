@@ -6,7 +6,7 @@
 
 | Tool | Purpose |
 |---|---|
-| `ocw` | Git worktree 作成・管理。Herdr 連携で commander/implementer/reviewer の三面体制を自動セットアップ |
+| `ocw` | Git worktree 作成・管理。Herdr 連携で commander/implementer/reviewer の三面体制を自動セットアップ（`--no-commander` で commander を省いた2面体制にできる） |
 | `claude-ds` | Claude Code を DeepSeek API 経由で実行するラッパー |
 | `ocw-meter` | LLM費用・Claude利用枠の観測基盤。既存ログを事後に集計する。`event` / `bind-pr` / `snapshot-quota` はfail-open、`report` / `ingest` / `validate` / `prune-diagnostics` はfail-loud（`report` は自動でingestを実行し、`prune-diagnostics --apply` は診断ファイルを削除する） |
 
@@ -66,6 +66,9 @@ ocw feature/foo
 # Herdr 連携（commander/implementer/reviewer の3ペイン）
 ocw --herdr my-feature
 
+# Herdr 連携（commander を省いた implementer/reviewer の2ペイン）
+ocw --herdr --no-commander my-feature
+
 # ベースブランチを指定
 ocw new --herdr my-feature origin/main
 
@@ -78,9 +81,14 @@ ocw ls
 ```
 
 **Herdr モードのペイン構成:**
+
+既定（`ocw -H`）は commander/implementer/reviewer の3ペイン。
+
 - **commander**: 司令塔（デフォルト: `claude`）
 - **implementer**: 実装担当（デフォルト: `claude`）
 - **reviewer**: レビュー担当（デフォルト: `claude`）
+
+`--no-commander` を付けると、commander ペインを作らず implementer/reviewer の2ペインだけになる（`create` 経路では `-H`/`--herdr` と一緒に使う必要があり、単独では `die` する。`ocw ls`/`ocw rm` では既存の `-H` と同じく黙って無視される）。root pane はそのまま implementer になる（commander を起動してから閉じるのではなく、最初から implementer として立てる。commander の `claude` プロセスは1つも起動されない）。`OCW_COMMANDER_COMMAND` はこのモードでは使われない。`umbrella-orchestrator` スキルの `/spawn` が作る孫ワークスペースは、誰も使わない commander ペインの分メモリを浪費していたため、このモードを使う。
 
 #### 設定（`git config ocw.*`）
 
@@ -227,6 +235,10 @@ Herdrモードでは、commander/implementer/reviewer の各ペイン起動時�
 `OCW_ROLE`（`commander`/`implementer`/`reviewer`）と `OCW_RUN_ID` が `herdr workspace create --env` /
 `herdr pane split --env` 経由で自動的に渡される。`ocw-meter event` はこれらの環境変数を
 自動的に読み取り役割・runを紐付けるため、呼び出し側で明示的に指定する必要はない。
+`--no-commander` の2ペインモードでは、root pane（implementer）に渡る `OCW_ROLE` が
+`commander` ではなく `implementer` になる。これは表示上の都合ではなく、`bin/ocw-meter` が
+`OCW_ROLE` から役割別の費用集計を行うためで、`commander` のまま渡ると2ペインモードでの
+実装作業の費用がすべて誤って commander に計上されてしまう。
 
 **非Herdrモード（`ocw <name>`、VS Codeを開く既定モード）では `OCW_RUN_ID` は自動では渡らない。**
 `run_id` は `run:` 行と `ocw-run-id` ファイルには保存されるが、それを読んで環境変数へ載せる主体が
@@ -670,7 +682,7 @@ export OCW_REVIEWER_COMMAND=claude
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `OCW_COMMANDER_COMMAND` | `claude` | commander ペインで実行するコマンド |
+| `OCW_COMMANDER_COMMAND` | `claude` | commander ペインで実行するコマンド。`--no-commander` を付けた2ペインモードでは使われない |
 | `OCW_IMPLEMENTER_COMMAND` | `claude` | implementer ペインで実行するコマンド |
 | `OCW_REVIEWER_COMMAND` | `claude` | reviewer ペインで実行するコマンド |
 
