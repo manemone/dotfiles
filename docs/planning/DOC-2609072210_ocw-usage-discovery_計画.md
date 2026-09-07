@@ -35,8 +35,8 @@ help テキストを 300行ほど足して実体が 1,800行になっても、�
 
 | 孫 | ブランチ | 内容 | 状況 |
 |---|---|---|---|
-| 1 | `ocw-usage-01-help-topics` | `ocw help <topic>` の階層化（`bin/ocw` 本体・`bin/tests/test_ocw.py`） | 🔄 実装中 |
-| 2 | `ocw-usage-02-skill-and-readme` | `skills/ocw/` 新設と参照の整理（`skills/README.md`・`bin/README.md`・ルート `README.md`） | ⬜ 待機中 |
+| 1 | `ocw-usage-01-help-topics` | `ocw help <topic>` の階層化（`bin/ocw` 本体・`bin/tests/test_ocw.py`） | ✅ PR #72 マージ済 |
+| 2 | `ocw-usage-02-skill-and-readme` | `skills/ocw/` 新設と参照の整理（`skills/README.md`・`bin/README.md`・ルート `README.md`） | 🔄 実装中 |
 
 ## 依存関係と実行順序
 
