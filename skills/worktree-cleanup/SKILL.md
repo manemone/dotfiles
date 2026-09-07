@@ -58,6 +58,12 @@ grep -rl "傘ブランチ: \`$CUR_BRANCH\`" docs/planning/*.md 2>/dev/null
 grep -oE '^\| *[0-9]+ *\| `[^`]+`' <計画書のパス> | grep -oE '`[^`]+`' | tr -d '`'
 ```
 
+**このブランチ名一覧をそのまま候補にしない。** 進捗テーブルには `⬜ 待機中` の
+未着手の孫や、既に掃除済みでワークツリーが存在しない孫も同じ形式で残り続ける。
+`git worktree list --porcelain` の結果と突き合わせ、**実在するワークツリーを持つ
+ブランチだけ**を候補にする（対応するワークツリーが無いブランチは対象外）。
+§4.1 以降の手順はすべて「ワークツリー」を前提にしており、ブランチ名だけでは実行できない。
+
 見つからなければ `umbrella` ではない。次へ。
 
 **この判定方法は dotfiles リポジトリの計画書規約に依存する。** 対象リポジトリが
@@ -86,9 +92,11 @@ git worktree list --porcelain
 ## 3. `herdr` スコープの取得方法
 
 **一次情報源は `herdr pane list` の `cwd` を起点に `herdr worktree list --cwd <cwd>`
-を叩く方式。** 計画書の実測（`herdr workspace list` の `worktree` フィールドは
-大半のワークスペースに無い）を本スキル実装時にも再実測して確認済み（2026-09-08、
-15ワークスペース中1つだけが `worktree` を持っていた）。この方式は**採用しない**。
+を叩く方式。** `herdr workspace list` の `worktree` フィールドに依存する方式は
+**採用しない**。計画書の実測（`worktree` フィールドは大半のワークスペースに無い）を
+本スキル実装時にも再実測して確認済み（2026-09-08、15ワークスペース中1つだけが
+`worktree` を持っていた）。一方 `herdr pane list` はどのワークスペースの pane も
+`cwd` を持っていたため、こちらを一次情報源にする。
 
 ```bash
 herdr pane list | python3 -c "
@@ -103,12 +111,23 @@ for p in panes:
 "
 ```
 
-得られた各 `cwd` について `herdr worktree list --cwd <cwd>` を叩く。
-返り値の `result.source.repo_root` でリポジトリを一意化し、`result.worktrees` の
-各要素が `branch` / `path` / `is_linked_worktree` / `open_workspace_id` /
-`is_prunable` を持つ。**`repo_root` が重複したら（複数の cwd が同じリポジトリを
-指す）片方を捨てて重複排除する。** 引数なしで叩くと呼び出し元と無関係な
-リポジトリを返すため、**必ず `--cwd`（または `--workspace <id>`）を指定すること。**
+得られた各 `cwd` について `herdr worktree list --cwd <cwd>` を叩く。**`cwd` は
+git リポジトリの外（プロジェクトの親ディレクトリ等）を指すことがあり、その場合は
+`error.code` が `not_git_worktree` のエラーが返る。** 実機で確認済み:
+
+```bash
+$ herdr worktree list --cwd /home/manemone/projects
+{"error":{"code":"not_git_worktree","message":"Herdr worktree actions require a path inside a Git work tree"},"id":"cli:worktree:list"}
+```
+
+**`not_git_worktree` は黙ってスキップし、次の `cwd` へ進む。** リポジトリ外の `cwd`
+はそもそも掃除の対象になりようがないため、これはエラーではなく想定内の分岐である。
+
+エラーにならなかった場合、返り値の `result.source.repo_root` でリポジトリを一意化し、
+`result.worktrees` の各要素が `branch` / `path` / `is_linked_worktree` /
+`open_workspace_id` / `is_prunable` を持つ。**`repo_root` が重複したら（複数の cwd が
+同じリポジトリを指す）片方を捨てて重複排除する。** 引数なしで叩くと呼び出し元と
+無関係なリポジトリを返すため、**必ず `--cwd`（または `--workspace <id>`）を指定すること。**
 
 ```json
 {"result":{"source":{"repo_root":"/home/manemone/projects/lora-dataset-forge/main", ...},
@@ -136,13 +155,26 @@ main チェックアウトはどのスコープでも消さない。
 
 1. **自分がいるワークツリーではないか。** `git rev-parse --show-toplevel` と比較し、
    一致するものは候補から外す（自分自身は消せない）
-2. **未コミットの変更が無いか**: `git -C <worktree> status --porcelain` が空であること
-3. **対応する PR がマージ済みか**: そのブランチの PR を
+2. **ブランチを持つワークツリーか。** `git worktree list --porcelain`（`herdr` スコープ
+   では `herdr worktree list` の `branch`）で detached（ブランチ無し）と分かった
+   ワークツリーは、この時点で候補から外し理由を添えて人間へ報告する。**空のブランチ名で
+   次のPR確認へ進んではいけない。** `gh pr list --head ""` はフィルタが無視されて全PRを
+   返すため、`state` が `MERGED` の要素がたまたま含まれ、次のゲートを素通りしてしまう
+   （実機で確認済み）
+3. **未コミットの変更が無いか**: `git -C <worktree> status --porcelain` が空であること
+4. **対応する PR がマージ済みか**: そのブランチの PR を、**そのワークツリーが属する
+   リポジトリを対象にして**（`herdr` スコープでは §3 で得た `repo_root` の
+   `owner/repo` を `gh pr list -R <owner>/<repo> --head <branch> ...` のように明示する。
+   `umbrella` / `repo` スコープでは現在のリポジトリで実行すればよい）
    `gh pr list --head <branch> --state all --json number,title,state,mergedAt` で調べ、
-   `state` が `MERGED` であること
+   `state` が `MERGED` であること。**リポジトリを明示しないと、`gh` は実行時の cwd の
+   remote から対象リポジトリを決めるため、`herdr` スコープで他リポジトリのブランチ名を
+   誤って現在地のリポジトリへ問い合わせることになる**（該当PRが見つからず全滅する、
+   または同名ブランチが現在地に存在すると無関係なPRのマージ状態を根拠に削除候補へ
+   載る、のどちらかの事故につながる）
 
 いずれかを満たさないワークツリーは**候補から外し、理由を添えて人間へ報告する**
-（未コミット変更あり／PRが無い／PRがマージされていない、等）。GitHub remote が
+（detached／未コミット変更あり／PRが無い／PRがマージされていない、等）。GitHub remote が
 無いなどでPR確認自体ができないリポジトリも、候補から外して人間の判断を仰ぐ。
 
 ### 4.2 候補リストの提示と承認
@@ -174,7 +206,7 @@ ocw rm <branch>
 
 ### 4.4 拒否されたら: `-f` を使う前の安全確認
 
-`ocw rm` の拒否メッセージは2種類あり、どちらでも同じ安全確認フローを踏む
+`ocw rm` の拒否メッセージは3種類あり、いずれでも同じ安全確認フローを踏む
 （原因は異なるが対処は共通）。
 
 - `branch is not merged into any known integration ref: <branch>` — 候補 ref は
@@ -185,13 +217,26 @@ ocw rm <branch>
   基本である）
 - `cannot determine an integration ref ...: set ocw.mergedInto or use -f` —
   候補 ref が1つも解決できなかった場合。非 bare リポジトリでは通常出ない
+- `detached worktree has no branch to check for a merge; use -f: <name>` —
+  detached なワークツリー。**このケースは §4.1 の手順2で既に候補から除外している
+  はずであり、ここに到達すべきではない。** 到達した場合は §4.1 の除外判定が
+  漏れている証拠であり、削除を進めず人間に報告する
 
-どちらの場合も、**すでに §4.1 でそのブランチの PR がマージ済みであることは
+いずれの場合も、**すでに §4.1 でそのブランチの PR がマージ済みであることは
 確認済み。** ここでは取りこぼしが無いかを追加で確認する。
 
-1. `git -C <worktree> log -1 --format=%cI <branch>` で最終コミット時刻を取得し、
-   §4.1 で得た PR の `mergedAt` より**前**であることを確認する（マージ後に
-   取りこぼしたコミットが無いこと）
+1. 最終コミット時刻と PR の `mergedAt` を**同じ基準（UTC）に揃えてから**比較し、
+   最終コミットがマージより**前**であることを確認する（マージ後に取りこぼした
+   コミットが無いこと）:
+   ```bash
+   TZ=UTC git -C <worktree> log -1 --date=iso-strict-local --format=%cd <branch>
+   ```
+   **`git log --format=%cI` はローカルタイムゾーンのオフセット付きで、`gh` の
+   `mergedAt` は UTC（`Z`）である。** 素直に文字列比較すると、JST 等のプラス
+   オフセット環境ではマージ済みの孫が軒並み「コミット時刻が逆転している」と
+   誤判定され本スキルの主目的が機能しなくなり、マイナスオフセット環境では逆に
+   取りこぼしコミットを見逃して安全弁をすり抜ける。上記のように `TZ=UTC` で
+   正規化してから比較すること
 2. `git -C <worktree> status --porcelain` が空であることを再確認する（§4.1 から
    時間が空いている場合、その間に変更が入っていないか）
 3. 上記2点が揃ったら、**改めて人間に「マージ済みを確認しました。`--force` で
