@@ -609,16 +609,26 @@ test "${HERDR_ENV:-}" = 1
 
 **相手が Claude Code だと判別できるときは `SendMessage`、そうでなければ従来の
 `herdr pane run` + `send-keys Enter` へ落ちる。**`SendMessage` はキーストローク注入
-ではないため、下記「herdr pane run の最重要注意点」に挙げた3つの事故
+ではないため、§3.2 注意点3「herdr pane run の最重要注意点」に挙げた3つの事故
 （Enterが飛ばない・長文が途中で止まる・再送で2重に積まれる）は原理的に起きない。
 
 #### 1. 判別
+
+**送信元（自分）**: 自分が `SendMessage` ツールを呼べる Claude Code セッションか。
+`SendMessage` は Claude Code 専用の機能であり、司令官・実装AI・レビューAI自身が
+Codex や OpenCode で動いている場合は呼び出せない。**呼べなければ、受信先が
+`claude` であっても即座にフォールバックへ落ちる。**
+
+**送信先**:
 
 ```bash
 herdr pane get <pane-id>
 ```
 
-の `agent` が `"claude"` かを見る。`"claude"` でなければ即座に「フォールバック」へ落ちる。
+の `agent` が `"claude"` かを見る。`"claude"` でなければ即座にフォールバックへ落ちる。
+
+**両方（送信元が `SendMessage` を呼べる・送信先の `agent` が `"claude"`）を満たした
+ときだけ次のステップへ進む。**
 
 #### 2. 宛先の解決
 
@@ -663,22 +673,32 @@ SendMessage({ to: <name>, message: "<計画書/レビュー指示の絶対パス
 
 #### 4. 到達確認
 
+送信**直前**に `herdr pane get <pane-id>` で `agent_status` を控えておく（`$PRE_STATUS`）。
+送信後、再度
+
 ```bash
 herdr pane get <pane-id>
 ```
 
-の `agent_status` が `idle` から動くこと（`working` または `done` へ遷移していること）を
-確認する。**フォーカスされていないペインは完了時に `working` を経ず直接 `done` になりうる**
-ので、`done` も到達成功として扱う（本節後述の「レビュー待ちデッドロック」参照）。
-動かなければフォールバックへ切り替える。
+を叩き、`agent_status` が `$PRE_STATUS` から変化していること（例: `idle` → `working` /
+`done`、`working` → `done`）を確認する。**フォーカスされていないペインは完了時に
+`working` を経ず直接 `done` になりうる**（本節後述の「レビュー待ちデッドロック」参照）ため、
+`working` を必須条件にしない。
+
+**変化していない場合は、状態だけでは届いたかどうか判別できない。** 特に送信前が
+すでに `done`（前ラウンドの完了結果が未読のまま残っている状態）だったケースがこれに
+当たる。`herdr pane read <pane-id> --source recent-unwrapped --lines 10` で画面を
+目視し、新しい応答が出ていれば到達成功、出ていなければフォールバックへ切り替える。
 
 #### フォールバック（従来手順）
 
 `herdr pane run <pane-id> "<本文>"` → 送信後 `herdr pane get <pane-id>` で
 `agent_status` を確認 → `idle` のままなら `herdr pane send-keys <pane-id> Enter` →
-再確認、を `working` になるまで繰り返す。**同じ本文を `herdr pane run` で再送しない**
-（プロンプト欄に2重に積まれる）。手順の詳細と実測は下記「`herdr pane run` の
-最重要注意点」を参照。
+再確認、を `working` になるまで繰り返す。**それでも `working` にならない場合は
+`herdr pane read <pane-id> --source detection --lines 3` で画面を確認する**
+（無人ペインは `working` を経ず直接 `done` になりうるため。上記「4. 到達確認」と
+同じ扱い）。**同じ本文を `herdr pane run` で再送しない**（プロンプト欄に2重に積まれる）。
+手順の詳細と実測は §3.2 注意点3「herdr pane run の最重要注意点」を参照。
 
 ### ワークスペース階層（最重要）
 
@@ -829,12 +849,15 @@ finalize のフローを止める理由にならない。
    改名する（§5「ワークスペースラベル」参照。失敗しても警告のみで続行）
 3. 出力から `implementer:` 行の pane ID を拾う
 4. **「AI間送信手順（二段構え）」に従ってプロンプト送信する**:
-   - implementer の `agent` が `"claude"` で、`agent_session.value` から
-     `~/.claude/sessions/` を引けたら `SendMessage({ to: <name>, message: "<prompt>" })`
+   - 自分が `SendMessage` を呼べる Claude Code セッションで、かつ implementer の
+     `agent` が `"claude"` で `agent_session.value` から `~/.claude/sessions/` を
+     引けたら `SendMessage({ to: <name>, message: "<prompt>" })`
    - それ以外は `herdr pane run <implementer-id> "<prompt>"`（フォールバック）
-5. `herdr pane get <implementer-id>` で `agent_status` を確認し、`idle` のままなら
-   `SendMessage` 経路なら再送を検討、フォールバック経路なら
-   `herdr pane send-keys <implementer-id> Enter` を撃って再確認する（§3.2 注意点3）
+5. 到達確認: `SendMessage` 経路なら§5「AI間送信手順」#4（送信直前の状態からの変化を見る）
+   に従う。動いていなければフォールバック（`herdr pane run` + `send-keys Enter`）へ
+   切り替える。フォールバック経路なら `herdr pane get <implementer-id>` で
+   `agent_status` を確認し、`idle` のままなら `herdr pane send-keys <implementer-id> Enter`
+   を撃って再確認する（§3.2 注意点3）
 6. 以上。reviewer は `/pr-review-loop` が勝手に使うので司令官は触らない
 
 ### 状態確認（`/check` から使う）

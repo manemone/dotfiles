@@ -709,9 +709,12 @@ herdr wait agent-status "$REVIEWER_PANE" --status idle --timeout 30000
 
 **送信は `umbrella-orchestrator/SKILL.md` §5「AI間送信手順（二段構え）」に従う**
 （正典はそちらにあり、本スキルは参照するだけで全文をコピーしない。背景・実測は
-ADR DOC-2609072215 参照）: `$REVIEWER_AGENT` が `claude` で、`$REVIEWER_PANE` の
-`agent_session.value` から `~/.claude/sessions/` を引けたら `SendMessage` を使う。
-`$REVIEWER_AGENT` が `claude` 以外、または索引が引けない場合は次のフォールバックへ落ちる。
+ADR DOC-2609072215 参照）: **自分（この Phase を実行している側）が `SendMessage` を
+呼べる Claude Code セッションで**、かつ `$REVIEWER_AGENT` が `claude` で
+`$REVIEWER_PANE` の `agent_session.value` から `~/.claude/sessions/` を引けたら
+`SendMessage` を使う。自分が `SendMessage` を呼べない（Codex / OpenCode 等で実行
+している）、`$REVIEWER_AGENT` が `claude` 以外、または索引が引けない場合は次の
+フォールバックへ落ちる。
 
 ```bash
 herdr pane run "$REVIEWER_PANE" "以下を読んでPRレビューを実行してください。レビュー指示: $REVIEW_REQUEST"
@@ -719,9 +722,11 @@ herdr pane run "$REVIEWER_PANE" "以下を読んでPRレビューを実行して
 
 ### Step 4: 配信確認
 
-**`SendMessage` を使った場合**: `herdr pane get "$REVIEWER_PANE"` の `agent_status` が
-`idle` から動く（`working` または `done` へ遷移する）ことを確認する。動かなければ
-フォールバック（`herdr pane run`）に切り替える。
+**`SendMessage` を使った場合**: 送信直前に控えた `agent_status`（Step 3 の直前に
+`herdr pane get "$REVIEWER_PANE"` で取得しておく）から変化していることを確認する。
+変化していなければ（特に送信前がすでに `done` だった場合、状態だけでは届いたか
+判別できない）`herdr pane read "$REVIEWER_PANE" --source recent-unwrapped --lines 10`
+で画面を目視し、新しい応答が出ていなければフォールバック（`herdr pane run`）に切り替える。
 
 **フォールバック（`herdr pane run`）を使った場合**:
 
@@ -1021,8 +1026,9 @@ command -v ocw-meter >/dev/null && ocw-meter event phase.start --phase rereview_
      区間の差分を分類してから検証範囲を決めるため、起点が無いと full suite を回し直すことになる
 
 送信は Phase 2 Step 3 と同じく `umbrella-orchestrator/SKILL.md` §5「AI間送信手順
-（二段構え）」に従う（`$REVIEWER_AGENT` が `claude` で宛先セッションが解決できれば
-`SendMessage`、できなければ以下のフォールバック）:
+（二段構え）」に従う（自分が `SendMessage` を呼べる Claude Code セッションで、かつ
+`$REVIEWER_AGENT` が `claude` で宛先セッションが解決できれば `SendMessage`、
+どちらかを満たさなければ以下のフォールバック）:
 
 ```bash
 herdr pane run "$REVIEWER_PANE" "PR #$PR 再レビュー依頼。レビュー指示: $REVIEW_REQUEST 全指摘に対応コメント書きました。前回レビュー対象: $HEAD_SHA → 現HEAD: $NEW_HEAD_SHA"
@@ -1032,9 +1038,9 @@ herdr pane run "$REVIEWER_PANE" "PR #$PR 再レビュー依頼。レビュー指
    **ラウンドの合間にエージェントが終了していることがあり**、そのまま `herdr pane run`
    を撃つとプロンプトがシェルへ流れて依頼が届かない。`idle` / `done` を確認してから送ること。
 
-5. 配信確認（Phase 2 Step 4と同様。`SendMessage` なら `agent_status` が `idle` から
-   動くことを確認、フォールバックなら `agent_status` が `working` にならなければ
-   `herdr pane send-keys "$REVIEWER_PANE" Enter`）。
+5. 配信確認（Phase 2 Step 4と同様。`SendMessage` なら送信直前に控えた `agent_status`
+   から変化したかを確認し、変化していなければ画面を目視、フォールバックなら
+   `agent_status` が `working` にならなければ `herdr pane send-keys "$REVIEWER_PANE" Enter`）。
 
 工程計測:
 

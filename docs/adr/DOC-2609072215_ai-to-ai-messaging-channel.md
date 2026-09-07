@@ -76,11 +76,14 @@ OpenCode のいずれのペインに対しても同じコードパスで動作�
 
 ### 2.2 橋渡しの手順
 
-送信元が次の3ステップで宛先を解決する。
+送信元が次の4ステップで宛先を解決する。
 
 ```
-1. herdr pane list（または対象1件なら herdr pane get）で対象ペインの
-   agent が "claude" か確認する。"claude" でなければ即座にフォールバックへ落ちる。
+1. 判別（送信元・送信先の両方）。
+   - 送信元: 自分が SendMessage を呼べる Claude Code セッションか。呼べなければ
+     即座にフォールバックへ落ちる。
+   - 送信先: herdr pane list（または対象1件なら herdr pane get）で対象ペインの
+     agent が "claude" か確認する。"claude" でなければ即座にフォールバックへ落ちる。
 
 2. agent_session.value（UUID）を取り出し、~/.claude/sessions/*.json を
    走査してその UUID を sessionId に持つレコードを探し、name を取得する。
@@ -90,15 +93,19 @@ OpenCode のいずれのペインに対しても同じコードパスで動作�
 3. SendMessage({ to: <name>, message: <計画書やレビュー指示の絶対パスと
    セクション名。プロンプト全文は送らない> }) で送信する。
 
-4. herdr pane get <pane-id> の agent_status が idle から動く
-  （working または done へ遷移する）ことを確認する。動かなければ
-  フォールバック（herdr pane run + send-keys Enter）に切り替える。
+4. 送信直前の agent_status を控えておき、送信後に herdr pane get <pane-id> で
+   再取得して変化したか（idle → working/done、working → done 等）を確認する。
+   変化していなければ（特に送信前がすでに done だった場合）herdr pane read で
+   画面を目視し、新しい応答が出ているかで判断する。動いていなければ
+   フォールバック（herdr pane run + send-keys Enter）に切り替える。
 ```
 
 **フォールバック（従来手順）**: `herdr pane run <pane-id> "<本文>"` → 送信後
 `herdr pane get <pane-id>` で `agent_status` を確認 → `idle` のままなら
 `herdr pane send-keys <pane-id> Enter` → 再確認、を `working` になるまで繰り返す。
-同じ本文を `herdr pane run` で再送しない（プロンプト欄に2重に積まれる）。
+それでも `working` にならない場合は `herdr pane read` で画面を確認する（無人ペインは
+`working` を経ず直接 `done` になりうるため、上記ステップ4と同じ扱い）。同じ本文を
+`herdr pane run` で再送しない（プロンプト欄に2重に積まれる）。
 
 この手順の正典は `skills/umbrella-orchestrator/SKILL.md` の
 「AI間送信手順（二段構え）」節に置き、`skills/pr-review-loop/SKILL.md` はそこを参照する
