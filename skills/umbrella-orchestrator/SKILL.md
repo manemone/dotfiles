@@ -234,7 +234,8 @@ ok = m and (latest_sha.startswith(m.group(1)) or m.group(1).startswith(latest_sh
       **ただし別の傘のブリーフ送信では、2回中2回とも Enter が届いた**（`herdr pane run`
       直後の `herdr pane get` で両方とも `agent_status: working` に遷移しており
       `send-keys Enter` は不要だった。約200文字・改行なしの日本語1行、実測日
-      2026-09-07。詳細は ADR [DOC-2609072215](../../docs/adr/DOC-2609072215_ai-to-ai-messaging-channel.md) §5）。
+      2026-09-07。詳細はADR DOC-2609072215 §5。このADRは dotfiles リポジトリの
+      `docs/adr/` 配下にあり、配布された本スキル単体からは参照できない）。
       **どちらも実際に起きたことであり、一方が既定でもう一方が例外とは言い切れない。**
       条件差（本文長・改行の有無・送信先の状態）は切り分けられていないため、
       「届かないことがある」という前提で、**送信後は必ず `agent_status` を確認する**
@@ -612,8 +613,8 @@ test "${HERDR_ENV:-}" = 1
 
 司令官が実装AI・レビューAIへ指示を送るときの正典手順。**`skills/pr-review-loop/SKILL.md`
 （Phase 2 Step 3・Phase 6 Step 4）はこの節を参照する。全文をコピーしない。**
-背景・実測・却下案は ADR [DOC-2609072215](../../docs/adr/DOC-2609072215_ai-to-ai-messaging-channel.md)
-を参照。
+背景・実測・却下案はADR DOC-2609072215を参照。このADRは dotfiles リポジトリの
+`docs/adr/` 配下にあり、配布された本スキル単体からは参照できない。
 
 **相手が Claude Code だと判別できるときは `SendMessage`、そうでなければ従来の
 `herdr pane run` + `send-keys Enter` へ落ちる。**`SendMessage` はキーストローク注入
@@ -644,6 +645,15 @@ herdr pane get <pane-id>
 `~/.claude/sessions/*.json` を走査してその UUID を `sessionId` に持つレコードを探し、
 `name`（`SendMessage` の宛先）を得る。
 
+**`status` フィールドはレコードが生きているかどうかを示さない。** 実測
+（2026-09-07、本セッション上の索引893レコード）では、845レコードがすでに終了した
+`pid` を指しており、そのうち複数レコードで同じ `sessionId` が重複していた（重複の
+大半で `name` が別々）。`status` だけで足切りすると、すでに終了した無関係なセッション
+（`SendMessage` の宛先を誤って解決してしまう）に一致しうる。**レコードの `pid` を
+実際に `kill -0` 相当で存命確認し、存命レコードがちょうど1件のときだけ採用する。**
+0件（存命レコードなし）でも2件以上（`sessionId` が存命セッション間で衝突しており
+どれが正しいか判別できない）でも、推測せずフォールバックへ落ちる。
+
 ```bash
 UUID=$(herdr pane get <pane-id> | python3 -c "
 import json, sys
@@ -653,21 +663,35 @@ print((d.get('agent_session') or {}).get('value', ''))
 [ -n "$UUID" ] && python3 -c "
 import json, glob, os, sys
 uuid = '$UUID'
+matches = []
 for path in glob.glob(os.path.expanduser('~/.claude/sessions/*.json')):
     try:
         with open(path) as f:
             rec = json.load(f)
     except Exception:
         continue
-    if rec.get('sessionId') == uuid and rec.get('status'):
-        print(rec.get('name', ''))
-        sys.exit(0)
+    if rec.get('sessionId') != uuid:
+        continue
+    pid = rec.get('pid')
+    if not pid:
+        continue
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        continue
+    except OSError:
+        pass
+    matches.append(rec)
+if len(matches) == 1:
+    print(matches[0].get('name', ''))
 "
 ```
 
-**該当レコードが無い／ファイルが読めない／`status` が生きたセッションを示していない
-場合は、フォールバックへ落ちる。** 黙って失敗しない（`~/.claude/sessions/` は
-Claude Code の内部実装であり公開インターフェースではないため。ADR 上記 §4「既知のリスク」）。
+**該当レコードが無い／ファイルが読めない／存命レコードが0件または2件以上
+（一意に決まらない）場合は、フォールバックへ落ちる。** 黙って失敗しない
+（`~/.claude/sessions/` は Claude Code の内部実装であり公開インターフェースでは
+ないため。ADR 上記 §4「既知のリスク」）。`os.kill(pid, 0)` は `ProcessLookupError`
+なら死亡、`PermissionError`（プロセスは存在するが権限がない）なら存命として扱う。
 
 #### 3. 送信
 
