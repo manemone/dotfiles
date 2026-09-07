@@ -237,7 +237,7 @@ uninstall を行い、symlink・既存ファイルの退避・冪等性・
 `claude/settings.json` の実ファイル生成に加えて、世代の作成と GC・
 ソースツリー消失耐性・編集分離・`--rollback`・`--dev`・
 配布実体（世代 + `current`）の後片付けを検証する（既定の対象は
-`bin,claude,skills`。デプロイの検証は必ずこのサンドボックス経由で行い、
+`bin,claude,skills,codex,opencode`。デプロイの検証は必ずこのサンドボックス経由で行い、
 人間の実 `$HOME` に対して直接実行しない。詳細は
 [docs/design/DOC-2608020715-b_テスト方針.md](docs/design/DOC-2608020715-b_テスト方針.md)
 を参照）。

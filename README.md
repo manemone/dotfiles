@@ -286,6 +286,8 @@ See each tool's README for detailed configuration and troubleshooting:
 - [bin/README.md](bin/README.md) — CLI tools (ocw worktree manager, claude-ds DeepSeek wrapper, ocw-meter observability)
 - [claude/README.md](claude/README.md) — Claude Code config, machine-specific customization
 - [skills/README.md](skills/README.md) — AI agent skills and how they reach Claude Code, Codex and OpenCode
+- [codex/README.md](codex/README.md) — Codex CLI global instructions (symlinked from claude/CLAUDE.md)
+- [opencode/README.md](opencode/README.md) — OpenCode global instructions (symlinked from claude/CLAUDE.md)
 - [zsh/README.md](zsh/README.md) — shell setup, plugin management, aliases, version managers
 - [nvim/README.md](nvim/README.md) — editor setup, LSP servers, keybindings, plugins
 - [tmux/README.md](tmux/README.md) — multiplexer setup, Vim-style keybindings, clipboard
