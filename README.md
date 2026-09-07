@@ -158,6 +158,7 @@ for details. `bin/` changes should additionally be verified with
 │   ├── umbrella-handoff/      # Consultation-to-commander handoff automation
 │   ├── repo-baseline/         # Applying the repo-baseline copier template
 │   ├── ocw/                   # Points AI agents to `ocw help <topic>` instead of reading bin/ocw
+│   ├── worktree-cleanup/      # Scope-aware worktree cleanup with human approval before deletion
 │   ├── deploy.sh              # skills deployment script (all agents, auto-detected)
 │   └── README.md
 ├── codex/
