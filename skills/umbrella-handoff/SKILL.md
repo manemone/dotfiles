@@ -111,16 +111,18 @@ git worktree list | grep "\[<傘ブランチ名>\]"
 配下には置かない（DOC-ID 採番の対象と誤認されるのを避けるため。§3 のテンプレート冒頭で
 「一時ファイルである」ことは既に明示している）。
 
-書き込んだら、そのワークツリーの `.gitignore` に `/.umbrella-handoff-brief.md` を追記する
-（無ければ追加してよい）。追記しないと `git status --porcelain` が非空のままになり、
-傘の作業が終わって `ocw rm` で傘ワークツリーを撤去するときに「uncommitted or untracked
-changes」で失敗する。追記自体は他ファイルを変更しない独立した1行差分なので、commander の
-最初のコミットに含めてよい。
+書き込んだら、次のコマンドでそのワークツリー用の除外リストへ登録する（`.gitignore` は
+使わない。トラック済みファイルなので変更がコミットされない限り `git status --porcelain`
+から消えず、コミットすれば逆に傘のテーマと無関係な1行が最終PRへ紛れ込む。`info/exclude`
+はトラック対象外・コミット対象外で、リンクされたワークツリーからでも効く）:
+
+```bash
+echo '/.umbrella-handoff-brief.md' >> "$(git rev-parse --git-common-dir)/info/exclude"
+```
 
 commander には**絶対パス**で渡す（§6）。**commander が計画書への転記を終えたら、この
-ファイルを削除することを§6の引き継ぎ文に含める（省略しない）。** `.gitignore` に加えても
-untracked のまま傘の寿命いっぱい残ると、ブリーフに含まれる人間の逐語発言が `git add -A`
-などで誤ってコミットされうるため、削除は必須の後片付けとして扱う。
+ファイルを削除することを§6の引き継ぎ文に含める（省略しない）。** 削除されるまでの間も
+`info/exclude` により `git status --porcelain` には出ないため、`ocw rm` を塞がない。
 
 ## 5. 傘ブランチとワークスペースの作成
 
