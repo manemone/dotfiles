@@ -1846,5 +1846,120 @@ class HerdrSetupRollbackTests(HerdrOcwTestCase):
         self.assertFalse(any("commander" in arg for call in calls for arg in call))
 
 
+class HelpTopicTests(unittest.TestCase):
+    """`ocw help <topic>` hierarchy (docs/planning/DOC-2609072210_ocw-usage-
+    discovery_計画.md 孫1 prompt). The plan calls out one regression by name:
+    a topic advertised in usage()'s `topics:` section that can't actually be
+    dispatched, or a dispatchable topic missing from that section. Every test
+    here drives `ocw` as a real subprocess against a throwaway cwd -- no
+    OcwTestCase repo fixture is needed since `ocw help` must work with or
+    without a git repository present (see test_help_works_outside_a_git_repository)."""
+
+    EXPECTED_TOPICS = {"config", "naming", "rm", "herdr", "meter", "env"}
+
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+
+    def tearDown(self):
+        self.tmpdir.cleanup()
+
+    def advertised_topics(self, stdout):
+        topics = set()
+        in_topics = False
+        for line in stdout.splitlines():
+            if line.strip() == "topics:":
+                in_topics = True
+                continue
+            if not in_topics:
+                continue
+            stripped = line.strip()
+            if not stripped:
+                break
+            topics.add(stripped.split()[0])
+        return topics
+
+    def test_bare_help_contains_synopsis_and_full_topic_list(self):
+        result = run_ocw(["help"], self.tmpdir.name)
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("usage:", result.stdout)
+        self.assertLessEqual(
+            len(result.stdout.encode("utf-8")),
+            2048,
+            "`ocw help` output must stay under 2 KB (計画書「呼び出し規約」)",
+        )
+        self.assertEqual(self.advertised_topics(result.stdout), self.EXPECTED_TOPICS)
+
+    def test_dash_h_and_dash_dash_help_match_bare_help(self):
+        bare = run_ocw(["help"], self.tmpdir.name).stdout
+        self.assertEqual(run_ocw(["-h"], self.tmpdir.name).stdout, bare)
+        self.assertEqual(run_ocw(["--help"], self.tmpdir.name).stdout, bare)
+
+    def test_every_advertised_topic_is_dispatchable(self):
+        # Derived from the actual `topics:` section, not EXPECTED_TOPICS --
+        # this is what pins "listed but not dispatchable" specifically.
+        topics = self.advertised_topics(run_ocw(["help"], self.tmpdir.name).stdout)
+        self.assertTrue(topics, "topics: section was empty or unparsable")
+
+        for topic in topics:
+            with self.subTest(topic=topic):
+                result = run_ocw(["help", topic], self.tmpdir.name)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn(f"topic: {topic}", result.stdout)
+
+    def test_help_topic_via_dash_h_and_dash_dash_help(self):
+        for flag in ("-h", "--help"):
+            with self.subTest(flag=flag):
+                result = run_ocw([flag, "env"], self.tmpdir.name)
+                self.assertEqual(result.returncode, 0)
+                self.assertIn("topic: env", result.stdout)
+
+    def test_unknown_topic_dies_listing_exactly_the_valid_topics(self):
+        result = run_ocw(["help", "bogus-topic"], self.tmpdir.name)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("unknown help topic", result.stderr)
+
+        listed = {
+            line.strip()
+            for line in result.stderr.splitlines()
+            if line.strip() and "unknown help topic" not in line and line.strip() != "valid topics:"
+        }
+        self.assertEqual(listed, self.EXPECTED_TOPICS)
+
+    def test_topic_with_extra_argument_dies(self):
+        result = run_ocw(["help", "config", "extra"], self.tmpdir.name)
+        self.assertNotEqual(result.returncode, 0)
+
+    def test_help_all_concatenates_every_topic(self):
+        result = run_ocw(["help", "all"], self.tmpdir.name)
+        self.assertEqual(result.returncode, 0)
+        for topic in self.EXPECTED_TOPICS:
+            with self.subTest(topic=topic):
+                self.assertIn(f"topic: {topic}", result.stdout)
+
+    def test_help_works_outside_a_git_repository(self):
+        # self.tmpdir is deliberately never `git init`'d -- help must not
+        # route through init_repo_context().
+        for args in (["help"], ["help", "config"], ["help", "all"], ["-h"], ["--help"]):
+            with self.subTest(args=args):
+                result = run_ocw(args, self.tmpdir.name)
+                self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_help_does_not_create_worktrees_or_emit_meter_events(self):
+        repo_root = make_repo(self.tmpdir.name)
+        meter_home = pathlib.Path(self.tmpdir.name) / "ocw-meter-home"
+        before = set(repo_root.parent.iterdir())
+
+        result = run_ocw(
+            ["help", "all"],
+            repo_root,
+            meter_on_path=True,
+            meter_home=meter_home,
+        )
+
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(set(repo_root.parent.iterdir()), before)
+        self.assertEqual(read_events(meter_home), [])
+
+
 if __name__ == "__main__":
     unittest.main()

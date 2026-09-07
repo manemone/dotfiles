@@ -38,6 +38,8 @@ usage:
   ocw rm <worktree-name>
   ocw rm -f <worktree-name>
   ocw ls
+  ocw help [topic]
+  ocw help all
 
 create behavior:
   default
@@ -66,17 +68,367 @@ examples:
   ocw rm -f failed-experiment
   ocw ls
 
-environment:
-  OCW_COMMANDER_COMMAND
-    default: claude
-    unused when --no-commander is given
+environment variables: see `ocw help env`
 
-  OCW_IMPLEMENTER_COMMAND
-    default: claude
-
-  OCW_REVIEWER_COMMAND
-    default: claude
+topics:
 USAGE
+
+  local topic=""
+
+  for topic in $HELP_TOPICS; do
+    printf '  %-8s %s\n' "$topic" "$(help_topic_description "$topic")"
+  done
+
+  cat <<'USAGE'
+
+  ocw help <topic>   show one topic in full
+  ocw help all       show every topic, concatenated
+USAGE
+}
+
+# Single source of truth for which topics exist, in display order. The case
+# dispatch in show_help_topic() below must define exactly one
+# help_topic_<name>() per word here -- bin/tests/test_ocw.py pins this
+# (topics advertised in usage()'s topics: section must all be dispatchable,
+# and vice versa).
+HELP_TOPICS="config naming rm herdr meter env"
+
+help_topic_description() {
+  case "$1" in
+    config) printf '%s\n' "where worktrees are created; git config ocw.* keys" ;;
+    naming) printf '%s\n' "how input becomes a branch/directory name" ;;
+    rm) printf '%s\n' "what 'ocw rm' deletes and how merged-ness is decided" ;;
+    herdr) printf '%s\n' "-H/--herdr pane layout and roles" ;;
+    meter) printf '%s\n' "ocw-meter integration (run_id, OCW_RUN_ID)" ;;
+    env) printf '%s\n' "environment variables ocw reads and sets" ;;
+  esac
+}
+
+help_topic_config() {
+  cat <<'TOPIC'
+topic: config
+
+Where worktrees are created, and the ocw.* git config keys that control it.
+
+Resolution order for the worktree path: read ocw.worktreeDir via
+`git config --get` (falls back to '{repo_parent}/{name}' if unset), expand
+its placeholders, then validate the result before ever touching disk.
+
+placeholders (an unknown {word} is rejected outright -- a typo like
+{rep_root} would otherwise become a literal directory name):
+  {repo_root}    path of the main worktree (bare repo: the bare repo itself)
+  {repo_parent}  dirname({repo_root})
+  {repo}         resolved repo_name (see below)
+  {name}         the (possibly '/'-nested) branch/slug -- see `ocw help naming`
+
+A leading '~' in ocw.worktreeDir expands to $HOME.
+
+ocw dies before creating anything if the template:
+  - contains an unknown {placeholder}
+  - does not contain {name}
+  - has no '/' right before {name} (no cleanup boundary can be derived)
+  - would make the cleanup boundary the filesystem root (e.g. "/{name}")
+  - does not expand to an absolute path
+
+cleanup boundary: the path up to (not including) the last '/' before
+{name}. `ocw rm` rmdir's now-empty parent directories up to, but never
+past, this boundary. A sibling worktree under the same parent naturally
+stops the climb (rmdir fails on a non-empty directory).
+
+  template                                     cleanup boundary
+  {repo_parent}/{name}                         {repo_parent}          (default)
+  {repo_root}/.worktrees/{name}                {repo_root}/.worktrees (hide inside repo)
+  ~/.cache/ocw/{repo}/{name}                   ~/.cache/ocw/{repo}    (central pool)
+
+set with: git config ocw.worktreeDir '<template>'
+
+repo_name ({repo}) resolution order:
+  1. ocw.repoName, if set
+  2. basename(remote.origin.url) with a trailing .git stripped
+  3. path guess: bare repo -> basename(repo_root) minus .git;
+     basename(repo_root) in {main,master,trunk} -> basename(repo_parent);
+     otherwise -> basename(repo_root)
+
+other ocw.* keys:
+  ocw.mergedInto        highest-priority integration ref for `ocw rm`'s
+                         merge check -- see `ocw help rm`
+  ocw.githubMergeCheck  bool, default false -- see `ocw help rm`
+
+All 4 keys are read via the normal git config layering (local > global >
+system); set in a repo's .git/config for that repo only, or in
+~/.gitconfig as a personal default across repos.
+TOPIC
+}
+
+help_topic_naming() {
+  cat <<'TOPIC'
+topic: naming
+
+How the name you type becomes a branch name and a worktree directory.
+
+1. normalize (lowercase; collapse any run of characters outside
+   [a-z0-9._/-] to a single '-'; collapse repeated '/' to one; trim
+   leading/trailing '/' and '-'). '/' is preserved, not folded into '-',
+   so a branch namespace like 'feature/foo' survives intact.
+
+   This alone turns several "obviously invalid" inputs into valid ones
+   instead of rejecting them:
+     Fix The Thing   -> fix-the-thing
+     feature//foo    -> feature/foo
+     HEAD            -> head
+     -x              -> x
+
+2. if normalization empties the string (input was pure punctuation), ocw
+   dies: "worktree name became empty".
+
+3. validate what's left with `git check-ref-format --branch` -- ocw defers
+   to git's own ref-name rules instead of reimplementing them. This is
+   what catches inputs normalization can't fix, such as a trailing
+   '.lock' or a '..' path segment (git's own fatal: message is included
+   in the die). This check is also the sole defense against path
+   traversal, since the validated name is later embedded directly into
+   the worktree path.
+
+No 'ai/' prefix is ever added. The branch name is exactly the normalized
+input; there is no prefix-only config key. Want a prefix? Type it:
+'ocw ai/foo'.
+
+directory nesting: the worktree directory mirrors the branch's '/'
+hierarchy under ocw.worktreeDir's expansion (see `ocw help config`) --
+'feature/foo' lands at '<expanded>/feature/foo'. `git worktree add`
+creates the missing parent directories itself. Because git refuses a
+branch name that collides with another branch's directory/file shape
+(e.g. 'feature' and 'feature/foo' cannot coexist), two ocw-managed
+worktrees can never nest inside each other. A collision with a directory
+ocw doesn't manage is still possible; ocw refuses with "worktree dir
+already exists: <path>" in that case.
+
+migration: a worktree still on a legacy 'ai/foo' branch (created before
+the 'ai/' prefix was dropped) can still be removed with 'ocw rm foo' (no
+prefix) -- see stage 3 of `ocw help rm`'s resolution rules.
+TOPIC
+}
+
+help_topic_rm() {
+  cat <<'TOPIC'
+topic: rm
+
+What `ocw rm <input>` deletes, and how "merged" is decided.
+
+resolution (input matched literally, NOT normalized -- you're naming
+something that already exists): built from `git worktree list
+--porcelain` entries (the main worktree and any `bare` entry are never
+candidates), tried in 3 stages, first non-empty stage wins:
+  1. exact branch name / exact absolute path / path relative to the
+     cleanup boundary (see `ocw help config`)
+  2. worktree directory's basename
+  3. branch name ends with "/<input>" (rescues pre-migration 'ai/*'
+     branches)
+
+  no worktree found matching '<input>'
+    none of the 3 stages produced a hit.
+  '<input>' matches multiple worktrees: ...
+    more than one hit within the same stage. ocw never auto-picks; type a
+    more specific name (a full branch name or path) from the candidates
+    listed on stderr.
+
+merge check (its verdict decides both the rejection below and run.end's
+outcome -- see `ocw help meter` -- and always runs, even under -f):
+candidate integration refs are collected in this order, each resolved to
+a commit or silently skipped (as is any duplicate of a commit an earlier
+candidate already resolved to):
+  1. ocw.mergedInto (git config)
+  2. the branch's own creation-time base-ref (persisted at create time,
+     read back from the worktree's git dir) -- this is what makes `ocw
+     rm` work against an umbrella branch instead of only `main`
+  3. bare repo: `git symbolic-ref --short HEAD`; else: repo_root's HEAD
+  4. `git symbolic-ref --short refs/remotes/origin/HEAD`
+
+  cannot determine an integration ref to check '<branch>' against; set
+  ocw.mergedInto or use -f
+    none of the 4 candidates resolved to a real commit.
+
+Each candidate is tested, in order, until one says "merged":
+  a. `git merge-base --is-ancestor <branch> <candidate>` (normal ancestry)
+  b. squash-merge detection (commit-tree + `git cherry` patch-id
+     comparison) -- catches GitHub-style squash merges that leave no
+     ancestry trace
+  c. only after EVERY candidate fails both a and b, and only once (not
+     per-candidate): if ocw.githubMergeCheck is true (default false) and
+     `gh` is on PATH, `gh pr list --head <branch> --state merged`. Any
+     `gh` failure (auth, network, no such remote) means "couldn't tell",
+     never a reason to abort.
+
+  branch is not merged into any known integration ref: <branch>
+    every candidate failed a, b, and (if enabled) c. Merge it first, set
+    ocw.mergedInto to the right integration branch, or use -f.
+  detached worktree has no branch to check for a merge; use -f: <name>
+    the worktree has no branch (detached HEAD) -- there is nothing to
+    check merge status of.
+
+known blind spot: if a squash-merged branch's diff no longer matches (the
+integration side was later rebased/amended, or a conflict was resolved
+during the merge), squash detection misses it too -- -f is required even
+though the branch really is merged.
+
+  worktree has uncommitted or untracked changes: <path>
+    `git status --porcelain` is non-empty. Commit, stash, or use -f.
+  do not remove the current worktree
+    you're standing inside the worktree you asked to remove; cd elsewhere
+    first (ocw prints the exact `cd` + `ocw rm` to run).
+
+-f/--force skips the two rejections above (uncommitted changes, unmerged);
+the merge check itself still always runs.
+
+on success, in order: closes any Herdr workspace whose cwd matches; `git
+worktree remove` ('--force' under -f); force-deletes the branch (`branch
+-D`, since the checks above already covered what `-d`'s own weaker check
+would ask); rmdir's now-empty parent dirs up to the cleanup boundary
+(`ocw help config`); emits run.end if a run_id was found.
+TOPIC
+}
+
+help_topic_herdr() {
+  cat <<'TOPIC'
+topic: herdr
+
+`-H`/`--herdr` pane layout, and `--no-commander`.
+
+Default (-H alone): 3 panes in one Herdr workspace, left to right --
+commander, implementer, reviewer. Each pane is started with `herdr pane
+run <pane> "$<ROLE>_COMMAND"` once the workspace/panes/env are all set up;
+the workspace is refocused at the end.
+
+--no-commander: 2 panes only -- implementer, reviewer. Requires -H (used
+without it, ocw dies: "--no-commander requires -H/--herdr"); on `ocw
+ls`/`ocw rm` it's accepted and silently ignored, exactly like -H is. The
+root pane is created as implementer directly rather than being created as
+commander and then torn down -- no commander `claude` process is ever
+started, and OCW_COMMANDER_COMMAND is not read in this mode.
+
+commands run per pane come from environment variables -- see `ocw help
+env` for OCW_COMMANDER_COMMAND / OCW_IMPLEMENTER_COMMAND /
+OCW_REVIEWER_COMMAND.
+
+each pane is started with OCW_ROLE set to its role name (commander /
+implementer / reviewer -- an implementer-as-root pane under
+--no-commander still gets OCW_ROLE=implementer, never commander) and
+OCW_RUN_ID set to the run's id -- see `ocw help meter`. Panes are also
+renamed to match their role, and the tab is renamed "agents".
+
+workspace label: "<repo_name> :: <slug>" (':: ', not '/' -- the slug can
+itself contain '/', which would make the repo/slug boundary ambiguous
+with a plain '/' separator).
+
+on any setup failure, ocw rolls back: closes the Herdr workspace (if one
+was created), force-removes the worktree, deletes the branch, and (if a
+run_id had been generated) emits run.end with outcome=failure -- then
+exits non-zero.
+
+requires a running Herdr server (`herdr status server`); if none is
+reachable, ocw dies before creating anything: "Herdr server is not
+running. Start or attach first with: herdr".
+TOPIC
+}
+
+help_topic_meter() {
+  cat <<'TOPIC'
+topic: meter
+
+Integration with `ocw-meter` (LLM cost / usage observability). Always
+fail-open: everything here is a no-op, never a hard failure, if
+ocw-meter is absent from PATH or fails internally.
+
+on create: a run_id is generated (`<epoch>-<hex><hex>`), printed as a
+`run:` line, and persisted to `ocw-run-id` inside the new worktree's
+private git metadata dir (found via `git -C <worktree> rev-parse
+--absolute-git-dir` -- NOT literally "<worktree>/.git/", which in a
+linked worktree is a file, not a directory). The resolved base-ref is
+persisted alongside it as `ocw-base-ref`, which `ocw rm`'s merge check
+reads back as candidate #2 -- see `ocw help rm`. `ocw-meter event
+run.start` is then emitted with the base-ref and the full original
+invocation.
+
+on remove: if `ocw-run-id` is still readable, that run_id is used to emit
+`ocw-meter event run.end --outcome <success|failure>`, where the outcome
+follows the merge-check verdict (`ocw help rm`), not whether -f was
+passed.
+
+OCW_RUN_ID propagation: in Herdr mode, every pane already gets
+OCW_RUN_ID set automatically via `herdr ... --env` (see `ocw help
+herdr`) -- no action needed. In the default (non-Herdr, VS Code) mode,
+nothing sets OCW_RUN_ID for you; export it manually inside the worktree
+if you want ocw-meter events from that shell tied to the run:
+
+  export OCW_RUN_ID="$(cat "$(git rev-parse --absolute-git-dir)/ocw-run-id" 2>/dev/null)"
+
+run.end is not always recorded: `ocw rm` has several die/exit paths (no
+resolvable target, ambiguous match, the target is the current worktree,
+`git worktree remove` itself failing, ...) that stop before run.end
+would be emitted, and -f only bypasses the merge/uncommitted-changes
+rejections, not those other paths.
+TOPIC
+}
+
+help_topic_env() {
+  cat <<'TOPIC'
+topic: env
+
+Environment variables ocw reads, and the ones it sets for you.
+
+read by ocw:
+  OCW_COMMANDER_COMMAND    default: claude
+                            command for the commander pane; unused under
+                            --no-commander
+  OCW_IMPLEMENTER_COMMAND  default: claude
+                            command for the implementer pane
+  OCW_REVIEWER_COMMAND     default: claude
+                            command for the reviewer pane
+  OCW_NO_VSCODE            unset by default
+                            any non-empty value skips launching VS Code
+                            in the default (non-Herdr) create mode --
+                            checked before even probing for the `code`
+                            CLI. Meant for scripts/automation/tests
+                            driving ocw non-interactively without a real
+                            VS Code or Herdr session to hand off to.
+
+set by ocw (Herdr panes only -- see `ocw help herdr`):
+  OCW_ROLE     commander / implementer / reviewer, per pane
+  OCW_RUN_ID   the run's id -- see `ocw help meter` for how to propagate
+               this manually outside Herdr mode
+TOPIC
+}
+
+show_help_topic() {
+  local topic="$1"
+
+  case "$topic" in
+    config) help_topic_config ;;
+    naming) help_topic_naming ;;
+    rm) help_topic_rm ;;
+    herdr) help_topic_herdr ;;
+    meter) help_topic_meter ;;
+    env) help_topic_env ;;
+    *)
+      {
+        echo "error: unknown help topic: ${topic}"
+        echo "valid topics:"
+        for topic in $HELP_TOPICS; do
+          echo "  ${topic}"
+        done
+      } >&2
+      exit 1
+      ;;
+  esac
+}
+
+help_all_topics() {
+  local topic=""
+
+  for topic in $HELP_TOPICS; do
+    show_help_topic "$topic"
+    echo
+  done
 }
 
 die() {
@@ -1508,7 +1860,22 @@ case "$cmd" in
     ;;
 
   help | -h | --help)
-    usage
+    shift
+
+    topic="${1:-}"
+
+    if [ -n "$topic" ]; then
+      shift
+
+      [ "$#" -eq 0 ] ||
+        die "too many arguments for help"
+    fi
+
+    case "$topic" in
+      "") usage ;;
+      all) help_all_topics ;;
+      *) show_help_topic "$topic" ;;
+    esac
     ;;
 
   *)
