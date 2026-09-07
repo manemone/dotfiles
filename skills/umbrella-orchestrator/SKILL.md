@@ -215,9 +215,12 @@ ok = m and (latest_sha.startswith(m.group(1)) or m.group(1).startswith(latest_sh
      全部できる（孫ワークスペースに commander ペーンは作らない。§5「ワークスペース階層」参照）
    - 出力の `workspace:` 行の ID に対して `herdr workspace rename` でラベルを日本語化する
      （書式・手順は §5「ワークスペースラベル」参照。**プロンプト送信より前**に行う）
-   - 起動した implementer ペーンにプロンプトを送信する
+   - 起動した implementer ペーンにプロンプトを送信する。**送信は §5「AI間送信手順
+     （二段構え）」に従う**（相手が Claude Code だと判別できれば `SendMessage`、
+     できなければ以下の `herdr pane run` 手順）
 
-   **⚠️ herdr pane run の最重要注意点（このルールを破ると毎回実装AIが動かない）**:
+   **⚠️ herdr pane run の最重要注意点（フォールバック経路。このルールを破ると
+   毎回実装AIが動かない）**:
 
    1. **プロンプト全文を打ち込まない。** 計画書の絶対パスとセクション名だけを伝える。
       `herdr pane run` は文字を1文字ずつターミナルに打ち込む。長文プロンプトは途中で止まり、
@@ -227,13 +230,22 @@ ok = m and (latest_sha.startswith(m.group(1)) or m.group(1).startswith(latest_sh
    3. **`herdr pane run` は本文だけ打ち込んで Enter を送らないことがある。送信後に必ず
       `herdr pane send-keys <pane-id> Enter` を撃つこと。**
       1つの傘で **8回送って8回とも** これだった（spawn 4回・復帰指示 4回）。
-      「たまに届かない」ではなく**届かないのが既定**だと思って手順に組み込む。
+
+      **ただし別の傘のブリーフ送信では、2回中2回とも Enter が届いた**（`herdr pane run`
+      直後の `herdr pane get` で両方とも `agent_status: working` に遷移しており
+      `send-keys Enter` は不要だった。約200文字・改行なしの日本語1行、実測日
+      2026-09-07。詳細はADR DOC-2609072215 §5。このADRは dotfiles リポジトリの
+      `docs/adr/` 配下にあり、配布された本スキル単体からは参照できない）。
+      **どちらも実際に起きたことであり、一方が既定でもう一方が例外とは言い切れない。**
+      条件差（本文長・改行の有無・送信先の状態）は切り分けられていないため、
+      「届かないことがある」という前提で、**送信後は必ず `agent_status` を確認する**
+      手順を省略しないこと（失敗時のコストが大きいため）。
 
       **herdr 自身の公式ドキュメント（`herdr` skill）は「`pane run` sends the text
-      and Enter together」（テキストとEnterをまとめて送る）と説明しており、この
-      実測とは食い違う。** 原因は特定できていない（herdr のバージョン差か、長文・
-      複数行プロンプト特有の条件かは不明）。ドキュメント通りに動くと信じて確認を
-      省略しないこと — このPRのレビュー往復自体でも、送信後に確認したところ
+      and Enter together」（テキストとEnterをまとめて送る）と説明しており、8回中8回
+      失敗した実測とは食い違う。** 原因は特定できていない（herdr のバージョン差か、
+      長文・複数行プロンプト特有の条件かは不明）。ドキュメント通りに動くと信じて
+      確認を省略しないこと — このPRのレビュー往復自体でも、送信後に確認したところ
       `idle` のままだったケースが複数回発生している（実測）。
 
       送信 → `herdr pane get <pane-id>` で `agent_status` を確認 → `idle` のままなら
@@ -431,25 +443,35 @@ ok = m and (latest_sha.startswith(m.group(1)) or m.group(1).startswith(latest_sh
 
 3. **implementer に最終PR作成プロンプトを送信**
    - implementer が `idle` または `done`（どちらも待機状態）であることを確認
-   - 以下の情報を含むプロンプトを `herdr pane run` で送信:
+   - **送信は §5「AI間送信手順（二段構え）」に従う**（自分が `SendMessage` を呼べる
+     Claude Code セッションで、かつ implementer の `agent` が `"claude"` で
+     `agent_session.value` から `~/.claude/sessions/` を引ければ `SendMessage`、
+     どちらかを満たさなければ以下の `herdr pane run` 手順）
+   - 以下の情報を含むプロンプトを送信:
      - base: `<ベースブランチ>`、head: `<傘ブランチ名>`（ベースブランチは傘ブランチが追跡するリモートブランチから判定。`main`/`master` 等リポジトリごとに異なる）
      - 変更概要（孫PR番号、変更ファイル数、テスト結果）
      - reviewer ペーン ID
      - PR説明文の作法（対象リポジトリの `docs/design/` にある「プルリクエストの作法」文書を
        参照させる指示。DOC-ID は対象リポジトリごとに異なるため、文書名で指示する）
 
-   **⚠️ プロンプトは短くする。** `herdr pane run` は文字を1文字ずつ打ち込むため、
-   長文プロンプトは途中で止まり届かない。要点だけを伝え、詳細は計画書を読ませる。
+   **⚠️ フォールバック（`herdr pane run`）ではプロンプトを短くする。** 文字を1文字ずつ
+   打ち込むため、長文プロンプトは途中で止まり届かない。要点だけを伝え、詳細は計画書を読ませる。
 
-   **推奨フォーマット**:
+   **推奨フォーマット（フォールバック時）**:
    ```
    herdr pane run <implementer-id> "最終PRを作成してください。base:<ベースブランチ> head:<傘ブランチ>。完了したらpr-review-loopを起動。reviewerは<reviewer-id>。計画書 docs/planning/DOC-XXXX_計画.md も参照。"
    ```
 
 4. **implementer の起動を確認**
 
-   §3.2 注意点3と同じ手順を踏む（本文とEnterは別送信。届いていないのは
-   大抵Enterだけで、本文自体は届いている）:
+   `SendMessage` 経路なら §5「AI間送信手順」#4（送信直前の状態からの変化を見る。
+   届いていなければフォールバックへ切り替える）に従う。**この implementer は
+   以前に作業を終えている可能性があり、フォーカスされていなければ `done` のまま
+   張り付く**（§3.5 の `/autopilot` 手順と同じ前提）ため、「`working` にならなければ
+   未達」という基準は使わない。
+
+   フォールバック経路（`herdr pane run`）なら §3.2 注意点3と同じ手順を踏む
+   （本文とEnterは別送信。届いていないのは大抵Enterだけで、本文自体は届いている）:
    ```bash
    herdr pane get <implementer-id>
    ```
@@ -586,6 +608,129 @@ main へのマージは人間が手動で行う。
 ```bash
 test "${HERDR_ENV:-}" = 1
 ```
+
+### AI間送信手順（二段構え）— 正典
+
+司令官が実装AI・レビューAIへ指示を送るときの正典手順。**`skills/pr-review-loop/SKILL.md`
+（Phase 2 Step 3・Phase 6 Step 4）はこの節を参照する。全文をコピーしない。**
+背景・実測・却下案はADR DOC-2609072215を参照。このADRは dotfiles リポジトリの
+`docs/adr/` 配下にあり、配布された本スキル単体からは参照できない。
+
+**相手が Claude Code だと判別できるときは `SendMessage`、そうでなければ従来の
+`herdr pane run` + `send-keys Enter` へ落ちる。**`SendMessage` はキーストローク注入
+ではないため、§3.2 注意点3「herdr pane run の最重要注意点」に挙げた3つの事故
+（Enterが飛ばない・長文が途中で止まる・再送で2重に積まれる）は原理的に起きない。
+
+#### 1. 判別
+
+**送信元（自分）**: 自分が `SendMessage` ツールを呼べる Claude Code セッションか。
+`SendMessage` は Claude Code 専用の機能であり、司令官・実装AI・レビューAI自身が
+Codex や OpenCode で動いている場合は呼び出せない。**呼べなければ、受信先が
+`claude` であっても即座にフォールバックへ落ちる。**
+
+**送信先**:
+
+```bash
+herdr pane get <pane-id>
+```
+
+の `agent` が `"claude"` かを見る。`"claude"` でなければ即座にフォールバックへ落ちる。
+
+**両方（送信元が `SendMessage` を呼べる・送信先の `agent` が `"claude"`）を満たした
+ときだけ次のステップへ進む。**
+
+#### 2. 宛先の解決
+
+`agent_session.value`（Claude Code のセッションUUID）を取り出し、
+`~/.claude/sessions/*.json` を走査してその UUID を `sessionId` に持つレコードを探し、
+`name`（`SendMessage` の宛先）を得る。
+
+**`status` フィールドはレコードが生きているかどうかを示さない。** 実測
+（2026-09-07、本セッション上の索引893レコード）では、845レコードがすでに終了した
+`pid` を指しており、そのうち複数レコードで同じ `sessionId` が重複していた（重複の
+大半で `name` が別々）。`status` だけで足切りすると、すでに終了した無関係なセッション
+（`SendMessage` の宛先を誤って解決してしまう）に一致しうる。**レコードの `pid` を
+実際に `kill -0` 相当で存命確認し、存命レコードがちょうど1件のときだけ採用する。**
+0件（存命レコードなし）でも2件以上（`sessionId` が存命セッション間で衝突しており
+どれが正しいか判別できない）でも、推測せずフォールバックへ落ちる。
+
+```bash
+UUID=$(herdr pane get <pane-id> | python3 -c "
+import json, sys
+d = json.load(sys.stdin)['result']['pane']
+print((d.get('agent_session') or {}).get('value', ''))
+")
+[ -n "$UUID" ] && python3 -c "
+import json, glob, os, sys
+uuid = '$UUID'
+matches = []
+for path in glob.glob(os.path.expanduser('~/.claude/sessions/*.json')):
+    try:
+        with open(path) as f:
+            rec = json.load(f)
+    except Exception:
+        continue
+    if rec.get('sessionId') != uuid:
+        continue
+    pid = rec.get('pid')
+    if not pid:
+        continue
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        continue
+    except OSError:
+        pass
+    matches.append(rec)
+if len(matches) == 1:
+    print(matches[0].get('name', ''))
+"
+```
+
+**該当レコードが無い／ファイルが読めない／存命レコードが0件または2件以上
+（一意に決まらない）場合は、フォールバックへ落ちる。** 黙って失敗しない
+（`~/.claude/sessions/` は Claude Code の内部実装であり公開インターフェースでは
+ないため。ADR 上記 §4「既知のリスク」）。`os.kill(pid, 0)` は `ProcessLookupError`
+なら死亡、`PermissionError`（プロセスは存在するが権限がない）なら存命として扱う。
+
+#### 3. 送信
+
+```
+SendMessage({ to: <name>, message: "<計画書/レビュー指示の絶対パスとセクション名>" })
+```
+
+**送る内容の方針は従来と同じ**: 計画書・レビュー指示ファイルの絶対パスとセクション名だけを
+渡し、プロンプト全文を打ち込まない。「〜とだけ返事してください」のようなメタ指示も
+付けない（受け手がそれを実行して返事だけして停止する）。
+
+#### 4. 到達確認
+
+送信**直前**に `herdr pane get <pane-id>` で `agent_status` を控えておく（`$PRE_STATUS`）。
+送信後、再度
+
+```bash
+herdr pane get <pane-id>
+```
+
+を叩き、`agent_status` が `$PRE_STATUS` から変化していること（例: `idle` → `working` /
+`done`、`working` → `done`）を確認する。**フォーカスされていないペインは完了時に
+`working` を経ず直接 `done` になりうる**（本節後述の「レビュー待ちデッドロック」参照）ため、
+`working` を必須条件にしない。
+
+**変化していない場合は、状態だけでは届いたかどうか判別できない。** 特に送信前が
+すでに `done`（前ラウンドの完了結果が未読のまま残っている状態）だったケースがこれに
+当たる。`herdr pane read <pane-id> --source recent-unwrapped --lines 10` で画面を
+目視し、新しい応答が出ていれば到達成功、出ていなければフォールバックへ切り替える。
+
+#### フォールバック（従来手順）
+
+`herdr pane run <pane-id> "<本文>"` → 送信後 `herdr pane get <pane-id>` で
+`agent_status` を確認 → `idle` のままなら `herdr pane send-keys <pane-id> Enter` →
+再確認、を `working` になるまで繰り返す。**それでも `working` にならない場合は
+`herdr pane read <pane-id> --source detection --lines 3` で画面を確認する**
+（無人ペインは `working` を経ず直接 `done` になりうるため。上記「4. 到達確認」と
+同じ扱い）。**同じ本文を `herdr pane run` で再送しない**（プロンプト欄に2重に積まれる）。
+手順の詳細と実測は §3.2 注意点3「herdr pane run の最重要注意点」を参照。
 
 ### ワークスペース階層（最重要）
 
@@ -735,9 +880,16 @@ finalize のフローを止める理由にならない。
 2. 出力から `workspace:` 行の ID を拾い、`herdr workspace rename` で日本語ラベルへ
    改名する（§5「ワークスペースラベル」参照。失敗しても警告のみで続行）
 3. 出力から `implementer:` 行の pane ID を拾う
-4. `herdr pane run <implementer-id> "<prompt>"` でプロンプト送信
-5. `herdr pane get <implementer-id>` で `agent_status` を確認し、`idle` のままなら
-   `herdr pane send-keys <implementer-id> Enter` を撃って再確認する（§3.2 注意点3）
+4. **「AI間送信手順（二段構え）」に従ってプロンプト送信する**:
+   - 自分が `SendMessage` を呼べる Claude Code セッションで、かつ implementer の
+     `agent` が `"claude"` で `agent_session.value` から `~/.claude/sessions/` を
+     引けたら `SendMessage({ to: <name>, message: "<prompt>" })`
+   - それ以外は `herdr pane run <implementer-id> "<prompt>"`（フォールバック）
+5. 到達確認: `SendMessage` 経路なら§5「AI間送信手順」#4（送信直前の状態からの変化を見る）
+   に従う。動いていなければフォールバック（`herdr pane run` + `send-keys Enter`）へ
+   切り替える。フォールバック経路なら `herdr pane get <implementer-id>` で
+   `agent_status` を確認し、`idle` のままなら `herdr pane send-keys <implementer-id> Enter`
+   を撃って再確認する（§3.2 注意点3）
 6. 以上。reviewer は `/pr-review-loop` が勝手に使うので司令官は触らない
 
 ### 状態確認（`/check` から使う）
@@ -807,15 +959,19 @@ herdr pane read <implementer-id> --source recent-unwrapped --lines 20
 ```
 
 `herdr wait agent-status` が走っている、または「通知を待ちます」と言ったまま
-バックグラウンドシェルが残っていることを確認してから、短く送って復帰させる:
+バックグラウンドシェルが残っていることを確認してから、短く送って復帰させる。
+送信は「AI間送信手順（二段構え）」に従う（`SendMessage` が使えるならそちら、
+使えなければ以下のフォールバック）:
 
 ```bash
 herdr pane run <implementer-id> "reviewerは完了済みで最新レビューが投稿されています。待機をやめて gh pr view <PR番号> --json reviews で最新レビューを読み、指摘に対応してpushし、再レビューを依頼してください。"
 herdr pane send-keys <implementer-id> Enter
 ```
 
-**`send-keys Enter` を忘れない**（§3.2 の注意点3）。復帰指示も他の送信と同じく
-Enter が送られないため、これを撃たないと「復帰させたつもりで止まったまま」になる。
+**フォールバック経路では `send-keys Enter` を忘れない**（§3.2 の注意点3）。
+復帰指示も他の送信と同じく Enter が送られないことがあるため、これを撃たないと
+「復帰させたつもりで止まったまま」になる。`SendMessage` 経路では Enter は不要だが、
+§5「AI間送信手順」の到達確認（`agent_status` が動くこと）は同様に行う。
 
 **同じ孫で2回目以降の復帰になったら、対症療法ではなく待ち方そのものを変えさせる。**
 復帰指示の末尾に「以後も push 後に完了通知を待つ形で停止しないでください。
