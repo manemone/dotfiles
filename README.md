@@ -153,6 +153,7 @@ for details. `bin/` changes should additionally be verified with
 ├── skills/
 │   ├── pr-review-loop/        # PR review cycle automation
 │   ├── umbrella-orchestrator/ # Umbrella-branch grandchild lifecycle
+│   ├── umbrella-handoff/      # Consultation-to-commander handoff automation
 │   ├── repo-baseline/         # Applying the repo-baseline copier template
 │   ├── ocw/                   # Points AI agents to `ocw help <topic>` instead of reading bin/ocw
 │   ├── deploy.sh              # skills deployment script (all agents, auto-detected)
