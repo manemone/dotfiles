@@ -118,7 +118,7 @@ is_wsl() {
 # skills/deploy.sh creates a repo-owned agent home itself when it is missing
 # (agent_home_mode), precisely so that `--only skills` and every --dry-run
 # behave the same as a full deploy.
-AVAILABLE_TOOLS="zsh nvim tmux bin claude skills"
+AVAILABLE_TOOLS="zsh nvim tmux bin claude skills codex opencode"
 
 # resolve_tools <only_tools> <var_name>
 # Resolves a comma-separated tool filter against AVAILABLE_TOOLS.
@@ -232,6 +232,19 @@ links_for_tool() {
     claude)
       printf '%s\n' \
         "$HOME/.claude/CLAUDE.md"
+      ;;
+    codex)
+      # Only meaningful once skill_agent_home(codex) already exists —
+      # codex/deploy.sh never creates it (ADR DOC-2608272128 §2.3, reused by
+      # ADR DOC-2609072334). links_for_tool() itself doesn't gate on that:
+      # deploy-all.sh --status reports a missing path as "[MISSING] ... (not
+      # deployed)" either way, same as every other tool here.
+      printf '%s\n' \
+        "$(skill_agent_home codex)/AGENTS.md"
+      ;;
+    opencode)
+      printf '%s\n' \
+        "$(skill_agent_home opencode)/AGENTS.md"
       ;;
       # skills deliberately has no arm: its $HOME-side links are one per
       # skill directory auto-detected under skills/, across every agent in

@@ -48,12 +48,17 @@
 | `bin/` | スタンドアロンの CLI ツール（`ocw`, `claude-ds`, `ocw-meter`）。`bin/tests/` は `ocw-meter` 等の Python テスト、`bin/prices/` は費用計算用の価格表 |
 | `claude/` | Claude Code 向け配布物（`CLAUDE.md` / `settings.json`） |
 | `skills/` | AI コーディングエージェント向けのスキル。Claude Code だけでなく Codex・OpenCode にも同じ実体を配る（ADR DOC-2608272128） |
+| `codex/` | Codex CLI のグローバル指示（`~/.codex/AGENTS.md`）を `claude/CLAUDE.md` から symlink で配る（ADR DOC-2609072334） |
+| `opencode/` | OpenCode のグローバル指示（`~/.config/opencode/AGENTS.md`）を `claude/CLAUDE.md` から symlink で配る（ADR DOC-2609072334） |
 | `shared/` | 全 deploy スクリプトが共有するヘルパー（`helpers.sh`） |
 | `docs/` | このリポジトリ自体の設計文書・ADR・計画書・運用リファレンス。`design/`（現役の規約）・`adr/`（確定した技術決定の記録）・`planning/`（傘ブランチ計画書）・`reference/`（運用中に繰り返し引く事実）の4フォルダに分かれる。詳細は [docs/README.md](docs/README.md) を参照 |
 | `tools/` | このリポジトリ自体の開発を支援するツール（`doc-id` など）。`bin/` と異なり `$HOME` へは配布しない |
 | `templates/` | 他リポジトリへ配布する copier テンプレート（`repo-baseline` など）。`$HOME` へは配布せず、dotfiles 本体にも依存しない自己完結ディレクトリ |
 
 各ツールディレクトリは「設定ファイル本体 + `deploy.sh` + `README.md`」という共通構造を持つ。
+例外は `codex/` と `opencode/` で、この2つは設定ファイル本体を持たず、`deploy.sh` が
+`claude/CLAUDE.md` を symlink で指す（内容がエージェント非依存の個人指示のため。理由は
+ADR DOC-2609072334 参照）。
 
 ## 3つの領域（混同しないこと）
 
@@ -65,7 +70,8 @@
 | `.claude/settings.json` | リポジトリで作業する AI 向けの permissions を置く場所 | このリポジトリで作業する Claude Code |
 
 **`claude/CLAUDE.md`（配布物。個人の口調設定などが入っている。ルート `CLAUDE.md` とは別物）は、
-指示が無い限り編集しない。**
+指示が無い限り編集しない。** `codex/deploy.sh` と `opencode/deploy.sh` もこのファイルを
+symlink 元にしている（ADR DOC-2609072334）ため、編集の影響は3エージェントへ及ぶことに注意する。
 
 ## AI 支援ツールの設定
 

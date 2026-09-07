@@ -12,6 +12,8 @@ Easily deployable, cross-platform dotfiles managed with [mise](https://mise.jdx.
 | **bin** | Custom CLI tools (ocw, claude-ds, ocw-meter) | — (standalone scripts) |
 | **claude** | Claude Code config | — (built-in) |
 | **skills** | AI agent skills, shared across Claude Code / Codex / OpenCode | — (built-in) |
+| **codex** | Codex CLI global instructions (symlinked from `claude/CLAUDE.md`) | — (built-in) |
+| **opencode** | OpenCode global instructions (symlinked from `claude/CLAUDE.md`) | — (built-in) |
 
 ## Supported Platforms
 
@@ -156,6 +158,12 @@ for details. `bin/` changes should additionally be verified with
 │   ├── umbrella-handoff/      # Consultation-to-commander handoff automation
 │   ├── repo-baseline/         # Applying the repo-baseline copier template
 │   ├── deploy.sh              # skills deployment script (all agents, auto-detected)
+│   └── README.md
+├── codex/
+│   ├── deploy.sh               # Symlinks ~/.codex/AGENTS.md → claude/CLAUDE.md
+│   └── README.md
+├── opencode/
+│   ├── deploy.sh               # Symlinks ~/.config/opencode/AGENTS.md → claude/CLAUDE.md
 │   └── README.md
 ├── zsh/
 │   ├── .zshrc                 # Shell configuration
