@@ -210,7 +210,12 @@ ok = m and (latest_sha.startswith(m.group(1)) or m.group(1).startswith(latest_sh
 2. **ワークツリーを作成し実装AIを起動**
 
    **Herdr あり（`ocw -H` が使える場合）**:
-   - `ocw -H --no-commander <孫ブランチ名> <傘ブランチ名>` を叩く
+   - `ocw -H --no-commander <孫ブランチ名> <傘ブランチ名>` を叩く。**`<傘ブランチ名>`
+     を省略しないこと。** 省略すると `base_ref` は `origin/HEAD` → `repo_root`（main
+     ワークツリー）の `HEAD` の順にデフォルト解決され、傘ではなく `master` 等の既定
+     ブランチが `ocw-base-ref` に永続化される。孫→傘の squash マージ検出はこの
+     `ocw-base-ref` 候補1つにしか成立し得ない（§3.3 参照）ため、ここで傘ブランチ名を
+     渡し忘れると、その孫は将来 `ocw rm` が**必ず** `--force` を要求するようになる
    - これだけで「git worktree 作成＋Herdr ワークスペース作成＋implementer ペーン＋reviewer ペーン」が
      全部できる（孫ワークスペースに commander ペーンは作らない。§5「ワークスペース階層」参照）
    - 出力の `workspace:` 行の ID に対して `herdr workspace rename` でラベルを日本語化する
@@ -309,7 +314,11 @@ ok = m and (latest_sha.startswith(m.group(1)) or m.group(1).startswith(latest_sh
     `<傘ブランチ>` は実際の傘ブランチ名（計画書の進捗テーブルやブランチ命名から取得）に置換すること。
 
    **Herdr なし**:
-   - `git worktree add -b <孫ブランチ名> ../<dir> <傘ブランチ名>` を表示
+   - `git worktree add -b <孫ブランチ名> ../<dir> <傘ブランチ名>` を表示。**この経路は
+     `ocw` を経由しないため `ocw-base-ref` が永続化されない。** その孫は §3.3 の
+     マージ判定候補が事実上ゼロになり、`ocw rm` が**必ず** `--force` を要求する
+     （合成リポジトリでの再現実験で確認済み。§3.3 参照）。気にせずクリーンアップ時に
+     `--force` を使ってよいが、その前提を踏まえて人間へ確認を取ること
    - 以下のプロンプトを新しい会話で実行するよう案内する:
      ```
      計画書 <計画書の絶対パス> の「## 孫N用プロンプト」セクションのコードブロック内の指示に従って実装してください。
@@ -359,24 +368,61 @@ ok = m and (latest_sha.startswith(m.group(1)) or m.group(1).startswith(latest_sh
    - 例: `ph-00 のワークツリーが残っています。ocw rm ph-00-must-keep しますか？`
    - `ocw rm` は worktree + Herdr ワークスペース + ブランチをまとめて削除する
    - 未マージの孫は削除しない（`ocw rm` が未マージを拒否するため安全）
-   - **`--force` は基本的に不要。** `ocw rm`（`bin/ocw`）のマージ済み判定は
+   - **`--force` の要否は「孫のワークツリーを作った時点で base-ref 候補が傘ブランチを
+     正しく指していたか」だけで決まる。** `ocw rm`（`bin/ocw`）のマージ済み判定は
      `ocw.mergedInto`（設定） → 作成時のベース（`<worktree の git dir>/ocw-base-ref`
-     に永続化される） → `HEAD` → `origin/HEAD` の順に候補を集め、各候補について
-     `git merge-base --is-ancestor` に加えて squash マージ検出（`commit-tree` +
-     `git cherry` によるパッチID比較）も試す。孫は傘ブランチへ squash マージされることが
-     多いが、作成時のベース（＝傘ブランチ）が候補に入り squash 検出も効くため、
-     **`--force` なしの `ocw rm` が普通に通る**
+     に永続化される） → `HEAD`（**司令官の cwd ではなく `repo_root` = `git worktree
+     list --porcelain` の先頭に載る main ワークツリーの HEAD。傘はふつう別ディレクトリの
+     linked worktree なので、これは実質的に傘ブランチを指さない**） → `origin/HEAD`
+     （同じくリポジトリの既定ブランチであって傘ブランチではない）の順に候補を集め、
+     各候補について `git merge-base --is-ancestor` に加えて squash マージ検出
+     （`commit-tree` + `git cherry` によるパッチID比較）も試す。**孫→傘の判定を
+     成立させられる候補は事実上「作成時のベース（`ocw-base-ref`）」1つだけであり**、
+     これが傘ブランチ名を正しく指していない限り、残り3候補は`master`などの既定ブランチを
+     指すだけで孫の squash 先には決して一致しない。
+
+     合成リポジトリでの再現実験（`git merge` は使わず `read-tree -m` + `commit-tree` で
+     squash 相当のコミットを合成。2026-09-08 実施）で確認した:
+     - `ocw -H --no-commander <孫> <傘ブランチ名>`（§3.2 の手順どおり**傘ブランチ名を
+       明示して**作成）した孫は、複数コミット（実装＋レビュー修正）・傘側の同時並行
+       コミット（他の孫の spawn／squash マージによる進捗表更新）があっても、
+       `--force` なしの `ocw rm` が通った
+     - 一方、`base_ref` を省略して作成した孫（デフォルト解決 `origin/HEAD` →
+       `repo_root` の `HEAD` の結果 `master` になった）や、「Herdr なし」節の
+       `git worktree add` を `ocw` を経由せず直接叩いて作った孫（`ocw-base-ref` が
+       最初から存在しない）は、傘へ実際に squash マージ済みでも
+       **`branch is not merged into any known integration ref: <branch>` で
+       確実に拒否された**（実測の拒否メッセージと一致）
+     - 反証できた仮説: 「孫が複数コミットを持つと squash のパッチIDが一致しない」
+       「傘へ他の孫が先に squash マージされて先へ進むと、後続の孫の判定が崩れる」は
+       **いずれも不成立**だった（ファイルが競合しない限り、コミット数や順序は
+       判定に影響しなかった。`squash_merged` はブランチ tip の最終ツリーとマージ
+       ベースの差分をまとめて1パッチとして比較するため）
+
+     **実測（2026-09-08、背景4.1）**: 掃除した7ワークツリーのうち6本が `--force` を
+     要求した。内訳は孫5本（`agent-handoff-01/02/03` `ocw-usage-01/02`）＋傘1本
+     （`ocw-usage-discovery`）。**孫5本は上記の「base-ref 候補が傘を指していない」
+     ケースに一致する**（作成経路が `ocw -H` に傘ブランチ名を明示していたか未確認だが、
+     その場合しか成立し得ないことは再現実験で確定した）。傘1本
+     （`ocw-usage-discovery` → `master`）はこれとは別原因で、`master` に**無関係な
+     別PRが先に着地し同じファイルへ重複して変更が入った**ことで squash 差分の
+     patch-id が一致しなくなったケースであり、`ocw help rm` 自身が明記する
+     「known blind spot」（統合先が後で rebase・amend された、あるいはマージ時に
+     衝突解決が入った場合は squash 検出も届かない）にそのまま該当する。唯一
+     `--force` なしで通った `agent-handoff`（傘）は `git diff master..agent-handoff`
+     が0ファイルだったケースで、「重複変更さえ無ければ検出は成立する」という
+     結論と矛盾しない。原因の全容（`ocw -H` 呼び出し時に傘ブランチ名の引数が
+     実際に省略されていたか）は当時のワークツリーが既に削除済みのため確定できて
+     いない。**未解明として残る**
    - 判定できない場合の拒否は2種類あり、原因も対処も異なる:
      - **`branch is not merged into any known integration ref: <branch>`** —
        候補 ref は解決できたが、is-ancestor でも squash 検出でも「マージ済み」と
-       判定できなかった場合。**傘運用で実際に遭遇するのはほぼこちら**。ありうる
-       原因は squash 後に統合先で rebase・amend されて patch-id が変わった、
-       マージ時の衝突解決で diff が変わった等（`bin/ocw` 自身が検出できないと
-       明記している限界）。この場合だけ `--force` を検討する。飛ぶ前に、
-       `ocw.githubMergeCheck`（opt-in）を有効にして `gh pr list --head <branch>
-       --state merged` によるマージ判定を試す手もある。司令官は `/check` の時点で
-       PR番号とマージ状態を既に握っているので、この運用ではマージチェックを
-       丸ごと迂回する `--force` より素直
+       判定できなかった場合。**傘運用で孫を掃除する際に実際に遭遇するのはほぼこちら**
+       （上記のとおり、孫→傘の判定を成立させられる候補が「作成時のベース」1つしか
+       無いため）。この場合、`ocw.githubMergeCheck`（opt-in）を有効にして
+       `gh pr list --head <branch> --state merged` によるマージ判定を試す手もあるが、
+       司令官は `/check` の時点で PR番号とマージ状態を既に握っているので、この運用
+       ではマージチェックを丸ごと迂回する `--force` より素直
      - **`cannot determine an integration ref ...: set ocw.mergedInto or
        use -f`** — 候補 ref が1つも解決できなかった場合。非 bare リポジトリでは
        `HEAD` が必ず解決するため、**通常の傘運用ではまず出ない**
