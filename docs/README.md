@@ -62,6 +62,7 @@
 | DOC-2608040229 | [deploy-distribution-method.md](adr/DOC-2608040229_deploy-distribution-method.md) | dotfiles の配布方式の決定。作業ツリーへの直接 symlink をやめ、世代ディレクトリ + `current` シンボリックリンクによる配布実体を1段挟む方式を採用した。実体コピー配布・世代を持たない方式・警告のみの最小案などの却下理由も記録 |
 | DOC-2608062258 | [ocw-worktree-naming-and-layout.md](adr/DOC-2608062258_ocw-worktree-naming-and-layout.md) | `ocw` のワークツリー命名とリポジトリレイアウトの外部化の決定。`ai/` 接頭辞の廃止、スラッシュ入りブランチ名のネストディレクトリ化、git config `ocw.*` によるフルパス雛形1本でのレイアウト表現、squash マージ検出を含むマージ済み判定の再定義を確定した。フラット化・enum によるレイアウト表現・`gh` 依存の判定などの却下理由も記録 |
 | DOC-2608272128 | [skills-multi-agent-distribution.md](adr/DOC-2608272128_skills-multi-agent-distribution.md) | スキルの配布方式の決定。`claude/skills/` を `skills/` へ切り出して独立したツールとし、Claude Code だけでなく Codex・OpenCode のスキルディレクトリへも同じ実体を symlink する方式を採用した。3者が同じ SKILL.md 形式を読むという実機調査が根拠。`claude/deploy.sh` の拡張・スキルごとの配布先指定などの却下理由も記録 |
+| DOC-2609072215 | [ai-to-ai-messaging-channel.md](adr/DOC-2609072215_ai-to-ai-messaging-channel.md) | AI間（司令官／実装AI／レビューAI）の受け渡しの決定。`herdr pane run` キーストローク注入一本から、相手が Claude Code だと判別できるときは `SendMessage` を使い、そうでなければ従来手順へ落ちる二段構えへ変更した。`herdr pane list` の `agent_session.value` から `~/.claude/sessions/` を引いて宛先セッション名を解決する橋渡し手順の実測と、ADR DOC-2608272128 §2.4（エージェント非依存の原則）に対する但し書きの位置づけを記録 |
 
 ### planning/ — ロードマップ・計画
 
