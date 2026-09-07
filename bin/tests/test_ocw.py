@@ -1863,8 +1863,8 @@ class HelpTopicTests(unittest.TestCase):
     def tearDown(self):
         self.tmpdir.cleanup()
 
-    def advertised_topics(self, stdout):
-        topics = set()
+    def advertised_topics_with_descriptions(self, stdout):
+        topics = {}
         in_topics = False
         for line in stdout.splitlines():
             if line.strip() == "topics:":
@@ -1875,8 +1875,27 @@ class HelpTopicTests(unittest.TestCase):
             stripped = line.strip()
             if not stripped:
                 break
-            topics.add(stripped.split()[0])
+            name, _, desc = stripped.partition(" ")
+            topics[name] = desc.strip()
         return topics
+
+    def advertised_topics(self, stdout):
+        return set(self.advertised_topics_with_descriptions(stdout))
+
+    def dispatchable_topics(self):
+        # Source-level, not a subprocess call: this is the *other* half of
+        # the single source of truth bin/ocw's HELP_TOPICS comment claims --
+        # every `help_topic_<name>()` definition is exactly the set of `case`
+        # arms show_help_topic() can dispatch to. help_topic_description()
+        # itself matches the naming pattern, so it's excluded explicitly
+        # rather than by a topic allowlist (which would just be EXPECTED_TOPICS
+        # again, defeating the point of deriving this from the source).
+        source = OCW.read_text(encoding="utf-8")
+        return {
+            name
+            for name in re.findall(r"^help_topic_([a-z0-9_]+)\(\)", source, re.MULTILINE)
+            if name != "description"
+        }
 
     def test_bare_help_contains_synopsis_and_full_topic_list(self):
         result = run_ocw(["help"], self.tmpdir.name)
@@ -1905,6 +1924,25 @@ class HelpTopicTests(unittest.TestCase):
                 result = run_ocw(["help", topic], self.tmpdir.name)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertIn(f"topic: {topic}", result.stdout)
+
+    def test_no_dispatchable_topic_is_missing_from_the_advertised_list(self):
+        # The reverse of test_every_advertised_topic_is_dispatchable above:
+        # a help_topic_<name>() (and matching show_help_topic() case arm)
+        # that exists but was never added to HELP_TOPICS would be invocable
+        # yet invisible in usage()'s topics: section and in the unknown-topic
+        # error's "valid topics" list -- the other regression the plan names
+        # ("引けるのに目次に無い topic").
+        dispatchable = self.dispatchable_topics()
+        self.assertTrue(dispatchable, "could not find any help_topic_<name>() definitions in bin/ocw")
+
+        advertised = self.advertised_topics(run_ocw(["help"], self.tmpdir.name).stdout)
+        self.assertEqual(dispatchable, advertised)
+
+    def test_every_advertised_topic_has_a_non_empty_description(self):
+        descriptions = self.advertised_topics_with_descriptions(run_ocw(["help"], self.tmpdir.name).stdout)
+        for topic, desc in descriptions.items():
+            with self.subTest(topic=topic):
+                self.assertTrue(desc, f"topic '{topic}' has an empty description in usage()'s topics: section")
 
     def test_help_topic_via_dash_h_and_dash_dash_help(self):
         for flag in ("-h", "--help"):

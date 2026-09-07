@@ -51,7 +51,6 @@ create behavior:
     create commander/implementer/reviewer panes
     start claude / claude / claude
     focus the Herdr workspace
-    open VS Code
 
   --no-commander
     with -H/--herdr, create implementer/reviewer panes only (no
