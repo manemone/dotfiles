@@ -103,7 +103,7 @@ ocw help all     # 全 topic を連結
 `ocw help` のtopic階層化とこの整理そのものの設計判断は計画書
 [DOC-2609072210](../docs/planning/DOC-2609072210_ocw-usage-discovery_計画.md) を参照。
 
-**`{name}` の直前に `/` が無い雛形も使える**（例: `git config ocw.worktreeDir '{repo_parent}/{repo}-{name}'` で、通常の clone の隣に `<repo>-<name>` という接頭辞付きディレクトリを作る）。`ocw help config` の die 条件の説明は「`{name}` の直前に `/` が無い雛形」を拒否対象として書いているが、実際に見ているのは雛形全体のどこかに `/` があるかどうかであり、`{name}` の直前である必要はない。この例は `ocw help` のどのtopicにも出てこないため、ここに残す。
+**`{name}` の直前に `/` が無い雛形も使える**（例: `git config ocw.worktreeDir '{repo_parent}/{repo}-{name}'` で、通常の clone の隣に `<repo>-<name>` という接頭辞付きディレクトリを作る）。詳細は `ocw help config` を参照。
 
 **「リポジトリ内に隠す」レイアウト（`ocw.worktreeDir` を `{repo_root}/.worktrees/{name}` に
 設定する場合）の注意**: worktree をメインワークツリーの内側に作ると、git はそのディレクトリを

@@ -125,7 +125,7 @@ A leading '~' in ocw.worktreeDir expands to $HOME.
 ocw dies before creating anything if the template:
   - contains an unknown {placeholder}
   - does not contain {name}
-  - has no '/' right before {name} (no cleanup boundary can be derived)
+  - has no '/' before {name} (no cleanup boundary can be derived)
   - would make the cleanup boundary the filesystem root (e.g. "/{name}")
   - does not expand to an absolute path
 
@@ -136,6 +136,7 @@ stops the climb (rmdir fails on a non-empty directory).
 
   template                                     cleanup boundary
   {repo_parent}/{name}                         {repo_parent}          (default)
+  {repo_parent}/{repo}-{name}                  {repo_parent}          (prefixed sibling)
   {repo_root}/.worktrees/{name}                {repo_root}/.worktrees (hide inside repo)
   ~/.cache/ocw/{repo}/{name}                   ~/.cache/ocw/{repo}    (central pool)
 
