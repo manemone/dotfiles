@@ -24,7 +24,7 @@
 
 | 孫 | ブランチ | 内容 | 状況 |
 |---|---|---|---|
-| 1 | `worktree-cleanup-01-merge-detection` | `ocw rm` が `-f` を要求した原因の究明と、`umbrella-orchestrator` §3.3 の記述是正 | ⬜ 待機中 |
+| 1 | `worktree-cleanup-01-merge-detection` | `ocw rm` が `-f` を要求した原因の究明と、`umbrella-orchestrator` §3.3 の記述是正 | 🔄 実装中 |
 | 2 | `worktree-cleanup-02-cleanup-skill` | 掃除スキル `skills/worktree-cleanup/` の新設と `skills/README.md` の追随 | ⬜ 待機中 |
 
 ## ワークスペースラベル
