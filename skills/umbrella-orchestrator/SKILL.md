@@ -442,8 +442,10 @@ ok = m and (latest_sha.startswith(m.group(1)) or m.group(1).startswith(latest_sh
 
 3. **implementer に最終PR作成プロンプトを送信**
    - implementer が `idle` または `done`（どちらも待機状態）であることを確認
-   - **送信は §5「AI間送信手順（二段構え）」に従う**（相手が Claude Code だと判別できれば
-     `SendMessage`、できなければ以下の `herdr pane run` 手順）
+   - **送信は §5「AI間送信手順（二段構え）」に従う**（自分が `SendMessage` を呼べる
+     Claude Code セッションで、かつ implementer の `agent` が `"claude"` で
+     `agent_session.value` から `~/.claude/sessions/` を引ければ `SendMessage`、
+     どちらかを満たさなければ以下の `herdr pane run` 手順）
    - 以下の情報を含むプロンプトを送信:
      - base: `<ベースブランチ>`、head: `<傘ブランチ名>`（ベースブランチは傘ブランチが追跡するリモートブランチから判定。`main`/`master` 等リポジトリごとに異なる）
      - 変更概要（孫PR番号、変更ファイル数、テスト結果）
@@ -461,8 +463,14 @@ ok = m and (latest_sha.startswith(m.group(1)) or m.group(1).startswith(latest_sh
 
 4. **implementer の起動を確認**
 
-   §3.2 注意点3と同じ手順を踏む（本文とEnterは別送信。届いていないのは
-   大抵Enterだけで、本文自体は届いている）:
+   `SendMessage` 経路なら §5「AI間送信手順」#4（送信直前の状態からの変化を見る。
+   届いていなければフォールバックへ切り替える）に従う。**この implementer は
+   以前に作業を終えている可能性があり、フォーカスされていなければ `done` のまま
+   張り付く**（§3.5 の `/autopilot` 手順と同じ前提）ため、「`working` にならなければ
+   未達」という基準は使わない。
+
+   フォールバック経路（`herdr pane run`）なら §3.2 注意点3と同じ手順を踏む
+   （本文とEnterは別送信。届いていないのは大抵Enterだけで、本文自体は届いている）:
    ```bash
    herdr pane get <implementer-id>
    ```
