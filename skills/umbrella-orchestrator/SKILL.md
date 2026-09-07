@@ -213,9 +213,10 @@ ok = m and (latest_sha.startswith(m.group(1)) or m.group(1).startswith(latest_sh
    - `ocw -H --no-commander <孫ブランチ名> <傘ブランチ名>` を叩く。**`<傘ブランチ名>`
      を省略しないこと。** 省略すると `base_ref` は `origin/HEAD` → `repo_root`（main
      ワークツリー）の `HEAD` の順にデフォルト解決され、傘ではなく `master` 等の既定
-     ブランチが `ocw-base-ref` に永続化される。孫→傘の squash マージ検出はこの
-     `ocw-base-ref` 候補1つにしか成立し得ない（§3.3 参照）ため、ここで傘ブランチ名を
-     渡し忘れると、その孫は将来 `ocw rm` が**必ず** `--force` を要求するようになる
+     ブランチが `ocw-base-ref` に永続化される。`ocw.mergedInto` を明示設定していない
+     限り、孫→傘の squash マージ検出はこの `ocw-base-ref` 候補に依存する（§3.3 参照）
+     ため、ここで傘ブランチ名を渡し忘れると、その孫は将来 `ocw rm` が**ほぼ確実に**
+     `--force` を要求するようになる
    - これだけで「git worktree 作成＋Herdr ワークスペース作成＋implementer ペーン＋reviewer ペーン」が
      全部できる（孫ワークスペースに commander ペーンは作らない。§5「ワークスペース階層」参照）
    - 出力の `workspace:` 行の ID に対して `herdr workspace rename` でラベルを日本語化する
@@ -315,10 +316,13 @@ ok = m and (latest_sha.startswith(m.group(1)) or m.group(1).startswith(latest_sh
 
    **Herdr なし**:
    - `git worktree add -b <孫ブランチ名> ../<dir> <傘ブランチ名>` を表示。**この経路は
-     `ocw` を経由しないため `ocw-base-ref` が永続化されない。** その孫は §3.3 の
-     マージ判定候補が事実上ゼロになり、`ocw rm` が**必ず** `--force` を要求する
-     （合成リポジトリでの再現実験で確認済み。§3.3 参照）。気にせずクリーンアップ時に
-     `--force` を使ってよいが、その前提を踏まえて人間へ確認を取ること
+     `ocw` を経由しないため `ocw-base-ref` が永続化されない。** 候補自体は残る
+     （`HEAD` / `origin/HEAD` は非 bare リポジトリでは必ず解決する）が、いずれも
+     傘ブランチを指さないため孫→傘の判定には使えない。その孫は `ocw rm` が
+     **ほぼ確実に** `--force` を要求する（合成リポジトリでの再現実験で確認済み。
+     §3.3 参照）。**`--force` を先に承認したことにはならない。** 実際にクリーン
+     アップする際は §3.3 の安全確認手順（`gh` でのマージ済み確認 → 人間の承認）を
+     省略せず踏むこと
    - 以下のプロンプトを新しい会話で実行するよう案内する:
      ```
      計画書 <計画書の絶対パス> の「## 孫N用プロンプト」セクションのコードブロック内の指示に従って実装してください。
@@ -368,18 +372,22 @@ ok = m and (latest_sha.startswith(m.group(1)) or m.group(1).startswith(latest_sh
    - 例: `ph-00 のワークツリーが残っています。ocw rm ph-00-must-keep しますか？`
    - `ocw rm` は worktree + Herdr ワークスペース + ブランチをまとめて削除する
    - 未マージの孫は削除しない（`ocw rm` が未マージを拒否するため安全）
-   - **`--force` の要否は「孫のワークツリーを作った時点で base-ref 候補が傘ブランチを
-     正しく指していたか」だけで決まる。** `ocw rm`（`bin/ocw`）のマージ済み判定は
-     `ocw.mergedInto`（設定） → 作成時のベース（`<worktree の git dir>/ocw-base-ref`
-     に永続化される） → `HEAD`（**司令官の cwd ではなく `repo_root` = `git worktree
-     list --porcelain` の先頭に載る main ワークツリーの HEAD。傘はふつう別ディレクトリの
-     linked worktree なので、これは実質的に傘ブランチを指さない**） → `origin/HEAD`
+   - **`--force` の要否は、主に「孫のワークツリーを作った時点で base-ref 候補が
+     傘ブランチを正しく指していたか」で決まる（ただし squash 検出自体の限界による
+     場合もある。後述）。** `ocw rm`（`bin/ocw`）のマージ済み判定は `ocw.mergedInto`
+     （設定） → 作成時のベース（`<worktree の git dir>/ocw-base-ref` に永続化される）
+     → `HEAD`（**司令官の cwd ではなく `repo_root` = `git worktree list --porcelain`
+     の先頭に載る main ワークツリーの HEAD。傘はふつう別ディレクトリの linked
+     worktree なので、これは実質的に傘ブランチを指さない**） → `origin/HEAD`
      （同じくリポジトリの既定ブランチであって傘ブランチではない）の順に候補を集め、
      各候補について `git merge-base --is-ancestor` に加えて squash マージ検出
-     （`commit-tree` + `git cherry` によるパッチID比較）も試す。**孫→傘の判定を
-     成立させられる候補は事実上「作成時のベース（`ocw-base-ref`）」1つだけであり**、
-     これが傘ブランチ名を正しく指していない限り、残り3候補は`master`などの既定ブランチを
-     指すだけで孫の squash 先には決して一致しない。
+     （`commit-tree` + `git cherry` によるパッチID比較）も試す。**孫→傘の判定に
+     使える候補は、通常は作成時のベース（`ocw-base-ref`）だけである。** `HEAD` /
+     `origin/HEAD` は `master` などの既定ブランチを指すため孫→傘の判定には使えない。
+     `ocw.mergedInto` は `git config ocw.mergedInto <傘ブランチ名>` のように明示設定
+     すればこの候補も使えるが、これはリポジトリ全体の設定であるため、傘ブランチ名に
+     固定すると今度は傘→`master` の判定に影響する副作用がある（通常の傘運用では
+     設定しない）。
 
      合成リポジトリでの再現実験（`git merge` は使わず `read-tree -m` + `commit-tree` で
      squash 相当のコミットを合成。2026-09-08 実施）で確認した:
@@ -399,30 +407,35 @@ ok = m and (latest_sha.startswith(m.group(1)) or m.group(1).startswith(latest_sh
        判定に影響しなかった。`squash_merged` はブランチ tip の最終ツリーとマージ
        ベースの差分をまとめて1パッチとして比較するため）
 
-     **実測（2026-09-08、背景4.1）**: 掃除した7ワークツリーのうち6本が `--force` を
-     要求した。内訳は孫5本（`agent-handoff-01/02/03` `ocw-usage-01/02`）＋傘1本
-     （`ocw-usage-discovery`）。**孫5本は上記の「base-ref 候補が傘を指していない」
-     ケースに一致する**（作成経路が `ocw -H` に傘ブランチ名を明示していたか未確認だが、
-     その場合しか成立し得ないことは再現実験で確定した）。傘1本
-     （`ocw-usage-discovery` → `master`）はこれとは別原因で、`master` に**無関係な
-     別PRが先に着地し同じファイルへ重複して変更が入った**ことで squash 差分の
-     patch-id が一致しなくなったケースであり、`ocw help rm` 自身が明記する
-     「known blind spot」（統合先が後で rebase・amend された、あるいはマージ時に
-     衝突解決が入った場合は squash 検出も届かない）にそのまま該当する。唯一
-     `--force` なしで通った `agent-handoff`（傘）は `git diff master..agent-handoff`
-     が0ファイルだったケースで、「重複変更さえ無ければ検出は成立する」という
-     結論と矛盾しない。原因の全容（`ocw -H` 呼び出し時に傘ブランチ名の引数が
-     実際に省略されていたか）は当時のワークツリーが既に削除済みのため確定できて
-     いない。**未解明として残る**
+     **実測（2026-09-08、`docs/planning/DOC-2609080222` の背景4.1）**: 掃除した
+     7ワークツリーのうち6本が `--force` を要求した。内訳は孫5本
+     （`agent-handoff-01/02/03` `ocw-usage-01/02`）＋傘1本（`ocw-usage-discovery`）。
+     **孫5本は上記の「base-ref 候補が傘を指していない」ケースに一致する**
+     （作成経路が `ocw -H` に傘ブランチ名を明示していたか未確認だが、その場合しか
+     成立し得ないことは再現実験で確定した）。傘1本（`ocw-usage-discovery` →
+     `master`）はこれとは別原因で、`master` に**無関係な別PRが先に着地し同じ
+     ファイルへ重複して変更が入った**ことで squash 差分の patch-id が一致しなく
+     なったケースであり、下記の「known blind spot」にそのまま該当する（base-ref
+     自体は `master` を正しく指していた）。唯一 `--force` なしで通った
+     `agent-handoff`（傘）は `git diff master..agent-handoff` が0ファイルだった
+     ケースで、「重複変更さえ無ければ検出は成立する」という結論と矛盾しない。
+     原因の全容（`ocw -H` 呼び出し時に傘ブランチ名の引数が実際に省略されていたか）
+     は当時のワークツリーが既に削除済みのため確定できていない。**未解明として残る**
    - 判定できない場合の拒否は2種類あり、原因も対処も異なる:
      - **`branch is not merged into any known integration ref: <branch>`** —
        候補 ref は解決できたが、is-ancestor でも squash 検出でも「マージ済み」と
        判定できなかった場合。**傘運用で孫を掃除する際に実際に遭遇するのはほぼこちら**
-       （上記のとおり、孫→傘の判定を成立させられる候補が「作成時のベース」1つしか
-       無いため）。この場合、`ocw.githubMergeCheck`（opt-in）を有効にして
-       `gh pr list --head <branch> --state merged` によるマージ判定を試す手もあるが、
-       司令官は `/check` の時点で PR番号とマージ状態を既に握っているので、この運用
-       ではマージチェックを丸ごと迂回する `--force` より素直
+       （上記のとおり、孫→傘の判定に使える候補が通常「作成時のベース」だけのため）。
+       ありうる原因は2つ: (a) base-ref がそもそも傘を指していない（上記）、
+       (b) base-ref は傘を正しく指しているが、統合先で squash 後に rebase・amend
+       されて patch-id が変わった、あるいはマージ時に衝突解決が入って diff が
+       変わった（`bin/ocw` 自身が検出できないと明記している limitation。
+       `ocw help rm` の「known blind spot」）。(a) は孫作成時の base-ref 指定
+       ミスとして事前に防げるが、(b) は統合先の状態に依存するため事前には防げない。
+       司令官は `/check` の時点で PR番号とマージ状態を既に握っているので、
+       いずれの場合も `gh pr list --head <branch> --state merged` で
+       マージ済みを確認したうえで人間の承認を得て `--force` を使う（後述の
+       安全確認手順を参照。原因の切り分け自体は必須ではない）
      - **`cannot determine an integration ref ...: set ocw.mergedInto or
        use -f`** — 候補 ref が1つも解決できなかった場合。非 bare リポジトリでは
        `HEAD` が必ず解決するため、**通常の傘運用ではまず出ない**
