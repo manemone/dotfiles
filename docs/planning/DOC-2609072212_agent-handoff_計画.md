@@ -27,7 +27,7 @@
 
 | 孫 | ブランチ | 内容 | 状況 |
 |---|---|---|---|
-| 1 | `agent-handoff-01-ai-messaging` | AI間通信を `SendMessage` 二段構えへ。ADR 起票 + `umbrella-orchestrator` / `pr-review-loop` の SKILL.md 更新 | ⬜ 待機中 |
+| 1 | `agent-handoff-01-ai-messaging` | AI間通信を `SendMessage` 二段構えへ。ADR 起票 + `umbrella-orchestrator` / `pr-review-loop` の SKILL.md 更新 | 🔄 実装中 |
 | 2 | `agent-handoff-02-handoff-skill` | 引き継ぎスキル `skills/umbrella-handoff/` の新設 | ⬜ 待機中 |
 | 3 | `agent-handoff-03-trigger-distribution` | 発動条件を Claude Code / Codex / OpenCode の3エージェントへ配布 | ⬜ 待機中 |
 
