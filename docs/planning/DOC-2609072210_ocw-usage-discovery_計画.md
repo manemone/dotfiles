@@ -35,7 +35,7 @@ help テキストを 300行ほど足して実体が 1,800行になっても、�
 
 | 孫 | ブランチ | 内容 | 状況 |
 |---|---|---|---|
-| 1 | `ocw-usage-01-help-topics` | `ocw help <topic>` の階層化（`bin/ocw` 本体・`bin/tests/test_ocw.py`） | ⬜ 待機中 |
+| 1 | `ocw-usage-01-help-topics` | `ocw help <topic>` の階層化（`bin/ocw` 本体・`bin/tests/test_ocw.py`） | 🔄 実装中 |
 | 2 | `ocw-usage-02-skill-and-readme` | `skills/ocw/` 新設と参照の整理（`skills/README.md`・`bin/README.md`・ルート `README.md`） | ⬜ 待機中 |
 
 ## 依存関係と実行順序
@@ -215,9 +215,13 @@ AI は `ocw help` の存在を知らない。skill の `description` は**エー
 
 | 対象 | ラベル |
 |---|---|
-| 傘（司令官） | `dotfiles :: ocwの使い方を安く知る` |
-| 孫1 | `dotfiles :: ocwの使い方を安く知る 孫1 help階層化` |
-| 孫2 | `dotfiles :: ocwの使い方を安く知る 孫2 skill入口とREADME整理` |
+| 傘（司令官） | `dotfiles :: ocw使い方をAIに教える`（**人間が手で付けた既存ラベル。上書きしない**） |
+| 孫1 | `dotfiles :: ocw使い方をAIに教える 孫1 help階層化` |
+| 孫2 | `dotfiles :: ocw使い方をAIに教える 孫2 skill入口とREADME整理` |
+
+傘の要約は司令官が即興で作らず、人間が既に付けている実ラベルの右側をそのまま流用する
+（`skills/umbrella-orchestrator/SKILL.md` §5「ワークスペースラベル」の上書き条件に従い、
+`:: ` の右側が既に非 ASCII を含むため rename しない）。
 
 ---
 
