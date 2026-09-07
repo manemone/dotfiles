@@ -11,6 +11,7 @@ AI コーディングエージェント向けのスキル。**Claude Code 専用
 | `pr-review-loop` | PRレビューサイクルを自動化。Herdr の reviewer ペインと連携し、レビュー→修正→再レビューを承認まで繰り返す |
 | `umbrella-orchestrator` | 傘ブランチの孫ライフサイクル管理。計画書の読み取り、孫ブランチの spawn、マージ検出と検証、計画書更新を自動化 |
 | `repo-baseline` | `templates/repo-baseline/` copier テンプレートを既存リポジトリへ適用する手順と判断ガイド |
+| `ocw` | `ocw` CLI（Git worktree 管理）の存在告知。使い方は `ocw help <topic>` へ誘導するだけで、挙動の事実は書かない |
 
 `pr-review-loop` は各Phaseの境界で `ocw-meter event`（工程計測。
 `docs/planning/DOC-2608021229-a_ai-llm-cost-observability_計画.md` 参照）を呼び出す。

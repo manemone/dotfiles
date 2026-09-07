@@ -1846,5 +1846,158 @@ class HerdrSetupRollbackTests(HerdrOcwTestCase):
         self.assertFalse(any("commander" in arg for call in calls for arg in call))
 
 
+class HelpTopicTests(unittest.TestCase):
+    """`ocw help <topic>` hierarchy (docs/planning/DOC-2609072210_ocw-usage-
+    discovery_計画.md 孫1 prompt). The plan calls out one regression by name:
+    a topic advertised in usage()'s `topics:` section that can't actually be
+    dispatched, or a dispatchable topic missing from that section. Every test
+    here drives `ocw` as a real subprocess against a throwaway cwd -- no
+    OcwTestCase repo fixture is needed since `ocw help` must work with or
+    without a git repository present (see test_help_works_outside_a_git_repository)."""
+
+    EXPECTED_TOPICS = {"config", "naming", "rm", "herdr", "meter", "env"}
+
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+
+    def tearDown(self):
+        self.tmpdir.cleanup()
+
+    def advertised_topics_with_descriptions(self, stdout):
+        topics = {}
+        in_topics = False
+        for line in stdout.splitlines():
+            if line.strip() == "topics:":
+                in_topics = True
+                continue
+            if not in_topics:
+                continue
+            stripped = line.strip()
+            if not stripped:
+                break
+            name, _, desc = stripped.partition(" ")
+            topics[name] = desc.strip()
+        return topics
+
+    def advertised_topics(self, stdout):
+        return set(self.advertised_topics_with_descriptions(stdout))
+
+    def dispatchable_topics(self):
+        # Source-level, not a subprocess call: this is the *other* half of
+        # the single source of truth bin/ocw's HELP_TOPICS comment claims --
+        # every `help_topic_<name>()` definition is exactly the set of `case`
+        # arms show_help_topic() can dispatch to. help_topic_description()
+        # itself matches the naming pattern, so it's excluded explicitly
+        # rather than by a topic allowlist (which would just be EXPECTED_TOPICS
+        # again, defeating the point of deriving this from the source).
+        source = OCW.read_text(encoding="utf-8")
+        return {
+            name
+            for name in re.findall(r"^help_topic_([a-z0-9_]+)\(\)", source, re.MULTILINE)
+            if name != "description"
+        }
+
+    def test_bare_help_contains_synopsis_and_full_topic_list(self):
+        result = run_ocw(["help"], self.tmpdir.name)
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("usage:", result.stdout)
+        self.assertLessEqual(
+            len(result.stdout.encode("utf-8")),
+            2048,
+            "`ocw help` output must stay under 2 KB (計画書「呼び出し規約」)",
+        )
+        self.assertEqual(self.advertised_topics(result.stdout), self.EXPECTED_TOPICS)
+
+    def test_dash_h_and_dash_dash_help_match_bare_help(self):
+        bare = run_ocw(["help"], self.tmpdir.name).stdout
+        self.assertEqual(run_ocw(["-h"], self.tmpdir.name).stdout, bare)
+        self.assertEqual(run_ocw(["--help"], self.tmpdir.name).stdout, bare)
+
+    def test_every_advertised_topic_is_dispatchable(self):
+        # Derived from the actual `topics:` section, not EXPECTED_TOPICS --
+        # this is what pins "listed but not dispatchable" specifically.
+        topics = self.advertised_topics(run_ocw(["help"], self.tmpdir.name).stdout)
+        self.assertTrue(topics, "topics: section was empty or unparsable")
+
+        for topic in topics:
+            with self.subTest(topic=topic):
+                result = run_ocw(["help", topic], self.tmpdir.name)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn(f"topic: {topic}", result.stdout)
+
+    def test_no_dispatchable_topic_is_missing_from_the_advertised_list(self):
+        # The reverse of test_every_advertised_topic_is_dispatchable above:
+        # a help_topic_<name>() (and matching show_help_topic() case arm)
+        # that exists but was never added to HELP_TOPICS would be invocable
+        # yet invisible in usage()'s topics: section and in the unknown-topic
+        # error's "valid topics" list -- the other regression the plan names
+        # ("引けるのに目次に無い topic").
+        dispatchable = self.dispatchable_topics()
+        self.assertTrue(dispatchable, "could not find any help_topic_<name>() definitions in bin/ocw")
+
+        advertised = self.advertised_topics(run_ocw(["help"], self.tmpdir.name).stdout)
+        self.assertEqual(dispatchable, advertised)
+
+    def test_every_advertised_topic_has_a_non_empty_description(self):
+        descriptions = self.advertised_topics_with_descriptions(run_ocw(["help"], self.tmpdir.name).stdout)
+        for topic, desc in descriptions.items():
+            with self.subTest(topic=topic):
+                self.assertTrue(desc, f"topic '{topic}' has an empty description in usage()'s topics: section")
+
+    def test_help_topic_via_dash_h_and_dash_dash_help(self):
+        for flag in ("-h", "--help"):
+            with self.subTest(flag=flag):
+                result = run_ocw([flag, "env"], self.tmpdir.name)
+                self.assertEqual(result.returncode, 0)
+                self.assertIn("topic: env", result.stdout)
+
+    def test_unknown_topic_dies_listing_exactly_the_valid_topics(self):
+        result = run_ocw(["help", "bogus-topic"], self.tmpdir.name)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("unknown help topic", result.stderr)
+
+        listed = {
+            line.strip()
+            for line in result.stderr.splitlines()
+            if line.strip() and "unknown help topic" not in line and line.strip() != "valid topics:"
+        }
+        self.assertEqual(listed, self.EXPECTED_TOPICS)
+
+    def test_topic_with_extra_argument_dies(self):
+        result = run_ocw(["help", "config", "extra"], self.tmpdir.name)
+        self.assertNotEqual(result.returncode, 0)
+
+    def test_help_all_concatenates_every_topic(self):
+        result = run_ocw(["help", "all"], self.tmpdir.name)
+        self.assertEqual(result.returncode, 0)
+        for topic in self.EXPECTED_TOPICS:
+            with self.subTest(topic=topic):
+                self.assertIn(f"topic: {topic}", result.stdout)
+
+    def test_help_works_outside_a_git_repository(self):
+        # self.tmpdir is deliberately never `git init`'d -- help must not
+        # route through init_repo_context().
+        for args in (["help"], ["help", "config"], ["help", "all"], ["-h"], ["--help"]):
+            with self.subTest(args=args):
+                result = run_ocw(args, self.tmpdir.name)
+                self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_help_does_not_create_worktrees_or_emit_meter_events(self):
+        repo_root = make_repo(self.tmpdir.name)
+        meter_home = pathlib.Path(self.tmpdir.name) / "ocw-meter-home"
+        before = set(repo_root.parent.iterdir())
+
+        result = run_ocw(
+            ["help", "all"],
+            repo_root,
+            meter_on_path=True,
+            meter_home=meter_home,
+        )
+
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(set(repo_root.parent.iterdir()), before)
+        self.assertEqual(read_events(meter_home), [])
+
+
 if __name__ == "__main__":
     unittest.main()
