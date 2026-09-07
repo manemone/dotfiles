@@ -62,6 +62,15 @@ Claude Code がセッション開始時に読み込むグローバルな個人�
 
 現在の設定:
 - 脳筋後輩キャラクターでの応答スタイル指定（語尾・一人称・二人称）
+- 傘ブランチへの引き継ぎ判断（複数PR規模だと判断したら `umbrella-handoff` スキルへの
+  引き継ぎを人間に提案する）
+
+**このファイルは Claude Code 専用ではない。** [`codex/deploy.sh`](../codex/README.md) と
+[`opencode/deploy.sh`](../opencode/README.md) も同じファイルを symlink しており、
+`~/.codex/AGENTS.md` と `${XDG_CONFIG_HOME:-~/.config}/opencode/AGENTS.md` は実体としては
+この `CLAUDE.md` と同一である（ADR
+[DOC-2609072334](../docs/adr/DOC-2609072334_codex-opencode-global-instructions-distribution.md)）。
+編集する際は3エージェント全部に影響することを意識すること。
 
 `~/.claude/CLAUDE.md` を直接編集すればその場ですぐに反映されるが、これは配布実体（世代
 ディレクトリ）内のコピーを直接編集しているだけで、リポジトリの作業ツリー側

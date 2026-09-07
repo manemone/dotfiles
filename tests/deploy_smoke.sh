@@ -3,15 +3,17 @@
 # tests/deploy_smoke.sh — deploy-all.sh のサンドボックス実行スモークテスト。
 # docs/design/DOC-2608020715-b_テスト方針.md の「サンドボックス実行」層を実装する。
 #
-# 対象は既定で bin,claude のみ。副作用が $HOME 配下に閉じ、かつネットワーク
-# 不要なツールに限定している（AGENTS.md 最重要ルール・テスト方針を参照）。
-# tmux はシステムへのパッケージインストール（apt/brew）を、zsh は Antidote
-# の、nvim は lazy.nvim の git clone を伴うため既定から外している。
+# 対象は既定で bin,claude,skills,codex,opencode。副作用が $HOME 配下に閉じ、
+# かつネットワーク不要なツールに限定している（AGENTS.md 最重要ルール・
+# テスト方針を参照）。tmux はシステムへのパッケージインストール
+# （apt/brew）を、zsh は Antidote の、nvim は lazy.nvim の git clone を
+# 伴うため既定から外している。codex/opencode は claude と同じく symlink
+# のみ（ネットワーク・パッケージインストール無し）なので既定に含めている。
 # 引数で対象を上書きできるが、その場合ネットワークアクセスやシステムへの
 # パッケージインストールが実際に発生しうることを呼び出し側が理解すること。
 #
 # Usage:
-#   tests/deploy_smoke.sh              # 既定: bin,claude
+#   tests/deploy_smoke.sh              # 既定: bin,claude,skills,codex,opencode
 #   tests/deploy_smoke.sh bin          # bin のみ
 #
 # set -e は使わない。1件のアサーション失敗で残りのチェックが埋もれるのを
@@ -28,7 +30,7 @@ REPO_ROOT=$(
   pwd
 )
 
-TOOLS="${1:-bin,claude,skills}"
+TOOLS="${1:-bin,claude,skills,codex,opencode}"
 
 FAIL=0
 CREATED_DIRS=()
@@ -187,7 +189,7 @@ wait_for_next_second() {
 copy_repo_snapshot() {
   local dest="$1" name
   mkdir -p "$dest"
-  for name in zsh nvim tmux bin claude skills shared; do
+  for name in zsh nvim tmux bin claude skills codex opencode shared; do
     cp -a "$REPO_ROOT/$name" "$dest/$name"
   done
   cp -a "$REPO_ROOT/deploy-all.sh" "$dest/deploy-all.sh"
@@ -258,6 +260,19 @@ scenario_backup_symlink_idempotent_uninstall() {
     mkdir -p "$sbx/.claude"
     printf 'dummy-claude-md\n' >"$sbx/.claude/CLAUDE.md"
     printf '{"dummy": true}\n' >"$sbx/.claude/settings.json"
+  fi
+  if has_tool codex; then
+    # ~/.codex/AGENTS.md は既に手作業で実ファイルとして存在するマシンが
+    # 実在する（ADR DOC-2609072334 背景1）。symlink_backup の退避経路が
+    # ここでも効くことを確認する。
+    mkdir -p "$sbx/.codex"
+    printf 'dummy-codex-agents-md\n' >"$sbx/.codex/AGENTS.md"
+  fi
+  if has_tool opencode; then
+    # sandbox_env が XDG_CONFIG_HOME を $sbx/.config へ差し替えるので、
+    # OpenCode のホームは $sbx/.config/opencode になる。
+    mkdir -p "$sbx/.config/opencode"
+    printf 'dummy-opencode-agents-md\n' >"$sbx/.config/opencode/AGENTS.md"
   fi
   if has_tool skills; then
     # skills/ の退避（symlink_backup を通らず <エージェントのホーム>/skills-backup/
@@ -332,6 +347,29 @@ scenario_backup_symlink_idempotent_uninstall() {
     fi
   fi
 
+  if has_tool codex; then
+    # codex/opencode は claude/CLAUDE.md を単一ソースとして symlink する
+    # （ADR DOC-2609072334）。ソースが claude/CLAUDE.md であって codex/ 配下
+    # の何かではないことを、symlink 先のパスで確認する。
+    assert_symlink "$sbx/.codex/AGENTS.md" "$prefix/current/claude/CLAUDE.md"
+    assert_exists "$sbx/.codex/AGENTS.md.backup"
+    if [ "$(cat "$sbx/.codex/AGENTS.md.backup" 2>/dev/null)" = "dummy-codex-agents-md" ]; then
+      pass "既存の ~/.codex/AGENTS.md が退避先に保存されている"
+    else
+      fail "既存の ~/.codex/AGENTS.md が退避先に保存されている"
+    fi
+  fi
+
+  if has_tool opencode; then
+    assert_symlink "$sbx/.config/opencode/AGENTS.md" "$prefix/current/claude/CLAUDE.md"
+    assert_exists "$sbx/.config/opencode/AGENTS.md.backup"
+    if [ "$(cat "$sbx/.config/opencode/AGENTS.md.backup" 2>/dev/null)" = "dummy-opencode-agents-md" ]; then
+      pass "既存の ~/.config/opencode/AGENTS.md が退避先に保存されている"
+    else
+      fail "既存の ~/.config/opencode/AGENTS.md が退避先に保存されている"
+    fi
+  fi
+
   if has_tool skills; then
     local skill
     while IFS= read -r skill; do
@@ -398,6 +436,23 @@ EOF
       pass "uninstall で claude/CLAUDE.md が元のファイルに復元された"
     else
       fail "uninstall で claude/CLAUDE.md が元のファイルに復元された"
+    fi
+  fi
+  if has_tool codex; then
+    # 過去に ocw-meter が uninstall.sh から撤去漏れした不具合（ADR
+    # DOC-2608040229 §2.6）と同種の regression。links_for_tool() へ arm を
+    # 足し忘れると、ここが symlink のまま残る。
+    if [ -f "$sbx/.codex/AGENTS.md" ] && [ ! -L "$sbx/.codex/AGENTS.md" ] && [ "$(cat "$sbx/.codex/AGENTS.md")" = "dummy-codex-agents-md" ]; then
+      pass "uninstall で ~/.codex/AGENTS.md が元のファイルに復元された"
+    else
+      fail "uninstall で ~/.codex/AGENTS.md が元のファイルに復元された"
+    fi
+  fi
+  if has_tool opencode; then
+    if [ -f "$sbx/.config/opencode/AGENTS.md" ] && [ ! -L "$sbx/.config/opencode/AGENTS.md" ] && [ "$(cat "$sbx/.config/opencode/AGENTS.md")" = "dummy-opencode-agents-md" ]; then
+      pass "uninstall で ~/.config/opencode/AGENTS.md が元のファイルに復元された"
+    else
+      fail "uninstall で ~/.config/opencode/AGENTS.md が元のファイルに復元された"
     fi
   fi
   if has_tool skills; then
@@ -983,6 +1038,71 @@ scenario_skill_multi_agent_distribution() {
   # （skills 以外のツールはこのサンドボックスに配っていない）。
   assert_not_exists "$prefix/generations"
   assert_not_exists "$prefix/current"
+}
+
+# ── シナリオ11c: codex/opencodeは導入済みエージェントだけにsymlinkされる ──
+
+scenario_agent_instructions_not_installed_skip() {
+  log "=== シナリオ11c: codex/opencodeは導入済みエージェントだけにsymlinkされる ==="
+  local sbx prefix out rc
+
+  new_sandbox
+  sbx="$SANDBOX_DIR"
+  prefix="$(dotfiles_prefix_for "$sbx")"
+
+  # エージェントのホームが実在するかどうかだけが配布の条件（ADR
+  # DOC-2608272128 §2.3、ADR DOC-2609072334）。codex だけホームを作り、
+  # opencode は作らない。claude/deploy.sh はこのシナリオでは呼ばないが、
+  # 世代には常に全ツール分がコピーされるので symlink 元の claude/CLAUDE.md
+  # は存在する（AGENTS.md「デプロイの仕組み」の --only の注記どおり）。
+  mkdir -p "$sbx/.codex"
+
+  out="$(run_deploy "$sbx" --force --only codex,opencode 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "deploy-all.sh --force --only codex,opencode が失敗 (exit=$rc)"
+    log "$out"
+    return
+  fi
+
+  assert_symlink "$sbx/.codex/AGENTS.md" "$prefix/current/claude/CLAUDE.md"
+  # ホームが無いエージェントには何も作らない。opencode ディレクトリごと
+  # 生えていないことまで確認する（親を勝手に掘っていない証拠）。
+  assert_not_exists "$sbx/.config/opencode"
+
+  if printf '%s' "$out" | grep -q "Skipping opencode"; then
+    pass "未導入のopencodeはスキップされた旨が報告される"
+  else
+    fail "未導入のopencodeはスキップされた旨が報告される"
+  fi
+
+  # --status のリンク健全性スキャンは AVAILABLE_TOOLS を総なめする
+  # (links_for_tool() 経由)。ここへ arm を足し忘れると codex/opencode は
+  # 一覧から静かに抜け落ちる（uninstall.sh の「No link list defined」と
+  # 同種の見落としがdeploy-all.sh --statusにも起こりうる、という懸念への
+  # regression テスト）。
+  out="$(run_deploy "$sbx" --status 2>&1)"
+  if printf '%s' "$out" | grep -qF "$sbx/.codex/AGENTS.md"; then
+    pass "--statusのリンク健全性スキャンが~/.codex/AGENTS.mdを列挙する"
+  else
+    fail "--statusのリンク健全性スキャンが~/.codex/AGENTS.mdを列挙する"
+  fi
+  if printf '%s' "$out" | grep -qF "$sbx/.config/opencode/AGENTS.md"; then
+    pass "--statusのリンク健全性スキャンが未導入のopencode分も(MISSINGとして)列挙する"
+  else
+    fail "--statusのリンク健全性スキャンが未導入のopencode分も(MISSINGとして)列挙する"
+  fi
+
+  # uninstall はcodexだけ撤去する。導入済みかどうかを問わずAVAILABLE_TOOLS
+  # を総なめするので、opencode(未導入)を含んでいても失敗しないことも確認。
+  out="$(run_uninstall "$sbx" --force --only codex,opencode 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "uninstall.sh --force --only codex,opencode が失敗 (exit=$rc)"
+    log "$out"
+    return
+  fi
+  assert_not_exists "$sbx/.codex/AGENTS.md"
 }
 
 # ── シナリオ12: デプロイ済み状態でのdry-runが作業ツリーへのリンクを提案しない ──
@@ -2404,6 +2524,8 @@ log
 scenario_skill_migration
 log
 scenario_skill_multi_agent_distribution
+log
+scenario_agent_instructions_not_installed_skip
 log
 scenario_claude_dry_run_matches_deployed_state
 log
