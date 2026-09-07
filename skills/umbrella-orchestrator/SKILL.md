@@ -321,7 +321,8 @@ ok = m and (latest_sha.startswith(m.group(1)) or m.group(1).startswith(latest_sh
      傘ブランチを指さないため孫→傘の判定には使えない。その孫は `ocw rm` が
      **ほぼ確実に** `--force` を要求する（合成リポジトリでの再現実験で確認済み。
      §3.3 参照）。**`--force` を先に承認したことにはならない。** 実際にクリーン
-     アップする際は §3.3 の安全確認手順（`gh` でのマージ済み確認 → 人間の承認）を
+     アップする際は §3.3「クリーンアップ提案」にある**「`--force` を使うときの
+     安全確認手順」**（`gh` でのマージ済み確認 → 人間の承認 → `--force`）を
      省略せず踏むこと
    - 以下のプロンプトを新しい会話で実行するよう案内する:
      ```
@@ -415,8 +416,11 @@ ok = m and (latest_sha.startswith(m.group(1)) or m.group(1).startswith(latest_sh
      成立し得ないことは再現実験で確定した）。傘1本（`ocw-usage-discovery` →
      `master`）はこれとは別原因で、`master` に**無関係な別PRが先に着地し同じ
      ファイルへ重複して変更が入った**ことで squash 差分の patch-id が一致しなく
-     なったケースであり、下記の「known blind spot」にそのまま該当する（base-ref
-     自体は `master` を正しく指していた）。唯一 `--force` なしで通った
+     なったケースであり、下記の「known blind spot」にそのまま該当する（傘→`master`
+     の判定では `HEAD` / `origin/HEAD` 経由で必ず `master` が候補に入るため、これは
+     候補の向き先の問題ではなく squash 検出側の限界である。`ocw-base-ref` の中身
+     自体は当時のワークツリーが既に削除済みのため確認できない）。唯一
+     `--force` なしで通った
      `agent-handoff`（傘）は `git diff master..agent-handoff` が0ファイルだった
      ケースで、「重複変更さえ無ければ検出は成立する」という結論と矛盾しない。
      原因の全容（`ocw -H` 呼び出し時に傘ブランチ名の引数が実際に省略されていたか）
@@ -432,10 +436,15 @@ ok = m and (latest_sha.startswith(m.group(1)) or m.group(1).startswith(latest_sh
        変わった（`bin/ocw` 自身が検出できないと明記している limitation。
        `ocw help rm` の「known blind spot」）。(a) は孫作成時の base-ref 指定
        ミスとして事前に防げるが、(b) は統合先の状態に依存するため事前には防げない。
-       司令官は `/check` の時点で PR番号とマージ状態を既に握っているので、
-       いずれの場合も `gh pr list --head <branch> --state merged` で
-       マージ済みを確認したうえで人間の承認を得て `--force` を使う（後述の
-       安全確認手順を参照。原因の切り分け自体は必須ではない）
+       原因の切り分け自体は必須ではなく、いずれの場合も次の**`--force` を使うときの
+       安全確認手順**を踏む（計画書 `docs/planning/DOC-2609080222` 背景6.1が
+       確定させた要件）:
+       1. `gh pr list --head <branch> --state merged --json number,title,mergedAt`
+          で対象PRが `merged` であることを確認する（司令官は `/check` の時点で
+          PR番号とマージ状態を既に握っている）
+       2. 人間に「マージ済みを確認しました。`--force` で削除してよいですか」と
+          承認を求める
+       3. 承認を得てから `ocw rm -f <branch>` を実行する
      - **`cannot determine an integration ref ...: set ocw.mergedInto or
        use -f`** — 候補 ref が1つも解決できなかった場合。非 bare リポジトリでは
        `HEAD` が必ず解決するため、**通常の傘運用ではまず出ない**
@@ -465,9 +474,10 @@ ok = m and (latest_sha.startswith(m.group(1)) or m.group(1).startswith(latest_sh
   停止する（`bin/ocw` の設計。破壊的操作のため）。`/check` `/autopilot` の無人巡回中に
   これが起きたら、そのクリーンアップだけをスキップして人間に完全な名前の指定を仰ぐ。
   他の孫の処理は止めない
-- 傘運用で `ocw.mergedInto` を明示設定する必要は無い。作成時のベース（傘ブランチ）が
-  自動的にマージ判定の候補へ入るため（本節冒頭を参照）、squash 検出との組み合わせで
-  素の `ocw rm` が通常どおり通る
+- 傘運用で `ocw.mergedInto` を明示設定する必要は無い。設定すると孫→傘の判定には
+  使えるようになるが、リポジトリ全体の設定であるため傘→`master` の判定にも影響する
+  副作用がある（本節冒頭を参照）。設定しない代わりに、孫の掃除では `--force` を
+  要求されるのが既定であることを前提にする
 
 ### 3.4 `/finalize`
 
