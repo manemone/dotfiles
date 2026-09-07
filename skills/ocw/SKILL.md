@@ -11,9 +11,10 @@ commander/implementer/reviewer マルチペイン環境をセットアップす�
 
 ## 使い方は `ocw help` で調べる
 
-**`bin/ocw` の実体（約44 KB・約1万2千トークン）や `bin/README.md` を読みに行くな。**
+**`bin/ocw` の実体（60 KB 超）や `bin/README.md` を読みに行くな。**
 どちらも高コストで、しかも `bin/README.md` は `$HOME` に配布されないため、他プロジェクトで
-作業しているあなたからはそもそも読めない（配布対象は `bin/ocw` の実体だけ）。
+作業しているあなたからはそもそも読めない（`bin/` から `$HOME` に配布されるのは実行ファイル
+`ocw` / `claude-ds` / `ocw-meter` のみで、`README.md` は含まれない）。
 
 ```bash
 ocw help          # コマンド構文（synopsis）+ topic 一覧

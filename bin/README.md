@@ -103,6 +103,8 @@ ocw help all     # 全 topic を連結
 `ocw help` のtopic階層化とこの整理そのものの設計判断は計画書
 [DOC-2609072210](../docs/planning/DOC-2609072210_ocw-usage-discovery_計画.md) を参照。
 
+**`{name}` の直前に `/` が無い雛形も使える**（例: `git config ocw.worktreeDir '{repo_parent}/{repo}-{name}'` で、通常の clone の隣に `<repo>-<name>` という接頭辞付きディレクトリを作る）。`ocw help config` の die 条件の説明は「`{name}` の直前に `/` が無い雛形」を拒否対象として書いているが、実際に見ているのは雛形全体のどこかに `/` があるかどうかであり、`{name}` の直前である必要はない。この例は `ocw help` のどのtopicにも出てこないため、ここに残す。
+
 **「リポジトリ内に隠す」レイアウト（`ocw.worktreeDir` を `{repo_root}/.worktrees/{name}` に
 設定する場合）の注意**: worktree をメインワークツリーの内側に作ると、git はそのディレクトリを
 自動では無視しない。メインワークツリーの `git status` が常に汚れ、`git clean -fdx` が他の
@@ -523,11 +525,7 @@ export OCW_IMPLEMENTER_COMMAND=claude-ds
 export OCW_REVIEWER_COMMAND=claude
 ```
 
-| Variable | Default | Purpose |
-|---|---|---|
-| `OCW_COMMANDER_COMMAND` | `claude` | commander ペインで実行するコマンド。`--no-commander` を付けた2ペインモードでは使われない |
-| `OCW_IMPLEMENTER_COMMAND` | `claude` | implementer ペインで実行するコマンド |
-| `OCW_REVIEWER_COMMAND` | `claude` | reviewer ペインで実行するコマンド |
+各変数の名前・既定値・`--no-commander` 時の扱いは `ocw help env` を参照。
 
 ### claude-ds の API キー設定
 
@@ -579,7 +577,7 @@ chmod 600 ~/.config/deepseek/api_key
 
 ### VS Code を開かずに worktree だけ作りたい（スクリプト・自動化・動作確認用）
 
-`OCW_NO_VSCODE=1` を設定すると、`--herdr` なしのデフォルトモードでも VS Code を起動しません（`code` の有無に関わらず無条件でスキップします）。`ocw` 自体の動作をスクリプトや手元のシェルから直接検証したいとき、あるいは自動化パイプラインから呼ぶときに使ってください。
+`ocw` 自体の動作をスクリプトや手元のシェルから直接検証したいとき、あるいは自動化パイプラインから呼ぶときは `OCW_NO_VSCODE` を使う。意味論（デフォルト・判定タイミング）は `ocw help env` を参照。
 
 ```bash
 OCW_NO_VSCODE=1 ocw widget-maker
