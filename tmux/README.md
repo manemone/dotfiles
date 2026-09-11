@@ -148,6 +148,36 @@ Prefix: `C-q` (Ctrl+q)
 
 The config uses a fallback chain on Linux: `xclip || wl-copy || true` — it never fails on clipboard operations.
 
+#### Clipboard over SSH (OSC 52)
+
+The methods above write to the clipboard of the machine tmux is running on. If
+you SSH into a remote machine (e.g. a Herdr-managed sandbox) and run tmux
+there, `pbcopy`/`xclip`/`wl-copy` write to *that remote machine's* clipboard,
+not the clipboard of the terminal you are physically typing into — and on a
+headless remote host, `xclip`/`wl-copy` may not work at all.
+
+To cover this case, `tmux.conf` also sets `set-clipboard on`. This makes tmux
+emit the copied text as an OSC 52 escape sequence to the terminal at the other
+end of the connection, in addition to the platform-specific copy above. Most
+modern terminal emulators apply OSC 52 to their own (local) clipboard, so a
+mouse-drag copy inside a remote/SSH tmux session lands in the clipboard of
+your local terminal.
+
+**This requires your local terminal to accept OSC 52 writes.** If you use
+[Warp](https://www.warp.dev/), OSC 52 clipboard access is disabled by default
+and must be enabled in `settings.toml`:
+
+```toml
+[terminal]
+osc52_clipboard_access = "write_only"
+```
+
+(`"write_only"` is enough for tmux → local clipboard; use `"read_write"` if
+you also want programs inside tmux to be able to read the local clipboard.)
+Other terminals (iTerm2, kitty, WezTerm, Windows Terminal, ...) generally
+support OSC 52 out of the box; check your terminal's documentation if pasting
+doesn't work.
+
 ## 4. Customization
 
 ### Changing the Prefix Key
@@ -216,6 +246,15 @@ sudo apt install xclip
 # Wayland
 sudo apt install wl-clipboard
 ```
+
+### Clipboard copy not working (SSH / remote tmux)
+
+If tmux is running on a remote machine you connected to over SSH (e.g. a
+Herdr-managed sandbox), the mouse-drag copy needs to reach your *local*
+terminal's clipboard via OSC 52 — see
+[Clipboard over SSH (OSC 52)](#clipboard-over-ssh-osc-52) above. If you use
+Warp, check that `osc52_clipboard_access` is set to `"write_only"` or
+`"read_write"` in `settings.toml`; it is `"deny"` by default.
 
 ### Clipboard copy not working (WSL)
 
