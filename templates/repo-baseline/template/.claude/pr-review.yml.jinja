@@ -1,0 +1,19 @@
+# このファイルは pr-review-loop スキル（skills/pr-review-loop/SKILL.md）が読みます。
+# `.claude/` という名前ですが Claude Code 専用の設定ではありません。読むのは
+# pr-review-loop スキル自身であり、どの AI エージェント（Claude Code / Codex / OpenCode）
+# から実行しても同じように読めます。
+{% if lint_cmd %}
+lint_cmd: {{ lint_cmd | tojson }}
+{% endif -%}
+{% if test_cmd %}
+test_cmd: {{ test_cmd | tojson }}
+{% endif -%}
+{% if use_doc_id %}
+convention_docs:
+  - "docs/design/DOC-DOCID_PLACEHOLDER_プルリクエストの作法.md"
+{% endif -%}
+markers:
+  approved: "🤖✅ 承認"
+  changes_requested: "🤖🔍 レビュー指摘"
+  reply: "🤖💬 対応報告"
+# reviewer_cmd: "claude"  # レビュワーペインでエージェントを起動し直すコマンド（省略可。マシン・人の都合なので既定では書かない）
