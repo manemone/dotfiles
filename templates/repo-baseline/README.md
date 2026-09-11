@@ -53,6 +53,12 @@ PR作法 doc を1件）を埋めます。`.claude/` という名前ですが Cla
 生成直後、まだ手を付けていない状態でやること:
 
 ```bash
+# git add より前に doc-id assign を実行しない（`doc-id assign` が参照を置換するのは
+# git ls-files --cached で列挙される追跡済みファイルだけであり、copier copy 直後の
+# 生成物は未追跡のため、先に git add しないと .claude/pr-review.yml の
+# convention_docs 等の参照が置換されずに残る）
+git add -A
+
 # DOC-ID の採番（プレースホルダのままのファイルがある場合）
 ./tools/doc-id/doc-id assign docs/design/DOC-DOCID_PLACEHOLDER_プルリクエストの作法.md
 ./tools/doc-id/doc-id assign docs/design/DOC-DOCID_PLACEHOLDER_コーディング方針.md

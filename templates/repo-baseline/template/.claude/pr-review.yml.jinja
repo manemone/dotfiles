@@ -3,10 +3,10 @@
 # pr-review-loop スキル自身であり、どの AI エージェント（Claude Code / Codex / OpenCode）
 # から実行しても同じように読めます。
 {% if lint_cmd %}
-lint_cmd: {{ lint_cmd | tojson }}
+lint_cmd: "{{ lint_cmd | replace('\\', '\\\\') | replace('"', '\\"') }}"
 {% endif -%}
 {% if test_cmd %}
-test_cmd: {{ test_cmd | tojson }}
+test_cmd: "{{ test_cmd | replace('\\', '\\\\') | replace('"', '\\"') }}"
 {% endif -%}
 {% if use_doc_id %}
 convention_docs:

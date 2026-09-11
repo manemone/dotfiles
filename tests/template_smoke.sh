@@ -179,7 +179,15 @@ import os
 import yaml
 
 with open(path, encoding="utf-8") as f:
-    doc = yaml.safe_load(f)
+    raw = f.read()
+
+# .claude/pr-review.yml は YAML パーサではなく pr-review-loop スキル（AI）が
+# `cat` で生テキストのまま読む前提のファイルである。tojson の \uXXXX エスケープ
+# （HTML向け。& ' < > を変換する）が紛れ込むと、YAML としては読み戻せても
+# 生テキストを読む AI には壊れたコマンドに見える（PR #81 レビュー指摘）。
+assert "\\u00" not in raw, f"生テキストに \\uXXXX エスケープが混入している（tojson 回帰の疑い）: {raw!r}"
+
+doc = yaml.safe_load(raw)
 
 assert isinstance(doc, dict), f"YAML のトップレベルが dict ではない: {doc!r}"
 
@@ -262,7 +270,7 @@ PYEOF
 
 check_combo "全部盛り(use_doc_id/use_ci/has_long_running_commands/use_adr/use_reference すべて true, lint/test に特殊文字あり)" "" \
   --data default_branch=main \
-  --data 'lint_cmd=pytest -k "not slow"' \
+  --data 'lint_cmd=pytest -k "not slow" && echo done' \
   --data 'test_cmd=npm run lint -- --max-warnings: 0' \
   --data use_doc_id=true \
   --data use_ci=true \

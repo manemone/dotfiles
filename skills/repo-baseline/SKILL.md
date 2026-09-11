@@ -90,10 +90,17 @@ copier が対話式に質問してくる。答え方の判断は「4. 質問へ�
 生成直後の状態は骨組みに過ぎない。以下を対象リポジトリの実態を調べたうえで埋める。
 
 - [ ] `.claude/pr-review.yml` が git に追跡される状態か確認する
-      （`git check-ignore -v .claude/pr-review.yml` を実行し、何も出なければ追跡されている）。
-      既存の `.gitignore` が `.claude/` を丸ごと無視している場合、`!/.claude/pr-review.yml`
-      のような否定行を足す。**`doc-id assign` より前に**やること（未追跡だと
-      `convention_docs` の参照が置換されず、切れたパスが残る）
+      （`git check-ignore -q .claude/pr-review.yml` を実行し、終了コードが1なら
+      無視されていない。**`-v` は否定行にマッチした場合もその行を出力するため、
+      「何も出なければよい」という判定はできない**）。既存の `.gitignore` が
+      `.claude/` や `/.claude` のように**ディレクトリそのもの**を無視している場合、
+      `!/.claude/pr-review.yml` のような否定行を足すだけでは効かない
+      （gitignore の仕様上、無視された親ディレクトリの中身は否定行で戻せない）。
+      その行を `/.claude/*` に書き換えたうえで否定行を足す。無視を解いたら
+      `git add .claude/pr-review.yml` し、`git ls-files --error-unmatch
+      .claude/pr-review.yml` でインデックスに載っていることを確かめる。
+      **`doc-id assign` より前に**やること（未追跡だと `convention_docs` の
+      参照が置換されず、切れたパスが残る）
 - [ ] `AGENTS.md` の「概要」: このリポジトリが何をするものかを1〜3文で
 - [ ] `AGENTS.md` の「ディレクトリ構成」: 主要ディレクトリの役割を表にする
 - [ ] `AGENTS.md` の「最重要ルール」: このリポジトリ固有の破壊的操作があれば追記
@@ -112,7 +119,10 @@ copier が対話式に質問してくる。答え方の判断は「4. 質問へ�
       安全な読み取り・検証コマンドを列挙する（マシン固有の絶対パスを含めないこと）
 
 生成直後に置かれている `docs/design/DOC-DOCID_PLACEHOLDER_*.md` は
-`./tools/doc-id/doc-id assign <file>` で採番してから中身を埋めること。
+`./tools/doc-id/doc-id assign <file>` で採番してから中身を埋めること。**`doc-id assign` の
+前に `git add` してから採番する。**`doc-id assign` が参照を置換するのは `git ls-files
+--cached` で列挙される追跡済みファイルだけであり、`copier copy` 直後の生成物は未追跡のため、
+先に追跡させないと `.claude/pr-review.yml` の `convention_docs` 等の参照が置換されずに残る。
 
 ## 6. 傘ブランチ運用について
 
