@@ -168,6 +168,48 @@ assert_decision \
   "git push に未知の値取りオプションが混入: 安全に解決できず ask" \
   "ask" "$(run_hook "git push --unknown-opt value origin feature --force" | extract_decision)"
 
+# refspec が "HEAD" / "@"（現在のブランチを指す特殊参照）のとき、文字列
+# のまま比較せず現在のブランチへ解決すること（レビュー指摘2の回帰）。
+export GIT_GUARD_TEST_CURRENT_BRANCH="master"
+assert_decision \
+  "git push --force-with-lease origin HEAD: 現在のブランチ(保護)へ解決して deny" \
+  "deny" "$(run_hook "git push --force-with-lease origin HEAD" | extract_decision)"
+assert_decision \
+  "git push --force-with-lease origin @: 現在のブランチ(保護)へ解決して deny" \
+  "deny" "$(run_hook "git push --force-with-lease origin @" | extract_decision)"
+unset GIT_GUARD_TEST_CURRENT_BRANCH
+
+export GIT_GUARD_TEST_CURRENT_BRANCH="feature"
+assert_decision \
+  "git push --force-with-lease origin HEAD: 現在のブランチ(非保護)へ解決して allow" \
+  "allow" "$(run_hook "git push --force-with-lease origin HEAD" | extract_decision)"
+unset GIT_GUARD_TEST_CURRENT_BRANCH
+
+# ── gh pr merge に --repo/-R が付くケース（レビュー指摘3の回帰）────
+# --repo/-R は gh pr view の対象リポジトリを cwd 以外へ切り替えるため、
+# 安全に base を解決できない。base=非保護でも allow に倒れないこと。
+export GIT_GUARD_TEST_BASE_REF="autopilot-permissions"
+assert_decision \
+  "gh pr merge --repo <owner/repo>: 対象リポジトリを安全に解決できず ask" \
+  "ask" "$(run_hook "gh pr merge 1 --repo other/repo --squash" | extract_decision)"
+assert_decision \
+  "gh pr merge -R <owner/repo>: 対象リポジトリを安全に解決できず ask" \
+  "ask" "$(run_hook "gh pr merge 1 -R other/repo --squash" | extract_decision)"
+assert_decision \
+  "gh pr merge --repo=<owner/repo>: 対象リポジトリを安全に解決できず ask" \
+  "ask" "$(run_hook "gh pr merge 1 --repo=other/repo --squash" | extract_decision)"
+unset GIT_GUARD_TEST_BASE_REF
+
+# ── has_chain の引用符誤検出対策（レビュー指摘4の回帰）────────────
+# コミットメッセージ等の引用符の中に ; / | があるだけの無関係なコマンドを
+# 連結と誤認して ask に倒さないこと。
+assert_decision \
+  "引用符内の ';' はコマンド連結と誤認しない" \
+  "(none)" "$(run_hook 'git commit -m "merge 済み判定を追加; 掃除も"' | extract_decision)"
+assert_decision \
+  "引用符内の '|' はコマンド連結と誤認しない" \
+  "(none)" "$(run_hook 'git commit -m "push|pull を整理"' | extract_decision)"
+
 # ── git merge ────────────────────────────────────────────────────
 export GIT_GUARD_TEST_CURRENT_BRANCH="master"
 assert_decision \

@@ -140,10 +140,19 @@ def find_subcommand(tokens, words):
     return None
 
 
+def strip_quoted(command):
+    # シングル/ダブルクォートで囲まれた区間を取り除く。has_chain() の
+    # 判定にだけ使う（コミットメッセージ中の "merge 済み; 掃除も" のような
+    # 引用符内の ; / | を連結と誤認しないため）。エスケープされた引用符や
+    # ネストしたクォートを厳密に再現するものではないが、万一取りこぼしても
+    # && / ; / | が残っていれば ask に倒れるだけで allow 方向には振れない。
+    return re.sub(r"'[^']*'|\"[^\"]*\"", "", command)
+
+
 def has_chain(command):
     # 複数コマンドが && / ; / | で連結されている場合、対象を一意に特定
     # できないため ask に倒す（fail-safe）。
-    return bool(re.search(r"&&|;|\|", command))
+    return bool(re.search(r"&&|;|\|", strip_quoted(command)))
 
 
 def subcommand_of(tokens, prog):
@@ -179,6 +188,14 @@ def handle_gh_pr_merge(command, cwd):
     start = find_subcommand(tokens, ["gh", "pr", "merge"])
     if start is None:
         ask("git-guard: gh pr merge の対象を特定できませんでした（グローバルオプションの可能性）")
+        return
+    # --repo/-R は gh pr view の対象リポジトリを cwd 以外へ切り替える。
+    # これを無視すると、判定対象（cwd のリポジトリ）と実際にマージされる
+    # リポジトリが食い違い、別リポジトリの base を見て誤って allow しうる。
+    if any(
+        tok in ("--repo", "-R") or tok.startswith("--repo=") for tok in tokens
+    ):
+        ask("git-guard: --repo/-R 指定付き gh pr merge は対象リポジトリを安全に解決できません")
         return
     target = None
     for tok in tokens[start:]:
@@ -269,7 +286,13 @@ def handle_git_push(command, cwd):
         dst = refspec.split(":")[-1] if ":" in refspec else refspec
         if dst.startswith("refs/heads/"):
             dst = dst[len("refs/heads/") :]
-        target_branch = dst
+        if dst in ("HEAD", "@"):
+            # "HEAD" / "@" は「現在チェックアウトしているブランチ」を指す
+            # git の特殊参照であり、ブランチ名そのものではない。文字列の
+            # まま比較すると常に非保護扱いになってしまう。
+            target_branch = current_branch(cwd)
+        else:
+            target_branch = dst
     else:
         target_branch = current_branch(cwd)
 

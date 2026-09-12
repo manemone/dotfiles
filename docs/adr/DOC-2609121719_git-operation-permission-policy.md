@@ -170,6 +170,9 @@ force push だけ止め、孫ブランチへの force-with-lease は通す」と
 
 ## 6. 既知の制限
 
+- **force 系フラグ（`--force` / `--force-with-lease` / `-f` / `+<refspec>`）を伴わない
+  `git push`（例: `git push origin master`）はこのフックの対象外であり、何も言わず
+  `permissions` の判定に委ねる。** 判定表の「上記以外」に該当する。
 - コマンドのトークン化には `shlex.split()`（POSIX モード）を使う。複雑な
   シェル構文（コマンド置換、変数展開を含むもの）は正しく解釈できない場合が
   あるが、その場合は例外を捕捉して `ask` に倒すため安全性は保たれる。
