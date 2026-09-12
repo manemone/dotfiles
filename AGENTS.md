@@ -9,8 +9,36 @@
 
 ## 最重要ルール
 
-- **人間の明示的指示がない限り、`git merge` / `git pull` / `git reset --hard` /
-  `git push --force` / `gh pr merge` を実行しない。例外はない。**
+- **`master` を書き換える操作（マージ・push・force push）は人間だけが行う。例外はない。**
+  - 傘ブランチ配下の操作は AI が行ってよい。孫ブランチ → 傘ブランチのマージは
+    **レビューで承認済みの PR に限り** AI が実行してよい
+    （`gh pr merge <PR番号> --squash --delete-branch`）。傘ブランチは孫を安全に
+    統合するための隔離された場所であり、そこへのマージまで人間待ちにすると
+    傘ブランチ方式が機能しない
+  - 傘ブランチへの上流取り込みは `git fetch origin` + `git merge origin/master`
+    で行う（傘ブランチは孫のマージで `master` より進んでいるため、ここは
+    `--ff-only` ではなく通常の `merge` を使う）
+  - 孫ブランチを傘ブランチへ追随させるときは `git rebase origin/<傘ブランチ>` +
+    **孫ブランチ限定**の `git push --force-with-lease` で行う（`master` への
+    force push は対象外）。孫ブランチは自分の作業コミットを持つのが通常であり、
+    傘ブランチが他の孫のマージで進んでいれば孫と傘は必ず分岐するため、
+    `git merge --ff-only` は使わない
+  - 上記の `fetch` + `merge` / `rebase` + `push` は、**`&&` 等で連結せず別々の
+    コマンドとして実行する**（連結すると `claude/hooks/git-guard.sh` が対象を
+    一意に特定できず `ask` に倒れる）
+  - `git pull` は使わない
+  - `git reset --hard` / `git clean` / 裸の `git push --force`（lease なし）は、
+    ブランチを問わず引き続き人間の承認が要る
+  - `claude/hooks/git-guard.sh`（PreToolUse フック。ADR
+    [DOC-2609121719](docs/adr/DOC-2609121719_git-operation-permission-policy.md)
+    参照）は、上記のうち `gh pr merge`・force系 `git push`・`git merge` の
+    保護ブランチ判定だけを機械的に担保する。**`git pull` を使わないこと・
+    孫→傘のマージをレビュー承認済みPRに限ることは、フックの対象外であり
+    この文言だけが歯止め。** また、フックは `permissions.allow` を返しても
+    `permissions.ask` / `deny` を上書きできない（制限を足すだけ）ため、
+    `claude/settings.json` 側の `ask` / `allow` パターンと矛盾がないか
+    合わせて確認すること
+
   すべての不可逆操作の前にこのルールを照合すること。
 - **deploy スクリプト（`deploy-all.sh` / `uninstall.sh` / `*/deploy.sh`）を実オペレーションで
   実行しない。** `$HOME` 側のシンボリックリンクは配布実体
