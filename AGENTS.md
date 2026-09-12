@@ -15,19 +15,30 @@
     （`gh pr merge <PR番号> --squash --delete-branch`）。傘ブランチは孫を安全に
     統合するための隔離された場所であり、そこへのマージまで人間待ちにすると
     傘ブランチ方式が機能しない
-  - 傘ブランチへの上流取り込みや、孫ブランチの傘ブランチへの追随も AI が行ってよい
-  - **孫ブランチ限定**で `git push --force-with-lease` を使ってよい（`master` への
-    force push は対象外）
-  - `git pull` は使わない。ブランチの追随は `git fetch origin` +
-    `git merge --ff-only origin/<branch>` で行い、孫ブランチを傘ブランチへ追随させる
-    ときは `git rebase origin/<傘ブランチ>` + `git push --force-with-lease` で行う
+  - 傘ブランチへの上流取り込みは `git fetch origin` + `git merge origin/master`
+    で行う（傘ブランチは孫のマージで `master` より進んでいるため、ここは
+    `--ff-only` ではなく通常の `merge` を使う）
+  - 孫ブランチの傘ブランチへの追随は `git fetch origin` +
+    `git merge --ff-only origin/<傘ブランチ>` で行う
+  - 孫ブランチを傘ブランチへ追随（rebase）させるときは
+    `git rebase origin/<傘ブランチ>` + **孫ブランチ限定**の
+    `git push --force-with-lease` で行う（`master` への force push は対象外）
+  - 上記の `fetch` + `merge` / `rebase` + `push` は、**`&&` 等で連結せず別々の
+    コマンドとして実行する**（連結すると `claude/hooks/git-guard.sh` が対象を
+    一意に特定できず `ask` に倒れる）
+  - `git pull` は使わない
   - `git reset --hard` / `git clean` / 裸の `git push --force`（lease なし）は、
     ブランチを問わず引き続き人間の承認が要る
-  - この線引きは `claude/hooks/git-guard.sh`（PreToolUse フック）が機械的に担保する
-    （ADR [DOC-2609121719](docs/adr/DOC-2609121719_git-operation-permission-policy.md)
-    参照）。ただしフックは `permissions.allow` を返しても `permissions.ask` /
-    `deny` を上書きできない（制限を足すだけ）ため、`claude/settings.json` 側の
-    `ask` / `allow` パターンと矛盾がないか合わせて確認すること
+  - `claude/hooks/git-guard.sh`（PreToolUse フック。ADR
+    [DOC-2609121719](docs/adr/DOC-2609121719_git-operation-permission-policy.md)
+    参照）は、上記のうち `gh pr merge`・force系 `git push`・`git merge` の
+    保護ブランチ判定だけを機械的に担保する。**`git pull` を使わないこと・
+    孫→傘のマージをレビュー承認済みPRに限ることは、フックの対象外であり
+    この文言だけが歯止め。** また、フックは `permissions.allow` を返しても
+    `permissions.ask` / `deny` を上書きできない（制限を足すだけ）ため、
+    `claude/settings.json` 側の `ask` / `allow` パターンと矛盾がないか
+    合わせて確認すること
+
   すべての不可逆操作の前にこのルールを照合すること。
 - **deploy スクリプト（`deploy-all.sh` / `uninstall.sh` / `*/deploy.sh`）を実オペレーションで
   実行しない。** `$HOME` 側のシンボリックリンクは配布実体
