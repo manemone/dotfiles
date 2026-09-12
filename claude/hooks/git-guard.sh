@@ -41,6 +41,7 @@ command -v python3 >/dev/null 2>&1 || exit 0
 GIT_GUARD_PROTECTED_BRANCHES="$GIT_GUARD_PROTECTED_BRANCHES" python3 - "$INPUT" <<'PYEOF'
 import json
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -72,11 +73,18 @@ MERGE_VALUE_TAKING = {
 # 見ないと、その値をマージ対象と取り違えて cwd 基準で解決してしまう。
 REPO_FLAGS = {"-R", "--repo"}
 
-# `gh` をコマンドとして扱ってよい位置。直前がこれらのいずれか（または先頭）
-# でなければ、ヒアドキュメントの本文や他コマンドの引数として現れた `gh` で
-# あり、実行されない。誤って deny すると無人ペインが止まる（deny は
+# `gh` をコマンドとして扱ってよい位置。行頭、または直前がこれらのいずれか。
+# そうでなければ他コマンドの引数として現れた `gh`（`echo gh pr merge 1` 等）
+# であり実行されない。誤って deny すると無人ペインが止まる（deny は
 # bypassPermissions でも覆せないぶん ask より強く止まる）。
 COMMAND_POSITION_PREV = {"&&", "||", ";", ";;", "|", "|&", "(", ")", "{", "}", "do", "then", "else", "!"}
+
+# ヒアドキュメントの開始（`<<EOF` / `<<'EOF'` / `<<-"EOF"`）。本文は実行され
+# ないため、トークン化の前に丸ごと落とす。落とさないと、本文の行頭に来た
+# `gh pr merge <実PR番号>` を実コマンドと誤認して deny する（ただのファイル
+# 書き込みが止まる）。位置の推測ではなく本文自体を除くことで、この誤検知と
+# 「改行区切りの gh pr merge を取りこぼす」の両方を同時に閉じる。
+HEREDOC_RE = re.compile(r"<<-?\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1")
 
 
 def emit(decision, reason=None):
@@ -94,6 +102,44 @@ def emit(decision, reason=None):
 
 def say_nothing():
     sys.exit(0)
+
+
+def strip_heredocs(command):
+    # ヒアドキュメントの本文と終端行を落とす。開始行自体は残す。
+    lines = command.split("\n")
+    out = []
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        out.append(line)
+        match = HEREDOC_RE.search(line)
+        i += 1
+        if match is None:
+            continue
+        delimiter = match.group(2)
+        while i < len(lines) and lines[i].strip() != delimiter:
+            i += 1
+        i += 1  # 終端行そのものも落とす（無ければループを抜ける）
+    return out
+
+
+def tokenize_lines(command):
+    # 行ごとにトークン化して返す。**行を1単位にするのは、shlex が改行を
+    # 単なる空白として捨ててしまい、`cd /tmp` 改行 `gh pr merge 1` の 2 行目が
+    # コマンド位置だと分からなくなるため。** `;` が前の語に密着した形
+    # （`cd /tmp; gh pr merge 1`）も区切りとして残らないので、punctuation_chars
+    # 付きの lexer を使って `;` / `&&` / `||` / `|` を独立したトークンにする。
+    # クォートは lexer が解釈するため、引用符の中の `;` では切れない。
+    # 解釈できない行（クォートが閉じていない等）はその行だけ捨てる。
+    result = []
+    for line in strip_heredocs(command):
+        lexer = shlex.shlex(line, posix=True, punctuation_chars=True)
+        lexer.whitespace_split = True
+        try:
+            result.append(list(lexer))
+        except ValueError:
+            continue
+    return result
 
 
 def repo_arg_of(tok, nxt):
@@ -114,8 +160,8 @@ def find_pr_merge(tokens):
         if tok != "gh":
             continue
         if i > 0 and tokens[i - 1] not in COMMAND_POSITION_PREV:
-            # 実行されない `gh`（ヒアドキュメントの本文、`echo gh pr merge 95` の
-            # 引数など）。拾うと無関係な書き込みコマンドが deny される。
+            # 実行されない `gh`（`echo gh pr merge 95` の引数など）。拾うと
+            # 無関係なコマンドが deny される。
             continue
         repo_args = []
         j = i + 1
@@ -203,12 +249,11 @@ def main():
     if not isinstance(command, str) or not command.strip():
         say_nothing()
 
-    try:
-        tokens = shlex.split(command)
-    except ValueError:
-        say_nothing()
-
-    found = find_pr_merge(tokens)
+    found = None
+    for tokens in tokenize_lines(command):
+        found = find_pr_merge(tokens)
+        if found is not None:
+            break
     if found is None:
         say_nothing()
 

@@ -277,7 +277,14 @@ PreToolUse フック）が担保するのは**1点だけ**である。
 | 上記以外のすべて（`git push` / `git merge` / `chmod` / `rm` / 連結コマンド / `git -C` …） | **何も言わない** |
 
 `-R` / `--repo` は `gh pr view` 側へ引き継ぐ（別リポジトリの PR を手元のブランチ
-構成で判定しないため）。
+構成で判定しないため）。`--repo` は `gh pr` の inherited flag なので、`gh` の直後
+（`gh -R o/r pr merge 7`）と `pr merge` の後ろ（`gh pr merge 7 -R o/r`）の両方を見る。
+
+拾う `gh` は**コマンド位置にあるものだけ**（行頭、または直前が `&&` / `||` / `;` /
+`|` / `do` / `then` などのトークン）。この判定にはヒアドキュメント本文の除去・
+行単位のトークン化・`punctuation_chars` 付き lexer の3つが揃って必要で、1つでも
+欠けると「ただのファイル書き込みが `deny` される」か「改行区切り・`;` 密着形の
+`gh pr merge` を素通りさせる」のどちらかが出る（ADR §3.1）。
 
 **`main`/`master` への `git push` は `claude/settings.json` の `permissions.ask` が
 受け持つ**。空白区切りの裸のブランチ名（`Bash(git push * main*)` /

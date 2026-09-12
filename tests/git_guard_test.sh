@@ -139,6 +139,18 @@ assert_decision \
   "gh pr merge: --body の値をマージ対象と取り違えない" \
   "deny" "$(run_hook "gh pr merge --squash -b 'merge 済み' 42" | extract_decision)"
 
+# コマンド位置の判定が「直前のトークン」だけを見ていると、区切りが消える形で
+# 取りこぼす。shlex は改行を空白として捨て、`;` は前の語に密着したままになる。
+# 無音一覧（ヒアドキュメント本文を deny しない）と対になる裏側であり、
+# 片方だけ固定すると位置判定を触るたびに同じ穴が再生産される。
+assert_decision \
+  "gh pr merge: 改行区切りの2行目でも deny" \
+  "deny" "$(run_hook "$(printf 'gh pr view 1 --json reviewDecision\ngh pr merge 1 --squash')" | extract_decision)"
+
+assert_decision \
+  "gh pr merge: ; が前の語に密着していても deny" \
+  "deny" "$(run_hook "cd /tmp; gh pr merge 1 --squash" | extract_decision)"
+
 # -R / --repo は対象リポジトリを cwd から動かすため、cwd 基準の base 解決は
 # 成立しない。gh pr view 側へ引き継げているかを引数の実物で検証する。
 # `--repo` は `gh pr` 配下の inherited flag であり、gh の直後だけでなく
