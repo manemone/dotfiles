@@ -73,6 +73,11 @@ force push だけ止め、孫ブランチへの force-with-lease は通す」と
   **`allow` に倒すことは絶対にしない。**
 - python3 が見つからない環境では、JSON をパースする前に固定の `ask` 応答を返す
   （フックが判定不能なまま黙って通すことを避けるため）。
+- **この判定表はフック単体の判定であり、最終的にユーザーへ確認が出るかどうかは
+  `permissions.ask` にも一致しないかどうかに依存する（§3.2/§3.3 参照）。**
+  `--force-with-lease` を摩擦なく通すには、フックが `allow` を返すだけでなく
+  `permissions.ask` 側にも一致しないよう `claude/settings.json` を設計する必要がある
+  （§3.3「`git push --force-with-lease` を摩擦なく通すための具体策」）。
 
 ### 3.2 PreToolUse フックの入出力契約（一次情報での確認結果）
 
@@ -97,26 +102,94 @@ force push だけ止め、孫ブランチへの force-with-lease は通す」と
 - **フックと `permissions` の評価順序**: PreToolUse フックは、`bypassPermissions`
   モードや `--dangerously-skip-permissions` を含む**すべての permission mode
   より前**に評価される。フックが `"deny"` を返せばそれらのモードでもブロック
-  される。フックが `"allow"` を返した場合でも、その後 `permissions.deny` /
-  `permissions.ask` は引き続き評価される（フックの `allow` は
-  `permissions.deny` を上書きしない）。この非対称性（`deny` は強いが `allow` は
-  弱い）が、本設計の二層構造（設計2. 後述）を安全に成立させている根拠。
+  される（"A blocking hook also takes precedence over allow rules"）。
+  **一方、フックが `"allow"` を返しても、その後 `permissions.deny` /
+  `permissions.ask` は変わらず評価され、一致すればブロック・確認が発生する
+  （"a matching ask rule still prompts even when the hook returned
+  `"allow"` or `"ask"`"）。フックの `allow` は `permissions.deny` /
+  `permissions.ask` を一切上書きできない。**
+  **この事実は当初の実装で見落としており、孫1 の PR レビューで発覚し
+  2026-09-12 に司令官が原文で再確認して訂正した（§3.3 参照）。**
 
-### 3.3 フックと `permissions` の二層構造（fail-safe）
+### 3.3 フックは制限を足せるだけ。`permissions` を緩める方向には使えない（2026-09-12 訂正）
 
-- フックの `allow` 判定は `permissions.ask` より先に評価される。したがって
-  「フックが安全と判定したものだけを通し、フックが黙っているものは従来どおり
-  `ask` で止める」という二層構造が組める。
-- `claude/settings.json` の `permissions.ask` から `git push` 系のパターンは
-  **消さない**。フックが `allow` を返したときだけ素通りする形にする。
+**当初はここに「フックが `allow` を返せば `permissions.ask` を素通りできる」という
+二層構造を書いていたが、§3.2 の契約と正面から矛盾しており成立しない。** 孫1 の
+実装中に判明したため、計画書
+`docs/planning/DOC-2609121700_autopilot-permissions_計画.md`「設計2」を書き直し、
+本 ADR もそれに合わせて訂正した。訂正前の記述に依拠したコードコメント・レビュー
+コメントは、この節の内容で読み替えること。
+
+公式ドキュメントはむしろ逆方向の使い方を明示的に推奨している。
+
+> To run all Bash commands without prompts except for a few you want blocked,
+> add `"Bash"` to your allow list and register a PreToolUse hook that rejects
+> those specific commands.
+
+つまり **PreToolUse フックは、`permissions` が許した範囲の中から危険な部分集合を
+`deny`/`ask` へ引き上げる（制限を足す）ことしかできない。** `ask`/`deny` を
+緩める方向には一切効かない。本設計は次の構造を取る。
+
+- **AI に摩擦なくやらせたい操作は、`permissions.ask` / `permissions.deny` の
+  どのパターンにも一致してはならない。** その操作の安全性はフックだけが担保する
+- **`permissions.ask` に残すのは「フックが不在でも無条件に止めたいもの」だけ**に
+  する。条件つき（ブランチ次第・PR の base 次第）で許したい操作を `ask` に
+  置いてはいけない。置いた瞬間、フックが `allow` を返しても止まる
+- 上記の推奨形（`allow` に `Bash` を置き、フックで個別に弾く）と本設計は同じ
+  構造である。実際、人間の実機の `~/.claude/settings.json` の `permissions.allow`
+  には既に `"Bash"` が含まれている（実測 2026-09-12）
 - 追跡されている `claude/settings.json` に `Bash(git merge *)` は**足さない**
-  （フックが判定するため）。
-- **フックが配布されていない・壊れている環境で黙って通らないこと。** そのため
-  `claude/settings.json` の `ask` は保険として残る。フックが原因不明の理由で
-  一切動かない（symlink が無い、実行権限が無い等）場合、Claude Code 側の挙動と
-  しては「フックが実行できない」旨のエラーが出るか、あるいはフック未定義と
-  同じ扱いで `permissions` の判定にそのまま委ねられる（フック不在時の挙動は
-  「意見なし」と同義であり、`permissions.ask` の網に必ず落ちる）。
+  （フックが唯一の担保）
+
+#### `git push --force-with-lease` を摩擦なく通すための具体策
+
+`permissions` のパターンは `*` のみだが、**空白の有無を厳密に区別する**
+（"A `*` in a Bash rule matches any text, including spaces" /
+"The space before a trailing `*` is part of the rule."）。これを利用して
+「裸の `--force` だけ」を単語境界で拾い、`--force-with-lease` を除外できる。
+
+- **削除**（どちらも `--force-with-lease` に一致してしまう。`*--force*` は
+  空白を挟まないため `--force-with-lease` の中の `--force` を拾う）:
+  `"Bash(git push *--force*)"` / `"Bash(git push *--force-with-lease*)"`
+- **代わりに置く**（裸の `--force` だけを単語境界で拾う4パターン）:
+  `"Bash(git push --force)"` / `"Bash(git push --force *)"` /
+  `"Bash(git push * --force)"` / `"Bash(git push * --force *)"`
+- **残す**: `"Bash(git push -f*)"` `"Bash(git push * -f*)"`
+  `"Bash(git push *+*)"` `"Bash(git push *--delete*)"`（いずれも
+  `--force-with-lease` には一致しない。`* -f*` が要求する「空白 + `-f`」は
+  `--force-with-lease` の中に現れない）
+- **追加**（フックが不在でも効く、ブランチ名の形をした残余の網）:
+  `"Bash(git push * main*)"` / `"Bash(git push * master*)"`。ブランチ名を
+  明示した保護ブランチへの push は、force かどうかに関わらず人間の仕事なので、
+  ここで止まるのが正しい挙動。孫ブランチ名（例: `autopilot-permissions-01-git-guard`）
+  には一致しない
+
+これらの非一致・一致は `tests/git_guard_test.sh` の
+`claude/settings.json` パターン検証で回帰テスト化している。
+
+#### 受け入れる残余リスク
+
+パターンだけでは表現できない穴が1つ残る: **refspec を省略した
+`git push --force-with-lease` を、保護ブランチをチェックアウトした状態で
+叩く形。** これは**フックが唯一の担保**であり、フックが配布されていない・
+壊れている環境では素通りする（fail-open）。
+
+受け入れる根拠:
+
+1. フックは `claude/deploy.sh` が配り、`deploy-all.sh --status` がリンク切れを
+   検出する（本 PR で `links_for_tool()` の `claude` arm に追加済み）
+2. `--force-with-lease` はリモートの ref がローカルの認識と一致するときだけ
+   push できるため、**他人の更新を消さない**（force push 一般の危険性のうち
+   「他人の作業を上書きする」リスクは lease の仕組み自体が防ぐ）
+3. 保護ブランチ（`main`/`master`）をチェックアウトして作業すること自体が、
+   本傘の傘ブランチ運用では例外的である（通常は孫・傘ブランチ上で作業する）
+
+**フックが配布されていない・壊れている環境で黙って通らないこと自体は
+引き続き大切にする。** そのため `claude/settings.json` の `ask` には
+「フック不在でも無条件に止めたいもの」（裸の `--force`/`-f`、`+<refspec>`、
+`--delete`、ブランチ名が `main`/`master` を含む push）を残す。フックが動作
+しない環境でも、これらのパターンに一致する危険な操作は `permissions.ask` の
+網に落ちる。
 
 ### 3.4 `claude/settings.machine.json` が `hooks.PreToolUse` を持つ場合の落とし穴
 

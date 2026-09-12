@@ -198,6 +198,17 @@ ADR [DOC-2609121719](../docs/adr/DOC-2609121719_git-operation-permission-policy.
 取れない・複数コマンドが `&&`/`;`/`|` で連結されている等）は必ず `ask` に倒す。
 **`allow` に倒すことは絶対に無い。**
 
+**上の判定表はフック単体の判定であり、フックが `allow` を返しても
+`permissions.ask` に一致すれば確認は出る。** PreToolUse フックは
+`permissions` の判定を緩める方向には使えず、危険な部分集合を引き上げる
+（制限を足す）ことしかできない（公式ドキュメントより。ADR §3.2/§3.3 参照）。
+`git push --force-with-lease` を実際に無確認で通すため、`claude/settings.json`
+の `permissions.ask` からは `--force-with-lease` に一致するパターンを外し
+（`*--force*` / `*--force-with-lease*` は空白を挟まず一致してしまうため
+どちらも置かない）、裸の `--force` だけを単語境界で拾う4パターンに
+置き換えている（ADR §3.3「`git push --force-with-lease` を摩擦なく通すための
+具体策」）。
+
 **無効化したいとき:**
 
 `claude/settings.machine.json` に `hooks.PreToolUse` を定義すると、`claude/deploy.sh` の
@@ -206,8 +217,10 @@ ADR [DOC-2609121719](../docs/adr/DOC-2609121719_git-operation-permission-policy.
 空配列 `"PreToolUse": []` を持つ `hooks` を書くか、リポジトリ側の `claude/settings.json` から
 `hooks.PreToolUse` を削除する。
 
-`git merge` には `permissions.ask` 側の保険が無い設計（ADR §3.3）なので、無効化すると
-保護ブランチへの `git merge` がガード無しで通るようになることに注意すること。
+`git merge` と、refspec を省略した `git push --force-with-lease` には
+`permissions.ask` 側の保険が無い設計（ADR §3.3「受け入れる残余リスク」）なので、
+無効化すると保護ブランチへのこれらの操作がガード無しで通るようになることに
+注意すること。
 
 ## 4. Customization — マシン固有設定の追加
 

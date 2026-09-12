@@ -262,6 +262,67 @@ assert_decision \
   "tool_name が Bash 以外なら何も言わない" \
   "(none)" "$(run_hook_raw "$NON_BASH_JSON" | extract_decision)"
 
+# ── claude/settings.json の permissions.ask パターン検証 ──────────
+# 計画書「設計2」（2026-09-12 訂正）の要求: git push --force-with-lease は
+# permissions.ask のどのパターンにも一致してはいけない（フックの allow が
+# permissions.ask に上書きされてしまうため）。裸の --force / -f / +<refspec>
+# / --delete、ブランチ名が main/master を含む push は、フック不在でも
+# 無条件に止まる必要があるため、いずれかのパターンに一致しなければならない。
+# permissions.ask のマッチングは "*"（空白含む任意文字列）による glob なので
+# Python の fnmatch で近似検証する（ADR §3.3 参照）。
+PATTERN_CHECK=$(
+  python3 - "$REPO_ROOT/claude/settings.json" <<'PYEOF'
+import fnmatch
+import json
+import sys
+
+with open(sys.argv[1]) as f:
+    settings = json.load(f)
+
+ask_patterns = [
+    p[len("Bash(") : -1]
+    for p in settings.get("permissions", {}).get("ask", [])
+    if p.startswith("Bash(") and p.endswith(")")
+]
+
+
+def matches_any(command):
+    return any(fnmatch.fnmatchcase(command, p) for p in ask_patterns)
+
+
+# (コマンド, permissions.ask のどれかに一致すべきか)
+cases = [
+    ("git push --force-with-lease origin feature", False),
+    ("git push origin feature --force-with-lease", False),
+    ("git push --force-with-lease", False),
+    ("git push --force origin feature", True),
+    ("git push origin feature --force", True),
+    ("git push --force", True),
+    ("git push -f origin feature", True),
+    ("git push origin +feature:feature", True),
+    ("git push origin --delete feature", True),
+    ("git push origin main", True),
+    ("git push origin master", True),
+    ("git push origin feature", False),
+]
+
+ok = True
+for command, expected in cases:
+    actual = matches_any(command)
+    if actual != expected:
+        ok = False
+        print(f"NG: {command!r} -> matches={actual} expected={expected}", file=sys.stderr)
+
+sys.exit(0 if ok else 1)
+PYEOF
+)
+PATTERN_CHECK_RC=$?
+if [ "$PATTERN_CHECK_RC" -eq 0 ]; then
+  pass "claude/settings.json の permissions.ask: force-with-lease 非一致・裸force等の一致を確認"
+else
+  fail "claude/settings.json の permissions.ask パターン検証: $PATTERN_CHECK"
+fi
+
 if [ "$FAIL" -eq 0 ]; then
   log "=== git-guard.sh テスト: 全件成功 ==="
 else
