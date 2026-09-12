@@ -217,10 +217,12 @@ ADR [DOC-2609121719](../docs/adr/DOC-2609121719_git-operation-permission-policy.
 空配列 `"PreToolUse": []` を持つ `hooks` を書くか、リポジトリ側の `claude/settings.json` から
 `hooks.PreToolUse` を削除する。
 
-`git merge` と、refspec を省略した `git push --force-with-lease` には
-`permissions.ask` 側の保険が無い設計（ADR §3.3「受け入れる残余リスク」）なので、
-無効化すると保護ブランチへのこれらの操作がガード無しで通るようになることに
-注意すること。
+`git merge` と、対象ブランチ名がコマンド文字列中に空白区切りの裸の単語として
+現れない書き方の `git push --force-with-lease`（refspec 省略・`HEAD`/`@`・
+`HEAD:master` のようなコロン区切り・`refs/heads/master` のような完全参照）
+には `permissions.ask` 側の保険が無い設計（ADR §3.3「受け入れる残余リスク」）
+なので、無効化すると保護ブランチへのこれらの操作がガード無しで通るように
+なることに注意すること。
 
 ## 4. Customization — マシン固有設定の追加
 

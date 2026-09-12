@@ -169,10 +169,28 @@ force push だけ止め、孫ブランチへの force-with-lease は通す」と
 
 #### 受け入れる残余リスク
 
-パターンだけでは表現できない穴が1つ残る: **refspec を省略した
-`git push --force-with-lease` を、保護ブランチをチェックアウトした状態で
-叩く形。** これは**フックが唯一の担保**であり、フックが配布されていない・
-壊れている環境では素通りする（fail-open）。
+`"Bash(git push * master*)"` / `"Bash(git push * main*)"` が拾えるのは、
+**コマンド文字列中に「空白の直後の裸のブランチ名」として `main`/`master` が
+現れる形（例: `git push origin master`）だけ**である（実測で確認済み。下記
+5パターンのうち拾えるのは1つだけ）。したがってパターンだけでは表現できない
+穴は、refspec を省略した形の1つではなく、**対象ブランチ名がコマンド文字列
+中で裸の単語として現れないあらゆる書き方**に及ぶ。実測（`fnmatch` で
+`permissions.ask` の全パターンと突合）:
+
+| コマンド（保護ブランチをチェックアウトした状態で `git push --force-with-lease origin ...`） | `permissions.ask` に一致するか |
+|---|---|
+| `origin master`（裸のブランチ名） | ✅ 一致する（`* master*`） |
+| `origin HEAD` | ❌ 一致しない |
+| `origin @` | ❌ 一致しない |
+| `origin HEAD:master`（refspec のコロン区切り） | ❌ 一致しない（`master` の直前が `:` で空白ではない） |
+| `origin refs/heads/master`（完全参照） | ❌ 一致しない（`master` の直前が `/`） |
+| refspec 省略（`git push --force-with-lease` のみ） | ❌ 一致しない |
+
+**これらすべてで、フック自体は refspec を正しく解析し `master`/`main` へ
+解決して deny する。** 一致しないのは `permissions.ask` 側のバックアップ
+（フック不在・故障時の網）だけであり、**フックが唯一の担保**になっている
+範囲は「refspec 省略形」よりずっと広い。フックが配布されていない・壊れて
+いる環境では、上記の ❌ の書き方すべてが素通りする（fail-open）。
 
 受け入れる根拠:
 
@@ -184,12 +202,18 @@ force push だけ止め、孫ブランチへの force-with-lease は通す」と
 3. 保護ブランチ（`main`/`master`）をチェックアウトして作業すること自体が、
    本傘の傘ブランチ運用では例外的である（通常は孫・傘ブランチ上で作業する）
 
+**`permissions.ask` 側の網をこれ以上広げてこの残余リスクを縮める判断
+（例えば `HEAD:master` や `refs/heads/master` まで拾うパターンを追加するか）
+は、本 PR のスコープでは行わない。** 広げるほど誤検出（無関係な操作への
+過剰な `ask`）も増えるトレードオフがあり、範囲を広げるかどうかの判断は
+司令官に委ねる。
+
 **フックが配布されていない・壊れている環境で黙って通らないこと自体は
 引き続き大切にする。** そのため `claude/settings.json` の `ask` には
 「フック不在でも無条件に止めたいもの」（裸の `--force`/`-f`、`+<refspec>`、
-`--delete`、ブランチ名が `main`/`master` を含む push）を残す。フックが動作
-しない環境でも、これらのパターンに一致する危険な操作は `permissions.ask` の
-網に落ちる。
+`--delete`、ブランチ名が空白区切りの裸の単語として `main`/`master` に
+一致する push）を残す。フックが動作しない環境でも、これらのパターンに
+一致する危険な操作は `permissions.ask` の網に落ちる。
 
 ### 3.4 `claude/settings.machine.json` が `hooks.PreToolUse` を持つ場合の落とし穴
 
