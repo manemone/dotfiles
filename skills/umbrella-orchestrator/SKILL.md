@@ -18,9 +18,9 @@ Herdr があると自動化度が上がるが、必須ではない。
 
 ```
 司令官（このスキルを読んだAI）
-  → spawn, マージ検出, 検証, 計画書更新
+  → spawn, 孫→傘マージの検出・検証（`/autopilot` では実行も）, 計画書更新
   → 実装コードのレビューはしない
-  → PRマージはしない（人間の仕事）
+  → 傘→既定ブランチ（`main`/`master`等。リポジトリごとに異なる）のPRマージはしない（人間の仕事）
 
 実装AI（別ペーン/別会話）
   → 実装, PR作成, /pr-review-loop 起動
@@ -154,6 +154,10 @@ ok = m and (latest_sha.startswith(m.group(1)) or m.group(1).startswith(latest_sh
 - 判定を含む**最後の**レビューが「承認」
 - その対象HEAD が PR の最新コミットと前方一致（古いHEADへの承認でマージしない）
 - implementer が `working` でない
+- **base がこのリポジトリの既定ブランチでない**（`gh repo view --json defaultBranchRef
+  -q .defaultBranchRef.name` で既定ブランチ名を取得し、`gh pr view <PR番号>
+  --json baseRefName` の base と突合する。`main`/`master` に固定した文字列比較では
+  済ませない。既定ブランチへのマージは承認済みでも人間の仕事であり、AI は実行しない）
 
 **implementer が `working` だからといって「承認はまだ出ていない」と推測しないこと。**
 承認の有無は必ず API で確認する（この推測で2回取り逃した実績がある）。
@@ -301,14 +305,17 @@ ok = m and (latest_sha.startswith(m.group(1)) or m.group(1).startswith(latest_sh
      1. PRを作成する。**PRの向き先は必ず <傘ブランチ> にすること。main には絶対に出さない。**
      2. /pr-review-loop を起動する（PRがない場合は自動で作成し、そのままレビューを開始する）
      3. レビュー指摘があれば修正し、承認されるまで繰り返す
-     4. 承認されたら人間に「マージしてください」と依頼する
+     4. 承認されたら /pr-review-loop がそのままマージまで実行する（base が傘ブランチのため、
+        人間の許可を待つ必要はない。`gh pr merge <PR番号> --squash --delete-branch`）
      実装が終わったタイミングで止まらず、必ずここまでやりきってください。
 
      ## ブランチ作成時の注意（最重要）
      作業ブランチは**必ず <傘ブランチ> から切ること**。
      main から切ると PR の diff に傘ブランチ全体が混入してレビュー不能になる。
-     実装開始前に以下を必ず実行すること:
-     git checkout <傘ブランチ> && git pull --rebase origin <傘ブランチ>
+     実装開始前に以下を必ず実行すること（`git pull` は使わない。連結せず別々のコマンドとして実行する）:
+     git checkout <傘ブランチ>
+     git fetch origin
+     git merge --ff-only origin/<傘ブランチ>
      git checkout -b <新しいブランチ名>
      ```
 
@@ -351,7 +358,10 @@ ok = m and (latest_sha.startswith(m.group(1)) or m.group(1).startswith(latest_sh
 
 2. **マージ済み孫を検証**
    - 傘ブランチに checkout
-   - `git pull --rebase`
+   - `git fetch origin`
+   - `git merge --ff-only origin/<傘ブランチ>`（`git pull` は使わない。失敗したら
+     傘ブランチのローカルに未pushのコミットがあり fast-forward できない。`reset --hard`
+     等で憶測により解決せず、検証を中断して人間に報告する）
    - プロジェクトの言語を自動検出し、該当する lint / test を実行（pr-review-loop Phase 0.5 と同じ方式）:
      - `Gemfile` があれば `bundle exec rubocop` + `bundle exec rspec`
      - `pyproject.toml` / `setup.py` / `setup.cfg` があれば `ruff check` + `python -m pytest`
@@ -601,16 +611,26 @@ main へのマージは人間が手動で行う。
       （🔄 実装中 が現在の孫、✅ マージ済 は完了）
    2. アクティブな孫の implementer 状態を確認:
       herdr pane list | python3で全workspaceのpaneを確認
-   3. PRが出ているか確認:
-      gh pr list --head <孫ブランチ名> --json number,title,state
+   3. **まずマージ済みかを確認する**（`/pr-review-loop` が承認後に自律マージ済みの
+      場合を含むため、オープンなPRだけを探すと`gh pr list`の既定 `--state open` に
+      阻まれて既にマージ済みのPRを永久に見失う）:
+      gh pr list --head <孫ブランチ名> --state merged --json number,title,mergedAt
+      - 1件返れば既にマージ済み。手順4・5はスキップし手順6へ進む
+      - 0件なら、まだオープンなPRを確認する:
+        gh pr list --head <孫ブランチ名> --json number,title,state
+        PRが無ければ待機（実装中）。PRがあれば手順4へ
    4. PRがあれば review 状況を確認:
       gh pr view <PR番号> --json reviews,commits
       ※ 判定の読み方は下記「レビュー判定の読み方」に従うこと。
         event 種別（APPROVED 等）で判断してはいけない
    5. 判定が「承認」かつ 対象HEAD が最新コミットと前方一致するならマージ:
       gh pr merge <PR番号> --squash --delete-branch
-   6. マージ後、傘ブランチで検証:
-      git pull --rebase origin <傘ブランチ>
+      （手順3で既にマージ済みと判定した場合はこの手順を実行しない）
+   6. マージ後、傘ブランチで検証（`git pull` は使わない）:
+      git fetch origin
+      git merge --ff-only origin/<傘ブランチ>
+      （失敗したら傘ブランチのローカルに未pushのコミットがあり、fast-forwardできない。
+      検証を中断し、`reset --hard` 等で憶測により解決せず人間に報告する）
       §3.3 手順2 と同じ方式で検証（.claude/pr-review.yml の lint_cmd/test_cmd を
       最優先、無ければ言語自動検出。Ruby 固定ではない）
    7. 検証通過後、計画書を「✅ PR #XX マージ済」に更新してcommit+push
@@ -1062,19 +1082,23 @@ herdr pane send-keys <implementer-id> Enter
 ### 司令官がやること
 - 計画書の読み取りと更新
 - 孫の spawn（`ocw -H` + `herdr pane run`）
-- PR マージの検出と検証
+- 孫→傘 PR のマージ検出・検証（`/autopilot` では承認済み PR のマージ実行も含む。
+  `gh pr merge <PR番号> --squash --delete-branch`）
 - 計画書の commit / push
 
 ### 司令官がやらないこと
 - 実装コードのレビュー（pr-review-loop の仕事）
-- PR マージ（人間の仕事）
+- **傘→既定ブランチ（`main`/`master`等。リポジトリごとに異なる）の PR マージ（人間の仕事）。**
+  ここだけは絶対に崩さない唯一の線引き（ADR DOC-2609121719、ルート `AGENTS.md`「最重要ルール」）
 - 孫ブランチ上での作業（司令官は傘ブランチに常駐）
 - Herdr ワークスペースの手動構築（`ocw -H` の仕事）
 
 ### 実装AIに期待すること
 - プロンプトを受け取ったら実装を開始
 - PR 作成後 `/pr-review-loop` を起動
-- 承認されたら人間にマージを依頼
+- 承認されたときの扱いは base による: **孫→傘のPR**は `/pr-review-loop` がそのまま
+  マージする（人間に依頼する必要はない）。**傘→既定ブランチの最終PR**（`/finalize`）は
+  マージせず、人間に「マージしてください」と依頼する（§3.4 手順5）
 
 ## 7. エラー処理
 
@@ -1097,12 +1121,24 @@ herdr pane send-keys <implementer-id> Enter
 孫は squash マージされるため履歴を共有しない。元の孫ブランチの上でコミットして
 PRを出すと、**マージ済みの変更が全部もう一度差分に出てレビュー不能**になる。
 
+**bare な `git stash` / `git stash pop` は使わない。** stash スタックは同じリポジトリの
+全ワークツリー（司令官・孫の各ワークツリー）で共有されており、`pop` も「直前のエントリ」
+という位置での取得も、その間に他のワークツリーが stash を積めば取り違える。**位置ではなく、
+自分が付けた一意なタグ文字列で該当エントリを特定する**（`push` 直後でも次の行を実行するまでの
+間に他のワークツリーが割り込む可能性はゼロではない）:
+
 ```bash
-git stash                      # 作業中の変更を退避
+TAG="umbrella-orchestrator-followup-$(date +%s)-$$"
+git stash push -u -m "$TAG"
+SHA=$(git stash list --format='%H %gs' | grep -F "$TAG" | cut -d' ' -f1)
 git fetch origin
 git checkout -b <追随孫名> origin/<傘ブランチ>
-git stash pop                  # 退避した変更を適用
+git stash apply "$SHA"
 ```
+
+適用結果を確認してから、同じタグ文字列で `git stash list --format='%gd %gs' | grep -F "$TAG"`
+を引き直して現在の `stash@{n}` を求め、`git stash drop stash@{n}` で消す（`$SHA` は
+`drop` には使えない。`drop` は `stash@{n}` 形式の参照名を取る）。
 
 追随孫は進捗テーブルに新しい行として追加し、元の孫は `✅ マージ済` のまま残す。
 
