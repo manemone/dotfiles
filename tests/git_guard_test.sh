@@ -151,6 +151,12 @@ assert_decision \
   "gh pr merge: ; が前の語に密着していても deny" \
   "deny" "$(run_hook "cd /tmp; gh pr merge 1 --squash" | extract_decision)"
 
+# shlex.shlex は commenters='#' が既定（shlex.split と違って自動解除されない）。
+# 有効なままだと行内の裸の # 以降が捨てられ、gh pr merge を取りこぼす。
+assert_decision \
+  "gh pr merge: 行内に裸の # があっても deny" \
+  "deny" "$(run_hook "curl https://example.com/x#frag && gh pr merge 1 --squash" | extract_decision)"
+
 # -R / --repo は対象リポジトリを cwd から動かすため、cwd 基準の base 解決は
 # 成立しない。gh pr view 側へ引き継げているかを引数の実物で検証する。
 # `--repo` は `gh pr` 配下の inherited flag であり、gh の直後だけでなく
@@ -252,6 +258,17 @@ assert_silent \
   "実 PR 番号を含むヒアドキュメントの書き込み" \
   "$(printf 'cat >> notes.md <<%sEOF%s\n承認されたら gh pr merge 1 --squash --delete-branch を実行する\nEOF' "'" "'")"
 assert_silent "echo での言及（クォートなし）" "echo gh pr merge 1"
+# delimiter が EOF 以外（ハイフン・ドットを含む形）でも本文が剥がれること。
+# 文字クラスを狭めると本文が素のコマンド扱いになり deny へ倒れる。
+assert_silent \
+  "ヒアドキュメント: delimiter が EOF-1" \
+  "$(printf 'cat >> notes.md <<%sEOF-1%s\ngh pr merge 1 --squash を実行する\nEOF-1' "'" "'")"
+# 本文中にインデントされた終端語がある形（ヒアドキュメントの例を含む文章）。
+# <<- と区別せず strip() で比較すると、ここで終端と誤判定して以降の本文が
+# 素のコマンド扱いになる。
+assert_silent \
+  "ヒアドキュメント: 本文中のインデントされた終端語で切れない" \
+  "$(printf 'cat >> notes.md <<%sEOF%s\n例: cat <<X ... 本文 ...\n  EOF\ngh pr merge 1 --squash を実行する\nEOF' "'" "'")"
 unset GIT_GUARD_TEST_BASE_REF
 
 # master への push はフックではなく claude/settings.json の permissions.ask

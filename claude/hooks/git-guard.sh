@@ -84,7 +84,10 @@ COMMAND_POSITION_PREV = {"&&", "||", ";", ";;", "|", "|&", "(", ")", "{", "}", "
 # `gh pr merge <実PR番号>` を実コマンドと誤認して deny する（ただのファイル
 # 書き込みが止まる）。位置の推測ではなく本文自体を除くことで、この誤検知と
 # 「改行区切りの gh pr merge を取りこぼす」の両方を同時に閉じる。
-HEREDOC_RE = re.compile(r"<<-?\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1")
+# delimiter はシェルが受け付ける範囲（空白・リダイレクト記号・クォート以外）を
+# そのまま許す。`EOF` だけに絞ると `<<'EOF-1'` `<<'END-OF-FILE'` `<<'EOF.md'` の
+# 本文が剥がれず、ただのファイル書き込みが deny される。
+HEREDOC_RE = re.compile(r"<<(-?)\s*(['\"]?)([^\s'\"<>|&;()]+)\2")
 
 
 def emit(decision, reason=None):
@@ -116,8 +119,13 @@ def strip_heredocs(command):
         i += 1
         if match is None:
             continue
-        delimiter = match.group(2)
-        while i < len(lines) and lines[i].strip() != delimiter:
+        dash, delimiter = match.group(1), match.group(3)
+        # `<<-` のときだけ先頭の空白を剥がして比較する。区別せずに strip() すると、
+        # 本文中のインデントされた終端語（ヒアドキュメントの例を含む文章など）で
+        # 早々に終端と誤判定し、以降の本文が素のコマンド扱いになる。
+        while i < len(lines) and (
+            lines[i].lstrip() != delimiter if dash else lines[i] != delimiter
+        ):
             i += 1
         i += 1  # 終端行そのものも落とす（無ければループを抜ける）
     return out
@@ -135,6 +143,11 @@ def tokenize_lines(command):
     for line in strip_heredocs(command):
         lexer = shlex.shlex(line, posix=True, punctuation_chars=True)
         lexer.whitespace_split = True
+        # `shlex.shlex` は `commenters = '#'` が既定で、`shlex.split()` のように
+        # 自動で解除されない。有効なままだと URL のフラグメント等、行内の裸の
+        # `#` 以降が丸ごと捨てられ、`curl https://x/y#z && gh pr merge 95` の
+        # `gh pr merge` を取りこぼす。
+        lexer.commenters = ""
         try:
             result.append(list(lexer))
         except ValueError:
