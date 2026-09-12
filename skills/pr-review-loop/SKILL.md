@@ -287,9 +287,8 @@ maintainability の説明を、記載様式として具体化したもの）。
   誤った範囲が処理対象になる → 出力全体が無効な結果になる
 
 テスト不足の finding における「逃す regression（何が、どういう変更で壊れるか）」
-（「テストの判断基準（risk-based testing）」の「テスト不足の finding として書くときの
-作法」参照）は、この failure scenario をテスト不足の場合に具体化したものであり、
-両者は矛盾しない。
+（「テスト不足の finding として書くときの作法」参照）は、この failure scenario を
+テスト不足の場合に具体化したものであり、両者は矛盾しない。
 
 ## テストの判断基準（risk-based testing）
 
