@@ -263,6 +263,14 @@ cmd_status() {
       ;;
   esac
 
+  _cs_machine_path="$(dotfiles_machine_json_path)"
+  if [ -f "$_cs_machine_path" ]; then
+    log_info "Machine settings: $_cs_machine_path (exists)"
+  else
+    log_info "Machine settings: $_cs_machine_path (not created yet — will be created empty on next deploy)"
+  fi
+  printf '\n'
+
   log_info "Link health (\$HOME):"
   _cs_broken=0
   for _cs_tool in $AVAILABLE_TOOLS; do
