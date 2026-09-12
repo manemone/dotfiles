@@ -41,7 +41,6 @@ command -v python3 >/dev/null 2>&1 || exit 0
 GIT_GUARD_PROTECTED_BRANCHES="$GIT_GUARD_PROTECTED_BRANCHES" python3 - "$INPUT" <<'PYEOF'
 import json
 import os
-import re
 import shlex
 import subprocess
 import sys
@@ -79,15 +78,15 @@ REPO_FLAGS = {"-R", "--repo"}
 # bypassPermissions でも覆せないぶん ask より強く止まる）。
 COMMAND_POSITION_PREV = {"&&", "||", ";", ";;", "|", "|&", "(", ")", "{", "}", "do", "then", "else", "!"}
 
-# ヒアドキュメントの開始（`<<EOF` / `<<'EOF'` / `<<-"EOF"`）。本文は実行され
-# ないため、トークン化の前に丸ごと落とす。落とさないと、本文の行頭に来た
+# ヒアドキュメントの開始を表すトークン（`<<EOF` / `<<'EOF'` / `<<-"EOF"`）。
+# 本文は実行されないため丸ごと落とす。落とさないと、本文の行頭に来た
 # `gh pr merge <実PR番号>` を実コマンドと誤認して deny する（ただのファイル
-# 書き込みが止まる）。位置の推測ではなく本文自体を除くことで、この誤検知と
-# 「改行区切りの gh pr merge を取りこぼす」の両方を同時に閉じる。
-# delimiter はシェルが受け付ける範囲（空白・リダイレクト記号・クォート以外）を
-# そのまま許す。`EOF` だけに絞ると `<<'EOF-1'` `<<'END-OF-FILE'` `<<'EOF.md'` の
-# 本文が剥がれず、ただのファイル書き込みが deny される。
-HEREDOC_RE = re.compile(r"<<(-?)\s*(['\"]?)([^\s'\"<>|&;()]+)\2")
+# 書き込みが止まる）。`punctuation_chars` 付きの lexer は
+# `<<` `<<-` `<<<` をそれぞれ別のトークンにするため、herestring（`<<<`）や
+# 引用符の中の `<<`（`echo "cat <<EOF"` は1つの語になる）と取り違えない。
+# 生テキストへの正規表現でこれを判定すると、herestring を開始と誤認して
+# 以降の行を全部捨て、次の行の `gh pr merge` を素通りさせる。
+HEREDOC_TOKENS = ("<<", "<<-")
 
 
 def emit(decision, reason=None):
@@ -107,51 +106,74 @@ def say_nothing():
     sys.exit(0)
 
 
-def strip_heredocs(command):
-    # ヒアドキュメントの本文と終端行を落とす。開始行自体は残す。
-    lines = command.split("\n")
-    out = []
+def tokenize_line(line):
+    # 1行をトークン化する。解釈できない行（クォートが閉じていない等）は None。
+    #
+    # `;` が前の語に密着した形（`cd /tmp; gh pr merge 1`）でも区切りが残るよう、
+    # `punctuation_chars` 付きの lexer で `;` / `&&` / `||` / `|` / `<<` などを
+    # 独立したトークンにする。クォートは lexer が解釈するため、引用符の中の `;`
+    # （`git commit -m "merge 済み; 掃除も"`）では切れない。
+    lexer = shlex.shlex(line, posix=True, punctuation_chars=True)
+    lexer.whitespace_split = True
+    # `shlex.shlex` は `commenters = '#'` が既定で、`shlex.split()` のように
+    # 自動で解除されない。有効なままだと URL のフラグメント等、行内の裸の `#`
+    # 以降が丸ごと捨てられ、`curl https://x/y#z && gh pr merge 95` の
+    # `gh pr merge` を取りこぼす。コメントはトークン列側で落とす（下）。
+    lexer.commenters = ""
+    try:
+        tokens = list(lexer)
+    except ValueError:
+        return None
+    # 語の先頭が `#` のトークン以降は行コメント。生テキストで切ると URL の
+    # フラグメントまで巻き添えになり、逆に落とさないと
+    # `gh pr merge --squash  # 承認済み` の `#` がマージ対象として拾われ、
+    # `gh pr view '#'` が失敗して無音になる（PR 番号を省略した形が素通りする）。
+    for idx, tok in enumerate(tokens):
+        if tok.startswith("#"):
+            return tokens[:idx]
+    return tokens
+
+
+def heredoc_delimiter(tokens):
+    # 行のトークン列がヒアドキュメントを開始していれば (終端語, `<<-` か) を返す。
+    # `<<-'EOF'` は `-` が語頭に残って `-EOF` になるため、そこで判別する。
+    for idx, tok in enumerate(tokens):
+        if tok in HEREDOC_TOKENS and idx + 1 < len(tokens):
+            delimiter = tokens[idx + 1]
+            if tok == "<<-" or delimiter.startswith("-"):
+                return delimiter.lstrip("-"), True
+            return delimiter, False
+    return None, False
+
+
+def command_lines(command):
+    # コマンドを行ごとのトークン列にして返す。**行を1単位にするのは、shlex が
+    # 改行を単なる空白として捨ててしまい、`cd /tmp` 改行 `gh pr merge 1` の
+    # 2 行目がコマンド位置だと分からなくなるため。**
+    #
+    # ヒアドキュメントの本文と終端行は落とす（開始行自体は残す）。落とさないと
+    # 本文の行頭に来た `gh pr merge <実PR番号>` を実コマンドと誤認して deny し、
+    # ただのファイル書き込みが止まる。
+    raw = command.split("\n")
+    result = []
     i = 0
-    while i < len(lines):
-        line = lines[i]
-        out.append(line)
-        match = HEREDOC_RE.search(line)
+    while i < len(raw):
+        tokens = tokenize_line(raw[i])
         i += 1
-        if match is None:
+        if tokens is None:
             continue
-        dash, delimiter = match.group(1), match.group(3)
+        result.append(tokens)
+        delimiter, dash = heredoc_delimiter(tokens)
+        if delimiter is None:
+            continue
         # `<<-` のときだけ先頭の空白を剥がして比較する。区別せずに strip() すると、
         # 本文中のインデントされた終端語（ヒアドキュメントの例を含む文章など）で
         # 早々に終端と誤判定し、以降の本文が素のコマンド扱いになる。
-        while i < len(lines) and (
-            lines[i].lstrip() != delimiter if dash else lines[i] != delimiter
+        while i < len(raw) and (
+            raw[i].lstrip() != delimiter if dash else raw[i] != delimiter
         ):
             i += 1
         i += 1  # 終端行そのものも落とす（無ければループを抜ける）
-    return out
-
-
-def tokenize_lines(command):
-    # 行ごとにトークン化して返す。**行を1単位にするのは、shlex が改行を
-    # 単なる空白として捨ててしまい、`cd /tmp` 改行 `gh pr merge 1` の 2 行目が
-    # コマンド位置だと分からなくなるため。** `;` が前の語に密着した形
-    # （`cd /tmp; gh pr merge 1`）も区切りとして残らないので、punctuation_chars
-    # 付きの lexer を使って `;` / `&&` / `||` / `|` を独立したトークンにする。
-    # クォートは lexer が解釈するため、引用符の中の `;` では切れない。
-    # 解釈できない行（クォートが閉じていない等）はその行だけ捨てる。
-    result = []
-    for line in strip_heredocs(command):
-        lexer = shlex.shlex(line, posix=True, punctuation_chars=True)
-        lexer.whitespace_split = True
-        # `shlex.shlex` は `commenters = '#'` が既定で、`shlex.split()` のように
-        # 自動で解除されない。有効なままだと URL のフラグメント等、行内の裸の
-        # `#` 以降が丸ごと捨てられ、`curl https://x/y#z && gh pr merge 95` の
-        # `gh pr merge` を取りこぼす。
-        lexer.commenters = ""
-        try:
-            result.append(list(lexer))
-        except ValueError:
-            continue
     return result
 
 
@@ -263,7 +285,7 @@ def main():
         say_nothing()
 
     found = None
-    for tokens in tokenize_lines(command):
+    for tokens in command_lines(command):
         found = find_pr_merge(tokens)
         if found is not None:
             break

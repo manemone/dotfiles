@@ -57,6 +57,13 @@ printf '%s\n' "$*" >"$GH_ARGS_FILE"
 if [ -z "${GIT_GUARD_TEST_BASE_REF:-}" ]; then
   exit 1
 fi
+# 実物と同じく、PR 番号 / URL / ブランチ名として解決できない target では失敗する。
+# （行コメントの `#` をマージ対象として渡してしまう回帰を、ここで初めて検出できる）
+for arg in "$@"; do
+  case "$arg" in
+    '#'*) exit 1 ;;
+  esac
+done
 printf '%s\n' "$GIT_GUARD_TEST_BASE_REF"
 exit 0
 STUB
@@ -156,6 +163,21 @@ assert_decision \
 assert_decision \
   "gh pr merge: 行内に裸の # があっても deny" \
   "deny" "$(run_hook "curl https://example.com/x#frag && gh pr merge 1 --squash" | extract_decision)"
+
+# 逆に、語頭が # のトークン以降は行コメント。落とさないと PR 番号を省略した形で
+# コメントがマージ対象として拾われ、gh pr view '#' が失敗して無音になる。
+assert_decision \
+  "gh pr merge: 末尾コメントをマージ対象と取り違えない（PR番号省略）" \
+  "deny" "$(run_hook "gh pr merge --squash --delete-branch  # 承認済み" | extract_decision)"
+
+# herestring（<<<）と引用符の中の << をヒアドキュメント開始と誤認すると、
+# 以降の行を全部捨てて次の行の gh pr merge を素通りさせる。
+assert_decision \
+  "gh pr merge: herestring の次の行でも deny" \
+  "deny" "$(run_hook "$(printf 'grep foo <<<"本文"\ngh pr merge 1 --squash')" | extract_decision)"
+assert_decision \
+  "gh pr merge: 引用符の中の << の次の行でも deny" \
+  "deny" "$(run_hook "$(printf 'echo "cat <<EOF"\ngh pr merge 1 --squash')" | extract_decision)"
 
 # -R / --repo は対象リポジトリを cwd から動かすため、cwd 基準の base 解決は
 # 成立しない。gh pr view 側へ引き継げているかを引数の実物で検証する。
