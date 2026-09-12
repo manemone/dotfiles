@@ -250,7 +250,12 @@ permission の評価は3層ある（<https://code.claude.com/docs/en/permission-
 
 ## 5. 実装
 
-- `claude/hooks/git-guard.sh`（POSIX sh + 埋め込み python3、193行）: §3.1 の判定表
+- `claude/hooks/git-guard.sh`（POSIX sh + 埋め込み python3、324行）: §3.1 の判定表。
+  **本改訂の初稿は193行だったが、レビューで見つかった解析まわりの取りこぼし・
+  誤検知（`--repo` の位置・コマンド位置の判定・ヒアドキュメント・行コメントの
+  クォート）を塞ぐ過程で 324行 まで戻っている。** §4.1 が却下の根拠に行数を
+  据えているため、対比できるよう実測値を置く（現在の合計は フック324 +
+  テスト324 + 本 ADR 328 = 976行。破棄した初版は1,789行）
 - `claude/settings.json`: `hooks.PreToolUse` への配線（matcher: `Bash`）と
   §3.2 / §3.3 の `permissions`
 - `shared/helpers.sh` の `links_for_tool()` の `claude` arm に
