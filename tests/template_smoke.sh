@@ -14,7 +14,9 @@
 # ci.yml を YAML パースに通す。あわせて生成された全 .md（AGENTS.md と
 # docs/ 配下の全ファイル）の Jinja 空白制御ミス（行ゼロの表・見出し直前の
 # 空行欠落・空行の二重化・Jinja 構文の残骸）と、use_doc_id=false 時に
-# docs/ tools/ .github/ が生成されないことも検証する。
+# docs/ tools/ .github/ が生成されないことも検証する。.claude/pr-review.yml
+# （回答に関わらず常に生成される）は lint_cmd/test_cmd の読み戻し・markers の
+# 既定値・convention_docs の出し分けと参照先の実在を検証する。
 #
 # set -e は使わない。1件のアサーション失敗で残りのチェックが埋もれるのを
 # 避け、全チェックを走らせた上で最後にまとめて合否を報告するため
@@ -111,6 +113,26 @@ PYEOF
   fi
 }
 
+# assert_agents_md_test_policy <file> <label>
+# テスト方針節と linter 対応の作法は「どの回答の組み合わせでも出す」設計（設計判断 D5）。
+# use_doc_id 等の if で将来誤って条件分岐させるリファクタや、抑制禁止ルールを緩める編集を
+# 検知する（AGENTS.md 参照）。
+assert_agents_md_test_policy() {
+  local file="$1" label="$2"
+  if grep -q '^## テスト方針$' "$file" &&
+    grep -q 'このテストが存在しなかった場合、どんな現実的な regression を逃すのか' "$file" &&
+    grep -q '受け入れ条件と test example は' "$file" &&
+    grep -q '発生可能性 × 影響度 × 既存coverage' "$file" &&
+    grep -q '壊れないことを確認するのと、専用テストを足すのは別の判断' "$file" &&
+    grep -q '長さ系の指摘に対して機械的に' "$file" &&
+    grep -q '対象ファイル単位の' "$file" &&
+    grep -q '抑制ディレクティブや、設定ファイルの除外・閾値緩和を、AI の判断で' "$file"; then
+    pass "$label: テスト方針節・linter 作法・抑制禁止ルールが揃っている"
+  else
+    fail "$label: テスト方針節・linter 作法・抑制禁止ルールが揃っている"
+  fi
+}
+
 # check_combo <name> <comma区切りの生成されないはずのパス、無ければ空文字> --data ...
 # 「生成されないはずのパス」の検査は copier copy が成功した場合のみ行う。
 # 呼び出し順や外側のグローバル変数に依存させず、この関数の中で完結させる
@@ -148,6 +170,79 @@ check_combo() {
     done
   fi
 
+  # .claude/pr-review.yml は回答に関わらず常に生成される（skills/pr-review-loop/ が
+  # Phase 0.5 で最優先に読む設定ファイル）。lint_cmd/test_cmd は特殊文字を含む回答が
+  # クォート崩れで別の値にならず読み戻せること、空欄ならキーごと出ないことを検証する
+  # （`null` にもしない。省略と `null` は意味が違うため）。convention_docs は
+  # docs/ が生成されている（≒ use_doc_id=true）場合だけ存在し、参照先が実在すること、
+  # markers は3つとも常に既定値であることを検証する。
+  local expected_lint="" expected_test="" arg_i arg
+  local args=("$@")
+  for ((arg_i = 0; arg_i < ${#args[@]}; arg_i++)); do
+    arg="${args[$arg_i]}"
+    if [ "$arg" = "--data" ]; then
+      case "${args[$arg_i + 1]}" in
+        lint_cmd=*) expected_lint="${args[$arg_i + 1]#lint_cmd=}" ;;
+        test_cmd=*) expected_test="${args[$arg_i + 1]#test_cmd=}" ;;
+      esac
+    fi
+  done
+  local has_docs=0
+  [ -d "$sbx/docs" ] && has_docs=1
+
+  if [ -f "$sbx/.claude/pr-review.yml" ]; then
+    if uvx --with pyyaml python3 - "$sbx/.claude/pr-review.yml" "$expected_lint" "$expected_test" "$has_docs" "$sbx" <<'PYEOF' >"$log_file" 2>&1; then
+import sys
+
+path, expected_lint, expected_test, has_docs, sbx = sys.argv[1:6]
+import os
+import yaml
+
+with open(path, encoding="utf-8") as f:
+    raw = f.read()
+
+# .claude/pr-review.yml は YAML パーサではなく pr-review-loop スキル（AI）が
+# `cat` で生テキストのまま読む前提のファイルである。tojson の \uXXXX エスケープ
+# （HTML向け。& ' < > を変換する）が紛れ込むと、YAML としては読み戻せても
+# 生テキストを読む AI には壊れたコマンドに見える（PR #81 レビュー指摘）。
+assert "\\u00" not in raw, f"生テキストに \\uXXXX エスケープが混入している（tojson 回帰の疑い）: {raw!r}"
+
+doc = yaml.safe_load(raw)
+
+assert isinstance(doc, dict), f"YAML のトップレベルが dict ではない: {doc!r}"
+
+if expected_lint:
+    assert doc.get("lint_cmd") == expected_lint, f"lint_cmd 不一致: {doc.get('lint_cmd')!r} != {expected_lint!r}"
+else:
+    assert "lint_cmd" not in doc, f"lint_cmd が空欄なのにキーが出ている: {doc.get('lint_cmd')!r}"
+
+if expected_test:
+    assert doc.get("test_cmd") == expected_test, f"test_cmd 不一致: {doc.get('test_cmd')!r} != {expected_test!r}"
+else:
+    assert "test_cmd" not in doc, f"test_cmd が空欄なのにキーが出ている: {doc.get('test_cmd')!r}"
+
+markers = doc.get("markers") or {}
+assert markers.get("approved") == "🤖✅ 承認", f"markers.approved 不一致: {markers.get('approved')!r}"
+assert markers.get("changes_requested") == "🤖🔍 レビュー指摘", f"markers.changes_requested 不一致: {markers.get('changes_requested')!r}"
+assert markers.get("reply") == "🤖💬 対応報告", f"markers.reply 不一致: {markers.get('reply')!r}"
+
+if has_docs == "1":
+    docs = doc.get("convention_docs")
+    assert docs, "docs/ があるのに convention_docs が無い"
+    for p in docs:
+        assert os.path.exists(os.path.join(sbx, p)), f"convention_docs の参照先が実在しない: {p}"
+else:
+    assert "convention_docs" not in doc, "docs/ が無いのに convention_docs がある"
+PYEOF
+      pass "$name: .claude/pr-review.yml の内容が期待どおり"
+    else
+      fail "$name: .claude/pr-review.yml の内容が期待どおり"
+      cat "$log_file" >&2
+    fi
+  else
+    fail "$name: .claude/pr-review.yml が生成されている"
+  fi
+
   if [ -f "$sbx/.copier-answers.yml" ]; then
     pass "$name: .copier-answers.yml が生成されている"
   else
@@ -180,6 +275,7 @@ check_combo() {
 
   if [ -f "$sbx/AGENTS.md" ]; then
     assert_markdown_hygiene "$sbx/AGENTS.md" "AGENTS.md"
+    assert_agents_md_test_policy "$sbx/AGENTS.md" "AGENTS.md"
   fi
 
   # AGENTS.md 以外にも Jinja の空白制御を使う .md.jinja が docs/ 配下にある
@@ -195,7 +291,7 @@ check_combo() {
 
 check_combo "全部盛り(use_doc_id/use_ci/has_long_running_commands/use_adr/use_reference すべて true, lint/test に特殊文字あり)" "" \
   --data default_branch=main \
-  --data 'lint_cmd=pytest -k "not slow"' \
+  --data 'lint_cmd=pytest -k "not slow" && echo done' \
   --data 'test_cmd=npm run lint -- --max-warnings: 0' \
   --data use_doc_id=true \
   --data use_ci=true \
