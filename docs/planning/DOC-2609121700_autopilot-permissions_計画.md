@@ -30,6 +30,7 @@
 | 3 | `autopilot-permissions-03-agents-rules` | ルート `AGENTS.md` と `templates/repo-baseline/template/AGENTS.md.jinja` の最重要ルールを「`main` は人間 / 傘配下は AI」の軸で書き直す | ✅ PR #90 マージ済 |
 | 4 | `autopilot-permissions-04-skill-exceptions` | `skills/pr-review-loop` / `skills/umbrella-orchestrator` の傘例外条項と、同一スキル内の矛盾の解消 | ✅ PR #91 マージ済 |
 | 5 | `autopilot-permissions-05-non-git-prompts` | 無人ペインを止める**非 git 操作**の解消。`chmod +x` / `rm -r` をガードフックへ取り込み（背景3-G）、`mkdir` のように分類器で止まるコマンドへ狭い `allow` を置く（背景3-H） | 🔄 実装中 |
+| 6 | `autopilot-permissions-06-machine-json-symlink` | `settings.machine.json` を `~/.claude/settings.json` の兄弟として symlink し、発見可能にする（背景3-I） | ⬜ 待機中 |
 
 ## ワークスペースラベル
 
@@ -42,6 +43,7 @@
 - 孫3: `dotfiles :: 自動進行の権限詰まり 孫3 最重要ルールの書き直し`
 - 孫4: `dotfiles :: 自動進行の権限詰まり 孫4 スキルの傘例外条項`
 - 孫5: `dotfiles :: 自動進行の権限詰まり 孫5 chmodなど非git操作`
+- 孫6: `dotfiles :: 自動進行の権限詰まり 孫6 machine.jsonの発見性`
 
 ## 依存関係と実行順序
 
@@ -57,6 +59,8 @@
 孫4 (配布スキルの傘例外条項)
   ↓
 孫5 (chmod など非 git 操作をガードフックへ取り込む。孫1 のフックが前提)
+  ↓
+孫6 (settings.machine.json の発見性。孫2 が変更した claude/deploy.sh をさらに触る)
 ```
 
 **直列。** 理由は2つ。
@@ -67,6 +71,8 @@
    孫2 は settings 生成ロジックの変更）。並列にすると確実に衝突する
 3. **孫5 は孫1 が作ったガードフックへ arm を足す孫**である。フックが存在しない状態では
    着手できない
+4. **孫6 は孫2 が変更した `claude/deploy.sh` の settings 生成部をさらに触る。**
+   また `claude/README.md` は孫2・孫5・孫6 が共通で触るため、直列でないと衝突する
 
 ---
 
@@ -301,6 +307,41 @@ allow に一致すれば評価順1で即決し、分類器を通らない。孫5
   含む cron 登録が `[Merge Without Review]` で拒否された）。Bash の許可ルールとは
   別の経路であり、`permissions` では表現できない。対処は人間の明示的な承認を
   プロンプト本文へ書くこと
+
+### I. `settings.machine.json` がどこにあるか人間から見えない
+
+**本傘の実運用中に人間が出した追加要求**（2026-09-12、逐語）:
+
+> claude/settings.machine.json とはどのフォルダやねん
+
+> settings.machine.json は、settings.json のデプロイ先に兄弟ファイルとしてシムリンク
+> 張るべきだと思うわ。わかりにくい
+
+> 傘に足したほうがいいね。あと、example を一緒に貼るんじゃなくて、なければ空っぽのものを
+> 作って symlink すればいいのかなと思ったけどね
+
+**傘に足すことは人間が決めている。** 採否は司令官の判断事項ではない。
+
+背景3-B で扱った時限爆弾（`deny: Bash(git merge *)`）に人間が自力でたどり着けなかったのが
+この要求の発端である。`claude/settings.machine.json` は git 非追跡のうえ、**実在するのが
+`master` ワークツリー1箇所だけ**で、その場所は `claude/README.md` にしか書かれていない。
+生成物である `~/.claude/settings.json` の隣に置かれていれば、人間は自分の設定を
+その場で見つけて直せる。
+
+司令官が起草時に確認した実測（2026-09-12）:
+
+- `links_for_tool()` の `claude)` arm は `$HOME/.claude/CLAUDE.md` と
+  `$HOME/.claude/hooks/git-guard.sh`（孫1 が追加）の2件。machine.json は無い
+- `state_files_for_tool()` の arm は `nvim` のみ
+- `uninstall.sh` には `KNOWN_GENERATED_claude` が定義済み。したがって
+  `links_for_tool()` への追加を忘れても「No link list defined」ガードは**発火せず**、
+  警告なしに撤去漏れする（ルート `AGENTS.md`「実装時の注意」に既出の罠）
+- `detect_state_writeback()` は `[ -f "$gen_file" ] && [ -f "$src_file" ]` の
+  **両方が存在するときだけ**比較する。片側にしか無いファイルは黙って無視される
+- `claude/settings.machine.json.example` の中身は `"allow": ["Bash", "Read", "Edit",
+  "WebFetch", ...]` という全許可と、存在しないパス `/path/to/your/hook.sh` を指す
+  `SessionStart` フック。**これを自動配布すると、この傘で締め直した権限が無効化され、
+  壊れたフックが毎セッション走る。** 人間も example ではなく空ファイル案を選んでいる
 
 ### F. ペインの起動コマンドに permission-mode が渡っていない
 
@@ -573,6 +614,56 @@ technically 成立しないと判明した場合は、実装を進める前に�
   孫用プロンプト雛形の手順4（「人間に依頼する」）も同様
 - 併せて、スキル内に残る `git pull --rebase` を fetch + rebase / merge --ff-only へ置き換える
 
+### 設計6: `settings.machine.json` は世代を経由させず、マシン固有の固定パスに置く
+
+背景3-I の要求（`~/.claude/settings.json` の兄弟として symlink する）を満たす置き方は
+2つある。**司令官は後者を採る。**
+
+**案A（却下）: ソースツリーの `claude/settings.machine.json` を世代経由で symlink する。**
+`nvim/lazy-lock.json` と同じ「状態ファイル」の型に乗せ、`state_files_for_tool()` に
+`claude)` arm を足し、書き戻しは `--adopt-state` で取り込む。
+
+却下の理由は**この傘が実際に踏んだバグを悪化させる**こと。背景3-B の追検証のとおり、
+machine.json は git 非追跡なので**ワークツリーごとに在ったり無かったりする**。案A で
+「無ければ空の `{}` を作る」を deploy に足すと、**machine.json を持たないワークツリー
+（＝この傘や孫のワークツリー）から deploy した瞬間に空ファイルが正となり**、人間の
+`hooks`（herdr のエージェント状態フック）と `additionalDirectories` が消える。
+孫2 の allow 保全は `allow` しか救わないので、これは実害のある退行である。
+
+**案B（採用）: canonical prefix 直下の固定パスに実体を置く。**
+
+- 実体: `${XDG_DATA_HOME:-$HOME/.local/share}/dotfiles/settings.machine.json`
+  （`current` や `generations/` と同じ階層。**世代の中には入れない**）
+- `~/.claude/settings.machine.json` はこの固定パスへの symlink
+- `claude/deploy.sh` の settings 生成は、machine 設定をこの固定パスから読む
+- 無ければ deploy が `{}` を作る（**`--dry-run` では作らない**）
+
+案B が優れている点:
+
+- **ワークツリーをまたいで1つ。** どのワークツリーから deploy しても同じ machine 設定に
+  なる。背景3-B の追検証で見つけた「傘から deploy すると machine.json ごと消える」が
+  原理的に消滅する
+- **人間が symlink 経由で編集した内容がそのまま残る。** 世代を経由しないので
+  `state_files_for_tool()` / `--adopt-state` の機構が要らない（案A は編集のたびに
+  「書き戻し検知 → adopt」を人間に強いる）
+- **世代のロールバックで machine 設定が巻き戻らない。** machine 設定は配布物ではなく
+  マシン固有の設定なので、`--rollback` の対象外であるほうが正しい
+
+案B で必ず扱うこと:
+
+- **移行**: 既存の `master` ワークツリーの `claude/settings.machine.json`（実在。4010バイト）を
+  固定パスへ移す。deploy が自動移行してよいが、**何をどこへ移したかを必ずログに出す**。
+  固定パスとソースツリーの両方に存在して内容が異なる場合は、勝手にどちらかを採らず
+  警告して停止する
+- **`uninstall.sh`**: `~/.claude/settings.machine.json` の symlink は撤去する。
+  **固定パスの実体は消さない**（人間のマシン設定であり、この傘の配布物ではない）。
+  その結果 prefix が空にならないので、既存の「空になった prefix を消す」処理が
+  それを許容するか確認し、必要なら明示的に扱う
+- **`links_for_tool()` の `claude)` arm に追加する。** 忘れても
+  `KNOWN_GENERATED_claude` があるため `uninstall.sh` は警告なしに撤去漏れする（背景3-I）
+- **`settings.machine.json.example` は配布しない。** 中身が全許可と壊れたフックであり、
+  撒くとこの傘の成果を無効化する（背景3-I）。空の `{}` を作るだけにする
+
 ---
 
 ## スコープ外
@@ -618,7 +709,7 @@ technically 成立しないと判明した場合は、実装を進める前に�
 
 ## 実装完了条件
 
-1. 孫1〜5 の PR がすべて傘ブランチへマージ済み
+1. 孫1〜6 の PR がすべて傘ブランチへマージ済み
 2. `pre-commit run --all-files` / `tests/deploy_smoke.sh` / `tests/template_smoke.sh` が通る
 3. 傘→`master` の PR に、**人間が deploy 前に行う移行手順**（machine.json の
    `deny: git merge` 2行の削除、生成物側に手で入った `ask` の扱い）が明記されている
@@ -1299,4 +1390,120 @@ reviewer は done 状態で完了し完了通知は来ないので、待機し�
 起動している。実装前に `git branch --show-current` で自分のブランチ名を確認し、
 `git log --oneline origin/autopilot-permissions..HEAD` が空であることを確かめること。
 `master` から切られていたら、その時点で作業を止めて司令官へ報告すること。
+````
+
+## 孫6用プロンプト: settings.machine.json を発見可能にする
+
+````
+# 孫6: settings.machine.json を ~/.claude/settings.json の兄弟として symlink する
+
+あなたはこの孫ブランチの実装 AI です。計画書
+`docs/planning/DOC-2609121700_autopilot-permissions_計画.md`
+（背景3-B、背景3-I、設計6 を必ず読むこと。設計6 が採る案と却下した案の理由が本体です）
+に基づいて実装してください。
+
+**前提: 孫2（PR #89）が `claude/deploy.sh` の settings 生成を既に変更している。**
+学習済み `allow` の保全処理が入っているので、その挙動を壊さないこと。
+
+## 問題（計画書 背景3-I より）
+
+`claude/settings.machine.json` は git 非追跡のうえ、実在するのが `master` ワークツリー
+1箇所だけで、場所は `claude/README.md` にしか書かれていない。この傘で扱った時限爆弾
+（`deny: Bash(git merge *)`）に人間が自力でたどり着けなかった。生成物である
+`~/.claude/settings.json` の隣に置かれていれば、その場で見つけて直せる。
+
+## やること（設計6 の案B。**案A は却下済みなので採らない**）
+
+1. **実体の置き場所を `${XDG_DATA_HOME:-$HOME/.local/share}/dotfiles/settings.machine.json`
+   にする**（`current` や `generations/` と同じ階層。**世代の中には入れない**）
+2. `~/.claude/settings.machine.json` をその固定パスへの symlink として張る
+   （`symlink_backup` 経由）
+3. `claude/deploy.sh` の settings 生成が machine 設定をこの固定パスから読むようにする
+4. 固定パスにファイルが無ければ deploy が `{}`（空の JSON オブジェクト）を作る。
+   **`--dry-run` では作らない**
+5. **移行**: 既存のソースツリー `claude/settings.machine.json` を固定パスへ移す。
+   自動移行してよいが**何をどこへ移したかを必ずログに出す**。固定パスとソースツリーの
+   両方に存在して内容が異なる場合は、勝手にどちらかを採らず**警告して停止する**
+6. `shared/helpers.sh` の `links_for_tool()` の `claude)` arm に
+   `$HOME/.claude/settings.machine.json` を追加する。
+   **忘れても `uninstall.sh` は警告を出さない**（`KNOWN_GENERATED_claude` が定義済みのため
+   「No link list defined」ガードが発火しない。ルート `AGENTS.md`「実装時の注意」参照）
+7. `uninstall.sh`: `~/.claude/settings.machine.json` の symlink は撤去し、
+   **固定パスの実体は消さない**。その結果 prefix が空にならないので、既存の
+   「空になった prefix を消す」処理が破綻しないか確認し、必要なら明示的に扱う
+8. `deploy-all.sh --status` に固定パスの状態（有無）が出るとよい（任意）
+9. `claude/README.md` とルート `AGENTS.md` の「claude の例外」節を追随させる。
+   README には「`~/.claude/settings.machine.json` を直接編集してよい」ことと、
+   `settings.machine.json.example` の位置づけ（**配布しない。参照用のサンプル**）を書く
+
+**`settings.machine.json.example` を自動配布しないこと。** 中身が
+`"allow": ["Bash", "Read", "Edit", "WebFetch", ...]` の全許可と、存在しないパス
+`/path/to/your/hook.sh` を指す `SessionStart` フックであり、撒くとこの傘で締め直した
+権限が無効化され、壊れたフックが毎セッション走る。
+
+## 検証方針
+
+以下の重要な behavior / regression risk が、`tests/deploy_smoke.sh` によって
+保護されていること（`HOME` を一時ディレクトリへ差し替えたサンドボックス上で検証する）。
+
+- **machine.json を持たないソースツリーから deploy しても、固定パスにある既存の
+  machine 設定が失われないこと。** **この regression は必ず自動テストで固定する**
+  （案A を却下した理由そのものであり、この孫の存在意義）
+- `~/.claude/settings.machine.json` が固定パスを指す symlink として張られ、
+  そこへの書き込みが deploy をまたいで残ること
+- 固定パスにファイルが無い初回 deploy で `{}` が作られ、生成される
+  `~/.claude/settings.json` がベース設定のままであること（空 machine 設定でも壊れない）
+- `--dry-run` で固定パスにファイルが作られないこと
+- 移行: ソースツリーにだけ machine.json がある状態から deploy すると固定パスへ移り、
+  ログにその旨が出ること。両方にあって内容が違う場合は警告して停止すること
+- `uninstall.sh` が `~/.claude/settings.machine.json` の symlink を撤去し、
+  **固定パスの実体を消さない**こと。**この regression は必ず自動テストで固定する**
+  （人間のマシン設定を消す事故は取り返しがつかない）
+- 孫2 が入れた「学習済み allow の保全」が引き続き動くこと（既存テストで担保できるなら
+  新規テストは追加しない）
+
+各項目と test example を1対1対応させる必要はない。複数の条件を1つの scenario で
+検証してよい。
+
+## やらないこと
+
+- **案A（世代経由の状態ファイル方式）を採らない。** 設計6 に却下理由がある。
+  実装してみて案B が成立しないと分かったら、自分で案を変えずに司令官へ報告する
+- `~/.claude/` 配下の実ファイルを、サンドボックス外で書き換えない
+- 人間の実 `$HOME` に対して `deploy-all.sh` を実オペレーションで実行しない
+  （`--dry-run` と `tests/deploy_smoke.sh` のサンドボックスのみ）
+- `settings.machine.json.example` を配布物にしない
+- 孫5 が入れたガードフックの判定ロジックに触らない
+- linter の抑制ディレクティブ・除外設定を足さない
+
+## コミット前に必ず実行する
+
+```
+pre-commit run --all-files
+tests/deploy_smoke.sh
+tests/git_guard_test.sh
+```
+
+## 実装完了後の流れ（必須）
+
+実装が完了したら、以下を**自律的に**実行してください:
+
+1. PR を作成する。**PR の向き先は必ず `autopilot-permissions` にすること。
+   `master` には絶対に出さない。**
+2. `/pr-review-loop` を起動する（PR がない場合は自動で作成し、そのままレビューを開始する）
+3. レビュー指摘があれば修正し、承認されるまで繰り返す
+4. 承認されたら人間に「マージしてください」と依頼する
+
+実装が終わったタイミングで止まらず、必ずここまでやりきってください。
+reviewer は done 状態で完了し完了通知は来ないので、待機して停止せず
+`gh pr view` をポーリングしてレビューの有無を確認してください。
+またレビュワーペインが許可の確認待ちで止まっていても、人間に依頼して自分は停止しないこと。
+
+## ブランチ作成時の注意（最重要）
+
+このワークツリーは `ocw` が傘ブランチ `autopilot-permissions` から切った孫ブランチ上で
+起動している。実装前に `git branch --show-current` で自分のブランチ名を確認し、
+`git log --oneline origin/autopilot-permissions..HEAD` が空であることを確かめること。
+`master` から切られていたら、その時点で作業を止めて司令官へ報告すること
+（`master` から切ると孫2 の `claude/deploy.sh` 変更が入らず、確実に衝突する）。
 ````
