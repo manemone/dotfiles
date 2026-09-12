@@ -47,6 +47,13 @@ fi
 # --- Symlink CLAUDE.md ---
 symlink_backup "$DOTFILES_DEPLOY_SRC/claude/CLAUDE.md" "$CLAUDE_DIR/CLAUDE.md" || FAIL=1
 
+# --- Symlink git-guard.sh (PreToolUse hook) ---
+# ~/.claude/hooks/ には dotfiles 由来でないフック（herdr-agent-state.sh）が
+# 既に居るため、ディレクトリごとではなくファイル単位で symlink する。
+# symlink_backup は親ディレクトリが無ければ作成するため、~/.claude/hooks
+# が未作成でも問題ない。
+symlink_backup "$DOTFILES_DEPLOY_SRC/claude/hooks/git-guard.sh" "$CLAUDE_DIR/hooks/git-guard.sh" || FAIL=1
+
 # --- Resolve where to read claude/'s own contents from for THIS run ---
 # symlink_backup (used for CLAUDE.md above) always links through
 # DOTFILES_DEPLOY_SRC regardless of DRY_RUN — its DRY-RUN branch only prints

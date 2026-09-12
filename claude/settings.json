@@ -51,6 +51,20 @@
     ],
     "defaultMode": "acceptEdits"
   },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$HOME/.claude/hooks/git-guard.sh\"",
+            "timeout": 15
+          }
+        ]
+      }
+    ]
+  },
   "model": "opus",
   "language": "Japanese",
   "effortLevel": "high",
