@@ -917,6 +917,157 @@ JSONEOF
   fi
 }
 
+# ── シナリオ10b: 学習した allow が deploy 越しに保全される（孫2 設計3） ───
+
+scenario_claude_allow_preservation() {
+  if ! has_tool claude; then
+    return
+  fi
+  log "=== シナリオ10b: 学習した allow が deploy 越しに保全される（孫2 設計3） ==="
+  local sbx out rc copy_dir _count
+
+  # --- ケースA: settings.machine.json 無しでも、既存生成物の allow が
+  #     保全される。保全対象外の ask（手で足された分。背景3-Aの再現）は
+  #     引き継がれず、ベースの deny/ask も弱められないこと。 ---
+  new_sandbox
+  sbx="$SANDBOX_DIR"
+  mkdir -p "$sbx/.claude"
+  cat >"$sbx/.claude/settings.json" <<'JSONEOF'
+{
+  "permissions": {
+    "allow": ["Bash(git checkout *)", "Bash(smoke-learned-cmd *)"],
+    "ask": ["Bash(git merge *)"]
+  }
+}
+JSONEOF
+
+  out="$(run_deploy "$sbx" --force --only claude 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "machine.json無しでの学習allow保全deployが失敗 (exit=$rc)"
+    log "$out"
+  else
+    if grep -qF '"Bash(smoke-learned-cmd *)"' "$sbx/.claude/settings.json"; then
+      pass "machine.json無しでも既存の学習allowが保全される"
+    else
+      fail "machine.json無しでも既存の学習allowが保全される"
+    fi
+    if grep -qF '"Bash(git merge *)"' "$sbx/.claude/settings.json"; then
+      fail "保全対象外のask(手動追加分)は引き継がれない(allowだけを保全するはずが ask も引きずっている)"
+    else
+      pass "保全対象外のask(手動追加分)は引き継がれない(allowだけを保全)"
+    fi
+    if grep -qF '"Bash(git push --force)"' "$sbx/.claude/settings.json" &&
+      grep -qF 'Read(./.env)' "$sbx/.claude/settings.json"; then
+      pass "保全されたallowがベースのdeny/askを弱めていない"
+    else
+      fail "保全されたallowがベースのdeny/askを弱めていない"
+    fi
+  fi
+
+  # --- 冪等性: 同じ状態で2回目を実行してもallowが増殖しない ---
+  wait_for_next_second
+  out="$(run_deploy "$sbx" --force --only claude 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "学習allow保全ありでの2回目deployが失敗 (exit=$rc、冪等性なし)"
+  else
+    _count="$(grep -cF '"Bash(smoke-learned-cmd *)"' "$sbx/.claude/settings.json")"
+    if [ "$_count" = "1" ]; then
+      pass "2回目のdeployでもallowが重複しない(冪等)"
+    else
+      fail "2回目のdeployでallowが重複増殖した(件数=$_count)"
+    fi
+  fi
+
+  # --- ケースB: 既存生成物が壊れたJSONでもdeployを失敗させない ---
+  new_sandbox
+  sbx="$SANDBOX_DIR"
+  mkdir -p "$sbx/.claude"
+  printf '{ this is not valid json' >"$sbx/.claude/settings.json"
+  out="$(run_deploy "$sbx" --force --only claude 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "既存settings.jsonが壊れたJSONでもdeployは失敗しない (exit=$rc)"
+    log "$out"
+  else
+    pass "既存settings.jsonが壊れたJSONでもdeployは失敗しない"
+    if python3 -m json.tool "$sbx/.claude/settings.json" >/dev/null 2>&1; then
+      pass "既存settings.jsonが壊れたJSONでも生成物自体はvalid JSONになる"
+    else
+      fail "既存settings.jsonが壊れたJSONでも生成物自体はvalid JSONになる"
+    fi
+  fi
+
+  # --- ケースC: settings.machine.json あり + 既存allow ---
+  # (両方のソース由来のallowが共存すること。machine.jsonのallow結合と
+  #  孫2の既存allow保全は別経路なので、片方だけ効いていないかを検知する)
+  new_sandbox
+  sbx="$SANDBOX_DIR"
+  mkdir -p "$sbx/.claude"
+  cat >"$sbx/.claude/settings.json" <<'JSONEOF'
+{
+  "permissions": {
+    "allow": ["Bash(smoke-learned-cmd-2 *)"]
+  }
+}
+JSONEOF
+  copy_dir="$(mktemp -d)"
+  CREATED_DIRS+=("$copy_dir")
+  copy_repo_snapshot "$copy_dir"
+  cat >"$copy_dir/claude/settings.machine.json" <<'JSONEOF'
+{
+  "permissions": {
+    "allow": ["Bash(git fetch *)"]
+  }
+}
+JSONEOF
+  out="$(run_deploy_from "$copy_dir/deploy-all.sh" "$sbx" --force --only claude 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "machine.jsonありでの学習allow保全deployが失敗 (exit=$rc)"
+    log "$out"
+  else
+    if grep -qF '"Bash(smoke-learned-cmd-2 *)"' "$sbx/.claude/settings.json" &&
+      grep -qF '"Bash(git fetch *)"' "$sbx/.claude/settings.json"; then
+      pass "machine.jsonありでも既存の学習allowとmachine側allowの両方が残る"
+    else
+      fail "machine.jsonありでも既存の学習allowとmachine側allowの両方が残る"
+    fi
+  fi
+
+  # --- ケースD: --dry-run は実ファイルを書き換えず、保全予定件数だけ報告する ---
+  new_sandbox
+  sbx="$SANDBOX_DIR"
+  mkdir -p "$sbx/.claude"
+  cat >"$sbx/.claude/settings.json" <<'JSONEOF'
+{
+  "permissions": {
+    "allow": ["Bash(smoke-learned-cmd-3 *)"]
+  }
+}
+JSONEOF
+  out="$(run_deploy "$sbx" --dry-run --only claude 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "学習allowありでの--dry-runが失敗 (exit=$rc)"
+    log "$out"
+  else
+    if printf '%s' "$out" | grep -qE "Would preserve 1 learned permissions.allow"; then
+      pass "--dry-runで保全予定件数が報告される"
+    else
+      fail "--dry-runで保全予定件数が報告される"
+    fi
+    # 実際にマージが走っていればbase由来の"model"キーが書き込まれるはず。
+    # それが無いことで「dry-runなのに実ファイルへ書いた」退化を検知する。
+    if grep -q '"model"' "$sbx/.claude/settings.json" 2>/dev/null; then
+      fail "--dry-runでも既存settings.jsonの内容は変更されない(実際に書き込まれた)"
+    else
+      pass "--dry-runでも既存settings.jsonの内容は変更されない"
+    fi
+  fi
+}
+
 # ── シナリオ11: 旧方式(直リンク)skill symlinkの移行 + stale掃除 ──────────
 
 scenario_skill_migration() {
@@ -2528,6 +2679,8 @@ log
 scenario_claude_source_tree_disappears
 log
 scenario_claude_settings_machine_merge
+log
+scenario_claude_allow_preservation
 log
 scenario_skill_migration
 log

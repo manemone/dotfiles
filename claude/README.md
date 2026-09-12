@@ -15,7 +15,7 @@ Claude Code の設定ファイル群。`~/.claude/` にデプロイして使う�
 | Tool | Why | Install |
 |---|---|---|
 | **Claude Code** CLI | 設定ファイルの読み取り元 | `npm install -g @anthropic-ai/claude-code` |
-| **Python 3** | `settings.machine.json` とのマージ用（任意） | `mise use python@latest` |
+| **Python 3** | `settings.machine.json` とのマージ、および学習済み `permissions.allow` の保全用（任意。無ければ両方スキップされ、ベース設定のみで生成される） | `mise use python@latest` |
 
 ## 2. Quick Start
 
@@ -41,9 +41,11 @@ ls -la ~/.claude/settings.json     # 実ファイル（deploy.sh が生成）
 The deploy script:
 - Creates `~/.claude/` directory with mode `700`（認証情報を置く可能性があるため）
 - Symlinks `CLAUDE.md` → `~/.claude/CLAUDE.md`
-- Generates `~/.claude/settings.json` as a real file（※symlink ではない）:
-  - 通常時: `claude/settings.json` をそのままコピー
-  - `claude/settings.machine.json` が存在する場合: ベース設定にマシン固有設定をマージして出力
+- Generates `~/.claude/settings.json` as a real file（※symlink ではない）。入力は3つ:
+  1. ベース設定（`claude/settings.json`）
+  2. マシン固有設定（`claude/settings.machine.json`。存在すれば）
+  3. **今まさに置き換えようとしている生成物（`~/.claude/settings.json`）の `permissions.allow`**
+     — Claude Code が対話で学習した allow を deploy 越しに保全する（§3.2.1参照）
 
 `~/.claude/skills/` はこのスクリプトの担当ではない。スキルは Claude Code 専用ではなく
 Codex・OpenCode にも同じ実体が配られるため、トップレベルの `skills/` ツールが受け持つ
@@ -51,8 +53,9 @@ Codex・OpenCode にも同じ実体が配られるため、トップレベルの
 [DOC-2608272128](../docs/adr/DOC-2608272128_skills-multi-agent-distribution.md)）。
 
 > **⚠️ 重要**: deploy 実行時に既存の `~/.claude/settings.json` はバックアップ（`.backup` 付きで退避）されます。
-> `permissions.allow`（33件）、Herdr の `SessionStart` hook、`additionalDirectories` など
-> マシン固有の設定が失われるのを防ぐには、**deploy 前に `settings.machine.json` を作成**してください。
+> `permissions.allow` は次回 deploy でも自動的に保全されますが（§3.2.1参照）、
+> Herdr の `SessionStart` hook や `additionalDirectories` など**`allow` 以外のマシン固有設定は
+> 保全されません**。失われるのを防ぐには、**deploy 前に `settings.machine.json` を作成**してください。
 
 ## 3. What's Included
 
@@ -80,7 +83,10 @@ Claude Code がセッション開始時に読み込むグローバルな個人�
 
 ### 3.2 settings.json
 
-Claude Code の設定ファイル。以下の汎用設定を含む（マシン固有の `permissions.allow`、`additionalDirectories`、`hooks` は**意図的に除外**）。
+Claude Code の設定ファイル。以下の汎用設定を含む（マシン固有の `additionalDirectories`、
+`hooks`（git-guard フックを除く。§3.5参照）は**意図的に除外**。`permissions.allow` は
+リポジトリ側のベース設定には含まれないが、deploy 時に学習済みの分が自動的に合成される
+— §3.2.1参照）。
 
 | Setting | Value | Notes |
 |---|---|---|
@@ -96,6 +102,35 @@ Claude Code の設定ファイル。以下の汎用設定を含む（マシン�
 | `permissions.deny` | セキュリティポリシー（24件） | `.env`, `.ssh`, `.aws`, API キー等へのアクセスをブロック |
 | `permissions.ask` | 危険コマンドパターン（20件） | `git push --force`, `rm -rf`, `sudo` 等の実行前に確認 |
 | `statusLine` | `{"type":"command","command":"ocw-meter snapshot-quota"}` | Claude 利用枠(5時間枠・週間枠)のステータスバー表示。§3.4参照 |
+
+#### 3.2.1 学習した allow は deploy 越しに保全される
+
+Claude Code が対話中に「今後確認しない」で `~/.claude/settings.json` の
+`permissions.allow` へ学習した内容は、**deploy を実行しても消えない**。
+`claude/deploy.sh` は settings 生成の入力として、ベース設定・
+`settings.machine.json`（存在すれば）に加えて、**今から置き換えようとしている
+生成物自身の `permissions.allow`** を読み、重複を除いて合成する
+（設計の詳細は計画書
+[DOC-2609121700](../docs/planning/DOC-2609121700_autopilot-permissions_計画.md)
+設計3を参照）。
+
+**保全されるのは `permissions.allow` だけ。** `ask` / `deny` / `hooks` /
+`additionalDirectories` などその他のキーは保全されない。理由は2つ:
+
+- 優先順位は `deny > ask > allow` なので、保全した `allow` が既存の `deny` / `ask` を
+  弱める心配が要らない。`ask` や `deny` まで保全すると、対話や `/permissions` で
+  一時的・誤って足された `ask` が deploy のたびに引き継がれ続けてしまう
+  （実際に一度これが起きた。§2の「⚠️ 重要」参照）
+- `hooks` や `additionalDirectories` のようなマシン固有の恒久設定は、
+  `settings.machine.json` に書くのが正規の経路（§4.3・§4.5）
+
+既存の生成物が無い・壊れている・`permissions.allow` を持たない場合は、
+何も保全せず従来どおりベース（+machine）だけで生成する（deploy は失敗しない）。
+`python3` が無い環境では保全そのものがスキップされ、警告を出したうえでベース設定を
+そのままコピーする（`settings.machine.json` を使わない限り `python3` は必須ではない）。
+
+`--dry-run` では、何件の `allow` を保全する予定かをログに出す
+（実ファイルには一切書き込まない）。
 
 ### 3.3 Skills
 
@@ -414,8 +449,10 @@ cp ~/.claude/settings.json.backup ~/.claude/settings.json
 
 ### `python3` がないと言われる
 
-`settings.machine.json` を使わない場合は python3 不要です（ベース設定がそのままコピーされます）。
-`settings.machine.json` によるマージを使う場合は python3 をインストールしてください:
+`settings.machine.json` を使わない場合は必須ではありませんが、無いと**学習した
+`permissions.allow` の保全（§3.2.1）もスキップされます**（deploy 自体は失敗せず、
+警告を出してベース設定のみで生成します）。`settings.machine.json` によるマージ・
+allow の保全のどちらかでも使いたい場合は python3 をインストールしてください:
 
 ```bash
 mise use python@latest
@@ -443,3 +480,33 @@ ls -la ~/.claude/CLAUDE.md
 # 修復
 ./deploy-all.sh --only claude
 ```
+
+## 6. 移行手順 — この変更（allow 保全）を取り込んだ後、次の deploy 前に人間が行うこと
+
+孫2（学習した allow の deploy 越し保全。計画書
+[DOC-2609121700](../docs/planning/DOC-2609121700_autopilot-permissions_計画.md)
+設計3）と、孫1（git-guard フック。ADR
+[DOC-2609121719](../docs/adr/DOC-2609121719_git-operation-permission-policy.md)）が
+両方マージされたあと、実際に deploy する前に**必ず**次を行うこと。
+どちらも `claude/settings.machine.json` は git 非追跡のマシン固有ファイルなので、
+AI はこのファイルを編集しない（PR の diff に乗らない変更を人間が知らないうちに
+受け取ることになるため）。**この節はその手順を文書化するだけで、AI 自身は実行しない。**
+
+1. **`claude/settings.machine.json` の `permissions.deny` から
+   `"Bash(git merge *)"` と `"Bash(git merge --*)"` の2行を削除する。**
+   この2行を消さないと、新しい git-guard フックが `allow` を返しても
+   `deny` が勝つため（優先順位は `deny > ask > allow`）、`git merge` が
+   保護ブランチ以外でも一切実行できないままになる（計画書 背景3-B参照）
+2. `settings.machine.json` は git 非追跡でワークツリーごとに独立している。
+   **`settings.machine.json` を持つワークツリー（通常は main ワークツリー）から
+   deploy すること。** 傘や孫のワークツリーには存在しないため、そこから
+   deploy すると machine.json ごと消えた生成物になる（`hooks` の Herdr
+   `SessionStart` などが一時的に失われる。§2の「⚠️ 重要」参照）
+3. 現在 `~/.claude/settings.json` に**手で**入っている `"Bash(git merge *)"`
+   （`permissions.ask`）は、この孫2の保全対象（`allow` のみ）に含まれないため
+   **何もしなくても次の deploy で自然に消える**。これは意図した挙動であり
+   （背景3-Aで指摘された「手で足された `ask` が永久に固定化する」状態を
+   壊すのが目的）、復元する必要はない
+
+上記1・2を行わずに deploy すると、`git merge` が保護ブランチ以外でも
+`deny` によって完全に不能になる（時限爆弾。背景3-B参照）。
