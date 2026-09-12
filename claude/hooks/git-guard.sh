@@ -15,12 +15,14 @@
 #                  を allow、裸の --force/-f は ask
 #   git merge    : 現在のブランチ（マージ先）が保護ブランチなら deny、他は allow
 #   chmod        : -R/--recursive 無し・モードが実行ビット付与のみ（+x 等の
-#                  シンボリック指定。数値モードは対象外）・対象パスが全て
-#                  現在の git ワークツリー内かつ .git 配下でなければ allow。
+#                  シンボリック指定。数値モードは対象外）・対象パスが1つ残らず
+#                  シェル展開に使われうる文字（~ $ * ? [ ] { } ` < >）を含まず、
+#                  かつ現在の git ワークツリー内かつ .git 配下でなければ allow。
 #                  1つでも満たさなければ ask（deny ではない）
-#   rm -r/-rf/-fr等: 対象パスが全て一時ディレクトリ配下（このセッションの
-#                  scratchpad、または $TMPDIR/`/tmp` 自身より深い場所）に
-#                  解決されれば allow。ワークツリー内は対象外（ask のまま）
+#   rm -r/-rf/-fr等: 対象パスが1つ残らず上記と同じ意味でシェル展開文字を
+#                  含まず、一時ディレクトリ配下（このセッションの scratchpad、
+#                  または $TMPDIR/`/tmp` 自身より深い場所）に解決されれば
+#                  allow。ワークツリー内は対象外（ask のまま）
 #   それ以外     : 何も言わず終了（既存の permissions.ask に委ねる）
 #
 # chmod/rm はいずれも「危険かどうかは対象がどこにあるかで決まる」ため、
@@ -282,10 +284,19 @@ def mentions_guarded_command(command):
     # chmod/rm だけ strip_quoted() を通す。`grep -rn "chmod" claude/ | head`
     # のように、引用符の中身が実際には実行されず単なる検索パターン等の
     # 文字列として使われるだけの無関係なコマンドを誤検出しないため
-    # （has_chain() が同じ理由で strip_quoted() を使うのと同じ配慮。
-    # ただし git/gh と異なり chmod/rm は §7.2 の handle_chmod/handle_rm 自体が
-    # 唯一の安全弁ではなく、ここで見逃してもそれらの対象は
-    # permissions.ask の名指しの網（settings.json）で別途拾われうる）。
+    # （has_chain() が同じ理由で strip_quoted() を使うのと同じ配慮）。
+    #
+    # git/gh と異なりこの選択が新たな危険を生まないのは、そもそも
+    # handle_chmod()/handle_rm() が find_prog() で「トークン化した結果
+    # 独立した "chmod"/"rm" が存在する」ときにしか動作しないため
+    # （handle_git_merge 等が subcommand_of() で同じ制約を持つのと同じ
+    # 理由）。`sh -c "chmod ..."` のように chmod/rm が引用符の中にしか
+    # 現れない形は、strip_quoted() の有無に関わらずそもそも
+    # handle_chmod()/handle_rm() 自体に届かない。この分岐（mentions_
+    # guarded_command 経由の ask フォールバック）は git/gh にとっては
+    # 「唯一の担保」だが、chmod/rm にとってはあくまで補助的な安全側の
+    # 上乗せであり、ここで見逃しても §7.2 の判定表そのものが元々
+    # カバーしていない範囲が広がるわけではない。
     stripped = strip_quoted(command)
     return bool(
         re.search(r"\bgit\b", command)
