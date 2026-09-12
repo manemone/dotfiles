@@ -116,7 +116,7 @@ Claude Code の設定ファイル。以下の汎用設定を含む（マシン�
 | `permissions.defaultMode` | `acceptEdits` | 権限のデフォルトモード |
 | `permissions.allow` | 分類器対策の狭いルール（8件） | `mkdir -p` / `chmod +x` / 一時ディレクトリの `rm -r` は auto mode の分類器待ちになるため、`permissions` 側で即決させる（§3.5・ADR §3.3/§3.5） |
 | `permissions.deny` | セキュリティポリシー（24件） | `.env`, `.ssh`, `.aws`, API キー等へのアクセスをブロック |
-| `permissions.ask` | 危険コマンドパターン（53件） | `git push --force`, `rm -r /home*` 等の名指しした絶対パス, `sudo` 等の実行前に確認（§3.5参照） |
+| `permissions.ask` | 危険コマンドパターン（57件） | `git push --force`, `rm -r /home*` 等の名指しした絶対パス, `sudo` 等の実行前に確認（§3.5参照） |
 | `statusLine` | `{"type":"command","command":"ocw-meter snapshot-quota"}` | Claude 利用枠(5時間枠・週間枠)のステータスバー表示。§3.4参照 |
 
 #### 3.2.1 学習した allow は deploy 越しに保全される
@@ -280,8 +280,12 @@ PreToolUse フック）が担保するのは**1点だけ**である。
 構成で判定しないため）。
 
 **`main`/`master` への `git push` は `claude/settings.json` の `permissions.ask` が
-受け持つ**（`Bash(git push * main*)` / `Bash(git push * master*)` と、裸の force 系
-4パターン）。`--force-with-lease` はどのパターンにも一致しないため、傘・孫ブランチへの
+受け持つ**。空白区切りの裸のブランチ名（`Bash(git push * main*)` /
+`Bash(git push * master*)`）に加えて、コロン区切りの refspec と完全参照
+（`Bash(git push *:master*)` / `Bash(git push *heads/master*)` ほか）も拾う。
+**後者が無いと `git push origin HEAD:master` がどの層からも漏れる**（`master` の
+直前が空白でないため前者に一致しない）。裸の force 系4パターンも従来どおり `ask`。
+`--force-with-lease` はどのパターンにも一致しないため、傘・孫ブランチへの
 force push は無音で通る。**`Bash(git push *--force*)` のように空白を挟まない
 パターンを置くと `--force-with-lease` まで拾って autopilot が止まる。置かないこと。**
 

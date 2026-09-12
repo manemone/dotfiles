@@ -46,7 +46,11 @@ import subprocess
 import sys
 
 PROTECTED = set(os.environ.get("GIT_GUARD_PROTECTED_BRANCHES", "main master").split())
-GH_TIMEOUT = 8
+# `claude/settings.json` のフック側 timeout（15秒）より短くしておく。ただし
+# 「gh は生きているが遅い」状態ではフックだけが先に諦めて無音になり、後続の
+# `gh pr merge` 本体（タイムアウト無し）は成功しうる。この窓は ADR §7 に
+# 残余リスクとして明記してある。
+GH_TIMEOUT = 12
 
 # `gh pr merge` のうち、値をスペース区切りで取るオプション。次のトークンを
 # マージ対象（PR 番号 / URL / ブランチ名）と取り違えないために読み飛ばす。
@@ -61,10 +65,18 @@ MERGE_VALUE_TAKING = {
     "--author-email",
 }
 
-# `gh` のグローバルオプションのうち、対象リポジトリを cwd から動かすもの。
-# base の解決を cwd 任せにすると別リポジトリのブランチで判定してしまうため、
-# `gh pr view` 側へそのまま引き継ぐ。
-REPO_FLAGS = ("-R", "--repo")
+# 対象リポジトリを cwd から動かすオプション。base の解決を cwd 任せにすると
+# 別リポジトリのブランチで判定してしまうため、`gh pr view` 側へ引き継ぐ。
+# `--repo` は `gh pr` 配下の inherited flag であり、`gh` の直後だけでなく
+# `pr merge` の後ろにも書ける（`gh pr merge 7 -R owner/repo`）。片側しか
+# 見ないと、その値をマージ対象と取り違えて cwd 基準で解決してしまう。
+REPO_FLAGS = {"-R", "--repo"}
+
+# `gh` をコマンドとして扱ってよい位置。直前がこれらのいずれか（または先頭）
+# でなければ、ヒアドキュメントの本文や他コマンドの引数として現れた `gh` で
+# あり、実行されない。誤って deny すると無人ペインが止まる（deny は
+# bypassPermissions でも覆せないぶん ask より強く止まる）。
+COMMAND_POSITION_PREV = {"&&", "||", ";", ";;", "|", "|&", "(", ")", "{", "}", "do", "then", "else", "!"}
 
 
 def emit(decision, reason=None):
@@ -84,6 +96,16 @@ def say_nothing():
     sys.exit(0)
 
 
+def repo_arg_of(tok, nxt):
+    # トークンが `--repo` 指定なら (repo_args, 次のトークンも消費するか) を返す。
+    # そうでなければ (None, False)。`-Rowner/repo` の密着形も `gh` は受け付ける。
+    if tok in REPO_FLAGS:
+        return ([tok, nxt], True) if nxt is not None else (None, False)
+    if tok.startswith("--repo=") or (tok.startswith("-R") and len(tok) > 2):
+        return [tok], False
+    return None, False
+
+
 def find_pr_merge(tokens):
     # tokens 内の `gh ... pr merge` を探し、(repo_args, target) を返す。
     # 見つからなければ None。`cd <dir> && gh pr merge 1` のように連結されて
@@ -91,17 +113,22 @@ def find_pr_merge(tokens):
     for i, tok in enumerate(tokens):
         if tok != "gh":
             continue
+        if i > 0 and tokens[i - 1] not in COMMAND_POSITION_PREV:
+            # 実行されない `gh`（ヒアドキュメントの本文、`echo gh pr merge 95` の
+            # 引数など）。拾うと無関係な書き込みコマンドが deny される。
+            continue
         repo_args = []
         j = i + 1
         while j < len(tokens) and tokens[j] != "pr":
             tok_j = tokens[j]
-            if tok_j in REPO_FLAGS and j + 1 < len(tokens):
-                repo_args = [tok_j, tokens[j + 1]]
-                j += 2
+            found, consumed = repo_arg_of(
+                tok_j, tokens[j + 1] if j + 1 < len(tokens) else None
+            )
+            if found is not None:
+                repo_args = found
+                j += 2 if consumed else 1
                 continue
-            if tok_j.startswith("--repo="):
-                repo_args = [tok_j]
-            elif not tok_j.startswith("-"):
+            if not tok_j.startswith("-"):
                 # `pr` 以外のサブコマンドだった（gh issue ... 等）。
                 break
             j += 1
@@ -109,24 +136,37 @@ def find_pr_merge(tokens):
             continue
         if j + 1 >= len(tokens) or tokens[j + 1] != "merge":
             continue
-        return repo_args, merge_target(tokens[j + 2 :])
+        rest_repo_args, target = scan_merge_args(tokens[j + 2 :])
+        return (rest_repo_args or repo_args), target
     return None
 
 
-def merge_target(rest):
-    # `gh pr merge` の後ろから、マージ対象（PR 番号 / URL / ブランチ名）を取り出す。
-    # 省略されていれば None（`gh pr view` 側も省略時は現在のブランチの PR を引く）。
+def scan_merge_args(rest):
+    # `gh pr merge` の後ろから、`--repo` 指定とマージ対象（PR 番号 / URL /
+    # ブランチ名）を取り出す。`--repo` は inherited flag なのでここにも書ける。
+    # 対象が省略されていれば None（`gh pr view` 側も省略時は現在のブランチの
+    # PR を引く）。
+    repo_args = []
+    target = None
     skip = False
-    for tok in rest:
+    for idx, tok in enumerate(rest):
         if skip:
             skip = False
+            continue
+        found, consumed = repo_arg_of(
+            tok, rest[idx + 1] if idx + 1 < len(rest) else None
+        )
+        if found is not None:
+            repo_args = found
+            skip = consumed
             continue
         if tok.startswith("-"):
             if tok in MERGE_VALUE_TAKING:
                 skip = True
             continue
-        return tok
-    return None
+        if target is None:
+            target = tok
+    return repo_args, target
 
 
 def resolve_base(repo_args, target, cwd):

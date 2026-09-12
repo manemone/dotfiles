@@ -139,17 +139,35 @@ assert_decision \
   "gh pr merge: --body の値をマージ対象と取り違えない" \
   "deny" "$(run_hook "gh pr merge --squash -b 'merge 済み' 42" | extract_decision)"
 
-# -R は対象リポジトリを cwd から動かすため、cwd 基準の base 解決は成立しない。
-# gh pr view 側へ引き継げているかを引数の実物で検証する。
-: >"$GH_ARGS_FILE"
-assert_decision \
-  "gh -R <owner/repo> pr merge: base=master なら deny" \
-  "deny" "$(run_hook "gh -R other/repo pr merge 7 --squash" | extract_decision)"
-if grep -q -- "-R other/repo" "$GH_ARGS_FILE"; then
-  pass "gh -R <owner/repo> が gh pr view へ引き継がれている"
-else
-  fail "gh -R <owner/repo> が gh pr view へ引き継がれていない (args: $(cat "$GH_ARGS_FILE"))"
-fi
+# -R / --repo は対象リポジトリを cwd から動かすため、cwd 基準の base 解決は
+# 成立しない。gh pr view 側へ引き継げているかを引数の実物で検証する。
+# `--repo` は `gh pr` 配下の inherited flag であり、gh の直後だけでなく
+# `pr merge` の後ろにも書ける。片側しか見ないと、その値をマージ対象と
+# 取り違えて cwd 基準で解決し、別リポジトリの master へのマージを allow に
+# 倒す（引き継ぎロジックが gh〜pr 間にしか無い状態では、この一覧のうち
+# 最初の1件しか落ちない）。
+assert_repo_forwarded() {
+  local label="$1" command="$2" expect_arg="$3"
+  : >"$GH_ARGS_FILE"
+  assert_decision "$label: base=master なら deny" \
+    "deny" "$(run_hook "$command" | extract_decision)"
+  if grep -q -- "$expect_arg" "$GH_ARGS_FILE"; then
+    pass "$label: リポジトリ指定が gh pr view へ引き継がれている"
+  else
+    fail "$label: リポジトリ指定が引き継がれていない (args: $(cat "$GH_ARGS_FILE"))"
+  fi
+}
+
+assert_repo_forwarded "gh -R <owner/repo> pr merge <N>" \
+  "gh -R other/repo pr merge 7 --squash" "-R other/repo"
+assert_repo_forwarded "gh pr merge -R <owner/repo> <N>" \
+  "gh pr merge -R other/repo 7 --squash" "-R other/repo"
+assert_repo_forwarded "gh pr merge <N> --repo <owner/repo>" \
+  "gh pr merge 7 --repo other/repo --squash" "--repo other/repo"
+assert_repo_forwarded "gh pr merge --repo=<owner/repo> <N>" \
+  "gh pr merge --repo=other/repo 7 --squash" "--repo=other/repo"
+assert_repo_forwarded "gh pr merge -R<owner/repo>（密着形）<N>" \
+  "gh pr merge -Rother/repo 7 --squash" "-Rother/repo"
 
 export GIT_GUARD_TEST_BASE_REF="main"
 assert_decision \
@@ -209,7 +227,20 @@ assert_silent "一時ディレクトリの後片付け" "rm -rf /tmp/tmp.AbCdEf"
 assert_silent "コミットメッセージに merge を含む" 'git commit -m "merge 済み; 掃除も"'
 assert_silent "トークン化できない入力（git）" 'git commit -m "unbalanced'
 assert_silent "トークン化できない入力（gh pr merge）" 'gh pr merge "unbalanced'
-assert_silent "gh pr merge に言及するだけの文字列" 'grep -rn "gh pr merge" docs/'
+# 実 PR 番号を含む文章をファイルへ書き込むだけのコマンド。shlex はヒア
+# ドキュメントの本文も同じトークン列に混ぜるため、コマンド位置を見ないと
+# 本文中の `gh pr merge <実PR番号>` を実コマンドと誤認して deny する
+# （deny は bypassPermissions でも覆せないぶん ask より強く止まる）。
+# 傘の commander が計画書や対応報告を書き込む経路そのもの。
+# base を解決できると deny になる状況（gh スタブが master を返す）で試さないと、
+# この経路は「gh が失敗したので無音」に化けて素通りする。
+export GIT_GUARD_TEST_BASE_REF="master"
+assert_silent "gh pr merge に言及するだけの文字列" 'grep -rn "gh pr merge 1" docs/'
+assert_silent \
+  "実 PR 番号を含むヒアドキュメントの書き込み" \
+  "$(printf 'cat >> notes.md <<%sEOF%s\n承認されたら gh pr merge 1 --squash --delete-branch を実行する\nEOF' "'" "'")"
+assert_silent "echo での言及（クォートなし）" "echo gh pr merge 1"
+unset GIT_GUARD_TEST_BASE_REF
 
 # master への push はフックではなく claude/settings.json の permissions.ask
 # グロブ（Bash(git push * master*)）が受け持つ。フック側は無音であること。

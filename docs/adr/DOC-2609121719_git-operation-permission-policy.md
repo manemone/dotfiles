@@ -62,18 +62,44 @@ base 判定だけに縮小した。**
 という初版の fail-safe は破棄した（§6）。判定できないなら既存の `permissions` に
 委ねる。
 
-`-R` / `--repo`（対象リポジトリを cwd から動かすグローバルオプション）は
-`gh pr view` 側へそのまま引き継ぐ。引き継がずに cwd で base を解決すると、
-**別リポジトリの PR を手元のリポジトリのブランチ構成で判定してしまい、
-`master` への マージを `allow` に倒しうる**（初版の修正案を書いていた相談 AI が
-実際にこの穴を作りかけた。`tests/git_guard_test.sh` が引数の実物で固定している）。
+`-R` / `--repo`（対象リポジトリを cwd から動かすオプション）は `gh pr view` 側へ
+そのまま引き継ぐ。引き継がずに cwd で base を解決すると、**別リポジトリの PR を
+手元のリポジトリのブランチ構成で判定してしまい、`master` へのマージを `allow` に
+倒しうる**（初版の修正案を書いていた相談 AI が実際にこの穴を作りかけた）。
+
+**`--repo` は `gh pr` 配下の inherited flag であり、`gh` の直後（`gh -R o/r pr
+merge 7`）だけでなく `pr merge` の後ろ（`gh pr merge 7 -R o/r`）にも書ける。**
+片側しか見ないと、後ろに置かれた `-R` は値を取らないフラグとして読み飛ばされ、
+その値（`o/r`）がマージ対象として採用される。結果は cwd 基準の解決になり、
+同じ穴が位置違いで残る。`-Ro/r` の密着形・`--repo=o/r` の等号形も同様。
+`tests/git_guard_test.sh` が5つの書き方すべてについて、`deny` になることと
+`gh pr view` へ引き継がれた引数の実物を固定している。
+
+**`gh` はコマンド位置にあるものだけを拾う**（先頭、または直前が `&&` / `||` /
+`;` / `|` / `do` / `then` などのシェル演算子）。`shlex.split()` はヒアドキュメントの
+本文も同じトークン列に混ぜるため、位置を見ないと
+`cat >> notes.md <<'EOF' ... gh pr merge 93 ... EOF` のような**ただのファイル
+書き込みが `deny` される**。`deny` は `bypassPermissions` でも覆せないぶん `ask`
+より強く止まり、しかもエラーメッセージ（「この PR の base は 'master' です」）は
+実際に起きたこと（ドキュメントの追記）と対応しないため切り分けも難しい。
+傘の commander が進捗表や対応報告を書き込む経路そのものであり、
+`skills/umbrella-orchestrator/SKILL.md` 自身がこの文字列を手順として持っている。
 
 ### 3.2 `git push` は `permissions.ask` のグロブが受け持つ
 
 `main`/`master` への push は対象がコマンド文字列に現れるため、フックではなく
 `claude/settings.json` の `permissions.ask` で止める。
 
-- `Bash(git push * main*)` / `Bash(git push * master*)` — 明示 refspec での push
+- `Bash(git push * main*)` / `Bash(git push * master*)` — 空白区切りの裸の
+  ブランチ名での push
+- `Bash(git push *:main*)` / `Bash(git push *:master*)` /
+  `Bash(git push *heads/main*)` / `Bash(git push *heads/master*)` —
+  コロン区切りの refspec（`HEAD:master`）と完全参照（`refs/heads/master`）。
+  **上の2パターンは `master` の直前が空白でないと一致しないため、これらが
+  無いと `git push origin HEAD:master` がどの層からも漏れる**（初版では
+  force 系に限ってフックが refspec をパースして拾っていた形）。autopilot が
+  日常的に打つ `git push -u origin <孫ブランチ>` /
+  `git push --force-with-lease origin <傘ブランチ>` はどれにも一致しない
 - `Bash(git push --force)` / `Bash(git push --force *)` / `Bash(git push * --force)` /
   `Bash(git push * --force *)` / `Bash(git push -f*)` / `Bash(git push * -f*)` /
   `Bash(git push *+*)` — 裸の force 系（AGENTS.md 最重要ルールでも人間の承認が要る）
@@ -227,10 +253,23 @@ deploy 直後の実環境（2026-09-13、WSL2）で、この設計は目的と�
 
 ## 7. 受け入れる残余リスク
 
-- **`gh` が実行失敗して base を解決できない場合、フックは何も言わない。** この窓で
-  AI が `master` への PR をマージしうる。`gh` が落ちていればマージ自体も失敗するため
-  実際に通る窓は狭い。線引きの一次的な担保はルート `AGENTS.md` の最重要ルール
-  （AI が読む規範）であり、フックはその機械的な裏打ちにすぎない
+- **base を解決できない場合、フックは何も言わない。** この窓で AI が `master` への
+  PR をマージしうる。線引きの一次的な担保はルート `AGENTS.md` の最重要ルール
+  （AI が読む規範）であり、フックはその機械的な裏打ちにすぎない。
+  **解決失敗は「`gh` が落ちている場合」に限らない**ので、「`gh` が落ちていれば
+  マージ自体も失敗するから窓は狭い」という緩和だけに寄りかからないこと。
+  - **`gh` は生きているが遅い場合**: `resolve_base()` は `gh pr view` を
+    `GH_TIMEOUT`（12秒。`claude/settings.json` のフック `timeout: 15` より短く
+    取っている）で打ち切る。一方この後に走る `gh pr merge` 本体にフックは関与せず
+    タイムアウトも無い。**フックだけが先に諦めてマージは成功する**という非対称が
+    実装上存在する（VPN 経由・CI ランナー・WSL2 の DNS 解決遅延など）
+  - **`gh` が正常でもマージ対象を取り違えた場合**: 解析の穴は同じ窓を開ける。
+    §3.1 の `--repo` の位置の取りこぼしが実例であり、テストで固定してある
+- **`sh -c "gh pr merge ..."` や `$(gh pr merge ...)` のように、`gh` が引用符や
+  コマンド置換の中にしか現れない形は検出しない**（`shlex.split()` が1トークンに
+  畳む、あるいは `$(gh` という別トークンになるため）。初版はこの形を
+  `mentions_guarded_command()` で `ask` に倒していたが、判定できないものは
+  何も言わないという本改訂の方針により素通りする
 - **`master` に checkout した状態での refspec 省略 `git push`** はグロブから漏れる。
   傘方式では commander は傘ブランチ、孫は孫ブランチに常駐し、誰も `master` に
   checkout しない（`AGENTS.md` もそれを禁じている）
