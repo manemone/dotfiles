@@ -18,9 +18,9 @@ Herdr があると自動化度が上がるが、必須ではない。
 
 ```
 司令官（このスキルを読んだAI）
-  → spawn, マージ検出, 検証, 計画書更新
+  → spawn, 孫→傘マージの検出・検証（`/autopilot` では実行も）, 計画書更新
   → 実装コードのレビューはしない
-  → PRマージはしない（人間の仕事）
+  → 傘→`main`/`master` のPRマージはしない（人間の仕事）
 
 実装AI（別ペーン/別会話）
   → 実装, PR作成, /pr-review-loop 起動
@@ -154,6 +154,9 @@ ok = m and (latest_sha.startswith(m.group(1)) or m.group(1).startswith(latest_sh
 - 判定を含む**最後の**レビューが「承認」
 - その対象HEAD が PR の最新コミットと前方一致（古いHEADへの承認でマージしない）
 - implementer が `working` でない
+- **base がリポジトリの既定ブランチ（`main` / `master`）でない**（`gh pr view <PR番号>
+  --json baseRefName` で確認する。既定ブランチへのマージは承認済みでも人間の仕事であり、
+  AI は実行しない）
 
 **implementer が `working` だからといって「承認はまだ出ていない」と推測しないこと。**
 承認の有無は必ず API で確認する（この推測で2回取り逃した実績がある）。
@@ -301,14 +304,17 @@ ok = m and (latest_sha.startswith(m.group(1)) or m.group(1).startswith(latest_sh
      1. PRを作成する。**PRの向き先は必ず <傘ブランチ> にすること。main には絶対に出さない。**
      2. /pr-review-loop を起動する（PRがない場合は自動で作成し、そのままレビューを開始する）
      3. レビュー指摘があれば修正し、承認されるまで繰り返す
-     4. 承認されたら人間に「マージしてください」と依頼する
+     4. 承認されたら /pr-review-loop がそのままマージまで実行する（base が傘ブランチのため、
+        人間の許可を待つ必要はない。`gh pr merge <PR番号> --squash --delete-branch`）
      実装が終わったタイミングで止まらず、必ずここまでやりきってください。
 
      ## ブランチ作成時の注意（最重要）
      作業ブランチは**必ず <傘ブランチ> から切ること**。
      main から切ると PR の diff に傘ブランチ全体が混入してレビュー不能になる。
-     実装開始前に以下を必ず実行すること:
-     git checkout <傘ブランチ> && git pull --rebase origin <傘ブランチ>
+     実装開始前に以下を必ず実行すること（`git pull` は使わない。連結せず別々のコマンドとして実行する）:
+     git checkout <傘ブランチ>
+     git fetch origin
+     git merge --ff-only origin/<傘ブランチ>
      git checkout -b <新しいブランチ名>
      ```
 
@@ -351,7 +357,8 @@ ok = m and (latest_sha.startswith(m.group(1)) or m.group(1).startswith(latest_sh
 
 2. **マージ済み孫を検証**
    - 傘ブランチに checkout
-   - `git pull --rebase`
+   - `git fetch origin`
+   - `git merge --ff-only origin/<傘ブランチ>`（`git pull` は使わない）
    - プロジェクトの言語を自動検出し、該当する lint / test を実行（pr-review-loop Phase 0.5 と同じ方式）:
      - `Gemfile` があれば `bundle exec rubocop` + `bundle exec rspec`
      - `pyproject.toml` / `setup.py` / `setup.cfg` があれば `ruff check` + `python -m pytest`
@@ -609,8 +616,9 @@ main へのマージは人間が手動で行う。
         event 種別（APPROVED 等）で判断してはいけない
    5. 判定が「承認」かつ 対象HEAD が最新コミットと前方一致するならマージ:
       gh pr merge <PR番号> --squash --delete-branch
-   6. マージ後、傘ブランチで検証:
-      git pull --rebase origin <傘ブランチ>
+   6. マージ後、傘ブランチで検証（`git pull` は使わない）:
+      git fetch origin
+      git merge --ff-only origin/<傘ブランチ>
       §3.3 手順2 と同じ方式で検証（.claude/pr-review.yml の lint_cmd/test_cmd を
       最優先、無ければ言語自動検出。Ruby 固定ではない）
    7. 検証通過後、計画書を「✅ PR #XX マージ済」に更新してcommit+push
@@ -1062,19 +1070,22 @@ herdr pane send-keys <implementer-id> Enter
 ### 司令官がやること
 - 計画書の読み取りと更新
 - 孫の spawn（`ocw -H` + `herdr pane run`）
-- PR マージの検出と検証
+- 孫→傘 PR のマージ検出・検証（`/autopilot` では承認済み PR のマージ実行も含む。
+  `gh pr merge <PR番号> --squash --delete-branch`）
 - 計画書の commit / push
 
 ### 司令官がやらないこと
 - 実装コードのレビュー（pr-review-loop の仕事）
-- PR マージ（人間の仕事）
+- **傘→`main`/`master` の PR マージ（人間の仕事）。** ここだけは絶対に崩さない
+  唯一の線引き（ADR DOC-2609121719、ルート `AGENTS.md`「最重要ルール」）
 - 孫ブランチ上での作業（司令官は傘ブランチに常駐）
 - Herdr ワークスペースの手動構築（`ocw -H` の仕事）
 
 ### 実装AIに期待すること
 - プロンプトを受け取ったら実装を開始
 - PR 作成後 `/pr-review-loop` を起動
-- 承認されたら人間にマージを依頼
+- 承認されたら `/pr-review-loop` がそのままマージする（base が傘ブランチのため、
+  人間に依頼する必要はない）
 
 ## 7. エラー処理
 
@@ -1097,12 +1108,22 @@ herdr pane send-keys <implementer-id> Enter
 孫は squash マージされるため履歴を共有しない。元の孫ブランチの上でコミットして
 PRを出すと、**マージ済みの変更が全部もう一度差分に出てレビュー不能**になる。
 
+**bare な `git stash` / `git stash pop` は使わない。** stash スタックは同じリポジトリの
+全ワークツリー（司令官・孫の各ワークツリー）で共有されており、`pop` は他の作業ツリーが
+積んだ変更を取り違えて適用しうる。一意なタグを付けて `push` し、直後に控えたエントリの
+SHA で `apply`（`pop` ではない）する。適用を確認できたら、タグを手がかりに
+`stash@{n}` を引き直してから `drop` する:
+
 ```bash
-git stash                      # 作業中の変更を退避
+git stash push -u -m "umbrella-orchestrator-followup-$(date +%s)"
+git stash list --format='%H %gs'   # 直前のエントリのSHAを控える（以下 <SHA>）
 git fetch origin
 git checkout -b <追随孫名> origin/<傘ブランチ>
-git stash pop                  # 退避した変更を適用
+git stash apply <SHA>
 ```
+
+適用結果を確認してから、タグ文字列で `git stash list` を引き直し、該当エントリを
+`git stash drop stash@{n}` で消す。
 
 追随孫は進捗テーブルに新しい行として追加し、元の孫は `✅ マージ済` のまま残す。
 

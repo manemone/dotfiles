@@ -1074,6 +1074,12 @@ command -v ocw-meter >/dev/null && ocw-meter event phase.end --phase rereview_re
    無いことを確認する。現HEADに対する結果が確認できない場合は完了報告に進まず、`TEST_CMD` を
    実行して結果を現HEADのSHA付きで記録する。
 4. CIがパスしていることを確認。
+5. **base を確認する**: `gh pr view <PR番号> --json baseRefName` で base を取得する。
+   - **base がリポジトリの既定ブランチ（`main` / `master`）** → マージしない（安全制約の
+     最優先ルール）。ステップ6は実行しない。
+   - **base がそれ以外（傘ブランチなど）** → 承認済みなので `gh pr merge <PR番号>
+     --squash --delete-branch` を実行してよい。
+6. base が既定ブランチ以外だった場合、上記のマージを実行し、成功を確認する。
 
 ユーザーに報告:
 - PR番号とURL
@@ -1084,7 +1090,8 @@ command -v ocw-meter >/dev/null && ocw-meter event phase.end --phase rereview_re
 - CI状態
 - 未解決の非ブロッキング項目
 - 承認条件をどう満たしたか
-- マージは実行していないこと
+- **マージの実施状況**: base が既定ブランチだった場合は「マージは実行していないこと」を、
+  それ以外の場合は「マージを実行したこと（コマンドと結果）」を報告する
 
 工程計測:
 
@@ -1095,7 +1102,8 @@ command -v ocw-meter >/dev/null && ocw-meter event phase.end --phase done --outc
 ## 安全制約
 
 **禁止事項:**
-- **承認されても、人間の明示的指示がない限りマージ（`git merge` / `gh pr merge`）を絶対に実行しない。** これはこのスキルの最優先ルール。承認＝マージ許可ではない。Phase 7 で「マージは実行していないこと」を報告するのはこのルールに基づく。
+- **base がリポジトリの既定ブランチ（`main` / `master`）である PR は、承認されても人間の明示的指示がない限りマージ（`git merge` / `gh pr merge`）を絶対に実行しない。** これはこのスキルの最優先ルールであり、「`main` / `master` へのマージは人間だけが行う」という唯一の線引き（ADR DOC-2609121719、ルート `AGENTS.md`「最重要ルール」）そのものである。承認＝マージ許可ではない。例外はない。
+- **base が既定ブランチ以外（傘ブランチなど）の PR は、レビューで承認済みならマージしてよい。** `gh pr merge <PR番号> --squash --delete-branch` を実行する。**マージ前に必ず `gh pr view <PR番号> --json baseRefName` で base を確認し、既定ブランチでないことを確かめてから実行すること。** base を確認せずにマージしない。
 - コミット履歴を破壊するマージ。GitHub Web UIのsquash mergeは全個別コミットメッセージをsquashコミット本文に連結する。よって各コミットに説明的なメッセージが必要。
 - Force push (`git push --force`, `git reset --hard`)
 - 破壊的削除（untracked files含む）
