@@ -657,8 +657,21 @@ machine.json は git 非追跡なので**ワークツリーごとに在ったり
   警告して停止する
 - **`uninstall.sh`**: `~/.claude/settings.machine.json` の symlink は撤去する。
   **固定パスの実体は消さない**（人間のマシン設定であり、この傘の配布物ではない）。
-  その結果 prefix が空にならないので、既存の「空になった prefix を消す」処理が
-  それを許容するか確認し、必要なら明示的に扱う
+  実測（2026-09-12）: `uninstall.sh` は最後に `rmdir "$DOTFILES_PREFIX"`（空のときだけ、
+  `2>/dev/null` 付き）を実行する。実体を prefix 直下に置くと prefix は空にならないので
+  この `rmdir` は恒久的に no-op になる。**挙動としてはそれが正しい**（マシン設定が
+  uninstall を生き延びる）が、`tests/deploy_smoke.sh` の
+  **`assert_not_exists "$prefix"` 2箇所（1444行目・1898行目）が確実に落ちる**ので
+  同時に直す。ルート `AGENTS.md`「uninstall.sh の後片付け」節（「空になった `<prefix>`
+  自体も片付ける」と書いてある）も追随が要る
+- **旧パスに実体が残っていたら警告する。** 移行後、`<ワークツリー>/claude/settings.machine.json`
+  が残っているワークツリーから deploy したときに黙って無視すると、人間が古い場所を
+  編集して「効かない」で詰まる（**今回の「どのフォルダやねん」と同じ失敗の再生産**）。
+  旧パスに実体を見つけたら警告を出すこと。`.gitignore:33` の
+  `claude/settings.machine.json` の行は**残す**（実体がソースツリーへ戻ってきたときに
+  誤ってコミットされるのを防ぐ保険。消す理由がない）
+- **`deploy-all.sh --status` に実体パスと有無を1行出す。** 人間がドキュメントを読まずに
+  場所へ到達できるようにする。**今回の要求の発端そのものなので任意ではなく必須とする**
 - **`links_for_tool()` の `claude)` arm に追加する。** 忘れても
   `KNOWN_GENERATED_claude` があるため `uninstall.sh` は警告なしに撤去漏れする（背景3-I）
 - **`settings.machine.json.example` は配布しない。** 中身が全許可と壊れたフックであり、
@@ -1429,10 +1442,17 @@ reviewer は done 状態で完了し完了通知は来ないので、待機し�
    **忘れても `uninstall.sh` は警告を出さない**（`KNOWN_GENERATED_claude` が定義済みのため
    「No link list defined」ガードが発火しない。ルート `AGENTS.md`「実装時の注意」参照）
 7. `uninstall.sh`: `~/.claude/settings.machine.json` の symlink は撤去し、
-   **固定パスの実体は消さない**。その結果 prefix が空にならないので、既存の
-   「空になった prefix を消す」処理が破綻しないか確認し、必要なら明示的に扱う
-8. `deploy-all.sh --status` に固定パスの状態（有無）が出るとよい（任意）
-9. `claude/README.md` とルート `AGENTS.md` の「claude の例外」節を追随させる。
+   **固定パスの実体は消さない**。実測のとおり `uninstall.sh` 末尾の
+   `rmdir "$DOTFILES_PREFIX"` は恒久的に no-op になる（それが正しい挙動）。
+   これにより **`tests/deploy_smoke.sh` の `assert_not_exists "$prefix"` 2箇所
+   （1444行目・1898行目）が落ちる**ので、同じ PR で直すこと。ルート `AGENTS.md`
+   「uninstall.sh の後片付け」節の文言も追随させる
+8. **`deploy-all.sh --status` に実体パスと有無を1行出す（必須）。**
+   人間がドキュメントを読まずに場所へ到達できるようにする。今回の要求の発端そのもの
+9. **旧パス（`<ワークツリー>/claude/settings.machine.json`）に実体が残っていたら
+   警告する。** 黙って無視すると人間が古い場所を編集して「効かない」で詰まる。
+   `.gitignore:33` の行は残す（実体がソースツリーへ戻ってきたときの誤コミット防止）
+10. `claude/README.md` とルート `AGENTS.md` の「claude の例外」節を追随させる。
    README には「`~/.claude/settings.machine.json` を直接編集してよい」ことと、
    `settings.machine.json.example` の位置づけ（**配布しない。参照用のサンプル**）を書く
 
@@ -1458,7 +1478,10 @@ reviewer は done 状態で完了し完了通知は来ないので、待機し�
   ログにその旨が出ること。両方にあって内容が違う場合は警告して停止すること
 - `uninstall.sh` が `~/.claude/settings.machine.json` の symlink を撤去し、
   **固定パスの実体を消さない**こと。**この regression は必ず自動テストで固定する**
-  （人間のマシン設定を消す事故は取り返しがつかない）
+  （人間のマシン設定を消す事故は取り返しがつかない）。既存の
+  `assert_not_exists "$prefix"` 2箇所は「prefix は残るが machine.json 以外は無い」を
+  主張する形へ書き換える（アサーションを消すだけにしない）
+- 旧パスに実体が残っているワークツリーから deploy したときに警告が出ること
 - 孫2 が入れた「学習済み allow の保全」が引き続き動くこと（既存テストで担保できるなら
   新規テストは追加しない）
 
