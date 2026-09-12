@@ -291,3 +291,180 @@ force push だけ止め、孫ブランチへの force-with-lease は通す」と
 - `git push` のオプションのうち、値を取りうる可能性がある未知のフラグ
   （`-o` / `--push-option` / `--repo` / `--receive-pack` 以外の未知の `-` 始まり
   トークン）が出現した場合は、対象ブランチの解決を諦めて `ask` に倒す。
+
+## 7. 追記（孫5, 2026-09-12）: `chmod` / `rm -r` への適用と3層構造の整理
+
+計画書
+[DOC-2609121700](../planning/DOC-2609121700_autopilot-permissions_計画.md)
+背景3-G・3-H（孫5）で、本 ADR の §3「決定」が持つ一般則
+——**危険かどうかが「対象がどこにあるか」で決まる操作は、コマンドライン
+文字列のパターンマッチではなく PreToolUse フックで判定する**——を、
+`git`/`gh` 以外の非 git 操作（`chmod +x` / `rm -r`）にも適用した。
+本節はこの適用範囲の拡張を追記するものであり、§1〜6 の決定・却下案・
+既知の制限を書き換えるものではない。
+
+### 7.1 なぜ `chmod`/`rm -r` も同じ構造か
+
+`Bash(chmod *)` / `Bash(rm -r *)` のようなパターンは「対象がワークツリー内か
+`/etc` 配下か」を区別できない。これは §2 で `git push --force-with-lease` の
+対象ブランチについて述べたのと同じ構造の限界であり、フックによる実行時判定
+（`git rev-parse --show-toplevel` でのワークツリー境界確認、`realpath` による
+シンボリックリンク・`..` の解決）でしか解けない。
+
+### 7.2 決定（判定表への追加）
+
+| 対象コマンド | 判定 |
+|---|---|
+| `chmod`（`-R`/`--recursive` 無し・モードが実行ビット付与のみのシンボリック指定 `[ugoa]*+x`・対象パスが1つ残らずシェル展開に使われうる文字（`~ $ * ? [ ] { } \` < >`）を含まず、かつ全て現在の git ワークツリー内かつ `.git` 配下でない） | **allow**。1つでも満たさなければ **ask**（`deny` ではない——人間が承認すれば通ってよい操作であり、`gh pr merge` のような「人間だけの仕事」ではないため） |
+| `rm -r`/`-rf`/`-fr`/`-R`/`--recursive`（対象パスが1つ残らず上記と同じ意味でシェル展開文字を含まず、このセッションの scratchpad、または `$TMPDIR`/`/tmp` 自身より深い一時ディレクトリに解決され、かつ git ワークツリー内でない） | **allow**。1つでも満たさなければ **ask** |
+
+`chmod`/`rm -r` はいずれも「フックが判定不能なら `ask` に倒す」という §3.1 の
+fail-safe をそのまま継承する（未知のオプション・トークン化失敗・複数コマンド
+連結は `ask`）。**`allow` に倒すことは絶対にしない**、という本 ADR の中核原則も
+変わらない。
+
+**対象パスのシェル展開文字チェック（`has_unsafe_path_chars()`）は、レビューで
+発見された regression の修正として追加した。** このフックが受け取る
+`tool_input.command` は bash がまだ展開する前の生の文字列であり、`shlex` で
+トークン化するだけでは `~/bin/x`（チルダ展開）・`$HOME/foo`（変数展開）・
+`foo*.sh`（glob展開）・`find . -exec chmod +x {} +` の `{}`（find 自身の
+プレースホルダ）を、bash が実際に展開する先とは無関係な「たまたま cwd 配下に
+見える文字列」として誤って解決してしまう。対象パスにこれらの文字
+（`~ $ * ? [ ] { } \` < >`）が1つでも含まれていれば、静的解決を諦めて `ask` に
+倒す。
+
+`rm -r` はワークツリー内を対象外としている点が `chmod` と非対称である。
+理由は危険度の非対称性: `chmod +x` はワークツリー内であれば git で復元できる
+（実行ビットの誤付与は再度 `chmod -x` すれば戻せるうえ、コミット済みの内容が
+壊れるわけではない）が、`rm -r` はコミット前のファイルを完全に失わせる。
+そのため `rm -r` の allow 条件には「一時ディレクトリ配下」という制限を残し、
+ワークツリー内は git ワークツリーであっても常に `ask` のままにしている
+（`is_temp_allowed()` が真でも `worktree_root()` 配下なら `ask` へ倒す実装。
+たまたまワークツリーが `/tmp` 配下にチェックアウトされている場合の
+フェイルセーフでもある）。
+
+`rm -r` をこの拡張に含めるかどうかは人間が明示的に決定している（計画書
+背景3-G の逐語）:
+
+> 巻き込んでいい。特にフォルダ単位で制限してあるならなおさら
+
+「対象フォルダで縛る」という形そのものが許容の根拠であり、この制限
+（一時ディレクトリ配下限定）を外したり広げたりする判断は、本 PR のスコープ
+では行わない。
+
+### 7.3 受け入れる残余リスク
+
+`permissions.ask` から `Bash(chmod *)` / `Bash(rm -rf *)` / `Bash(rm -fr *)` /
+`Bash(rm -r *)` を削除し、次のように narrow 化した（フックの `allow` は
+`permissions.ask` を素通りさせられないため。§3.3 と同じ理由）。
+
+- `chmod`: `-R`/`--recursive`（前置・後置の両方）、絶対パス（`chmod * /*`。
+  空白の直後に `/` が来る形。`/Users`（macOS のホーム）を含む全ての `/` 始まり
+  の絶対パスを拾う）、および `~`/`$HOME`（`chmod * ~*`/`chmod * $HOME*`）が
+  無条件 `ask` として残る。**それ以外（ワークツリー内の相対パスへの数値モード
+  chmod や、`u+s`/`o+w` のような実行ビット以外の変更）はフックが唯一の担保
+  であり、フックが配布されていない・壊れている環境では素通りする
+  （fail-open）**
+- `rm -r`: `/home` `/usr` `/etc` `/var` `/mnt` `/opt` `~` `$HOME` `/Users`
+  （macOS のホーム）を名指しした絶対パスへの `-r`/`-rf`/`-fr` が無条件 `ask`
+  として残る（計画書が明示した6つの絶対パス + ホームディレクトリの表現2種）。
+  **ワークツリー内の相対パスへの `rm -r`（例: `rm -rf tests/tmp-output`）は
+  上記の名指しの網に無い。フックが唯一の担保であり、フックが配布されて
+  いない・壊れている環境では素通りする（fail-open）**
+- どちらも `-R`/`-r` を伴わない・実行ビット以外を触らない・名指しされていない
+  絶対パス（例: `chmod 644 tests/foo.sh` を絶対パスで書いた場合、または
+  `-fr`/`-rf` 以外のフラグ組み合わせで書かれた `rm` の一部）は、フラグの
+  組み合わせを網羅的に列挙していないため、上記の網からも漏れる場合がある
+
+受け入れる根拠は §3.3 の `git push --force-with-lease` と同じ構造:
+フックは `claude/deploy.sh` が配り、`deploy-all.sh --status` がリンク切れを
+検出する。網を広げるほど誤検出（無関係な操作への過剰な `ask`）も増える
+トレードオフがあり、これ以上の拡張は司令官の判断に委ねる。
+
+### 7.4 `permissions` / フック / 分類器の3層構造（背景3-H）
+
+孫2 の実装中に「`mkdir` でも詰まる」という報告があり、調査の結果
+**承認ダイアログの出どころは `permissions` だけではないと判明した**。
+Claude Code の permission 評価は次の3層になっている（公式ドキュメント
+<https://code.claude.com/docs/en/permission-modes> を `claude-code-guide`
+サブエージェント経由で 2026-09-12 に確認）。
+
+1. **`permissions.allow`/`ask`/`deny` に一致した操作は即決**（本 ADR の
+   §1〜7.3 が担保する層）
+2. **PreToolUse フック**（`git-guard.sh`）——公式ドキュメントで確認できているのは
+   「フックの `allow` は `permissions.ask`/`deny` を上書きできない」（§3.2/§3.3）
+   という**片方向の制約だけ**である。**フックの `allow` が、1のどのルールにも
+   一致しない操作について3（分類器）を経由させずに即決させるかどうかは、
+   公式ドキュメントに明記が無い**（2026-09-12、`claude-code-guide` サブエージェント
+   経由で `permission-modes.md`/`hooks-guide.md` を確認したが直接の記述は
+   見つからなかった）。本 ADR は「フックの `allow` は permissions の
+   allow ルールと同格に扱われ、分類器より前に即決される」という前提で
+   §1〜§3・§7.1〜§7.3 の設計（`gh pr merge`/`git push --force-with-lease`/
+   `chmod`/`rm -r` のいずれも `permissions.ask`/`deny` に一致しない形で
+   フックだけに判定を委ねる）を組んでいる。この前提の根拠は次節参照
+3. **auto mode の分類器**——1のどのルールにも一致しない操作が落ちる先。
+   `mkdir` は `ask`/`deny` のどちらにも無いため、無条件でここへ落ち、
+   毎回分類器の判断待ちになる
+
+3層目（分類器）は `permissions`/フックのどちらでも制御できない。原文:
+
+> On entering auto mode, broad allow rules that grant arbitrary code
+> execution are dropped: Blanket `Bash(*)` or `PowerShell(*)`; Wildcarded
+> interpreters like `Bash(python*)`; Package-manager run commands; `Agent`
+> allow rules; `Monitor` allow rules
+
+この「broad allow」の判定基準は、原文が列挙する4カテゴリ
+（インタプリタのワイルドカード呼び出し・パッケージマネージャの run・
+`Agent`・`Monitor`）に限定されている。`Bash(mkdir -p *)` のような単純な
+ファイルシステム操作コマンドはこの列挙に含まれず、ドキュメントにも
+「narrow rules like `Bash(npm test)` stay in effect」と明記されているため、
+**`mkdir -p` へのワイルドカード付き `allow` は auto mode で落とされない
+狭いルールと判断した**（`Bash(mkdir *)` 自体が「広すぎる」に当たるか否かは
+ドキュメントに明記が無く、`mkdir -p` へさらに絞ることで安全側に倒した）。
+このため `claude/settings.json` の `permissions.allow` に
+`"Bash(mkdir -p *)"` を追加し、3層目（分類器）を経由させずに1層目で
+即決させることにした。
+
+なお分類器は3回連続または累計20回ブロックすると auto mode を一時停止する
+（原文: 「if the classifier blocks an action 3 times in a row or 20 times
+total, auto mode pauses and Claude Code resumes prompting. ... Any allowed
+action resets the consecutive counter, while the total counter persists
+for the session」）。無人ペインはここで確実に停止するため、分類器へ
+落ちる操作は極力減らしたい。**分類器を確実に迂回できると分かっているのは
+`permissions.allow` に一致させる経路（`mkdir -p` はこちら）だけ**であり、
+フックの `allow` が同じ効果を持つかは前項のとおり未確認である。
+
+### 7.4.1 フックの `allow` が分類器を迂回するという前提の根拠（未検証の明記）
+
+本傘は孫1（PR #88、マージ済み）の時点から、`gh pr merge`・`git push
+--force-with-lease` を `permissions.allow`/`ask` のどちらにも一致させず、
+フックの `allow` のみで確認無しに通す設計を採用しており、この設計のまま
+実際に孫1〜4（PR #88〜#91）が本傘のオーケストレーションで無人マージされている
+（`docs/planning/DOC-2609121700_autopilot-permissions_計画.md` の孫ブランチ
+進捗表を参照）。`gh pr merge` は `permissions.allow`/`ask`/`deny` のどれにも
+一致せず、読み取り専用でも作業ディレクトリ内の編集でもないため、フックの
+`allow` が分類器を迂回していないなら auto mode の分類器の判断待ちになる
+はずだが、そのような詰まりは孫1〜4のマージでは報告されていない。**これは
+「フックの `allow` が分類器を迂回する」という前提を支持する運用上の状況証拠
+ではあるが、公式ドキュメントによる直接の裏付けではない。**
+
+本 PR（孫5）の `chmod`/`rm -r` の扱いは、この孫1の前提をそのまま踏襲した
+ものであり、孫5に固有の新しいリスクを持ち込むものではない。**もしこの前提が
+誤りだと後で判明した場合**（例えば `chmod +x` が分類器の判断待ちで頻繁に
+止まる事例が実際に観測された場合）、影響は孫1の `gh pr merge`/
+`git push --force-with-lease` にも等しく及ぶため、孫5だけを個別に見直すのでは
+なく、本 ADR の§1〜§7全体の前提として司令官へ再検証を報告すること。
+
+なお、この場合の代替案（`chmod`/`rm -r` にも `mkdir` と同じ形の狭い
+`permissions.allow` を足す）は、対象の場所を区別できないという §7.1 の
+理由でそもそも採用できない（`Bash(chmod +x *)` のような allow は、
+ワークツリー外への `chmod +x` も無条件に通してしまい、本 PR が解決しようと
+している問題を再発させる）。分類器を迂回できないと判明した場合、`chmod`/
+`rm -r` については「フックによる安全な自動化」と「分類器の摩擦」のどちらかを
+選べず、そのときは司令官の判断を仰ぐ。
+
+**憶測で allow を大量に足さない。** 本 PR で `permissions.allow` に足したのは
+`mkdir -p` の1件のみ（計画書背景3-H が明示した実測1件）。他に分類器で
+止まるコマンドが見つかった場合は、同じ判断基準（狭いルールで表現できるか、
+`Bash(*)`/wildcarded interpreter/package-manager run/`Agent`/`Monitor` に
+当たらないか）で個別に検討し、都度追加する。

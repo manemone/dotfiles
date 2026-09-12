@@ -85,8 +85,9 @@ Claude Code がセッション開始時に読み込むグローバルな個人�
 
 Claude Code の設定ファイル。以下の汎用設定を含む（マシン固有の `additionalDirectories`、
 `hooks`（git-guard フックを除く。§3.5参照）は**意図的に除外**。`permissions.allow` は
-リポジトリ側のベース設定には含まれないが、deploy 時に学習済みの分が自動的に合成される
-— §3.2.1参照）。
+リポジトリ側のベース設定には分類器対策の狭いルール（`mkdir -p` 等。§3.5・
+ADR §7.4参照）のみ含む。deploy 時には、これに加えて学習済みの分が自動的に
+合成される — §3.2.1参照）。
 
 | Setting | Value | Notes |
 |---|---|---|
@@ -99,8 +100,9 @@ Claude Code の設定ファイル。以下の汎用設定を含む（マシン�
 | `switchModelsOnFlag` | `true` | フラグによるモデル切り替え |
 | `skipWorkflowUsageWarning` | `true` | ワークフロー警告スキップ |
 | `permissions.defaultMode` | `acceptEdits` | 権限のデフォルトモード |
+| `permissions.allow` | 分類器対策の狭いルール（1件） | `mkdir -p` は auto mode の分類器待ちになるため、`permissions` 側で即決させる（§3.5・ADR §7.4） |
 | `permissions.deny` | セキュリティポリシー（24件） | `.env`, `.ssh`, `.aws`, API キー等へのアクセスをブロック |
-| `permissions.ask` | 危険コマンドパターン（20件） | `git push --force`, `rm -rf`, `sudo` 等の実行前に確認 |
+| `permissions.ask` | 危険コマンドパターン（46件） | `git push --force`, `rm -r /home*` 等の名指しした絶対パス, `sudo` 等の実行前に確認（§3.5参照） |
 | `statusLine` | `{"type":"command","command":"ocw-meter snapshot-quota"}` | Claude 利用枠(5時間枠・週間枠)のステータスバー表示。§3.4参照 |
 
 #### 3.2.1 学習した allow は deploy 越しに保全される
@@ -226,13 +228,15 @@ statusLine が描画のたびに呼ばれても書き込みが肥大しない。
 （**次回 `./deploy-all.sh` 実行時に `claude/settings.json` の内容で再度上書きされる**ので、
 恒久的に無効化したい場合はリポジトリ側の `claude/settings.json` から `statusLine` を削除すること）。
 
-### 3.5 git-guard フック — main/master への破壊的操作の機械的ガード
+### 3.5 git-guard フック — main/master への破壊的操作・chmod・rm -r の機械的ガード
 
 `~/.claude/hooks/git-guard.sh`（`claude/hooks/git-guard.sh` から symlink される PreToolUse
 フック）が、「`main`/`master` へのマージ・push は人間、それ以外の git 操作は AI に任せる」
-という線引きを機械的に担保する。設計の根拠・却下案・PreToolUse フックの入出力契約の確認結果は
-ADR [DOC-2609121719](../docs/adr/DOC-2609121719_git-operation-permission-policy.md)
-を参照。
+という線引きに加えて、無人ペインを止める非 git 操作（`chmod +x`・`rm -r`）のうち
+安全と判定できるものを機械的に担保する。設計の根拠・却下案・PreToolUse フックの
+入出力契約の確認結果は ADR
+[DOC-2609121719](../docs/adr/DOC-2609121719_git-operation-permission-policy.md)
+（chmod/rm-r への適用は同 ADR §7）を参照。
 
 **何を止めて何を通すか（判定表）:**
 
@@ -241,11 +245,18 @@ ADR [DOC-2609121719](../docs/adr/DOC-2609121719_git-operation-permission-policy.
 | `gh pr merge`（PR 番号 / URL / 省略＝現ブランチ） | base ブランチが `main`/`master` なら **deny**、それ以外は **allow** |
 | `git push` に `--force` / `--force-with-lease` / `-f` / `+<refspec>` が付く | 対象ブランチが `main`/`master` なら **deny**。それ以外は `--force-with-lease` を **allow**、裸の `--force`/`-f` は **ask** |
 | `git merge` | 現在のブランチ（マージ先）が `main`/`master` なら **deny**、それ以外は **allow** |
-| 上記以外の git/gh コマンド、対象を安全に判定できないコマンド | 何も言わず `permissions.ask` の判定に委ねる、または **ask** |
+| `chmod`（`-R`/`--recursive` 無し・モードが実行ビット付与のみのシンボリック指定 `+x`/`u+x`/`a+x` 等・対象パスが1つ残らずシェル展開文字（`~ $ * ? [ ] { } \` < >`）を含まず、かつ全て現在の git ワークツリー内かつ `.git` 配下でない） | **allow**。1つでも満たさなければ **ask**（`deny` ではない） |
+| `rm -r`/`-rf`/`-fr`/`-R`/`--recursive`（対象パスが1つ残らず上記と同じ意味でシェル展開文字を含まず、一時ディレクトリ配下——このセッションの scratchpad、または `$TMPDIR`/`/tmp` 自身より深い場所——に解決され、かつ git ワークツリー内でない） | **allow**。1つでも満たさなければ **ask** |
+| 上記以外の git/gh/chmod/rm コマンド、対象を安全に判定できないコマンド | 何も言わず `permissions.ask` の判定に委ねる、または **ask** |
 
 判定できない入力（PR 番号が解決できない・`gh` の実行に失敗する・現在のブランチが
-取れない・複数コマンドが `&&`/`;`/`|` で連結されている等）は必ず `ask` に倒す。
-**`allow` に倒すことは絶対に無い。**
+取れない・複数コマンドが `&&`/`;`/`|` で連結されている・chmod/rm の未知のオプション
+等）は必ず `ask` に倒す。**`allow` に倒すことは絶対に無い。**
+
+`chmod`/`rm -r` を対象に含めた理由（背景3-G）: `Bash(chmod *)`/`Bash(rm -r *)` の
+ようなパターンは「対象がワークツリー内か `/etc` 配下か」を区別できず、無人の孫
+ペインが新規スクリプトへの `chmod +x` や `mktemp -d` の後片付けで頻繁に止まって
+いた。詳細は ADR §7 を参照。
 
 **上の判定表はフック単体の判定であり、フックが `allow` を返しても
 `permissions.ask` に一致すれば確認は出る。** PreToolUse フックは
@@ -257,6 +268,18 @@ ADR [DOC-2609121719](../docs/adr/DOC-2609121719_git-operation-permission-policy.
 どちらも置かない）、裸の `--force` だけを単語境界で拾う4パターンに
 置き換えている（ADR §3.3「`git push --force-with-lease` を摩擦なく通すための
 具体策」）。
+
+同じ理由で `chmod`/`rm -r` も narrow 化している（ADR §7.3）。`Bash(chmod *)`
+は削除し、`-R`/`--recursive`・絶対パス（`chmod * /*`。`/Users` 等の macOS の
+ホームを含む全ての `/` 始まりパスを拾う）・`~`/`$HOME`（`chmod * ~*`/
+`chmod * $HOME*`）だけを無条件 `ask` として残した。`Bash(rm -r *)`/
+`Bash(rm -rf *)`/`Bash(rm -fr *)` も削除し、
+`/home`/`/usr`/`/etc`/`/var`/`/mnt`/`/opt`/`~`/`$HOME`/`/Users`（macOS の
+ホーム）を名指しした絶対パスだけを無条件 `ask` として残している。
+**ワークツリー内の相対パスへの chmod/rm -r はこれらのパターンのどれにも
+一致しない**（それがフックに allow させる目的）ため、フックが配布されて
+いない・壊れている環境では、これらの操作はガード無しで通る
+（fail-open。ADR §7.3「受け入れる残余リスク」）。
 
 **無効化したいとき:**
 
@@ -271,7 +294,9 @@ ADR [DOC-2609121719](../docs/adr/DOC-2609121719_git-operation-permission-policy.
 `HEAD:master` のようなコロン区切り・`refs/heads/master` のような完全参照）
 には `permissions.ask` 側の保険が無い設計（ADR §3.3「受け入れる残余リスク」）
 なので、無効化すると保護ブランチへのこれらの操作がガード無しで通るように
-なることに注意すること。
+なることに注意すること。同様に、ワークツリー内の相対パスへの `chmod +x` /
+`rm -r`（scratchpad・`/tmp` 配下）にも `permissions.ask` 側の保険が無い
+（ADR §7.3）ため、無効化するとこれらも無確認で通るようになる。
 
 ## 4. Customization — マシン固有設定の追加
 
