@@ -30,7 +30,7 @@
 | 3 | `autopilot-permissions-03-agents-rules` | ルート `AGENTS.md` と `templates/repo-baseline/template/AGENTS.md.jinja` の最重要ルールを「`main` は人間 / 傘配下は AI」の軸で書き直す | ✅ PR #90 マージ済 |
 | 4 | `autopilot-permissions-04-skill-exceptions` | `skills/pr-review-loop` / `skills/umbrella-orchestrator` の傘例外条項と、同一スキル内の矛盾の解消 | ✅ PR #91 マージ済 |
 | 5 | `autopilot-permissions-05-non-git-prompts` | 無人ペインを止める**非 git 操作**の解消。`chmod +x` / `rm -r` をガードフックへ取り込み（背景3-G）、`mkdir` のように分類器で止まるコマンドへ狭い `allow` を置く（背景3-H） | ✅ PR #92 マージ済 |
-| 6 | `autopilot-permissions-06-machine-json-symlink` | `settings.machine.json` を `~/.claude/settings.json` の兄弟として symlink し、発見可能にする（背景3-I） | 🔄 実装中 |
+| 6 | `autopilot-permissions-06-machine-json-symlink` | `settings.machine.json` を `~/.claude/settings.json` の兄弟として symlink し、発見可能にする（背景3-I） | ✅ PR #93 マージ済 |
 
 ## ワークスペースラベル
 
