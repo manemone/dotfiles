@@ -28,8 +28,8 @@ dotfiles 側にまだ無いものを、**レビュースキル（`skills/pr-revi
 
 | 孫 | ブランチ | 内容 | 状況 |
 |---|---|---|---|
-| 1 | `review-policy-harvest-01-pr-review-yml` | repo-baseline テンプレに `.claude/pr-review.yml` を生成させる（穴①） | 🔄 実装中 |
-| 2 | `review-policy-harvest-02-template-test-policy` | テンプレの `AGENTS.md.jinja` に risk-based テスト方針と linter 対応の作法を入れる（穴②③・テンプレ側） | ⬜ 待機中 |
+| 1 | `review-policy-harvest-01-pr-review-yml` | repo-baseline テンプレに `.claude/pr-review.yml` を生成させる（穴①） | ✅ PR #81 マージ済 |
+| 2 | `review-policy-harvest-02-template-test-policy` | テンプレの `AGENTS.md.jinja` に risk-based テスト方針と linter 対応の作法を入れる（穴②③・テンプレ側） | 🔄 実装中 |
 | 3 | `review-policy-harvest-03-dotfiles-test-policy` | dotfiles 本体の `AGENTS.md` に同じ方針を入れ、3箇所の乖離防止ルールを置く（穴②③・本体側） | ⬜ 待機中 |
 | 4 | `review-policy-harvest-04-failure-scenario` | pr-review-loop の finding gate に failure scenario の記載様式を足す（穴④） | ⬜ 待機中 |
 
