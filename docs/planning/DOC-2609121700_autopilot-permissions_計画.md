@@ -29,7 +29,7 @@
 | 2 | `autopilot-permissions-02-allow-preservation` | `claude/deploy.sh` が学習済み `allow` を deploy 越しに保全する仕組み ＋ `claude/README.md` 追随 | 🔄 実装中 |
 | 3 | `autopilot-permissions-03-agents-rules` | ルート `AGENTS.md` と `templates/repo-baseline/template/AGENTS.md.jinja` の最重要ルールを「`main` は人間 / 傘配下は AI」の軸で書き直す | ⬜ 待機中 |
 | 4 | `autopilot-permissions-04-skill-exceptions` | `skills/pr-review-loop` / `skills/umbrella-orchestrator` の傘例外条項と、同一スキル内の矛盾の解消 | ⬜ 待機中 |
-| 5 | `autopilot-permissions-05-non-git-prompts` | 無人ペインを止める**非 git 操作**（`chmod +x` ほか）をガードフックへ取り込む | ⬜ 待機中 |
+| 5 | `autopilot-permissions-05-non-git-prompts` | 無人ペインを止める**非 git 操作**の解消。`chmod +x` / `rm -r` をガードフックへ取り込み（背景3-G）、`mkdir` のように分類器で止まるコマンドへ狭い `allow` を置く（背景3-H） | ⬜ 待機中 |
 
 ## ワークスペースラベル
 
@@ -252,6 +252,44 @@ pr-review-loop 側と umbrella-orchestrator §6 / 孫用プロンプトの両方
 書かれている。これはルート `AGENTS.md`（および repo-baseline テンプレート）の
 「`git pull` を実行しない」と衝突しており、E と同じ構図の矛盾がもう1組ある。孫4 の
 対象に含める。
+
+### H. 承認ダイアログの出どころは permissions だけではない（auto mode の分類器）
+
+**本傘の実運用中に人間が観測した追加の穴**（2026-09-12、孫2 の実装中に報告された）:
+
+> mkdir でもつまる
+
+`mkdir` は `ask` にも `deny` にも入っていない。**止めているのは permissions ではなく
+auto mode の分類器**である。司令官が公式ドキュメント
+（<https://code.claude.com/docs/en/permission-modes>）で確認した評価順（原文の要約）:
+
+1. **allow / ask / deny ルールに一致した操作は即決**（分類器へ行かない）
+2. 読み取りと作業ディレクトリ内の編集は自動承認
+3. **それ以外はすべて分類器へ行く**
+4. 分類器がブロックすると Claude は理由を受け取って代替を試す
+
+つまり `mkdir` のように**どのルールにも当たらないコマンドは、毎回分類器の判断待ちになる**。
+そして決定的なのが次の2点である。
+
+- **auto mode に入るとき、広すぎる allow ルールは落とされる**（原文: 「On entering auto
+  mode, broad allow rules that grant arbitrary code execution are dropped」。対象は
+  `Bash(*)` / `PowerShell(*)`、`Bash(python*)` のようなワイルドカード付きインタプリタ、
+  パッケージマネージャの run、`Agent`、`Monitor`）。**人間の
+  `~/.claude/settings.json` の `allow` 先頭に入っている `"Bash"` はこれに該当し、
+  auto mode では効いていない。** 「allow に積んだのに毎回聞かれる」の一因がこれである。
+  一方 `Bash(npm test)` のような**狭いルールは効き続ける**
+- **分類器が3回連続または累計20回ブロックすると auto mode が一時停止し、通常の
+  プロンプトに戻る**（原文: 「if the classifier blocks an action 3 times in a row or 20
+  times total, auto mode pauses and Claude Code resumes prompting」）。無人ペインは
+  ここで確実に死ぬ
+
+**対策はフックでも `ask` の絞り込みでもなく、「狭い `allow` ルールを置くこと」**である。
+allow に一致すれば評価順1で即決し、分類器を通らない。孫5 の守備範囲に含める。
+
+実測（同日、司令官の巡回中）: 司令官自身が叩いた
+`gh pr list ... && herdr pane list ... | python3 -c ...` という連結コマンドが
+`Blocked by classifier` で弾かれた（`&&` による連結・引用符・`python3 -c` が
+重なった形）。単体のコマンドに分割したら通った。
 
 ### F. ペインの起動コマンドに permission-mode が渡っていない
 
@@ -1157,6 +1195,27 @@ reviewer は done 状態で完了し完了通知は来ないので、待機し�
   **ただし絞り込みすぎるとフック不在時の fail-open が広がる**ので、危険な絶対パス
   （`/home` `/usr` `/etc` `/var` `/mnt` `/opt` `~` 等）を名指しする形の網は残すこと
 - **フックが不在／壊れている環境で素通りするようになる範囲を洗い出し、ADR に明記する**
+
+### 4. 分類器で止まるコマンドへ狭い `allow` を置く（背景3-H）
+
+**`mkdir` のように `ask` にも `deny` にも入っていないコマンドは、permissions ではなく
+auto mode の分類器が止めている。** 評価順は「allow / ask / deny に一致 → 即決」
+「それ以外 → 分類器」なので、**対策は狭い `allow` ルールを置くこと**（フックでも
+`ask` の絞り込みでもない。フックは分類器を飛ばせない）。
+
+- 無人の孫が正当な作業の過程で叩くのに、どのルールにも当たらないコマンドを棚卸しする
+  （`mkdir -p` は人間が実測で報告した1件。他に何があるかは
+  `/permissions` の **Recently denied** タブや実際の巡回ログから拾えるものを拾う。
+  **憶測で大量に足さない**）
+- **広すぎる allow は auto mode で落とされるので意味がない。**
+  対象は `Bash(*)`・`Bash(python*)` のようなワイルドカード付きインタプリタ・
+  パッケージマネージャの run・`Agent`・`Monitor`。`Bash(npm test)` のような
+  狭いルールだけが効き続ける。**`Bash(mkdir *)` がこの「広すぎる」に当たるかどうかは
+  一次情報で確認すること**（当たるなら `Bash(mkdir -p *)` のようにさらに狭める）
+- 追加する `allow` は**追跡されている `claude/settings.json`** に書く。
+  人間の `~/.claude/settings.json` を直接編集しない
+- この節の対策は ADR に「permissions・フック・分類器の3層があり、それぞれ効く相手が
+  違う」という整理として残すこと
 - 孫1 の ADR に「対象がどこにあるかで危険度が決まる操作は、パターンではなく
   フックで判定する」という一般則が書かれているはずなので、そこへ `chmod` / `rm -r` を
   適用した節を追記する（ADR は原則書き換えないが、**同じ決定の適用範囲を広げる追記**は
