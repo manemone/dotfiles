@@ -113,6 +113,26 @@ PYEOF
   fi
 }
 
+# assert_agents_md_test_policy <file> <label>
+# テスト方針節と linter 対応の作法は「どの回答の組み合わせでも出す」設計（設計判断 D5）。
+# use_doc_id 等の if で将来誤って条件分岐させるリファクタや、抑制禁止ルールを緩める編集を
+# 検知する（AGENTS.md 参照）。
+assert_agents_md_test_policy() {
+  local file="$1" label="$2"
+  if grep -q '^## テスト方針$' "$file" &&
+    grep -q 'このテストが存在しなかった場合、どんな現実的な regression を逃すのか' "$file" &&
+    grep -q '受け入れ条件と test example は' "$file" &&
+    grep -q '発生可能性 × 影響度 × 既存coverage' "$file" &&
+    grep -q '壊れないことを確認するのと、専用テストを足すのは別の判断' "$file" &&
+    grep -q '長さ系の指摘に対して機械的に' "$file" &&
+    grep -q '対象ファイル単位の' "$file" &&
+    grep -q '抑制ディレクティブや、設定ファイルの除外・閾値緩和を、AI の判断で' "$file"; then
+    pass "$label: テスト方針節・linter 作法・抑制禁止ルールが揃っている"
+  else
+    fail "$label: テスト方針節・linter 作法・抑制禁止ルールが揃っている"
+  fi
+}
+
 # check_combo <name> <comma区切りの生成されないはずのパス、無ければ空文字> --data ...
 # 「生成されないはずのパス」の検査は copier copy が成功した場合のみ行う。
 # 呼び出し順や外側のグローバル変数に依存させず、この関数の中で完結させる
@@ -255,6 +275,7 @@ PYEOF
 
   if [ -f "$sbx/AGENTS.md" ]; then
     assert_markdown_hygiene "$sbx/AGENTS.md" "AGENTS.md"
+    assert_agents_md_test_policy "$sbx/AGENTS.md" "AGENTS.md"
   fi
 
   # AGENTS.md 以外にも Jinja の空白制御を使う .md.jinja が docs/ 配下にある
