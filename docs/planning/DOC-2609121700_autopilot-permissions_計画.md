@@ -25,18 +25,21 @@
 
 | 孫 | ブランチ | 内容 | 状況 |
 |---|---|---|---|
-| 1 | `autopilot-permissions-01-git-guard` | 許可ポリシーの確定（ADR）＋ 保護ブランチ判定の PreToolUse ガードフック新設 ＋ `claude/settings.json` 再設計 | ⬜ 待機中 |
+| 1 | `autopilot-permissions-01-git-guard` | 許可ポリシーの確定（ADR）＋ 保護ブランチ判定の PreToolUse ガードフック新設 ＋ `claude/settings.json` 再設計 | 🔄 実装中 |
 | 2 | `autopilot-permissions-02-allow-preservation` | `claude/deploy.sh` が学習済み `allow` を deploy 越しに保全する仕組み ＋ `claude/README.md` 追随 | ⬜ 待機中 |
 | 3 | `autopilot-permissions-03-agents-rules` | ルート `AGENTS.md` と `templates/repo-baseline/template/AGENTS.md.jinja` の最重要ルールを「`main` は人間 / 傘配下は AI」の軸で書き直す | ⬜ 待機中 |
 | 4 | `autopilot-permissions-04-skill-exceptions` | `skills/pr-review-loop` / `skills/umbrella-orchestrator` の傘例外条項と、同一スキル内の矛盾の解消 | ⬜ 待機中 |
 
 ## ワークスペースラベル
 
-- 傘: `dotfiles :: autopilot許可設計`
-- 孫1: `dotfiles :: autopilot許可設計 孫1 ガードフックと許可設計`
-- 孫2: `dotfiles :: autopilot許可設計 孫2 学習allowの保全`
-- 孫3: `dotfiles :: autopilot許可設計 孫3 最重要ルールの書き直し`
-- 孫4: `dotfiles :: autopilot許可設計 孫4 スキルの傘例外条項`
+傘のラベルは `umbrella-handoff` が既に日本語で付けている（`dotfiles :: 自動進行の権限詰まり`）。
+既定形ではないので**司令官は改名しない**。孫のラベルはこれを親要約として導出する。
+
+- 傘: `dotfiles :: 自動進行の権限詰まり`（既存。変更しない）
+- 孫1: `dotfiles :: 自動進行の権限詰まり 孫1 ガードフックと許可設計`
+- 孫2: `dotfiles :: 自動進行の権限詰まり 孫2 学習allowの保全`
+- 孫3: `dotfiles :: 自動進行の権限詰まり 孫3 最重要ルールの書き直し`
+- 孫4: `dotfiles :: 自動進行の権限詰まり 孫4 スキルの傘例外条項`
 
 ## 依存関係と実行順序
 
