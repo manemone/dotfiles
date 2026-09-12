@@ -53,6 +53,16 @@ PR作法 doc を1件）を埋めます。`.claude/` という名前ですが Cla
 生成直後、まだ手を付けていない状態でやること:
 
 ```bash
+# .claude/pr-review.yml が既存の .gitignore で無視されていないか確認する
+# （git check-ignore -q の終了コードが1なら無視されていない。-v は否定行にマッチした
+# 場合もその行を出力するため「何も出なければよい」という判定はできない）。
+# .claude/ や /.claude のようにディレクトリそのものを無視している場合、
+# !/.claude/pr-review.yml のような否定行を足すだけでは効かない（gitignore の仕様上、
+# 無視された親ディレクトリの中身は否定行で戻せない）。その行を /.claude/* に
+# 書き換えたうえで否定行を足すこと。doc-id assign より前にやる必要がある
+# （未追跡だと convention_docs 等の参照が置換されず、切れたパスが残る）
+git check-ignore -q .claude/pr-review.yml && echo "無視されています。.gitignore を修正してください" || echo OK
+
 # git add より前に doc-id assign を実行しない（`doc-id assign` が参照を置換するのは
 # git ls-files --cached で列挙される追跡済みファイルだけであり、copier copy 直後の
 # 生成物は未追跡のため、先に git add しないと .claude/pr-review.yml の
