@@ -25,7 +25,7 @@ OSC 52エスケープシーケンス経由でローカル（手元の端末）�
 
 | 孫 | ブランチ | 内容 | 状況 |
 |---|---|---|---|
-| 1 | `tmux-remote-clipboard-01-osc52` | tmux.confのコピー設定をOSC 52経由に書き換え、README.mdへ人間向け案内を追記 | 🔄 実装中 |
+| 1 | `tmux-remote-clipboard-01-osc52` | tmux.confのコピー設定をOSC 52経由に書き換え、README.mdへ人間向け案内を追記 | ✅ PR #83 マージ済 |
 
 ## ワークスペースラベル
 
