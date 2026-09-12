@@ -271,13 +271,25 @@ def mentions_guarded_command(command):
     # トークン化不能・複数コマンド連結のとき、このフックが担保している
     # コマンド（git/gh/chmod/rm）に言及している可能性があれば ask に倒す。
     # 言及が無ければ何も言わず既存の permissions に委ねる。
-    # strip_quoted() を通すのは、`grep -rn "chmod" claude/ | head` のように
-    # 引用符の中に語として現れるだけの無関係なコマンドを誤検出しないため
-    # （has_chain() が同じ理由で strip_quoted() を使うのと同じ配慮）。
+    #
+    # git/gh は生の command を見る（孫1のフェイルセーフをそのまま踏襲。
+    # `git merge` には permissions.ask 側の保険が無くこのフックだけが
+    # 唯一の担保のため、`echo x | sh -c "git push --force origin master"`
+    # のように引用符の**中身自体が実際に実行されるコマンド**であるケースを
+    # strip_quoted() で除外すると、実行される git コマンドを見逃して
+    # allow 方向（＝ askにもならない）へ倒れてしまう。レビューで実測・指摘）。
+    #
+    # chmod/rm だけ strip_quoted() を通す。`grep -rn "chmod" claude/ | head`
+    # のように、引用符の中身が実際には実行されず単なる検索パターン等の
+    # 文字列として使われるだけの無関係なコマンドを誤検出しないため
+    # （has_chain() が同じ理由で strip_quoted() を使うのと同じ配慮。
+    # ただし git/gh と異なり chmod/rm は §7.2 の handle_chmod/handle_rm 自体が
+    # 唯一の安全弁ではなく、ここで見逃してもそれらの対象は
+    # permissions.ask の名指しの網（settings.json）で別途拾われうる）。
     stripped = strip_quoted(command)
     return bool(
-        re.search(r"\bgit\b", stripped)
-        or re.search(r"\bgh\b", stripped)
+        re.search(r"\bgit\b", command)
+        or re.search(r"\bgh\b", command)
         or re.search(r"\bchmod\b", stripped)
         or re.search(r"\brm\b", stripped)
     )

@@ -333,6 +333,16 @@ assert_decision \
   "grep で 'rm' を検索するだけの読み取り専用コマンドは連結があっても何も言わない" \
   "(none)" "$(run_hook 'grep -rn "rm -rf" claude/ | head' "$WORKTREE_DIR" | extract_decision)"
 
+# ── git/gh は strip_quoted を通さない（ラウンド2レビュー指摘の回帰） ──────
+# 引用符の"中身自体が実際に実行されるコマンド"であるケース（sh -c 等）で
+# git/gh への言及を見逃すと、フックが唯一の担保である git push --force 等が
+# 何の判定も受けずに素通りしてしまう。chmod/rm 用に strip_quoted 化した際、
+# git/gh もまとめて strip_quoted してしまっていた回帰（孫1のフェイルセーフを
+# 弱めていた）。
+assert_decision \
+  "sh -c 経由の git push --force は引用符内でも連結扱いで ask（allow に倒れない）" \
+  "ask" "$(run_hook 'echo x | sh -c "git push --force origin master"' "$WORKTREE_DIR" | extract_decision)"
+
 # ── rm -r（背景3-G。mktemp -d の後片付けを通すのが目的） ──────────
 assert_decision \
   "rm -rf: このセッションの scratchpad 配下は allow" \
