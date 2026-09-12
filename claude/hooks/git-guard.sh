@@ -382,6 +382,11 @@ def _has_force_marker(rest):
             return True
         if tok in ("--force", "-f"):
             return True
+        # 束ねた短オプション（-fu / -uf / -qf 等）。git の parse-options は
+        # 短オプションの結合を受け付けるため、f が混ざっていれば force push。
+        # ここで拾えば詳細パース側で「未知オプション → ask」に落ちる。
+        if len(tok) > 1 and tok.startswith("-") and not tok.startswith("--") and "f" in tok[1:]:
+            return True
         if tok.startswith("+") and not tok.startswith("++"):
             return True
     return False

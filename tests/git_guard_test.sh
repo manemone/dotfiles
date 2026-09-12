@@ -197,6 +197,21 @@ assert_decision \
   "git push -q --force-with-lease origin <branch>: force はあるが未知の -q が混在 → ask" \
   "ask" "$(run_hook "git push -q --force-with-lease origin feature" | extract_decision)"
 
+# git の parse-options は短オプションの結合を受け付けるため、"-uf" のような
+# 束ねたオプションに "f" が混ざっていれば force push である。force マーカー
+# 判定がこれを見落とすと、保護ブランチへの force push が未知オプション扱いにも
+# ならずそのまま (none) に落ち、フックが唯一の担保である refspec 省略形
+# （ADR §3.3「受け入れる残余リスク」）が無防備になる（レビュー指摘の回帰）。
+export GIT_GUARD_TEST_CURRENT_BRANCH="master"
+assert_decision \
+  "git push -uf origin HEAD: 束ねた短オプションのforceを保護ブランチで見落とさず ask 以上" \
+  "ask" "$(run_hook "git push -uf origin HEAD" | extract_decision)"
+unset GIT_GUARD_TEST_CURRENT_BRANCH
+
+assert_decision \
+  "git push -uf origin feature: 束ねた短オプションのforceは非保護ブランチでも ask（未知オプションのfail-safe）" \
+  "ask" "$(run_hook "git push -uf origin feature" | extract_decision)"
+
 # refspec が "HEAD" / "@"（現在のブランチを指す特殊参照）のとき、文字列
 # のまま比較せず現在のブランチへ解決すること（レビュー指摘2の回帰）。
 export GIT_GUARD_TEST_CURRENT_BRANCH="master"
@@ -505,6 +520,12 @@ cases = [
     ("git push origin main", True),
     ("git push origin master", True),
     ("git push origin feature", False),
+    # 束ねた短オプション（-uf 等）による force push は permissions.ask の
+    # どのパターンにも一致しない（受け入れる残余リスク。フックが唯一の
+    # 担保）。git-guard.sh 側の _has_force_marker() がこれを force と
+    # 認識し ask に倒すことは tests/git_guard_test.sh 本体で検証している
+    # （レビュー指摘の回帰）。
+    ("git push -uf origin HEAD", False),
     # chmod（背景3-G）: ワークツリー内の相対パスへの +x は、フックが
     # allow を返しても permissions.ask のどのパターンにも一致してはいけない。
     ("chmod +x tests/foo.sh", False),
