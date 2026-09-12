@@ -23,21 +23,21 @@
     force push は対象外）。孫ブランチは自分の作業コミットを持つのが通常であり、
     傘ブランチが他の孫のマージで進んでいれば孫と傘は必ず分岐するため、
     `git merge --ff-only` は使わない
-  - 上記の `fetch` + `merge` / `rebase` + `push` は、**`&&` 等で連結せず別々の
-    コマンドとして実行する**（連結すると `claude/hooks/git-guard.sh` が対象を
-    一意に特定できず `ask` に倒れる）
   - `git pull` は使わない
   - `git reset --hard` / `git clean` / 裸の `git push --force`（lease なし）は、
     ブランチを問わず引き続き人間の承認が要る
   - `claude/hooks/git-guard.sh`（PreToolUse フック。ADR
     [DOC-2609121719](docs/adr/DOC-2609121719_git-operation-permission-policy.md)
-    参照）は、上記のうち `gh pr merge`・force系 `git push`・`git merge` の
-    保護ブランチ判定だけを機械的に担保する。**`git pull` を使わないこと・
-    孫→傘のマージをレビュー承認済みPRに限ることは、フックの対象外であり
-    この文言だけが歯止め。** また、フックは `permissions.allow` を返しても
-    `permissions.ask` / `deny` を上書きできない（制限を足すだけ）ため、
-    `claude/settings.json` 側の `ask` / `allow` パターンと矛盾がないか
-    合わせて確認すること
+    参照）が機械的に担保するのは**`gh pr merge` の base が保護ブランチかどうか、
+    その1点だけ**である。base は PR 側の属性でコマンド文字列に現れず、
+    `permissions` のグロブで表現できないため。`main`/`master` への `git push` は
+    `claude/settings.json` の `permissions.ask` グロブが受け持つ。
+    **それ以外——`git pull` を使わないこと・孫→傘のマージをレビュー承認済みPRに
+    限ること・ローカルの `git merge` の向き先——はフックの対象外であり、
+    この文言だけが歯止め。** フックは判定できない入力に対して何も言わない
+    （`ask` に倒さない）。また `permissions.allow` を返しても `ask` / `deny` を
+    上書きできない（制限を足すだけ）ため、`claude/settings.json` 側の
+    `ask` / `allow` パターンと矛盾がないか合わせて確認すること
 
   すべての不可逆操作の前にこのルールを照合すること。
 - **deploy スクリプト（`deploy-all.sh` / `uninstall.sh` / `*/deploy.sh`）を実オペレーションで

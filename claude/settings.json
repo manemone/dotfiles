@@ -2,7 +2,14 @@
   "$schema": "https://json.schemastore.org/claude-code-settings.json",
   "permissions": {
     "allow": [
-      "Bash(mkdir -p *)"
+      "Bash(mkdir -p *)",
+      "Bash(chmod +x *)",
+      "Bash(rm -r /tmp/tmp.*)",
+      "Bash(rm -rf /tmp/tmp.*)",
+      "Bash(rm -fr /tmp/tmp.*)",
+      "Bash(rm -r /tmp/claude-*)",
+      "Bash(rm -rf /tmp/claude-*)",
+      "Bash(rm -fr /tmp/claude-*)"
     ],
     "deny": [
       "Read(./.env)",
@@ -41,7 +48,6 @@
       "Bash(git push -f*)",
       "Bash(git push * -f*)",
       "Bash(git push *+*)",
-      "Bash(git push *--delete*)",
       "Bash(git push * main*)",
       "Bash(git push * master*)",
       "Bash(rm -r /home*)",

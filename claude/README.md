@@ -99,8 +99,8 @@ Claude Code がセッション開始時に読み込むグローバルな個人�
 
 Claude Code の設定ファイル。以下の汎用設定を含む（マシン固有の `additionalDirectories`、
 `hooks`（git-guard フックを除く。§3.5参照）は**意図的に除外**。`permissions.allow` は
-リポジトリ側のベース設定には分類器対策の狭いルール（`mkdir -p` 等。§3.5・
-ADR §7.4参照）のみ含む。deploy 時には、これに加えて学習済みの分が自動的に
+リポジトリ側のベース設定には分類器対策の狭いルール（`mkdir -p` / `chmod +x` /
+一時ディレクトリの `rm -r`。§3.5・ADR §3.3/§3.5参照）のみ含む。deploy 時には、これに加えて学習済みの分が自動的に
 合成される — §3.2.1参照）。
 
 | Setting | Value | Notes |
@@ -114,9 +114,9 @@ ADR §7.4参照）のみ含む。deploy 時には、これに加えて学習済�
 | `switchModelsOnFlag` | `true` | フラグによるモデル切り替え |
 | `skipWorkflowUsageWarning` | `true` | ワークフロー警告スキップ |
 | `permissions.defaultMode` | `acceptEdits` | 権限のデフォルトモード |
-| `permissions.allow` | 分類器対策の狭いルール（1件） | `mkdir -p` は auto mode の分類器待ちになるため、`permissions` 側で即決させる（§3.5・ADR §7.4） |
+| `permissions.allow` | 分類器対策の狭いルール（8件） | `mkdir -p` / `chmod +x` / 一時ディレクトリの `rm -r` は auto mode の分類器待ちになるため、`permissions` 側で即決させる（§3.5・ADR §3.3/§3.5） |
 | `permissions.deny` | セキュリティポリシー（24件） | `.env`, `.ssh`, `.aws`, API キー等へのアクセスをブロック |
-| `permissions.ask` | 危険コマンドパターン（54件） | `git push --force`, `rm -r /home*` 等の名指しした絶対パス, `sudo` 等の実行前に確認（§3.5参照） |
+| `permissions.ask` | 危険コマンドパターン（53件） | `git push --force`, `rm -r /home*` 等の名指しした絶対パス, `sudo` 等の実行前に確認（§3.5参照） |
 | `statusLine` | `{"type":"command","command":"ocw-meter snapshot-quota"}` | Claude 利用枠(5時間枠・週間枠)のステータスバー表示。§3.4参照 |
 
 #### 3.2.1 学習した allow は deploy 越しに保全される
@@ -250,75 +250,58 @@ statusLine が描画のたびに呼ばれても書き込みが肥大しない。
 （**次回 `./deploy-all.sh` 実行時に `claude/settings.json` の内容で再度上書きされる**ので、
 恒久的に無効化したい場合はリポジトリ側の `claude/settings.json` から `statusLine` を削除すること）。
 
-### 3.5 git-guard フック — main/master への破壊的操作・chmod・rm -r の機械的ガード
+### 3.5 git-guard フック — `gh pr merge` の base だけを見る最小ガード
 
-`~/.claude/hooks/git-guard.sh`（`claude/hooks/git-guard.sh` から symlink される PreToolUse
-フック）が、「`main`/`master` へのマージ・push は人間、それ以外の git 操作は AI に任せる」
-という線引きに加えて、無人ペインを止める非 git 操作（`chmod +x`・`rm -r`）のうち
-安全と判定できるものを機械的に担保する。設計の根拠・却下案・PreToolUse フックの
-入出力契約の確認結果は ADR
+`~/.claude/hooks/git-guard.sh`（`claude/hooks/git-guard.sh` から symlink される
+PreToolUse フック）が担保するのは**1点だけ**である。
+
+> `gh pr merge` のマージ先（base）が `main` / `master` なら **deny**。
+
+**それ以外は何も言わない。判定できない入力も何も言わない**（`ask` に倒さない）。
+設計の根拠・破棄した初版の設計・受け入れた残余リスクは ADR
 [DOC-2609121719](../docs/adr/DOC-2609121719_git-operation-permission-policy.md)
-（chmod/rm-r への適用は同 ADR §7）を参照。
+を参照。
 
-**何を止めて何を通すか（判定表）:**
+**なぜ `gh pr merge` だけなのか:** 不可逆なのはリモートを書き換える操作だけであり、
+そのうち `git push` は対象がコマンド文字列に現れるため `permissions.ask` のグロブで
+表現できる。base は PR 側の属性でコマンド文字列に現れないため、`gh pr merge` だけが
+グロブで表現できずフックを要する。ローカルの `git merge` は push しなければ巻き戻せる。
+
+**判定表:**
 
 | 対象コマンド | 判定 |
 |---|---|
-| `gh pr merge`（PR 番号 / URL / 省略＝現ブランチ） | base ブランチが `main`/`master` なら **deny**、それ以外は **allow** |
-| `git push` に `--force` / `--force-with-lease` / `-f` / `+<refspec>` が付く | 対象ブランチが `main`/`master` なら **deny**。それ以外は `--force-with-lease` を **allow**、裸の `--force`/`-f` は **ask** |
-| `git merge` | 現在のブランチ（マージ先）が `main`/`master` なら **deny**、それ以外は **allow** |
-| `chmod`（`-R`/`--recursive` 無し・モードが実行ビット付与のみのシンボリック指定 `+x`/`u+x`/`a+x` 等・対象パスが1つ残らずシェル展開文字（`~ $ * ? [ ] { } \` < >`）を含まず、かつ全て現在の git ワークツリー内かつ `.git` 配下でない） | **allow**。1つでも満たさなければ **ask**（`deny` ではない） |
-| `rm -r`/`-rf`/`-fr`/`-R`/`--recursive`（対象パスが1つ残らず上記と同じ意味でシェル展開文字を含まず、一時ディレクトリ配下——このセッションの scratchpad、または `$TMPDIR`/`/tmp` 自身より深い場所——に解決され、かつ git ワークツリー内でない） | **allow**。1つでも満たさなければ **ask** |
-| 上記以外の git/gh/chmod/rm コマンド、対象を安全に判定できないコマンド | 何も言わず `permissions.ask` の判定に委ねる、または **ask** |
+| `gh pr merge`（PR 番号 / URL / 省略＝現ブランチ）で base が `main`/`master` | **deny** |
+| `gh pr merge` で base がそれ以外だと確定できた | **allow**（孫→傘のマージを無音で通す） |
+| `gh pr merge` だが base を解決できない（`gh` 実行失敗・PR 不明・解釈不能） | **何も言わない** |
+| 上記以外のすべて（`git push` / `git merge` / `chmod` / `rm` / 連結コマンド / `git -C` …） | **何も言わない** |
 
-判定できない入力（PR 番号が解決できない・`gh` の実行に失敗する・現在のブランチが
-取れない・複数コマンドが `&&`/`;`/`|` で連結されている・chmod/rm の未知のオプション
-等）は必ず `ask` に倒す。**`allow` に倒すことは絶対に無い。**
+`-R` / `--repo` は `gh pr view` 側へ引き継ぐ（別リポジトリの PR を手元のブランチ
+構成で判定しないため）。
 
-`chmod`/`rm -r` を対象に含めた理由（背景3-G）: `Bash(chmod *)`/`Bash(rm -r *)` の
-ようなパターンは「対象がワークツリー内か `/etc` 配下か」を区別できず、無人の孫
-ペインが新規スクリプトへの `chmod +x` や `mktemp -d` の後片付けで頻繁に止まって
-いた。詳細は ADR §7 を参照。
+**`main`/`master` への `git push` は `claude/settings.json` の `permissions.ask` が
+受け持つ**（`Bash(git push * main*)` / `Bash(git push * master*)` と、裸の force 系
+4パターン）。`--force-with-lease` はどのパターンにも一致しないため、傘・孫ブランチへの
+force push は無音で通る。**`Bash(git push *--force*)` のように空白を挟まない
+パターンを置くと `--force-with-lease` まで拾って autopilot が止まる。置かないこと。**
 
-**上の判定表はフック単体の判定であり、フックが `allow` を返しても
-`permissions.ask` に一致すれば確認は出る。** PreToolUse フックは
-`permissions` の判定を緩める方向には使えず、危険な部分集合を引き上げる
-（制限を足す）ことしかできない（公式ドキュメントより。ADR §3.2/§3.3 参照）。
-`git push --force-with-lease` を実際に無確認で通すため、`claude/settings.json`
-の `permissions.ask` からは `--force-with-lease` に一致するパターンを外し
-（`*--force*` / `*--force-with-lease*` は空白を挟まず一致してしまうため
-どちらも置かない）、裸の `--force` だけを単語境界で拾う4パターンに
-置き換えている（ADR §3.3「`git push --force-with-lease` を摩擦なく通すための
-具体策」）。
-
-同じ理由で `chmod`/`rm -r` も narrow 化している（ADR §7.3）。`Bash(chmod *)`
-は削除し、`-R`/`--recursive`・絶対パス（`chmod * /*`。`/Users` 等の macOS の
-ホームを含む全ての `/` 始まりパスを拾う）・`~`/`$HOME`（`chmod * ~*`/
-`chmod * $HOME*`）だけを無条件 `ask` として残した。`Bash(rm -r *)`/
-`Bash(rm -rf *)`/`Bash(rm -fr *)` も削除し、
-`/home`/`/usr`/`/etc`/`/var`/`/mnt`/`/opt`/`~`/`$HOME`/`/Users`（macOS の
-ホーム）を名指しした絶対パスだけを無条件 `ask` として残している。
-**ワークツリー内の相対パスへの chmod/rm -r はこれらのパターンのどれにも
-一致しない**（それがフックに allow させる目的）ため、フックが配布されて
-いない・壊れている環境では、これらの操作はガード無しで通る
-（fail-open。ADR §7.3「受け入れる残余リスク」）。
+`chmod +x` と一時ディレクトリの `rm -r` は、初版ではフックが判定していたが、対象パスが
+コマンド文字列に現れるため `permissions.allow` の狭いグロブ（`Bash(chmod +x *)` /
+`Bash(rm -r* /tmp/tmp.*)` / `Bash(rm -r* /tmp/claude-*)`）へ移した。`ask` は `allow` に
+優先するため、絶対パス・ホーム配下への `chmod`/`rm -r` は従来どおり止まる。
 
 **無効化したいとき:**
 
 `settings.machine.json`（固定パスの実体）に `hooks.PreToolUse` を定義すると、`claude/deploy.sh` の
 浅い `update()` マージによりベース側の `hooks.PreToolUse`（本フックの配線）が丸ごと
-上書きされる（§4.3・ADR §3.4 参照）。恒久的に無効化したい場合は、machine.json に
+上書きされる（§4.3・ADR §3.6 参照）。恒久的に無効化したい場合は、machine.json に
 空配列 `"PreToolUse": []` を持つ `hooks` を書くか、リポジトリ側の `claude/settings.json` から
 `hooks.PreToolUse` を削除する。
 
-`git merge` と、対象ブランチ名がコマンド文字列中に空白区切りの裸の単語として
-現れない書き方の `git push --force-with-lease`（refspec 省略・`HEAD`/`@`・
-`HEAD:master` のようなコロン区切り・`refs/heads/master` のような完全参照）
-には `permissions.ask` 側の保険が無い設計（ADR §3.3「受け入れる残余リスク」）
-なので、無効化すると保護ブランチへのこれらの操作がガード無しで通るように
-なることに注意すること。同様に、ワークツリー内の相対パスへの `chmod +x` /
-`rm -r`（scratchpad・`/tmp` 配下）にも `permissions.ask` 側の保険が無い
-（ADR §7.3）ため、無効化するとこれらも無確認で通るようになる。
+無効化すると、**AI が `main`/`master` への PR をマージすることを機械的に止める手段が
+無くなる**（`gh pr merge` は `permissions` のグロブで表現できないため保険が無い）。
+線引きの一次的な担保はルート `AGENTS.md` の最重要ルールであり、フックはその機械的な
+裏打ちにすぎないが、無人運転中はその裏打ちが唯一の歯止めになることに注意すること。
 
 ## 4. Customization — マシン固有設定の追加
 
