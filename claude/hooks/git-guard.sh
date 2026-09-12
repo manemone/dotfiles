@@ -40,8 +40,17 @@ INPUT="$(cat)"
 # ような連続文字列ではなく緩い間隔一致にしているのは、`git -C <dir> merge`
 # のようにグローバルオプションが挟まるケースを取りこぼして「何も言わない」
 # （本来は ask にすべき判定不能ケース）に落ちるのを防ぐため。
+#
+# "rm" だけは単純な部分文字列一致にしない。"rm" は "permissions" "confirm"
+# "term" のような英単語の一部としてもごく普通に現れ、しかもこのフック自身が
+# 全 Bash 呼び出しに渡って評価される cwd の JSON フィールド（例: このリポジトリの
+# 傘ブランチ名 "...permissions..." 自体に "rm" を含む）にも常時出現しうるため、
+# 単純な `*"rm"*` では速い経路が実質ほぼ常に不成立になり「速い経路」の意味が
+# 無くなる（レビュー指摘で実測）。英数字境界（`[!a-zA-Z0-9]`）で挟まれた "rm" だけを
+# 拾うことで、"rm -rf ..." のような実際のコマンド呼び出しは確実に拾いつつ、
+# 英単語中の "rm" は除外する。
 case "$INPUT" in
-  *"git"*"merge"* | *"git"*"push"* | *"gh"*"pr"*"merge"* | *"chmod"* | *"rm"*) ;;
+  *"git"*"merge"* | *"git"*"push"* | *"gh"*"pr"*"merge"* | *"chmod"* | *[!a-zA-Z0-9]rm[!a-zA-Z0-9]*) ;;
   *) exit 0 ;;
 esac
 
@@ -162,12 +171,33 @@ def resolve_path(token, cwd):
     # シンボリックリンクと ".." を解決した絶対パスを返す。存在しないパス
     # でも lexical に正規化される（chmod/rm の対象は通常存在するファイルだが、
     # 解決に失敗する場合のみ None を返し呼び出し側で ask に倒す）。
+    #
+    # **呼び出し前に has_unsafe_path_chars() で弾いていることが前提。**
+    # このフックは実際にシェルへ渡される直前のコマンド文字列（tool_input.command）
+    # を shlex でトークン化しただけであり、bash 自身が行うチルダ展開・変数展開・
+    # glob展開・コマンド置換は一切行っていない。したがって `~/bin/x` や
+    # `$HOME/foo` のようなトークンをここでそのまま解決すると、bash が実際に
+    # 展開する先（例: 実ホームディレクトリ）とは無関係な、たまたま cwd 配下に
+    # 見える文字列として誤って「ワークツリー内」と判定してしまう
+    # （レビューで実測。has_unsafe_path_chars() のガードで防ぐ）。
     try:
         base = cwd or os.getcwd()
         path = token if os.path.isabs(token) else os.path.join(base, token)
         return os.path.realpath(path)
     except Exception:
         return None
+
+
+# chmod/rm の対象パスに現れてはいけない文字。bash 自身がこのフックより後で
+# 展開する可能性がある構文（チルダ展開・変数展開・glob・コマンド置換・
+# find の `{}` プレースホルダ等）を広く弾く。1つでも含まれていれば、
+# このフックが見ているリテラル文字列と実際に bash が渡す最終的な引数が
+# 一致する保証が無いため、静的解決を諦めて ask に倒す。
+UNSAFE_PATH_CHARS = set("~$*?[]{}`<>")
+
+
+def has_unsafe_path_chars(token):
+    return any(ch in UNSAFE_PATH_CHARS for ch in token)
 
 
 def is_within(path, base):
@@ -241,11 +271,15 @@ def mentions_guarded_command(command):
     # トークン化不能・複数コマンド連結のとき、このフックが担保している
     # コマンド（git/gh/chmod/rm）に言及している可能性があれば ask に倒す。
     # 言及が無ければ何も言わず既存の permissions に委ねる。
+    # strip_quoted() を通すのは、`grep -rn "chmod" claude/ | head` のように
+    # 引用符の中に語として現れるだけの無関係なコマンドを誤検出しないため
+    # （has_chain() が同じ理由で strip_quoted() を使うのと同じ配慮）。
+    stripped = strip_quoted(command)
     return bool(
-        re.search(r"\bgit\b", command)
-        or re.search(r"\bgh\b", command)
-        or re.search(r"\bchmod\b", command)
-        or re.search(r"\brm\b", command)
+        re.search(r"\bgit\b", stripped)
+        or re.search(r"\bgh\b", stripped)
+        or re.search(r"\bchmod\b", stripped)
+        or re.search(r"\brm\b", stripped)
     )
 
 
@@ -467,6 +501,12 @@ def handle_chmod(command, cwd):
     git_meta = os.path.realpath(os.path.join(root, ".git"))
 
     for p in paths:
+        if has_unsafe_path_chars(p):
+            ask(
+                f"git-guard: chmod の対象 '{p}' はシェル展開（~/$変数/glob/`find` の"
+                "プレースホルダ等）を含む可能性があり安全に解決できません"
+            )
+            return
         resolved = resolve_path(p, cwd)
         if resolved is None:
             ask(f"git-guard: chmod の対象 '{p}' を解決できませんでした")
@@ -533,6 +573,12 @@ def handle_rm(command, cwd):
     root = worktree_root(cwd)
 
     for p in paths:
+        if has_unsafe_path_chars(p):
+            ask(
+                f"git-guard: rm -r の対象 '{p}' はシェル展開（~/$変数/glob/`find` の"
+                "プレースホルダ等）を含む可能性があり安全に解決できません"
+            )
+            return
         resolved = resolve_path(p, cwd)
         if resolved is None or not is_temp_allowed(resolved):
             ask(

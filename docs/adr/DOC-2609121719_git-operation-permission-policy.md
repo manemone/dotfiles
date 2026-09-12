@@ -379,8 +379,17 @@ Claude Code の permission 評価は次の3層になっている（公式ドキ�
 
 1. **`permissions.allow`/`ask`/`deny` に一致した操作は即決**（本 ADR の
    §1〜7.3 が担保する層）
-2. **PreToolUse フック**（`git-guard.sh`）——1で `ask`/`deny` に一致しても
-   フックは制限を追加できるが、1で一致しないものへの追加判定はできない
+2. **PreToolUse フック**（`git-guard.sh`）——公式ドキュメントで確認できているのは
+   「フックの `allow` は `permissions.ask`/`deny` を上書きできない」（§3.2/§3.3）
+   という**片方向の制約だけ**である。**フックの `allow` が、1のどのルールにも
+   一致しない操作について3（分類器）を経由させずに即決させるかどうかは、
+   公式ドキュメントに明記が無い**（2026-09-12、`claude-code-guide` サブエージェント
+   経由で `permission-modes.md`/`hooks-guide.md` を確認したが直接の記述は
+   見つからなかった）。本 ADR は「フックの `allow` は permissions の
+   allow ルールと同格に扱われ、分類器より前に即決される」という前提で
+   §1〜§3・§7.1〜§7.3 の設計（`gh pr merge`/`git push --force-with-lease`/
+   `chmod`/`rm -r` のいずれも `permissions.ask`/`deny` に一致しない形で
+   フックだけに判定を委ねる）を組んでいる。この前提の根拠は次節参照
 3. **auto mode の分類器**——1のどのルールにも一致しない操作が落ちる先。
    `mkdir` は `ask`/`deny` のどちらにも無いため、無条件でここへ落ち、
    毎回分類器の判断待ちになる
@@ -409,8 +418,38 @@ Claude Code の permission 評価は次の3層になっている（公式ドキ�
 total, auto mode pauses and Claude Code resumes prompting. ... Any allowed
 action resets the consecutive counter, while the total counter persists
 for the session」）。無人ペインはここで確実に停止するため、分類器へ
-落ちる操作を1層目（`permissions.allow`）で拾えるものは拾うのが対策の
-本筋であり、フックはこの層には効かない。
+落ちる操作は極力減らしたい。**分類器を確実に迂回できると分かっているのは
+`permissions.allow` に一致させる経路（`mkdir -p` はこちら）だけ**であり、
+フックの `allow` が同じ効果を持つかは前項のとおり未確認である。
+
+### 7.4.1 フックの `allow` が分類器を迂回するという前提の根拠（未検証の明記）
+
+本傘は孫1（PR #88、マージ済み）の時点から、`gh pr merge`・`git push
+--force-with-lease` を `permissions.allow`/`ask` のどちらにも一致させず、
+フックの `allow` のみで確認無しに通す設計を採用しており、この設計のまま
+実際に孫1〜4（PR #88〜#91）が本傘のオーケストレーションで無人マージされている
+（`docs/planning/DOC-2609121700_autopilot-permissions_計画.md` の孫ブランチ
+進捗表を参照）。`gh pr merge` は `permissions.allow`/`ask`/`deny` のどれにも
+一致せず、読み取り専用でも作業ディレクトリ内の編集でもないため、フックの
+`allow` が分類器を迂回していないなら auto mode の分類器の判断待ちになる
+はずだが、そのような詰まりは孫1〜4のマージでは報告されていない。**これは
+「フックの `allow` が分類器を迂回する」という前提を支持する運用上の状況証拠
+ではあるが、公式ドキュメントによる直接の裏付けではない。**
+
+本 PR（孫5）の `chmod`/`rm -r` の扱いは、この孫1の前提をそのまま踏襲した
+ものであり、孫5に固有の新しいリスクを持ち込むものではない。**もしこの前提が
+誤りだと後で判明した場合**（例えば `chmod +x` が分類器の判断待ちで頻繁に
+止まる事例が実際に観測された場合）、影響は孫1の `gh pr merge`/
+`git push --force-with-lease` にも等しく及ぶため、孫5だけを個別に見直すのでは
+なく、本 ADR の§1〜§7全体の前提として司令官へ再検証を報告すること。
+
+なお、この場合の代替案（`chmod`/`rm -r` にも `mkdir` と同じ形の狭い
+`permissions.allow` を足す）は、対象の場所を区別できないという §7.1 の
+理由でそもそも採用できない（`Bash(chmod +x *)` のような allow は、
+ワークツリー外への `chmod +x` も無条件に通してしまい、本 PR が解決しようと
+している問題を再発させる）。分類器を迂回できないと判明した場合、`chmod`/
+`rm -r` については「フックによる安全な自動化」と「分類器の摩擦」のどちらかを
+選べず、そのときは司令官の判断を仰ぐ。
 
 **憶測で allow を大量に足さない。** 本 PR で `permissions.allow` に足したのは
 `mkdir -p` の1件のみ（計画書背景3-H が明示した実測1件）。他に分類器で
