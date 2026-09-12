@@ -156,16 +156,17 @@ there, `pbcopy`/`xclip`/`wl-copy` write to *that remote machine's* clipboard,
 not the clipboard of the terminal you are physically typing into — and on a
 headless remote host, `xclip`/`wl-copy` may not work at all.
 
-To cover this case, `tmux.conf` also sets `set-clipboard on`. This makes tmux
-emit the copied text as an OSC 52 escape sequence to the terminal at the other
-end of the connection, in addition to the platform-specific copy above. Most
+tmux already covers this case by default: its `set-clipboard` option defaults
+to `external`, under which tmux emits the copied text as an OSC 52 escape
+sequence to the terminal at the other end of the connection, in addition to
+the platform-specific copy above — no change to `tmux.conf` is needed. Most
 modern terminal emulators apply OSC 52 to their own (local) clipboard, so a
 mouse-drag copy inside a remote/SSH tmux session lands in the clipboard of
-your local terminal.
+your local terminal, as long as that terminal accepts OSC 52 writes.
 
-**This requires your local terminal to accept OSC 52 writes.** If you use
-[Warp](https://www.warp.dev/), OSC 52 clipboard access is disabled by default
-and must be enabled in `settings.toml`:
+**The local terminal accepting OSC 52 writes is the part that usually needs
+configuring.** If you use [Warp](https://www.warp.dev/), OSC 52 clipboard
+access is disabled by default and must be enabled in `settings.toml`:
 
 ```toml
 [terminal]
