@@ -370,6 +370,23 @@ def handle_gh_pr_merge(command, cwd):
         allow()
 
 
+def _has_force_marker(rest):
+    """rest（'git push'以降のトークン列）に force 系マーカーが1つでも現れるか。
+
+    詳細パース前の粗い文字列判定でよい。force マーカーが1つも無ければ
+    force push ではないと確定でき、他の未知オプションの解釈精度に関わらず
+    このフックは対象外（何も言わない）にできる。
+    """
+    for tok in rest:
+        if FORCE_LEASE_RE.match(tok):
+            return True
+        if tok in ("--force", "-f"):
+            return True
+        if tok.startswith("+") and not tok.startswith("++"):
+            return True
+    return False
+
+
 def handle_git_push(command, cwd):
     tokens = tokenize(command)
     if tokens is None:
@@ -381,6 +398,16 @@ def handle_git_push(command, cwd):
         return
 
     rest = tokens[start:]
+
+    if not _has_force_marker(rest):
+        # force 系フラグも +refspec も一切現れていない ⇒ このフックの対象外。
+        # ここで先に判定することで、-u / --set-upstream / -q のような
+        # force と無関係な未知オプションを含む通常の push が、下の詳細パースで
+        # 「未知オプションだから ask」に巻き込まれるのを防ぐ（ADR
+        # DOC-2609121719「6. 既知の制限」の契約: force を伴わない push は
+        # 何も言わず permissions の判定に委ねる）。
+        say_nothing()
+        return
 
     has_force_lease = False
     has_bare_force = False
@@ -411,13 +438,6 @@ def handle_git_push(command, cwd):
             return
         positional.append(tok)
         i += 1
-
-    if not has_force_lease and not has_bare_force and not any(
-        p.startswith("+") for p in positional
-    ):
-        # force 系フラグも +refspec も無い ⇒ このフックの対象外。
-        say_nothing()
-        return
 
     if len(positional) == 0:
         refspec = None

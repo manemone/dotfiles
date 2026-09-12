@@ -180,6 +180,23 @@ assert_decision \
   "git push に未知の値取りオプションが混入: 安全に解決できず ask" \
   "ask" "$(run_hook "git push --unknown-opt value origin feature --force" | extract_decision)"
 
+# force 系フラグを一切伴わない push は、未知オプション（force とは無関係）が
+# 混ざっていても対象外（何も言わない）であること。孫ブランチの初回 push
+# （git push -u origin <新ブランチ>）そのものであり、この判定を誤ると
+# 本PRの目的（無人ペインの承認ダイアログ詰まり解消）に逆行する退行になる
+# （レビュー指摘の回帰）。
+assert_decision \
+  "git push -u origin <branch>: force を伴わないので未知オプションがあっても対象外" \
+  "(none)" "$(run_hook "git push -u origin feature" | extract_decision)"
+
+assert_decision \
+  "git push --set-upstream origin <branch>: 同上" \
+  "(none)" "$(run_hook "git push --set-upstream origin feature" | extract_decision)"
+
+assert_decision \
+  "git push -q --force-with-lease origin <branch>: force はあるが未知の -q が混在 → ask" \
+  "ask" "$(run_hook "git push -q --force-with-lease origin feature" | extract_decision)"
+
 # refspec が "HEAD" / "@"（現在のブランチを指す特殊参照）のとき、文字列
 # のまま比較せず現在のブランチへ解決すること（レビュー指摘2の回帰）。
 export GIT_GUARD_TEST_CURRENT_BRANCH="master"

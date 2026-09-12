@@ -1082,9 +1082,17 @@ command -v ocw-meter >/dev/null && ocw-meter event phase.end --phase rereview_re
    - `gh pr view <PR番号> --json baseRefName` で base を取得する。
    - **base が既定ブランチ名と一致する** → マージしない（安全制約の最優先ルール）。
      ステップ6は実行しない。
-   - **一致しない（傘ブランチなど）** → 承認済みなので `gh pr merge <PR番号>
-     --squash --delete-branch` を実行してよい。
-6. base が既定ブランチ以外だった場合、上記のマージを実行し、成功を確認する。
+   - **一致しない**場合でも、まだマージしてよいと決めつけない。**このリポジトリが
+     傘ブランチ方式を採用しており、base がその傘ブランチであること**を確認する:
+     - リポジトリの `AGENTS.md`（そのリポジトリ自身のルール文書。配布物である
+       `claude/CLAUDE.md` とは別物）を読み、「傘ブランチ方式」を使うと明記されているか確認する
+     - 明記が無い、または確認できない場合は**傘ブランチ方式を採用していないとみなし、
+       マージしない**（fail-safe。人間に依頼する）。base が既定ブランチでないというだけでは
+       マージしてよい根拠にならない（傘ブランチ方式を使わないリポジトリで、stacked PR や
+       `release/*` / `develop` を base にした通常のPRを誤ってマージする事故になる）
+     - 明記があれば、承認済みなので `gh pr merge <PR番号> --squash --delete-branch`
+       を実行してよい。
+6. 上記の確認によりマージしてよいと判断した場合、マージを実行し、成功を確認する。
 
 ユーザーに報告:
 - PR番号とURL
@@ -1108,7 +1116,11 @@ command -v ocw-meter >/dev/null && ocw-meter event phase.end --phase done --outc
 
 **禁止事項:**
 - **base がこのリポジトリの既定ブランチである PR は、承認されても人間の明示的指示がない限りマージ（`git merge` / `gh pr merge`）を絶対に実行しない。** これはこのスキルの最優先ルールであり、「既定ブランチ（多くの場合 `main` / `master`。判定方法は下記）へのマージは人間だけが行う」という唯一の線引き（ADR DOC-2609121719、ルート `AGENTS.md`「最重要ルール」）そのものである。承認＝マージ許可ではない。例外はない。
-- **base が既定ブランチ以外（傘ブランチなど）の PR は、レビューで承認済みならマージしてよい。** `gh pr merge <PR番号> --squash --delete-branch` を実行する。**マージ前に必ず `gh repo view --json defaultBranchRef -q .defaultBranchRef.name` でこのリポジトリの既定ブランチ名を取得し、`gh pr view <PR番号> --json baseRefName` の base と突合して一致しないことを確かめてから実行すること。** `main` / `master` に固定した文字列比較で済ませない（既定ブランチ名はリポジトリによって異なる）。base を確認せずにマージしない。
+- **base が既定ブランチ以外の PR は、このリポジトリが傘ブランチ方式を採用しており base がその傘ブランチであることを確認できた場合に限り、レビューで承認済みならマージしてよい。** `gh pr merge <PR番号> --squash --delete-branch` を実行する。**マージ前に必ず次の2点を確認すること**:
+  1. `gh repo view --json defaultBranchRef -q .defaultBranchRef.name` でこのリポジトリの既定ブランチ名を取得し、`gh pr view <PR番号> --json baseRefName` の base と突合して一致しないこと（`main` / `master` に固定した文字列比較で済ませない。既定ブランチ名はリポジトリによって異なる）
+  2. リポジトリの `AGENTS.md`（配布物である `claude/CLAUDE.md` ではなく、そのリポジトリ自身のルール文書）が「傘ブランチ方式」を明記していること。**明記が無い、または確認できない場合はマージしない**（fail-safe。人間に依頼する）。傘ブランチ方式を使わないリポジトリで、stacked PR や `release/*` / `develop` を base にした通常のPRを、既定ブランチでないというだけでマージしてしまう事故を防ぐため
+
+  base を確認せずにマージしない。
 - コミット履歴を破壊するマージ。GitHub Web UIのsquash mergeは全個別コミットメッセージをsquashコミット本文に連結する。よって各コミットに説明的なメッセージが必要。
 - Force push (`git push --force`, `git reset --hard`)
 - 破壊的削除（untracked files含む）

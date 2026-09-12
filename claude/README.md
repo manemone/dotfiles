@@ -116,7 +116,7 @@ ADR §7.4参照）のみ含む。deploy 時には、これに加えて学習済�
 | `permissions.defaultMode` | `acceptEdits` | 権限のデフォルトモード |
 | `permissions.allow` | 分類器対策の狭いルール（1件） | `mkdir -p` は auto mode の分類器待ちになるため、`permissions` 側で即決させる（§3.5・ADR §7.4） |
 | `permissions.deny` | セキュリティポリシー（24件） | `.env`, `.ssh`, `.aws`, API キー等へのアクセスをブロック |
-| `permissions.ask` | 危険コマンドパターン（46件） | `git push --force`, `rm -r /home*` 等の名指しした絶対パス, `sudo` 等の実行前に確認（§3.5参照） |
+| `permissions.ask` | 危険コマンドパターン（54件） | `git push --force`, `rm -r /home*` 等の名指しした絶対パス, `sudo` 等の実行前に確認（§3.5参照） |
 | `statusLine` | `{"type":"command","command":"ocw-meter snapshot-quota"}` | Claude 利用枠(5時間枠・週間枠)のステータスバー表示。§3.4参照 |
 
 #### 3.2.1 学習した allow は deploy 越しに保全される
