@@ -8,7 +8,17 @@ Claude Code の設定ファイル群。`~/.claude/` にデプロイして使う�
 |---|---|---|
 | `CLAUDE.md` | Claude Code の個人指示（プロジェクト横断で適用されるグローバル指示） | symlink |
 | `settings.json` | Claude Code の汎用設定（モデル、権限ポリシー、テーマ等）。マシン固有設定は**含まない** | 生成（マージ） |
-| `settings.machine.json.example` | マシン固有設定のテンプレート。コピーして使う | （手動コピー） |
+| `settings.machine.json.example` | マシン固有設定のテンプレート・参照用サンプル。**配布されない**（手でコピーする用） | （手動コピー） |
+
+`~/.claude/settings.machine.json`（マシン固有設定の実体）はこのリポジトリの中身では**ない**。
+実体は `${XDG_DATA_HOME:-$HOME/.local/share}/dotfiles/settings.machine.json`
+という、`current` や `generations/` と同じ階層にある**世代を経由しない固定パス**にあり、
+`~/.claude/settings.machine.json` はそこへの symlink として `settings.json` の隣に
+張られる（§4参照）。世代（`claude/settings.machine.json`）を経由しないのは、git 非追跡の
+マシン固有ファイルをワークツリーごとに持たせると、machine.json を持たないワークツリー
+（傘や孫など）から deploy した瞬間に空扱いされて人間の設定が消えるため
+（計画書 [DOC-2609121700](../docs/planning/DOC-2609121700_autopilot-permissions_計画.md)
+設計6）。
 
 ## 1. Requirements
 
@@ -41,9 +51,11 @@ ls -la ~/.claude/settings.json     # 実ファイル（deploy.sh が生成）
 The deploy script:
 - Creates `~/.claude/` directory with mode `700`（認証情報を置く可能性があるため）
 - Symlinks `CLAUDE.md` → `~/.claude/CLAUDE.md`
+- Symlinks `settings.machine.json` → `~/.claude/settings.machine.json`（固定パスの実体。無ければ
+  空の `{}` を作ってから symlink する。§4参照）
 - Generates `~/.claude/settings.json` as a real file（※symlink ではない）。入力は3つ:
   1. ベース設定（`claude/settings.json`）
-  2. マシン固有設定（`claude/settings.machine.json`。存在すれば）
+  2. マシン固有設定（固定パスの `settings.machine.json`。存在すれば）
   3. **今まさに置き換えようとしている生成物（`~/.claude/settings.json`）の `permissions.allow`**
      — Claude Code が対話で学習した allow を deploy 越しに保全する（§3.2.1参照）
 
@@ -55,7 +67,9 @@ Codex・OpenCode にも同じ実体が配られるため、トップレベルの
 > **⚠️ 重要**: deploy 実行時に既存の `~/.claude/settings.json` はバックアップ（`.backup` 付きで退避）されます。
 > `permissions.allow` は次回 deploy でも自動的に保全されますが（§3.2.1参照）、
 > Herdr の `SessionStart` hook や `additionalDirectories` など**`allow` 以外のマシン固有設定は
-> 保全されません**。失われるのを防ぐには、**deploy 前に `settings.machine.json` を作成**してください。
+> 保全されません**。失われるのを防ぐには、**deploy 前に `settings.machine.json`（固定パスの実体。
+> §4参照）を作成**してください。固定パスの実体は生成のたびに空へ戻ることはない（§4冒頭参照）ので、
+> 一度作れば以後の deploy で毎回作り直す必要はない。
 
 ## 3. What's Included
 
@@ -203,9 +217,17 @@ statusLine が描画のたびに呼ばれても書き込みが肥大しない。
 **⚠️ 重大な注意 — `~/.claude/settings.json` の `hooks` 消失リスク（計画書17章 R3）:**
 
 `~/.claude/settings.json` は **Herdr（`SessionStart` hook）と `claude/deploy.sh` の両方が書き込む
-競合地帯**である。`claude/deploy.sh` は `claude/settings.machine.json` が存在しない、または
-存在しても `hooks` を含まない場合、Herdr が実行時に書き足した `hooks` ごと上書きしてしまう
+競合地帯**である。`claude/deploy.sh` は machine 設定（固定パスの実体。§4参照）が `hooks` を
+含まない場合、Herdr が実行時に書き足した `hooks` ごと上書きしてしまう
 （実機検証中に実際にこの事故が発生している — 詳細は DOC-2608021229 Appendix A 参照）。
+
+> かつては machine.json が git 非追跡のワークツリー相対ファイルだったため、
+> machine.json を持たないワークツリー（傘や孫など）から deploy するだけでもこの事故が
+> 起きた（計画書 [DOC-2609121700](../docs/planning/DOC-2609121700_autopilot-permissions_計画.md)
+> 背景3-B）。孫6でこの実体が固定パスへ移り、どのワークツリーから deploy しても同じ
+> machine 設定を使うようになったため、**「別のワークツリーから deploy したら消えた」という
+> 形のこの事故は起きなくなっている。** 残るのは、machine 設定自体が `hooks` を持っていない
+> （そもそも設定していない）場合に Herdr の書き足しが上書きされるケースのみ。
 
 **`statusLine` を配線した本設定を deploy する前に、必ず以下を確認・実施すること:**
 
@@ -213,16 +235,16 @@ statusLine が描画のたびに呼ばれても書き込みが肥大しない。
    ```bash
    python3 -c "import json; print(json.dumps(json.load(open('$HOME/.claude/settings.json')).get('hooks'), indent=2))"
    ```
-2. `claude/settings.machine.json`（無ければ `settings.machine.json.example` からコピー）に、
+2. `~/.claude/settings.machine.json`（固定パスへの symlink。§4参照）に、
    確認した `hooks`（通常は Herdr の `herdr-agent-state.sh`）を明記する（§4.3参照）
-3. `./deploy-all.sh --only claude`（リポジトリルートから）を実行する。**単体の
-   `claude/deploy.sh` では不可**（配布実体経由でしか読まないため、今編集した
-   `settings.machine.json` の内容を拾わない）
+3. `./deploy-all.sh --only claude`（リポジトリルートから）を実行する。machine 設定は
+   固定パスから直接読まれるため、単体の `claude/deploy.sh` でも反映されるが、
+   `settings.json` のベース側の変更まで確実に拾いたい場合は `deploy-all.sh` を使うこと
 4. deploy 後、再度 手順1 のコマンドを実行し、`hooks.SessionStart` が健在であることを確認する
 
 **statusLine の無効化方法:**
 
-`claude/settings.machine.json` に `"statusLine": null` は効かない（machine側の shallow merge は
+`settings.machine.json`（固定パスの実体）に `"statusLine": null` は効かない（machine側の shallow merge は
 `null` も値として上書きしてしまうだけで、キー自体を消せない）。無効化したい場合は
 `~/.claude/settings.json` の `statusLine` キーを deploy 後に手動で削除する
 （**次回 `./deploy-all.sh` 実行時に `claude/settings.json` の内容で再度上書きされる**ので、
@@ -283,7 +305,7 @@ statusLine が描画のたびに呼ばれても書き込みが肥大しない。
 
 **無効化したいとき:**
 
-`claude/settings.machine.json` に `hooks.PreToolUse` を定義すると、`claude/deploy.sh` の
+`settings.machine.json`（固定パスの実体）に `hooks.PreToolUse` を定義すると、`claude/deploy.sh` の
 浅い `update()` マージによりベース側の `hooks.PreToolUse`（本フックの配線）が丸ごと
 上書きされる（§4.3・ADR §3.4 参照）。恒久的に無効化したい場合は、machine.json に
 空配列 `"PreToolUse": []` を持つ `hooks` を書くか、リポジトリ側の `claude/settings.json` から
@@ -305,29 +327,58 @@ statusLine が描画のたびに呼ばれても書き込みが肥大しない。
 **Claude Code はユーザーレベルの `~/.claude/settings.local.json` を読み取りません。**
 （`--setting-sources` の `local` はプロジェクトレベルの `.claude/settings.local.json` を指します。）
 
-代わりに `claude/settings.machine.json` を使います。deploy.sh がベース設定とマージして
-`~/.claude/settings.json` を生成します。
+代わりに `settings.machine.json` を使います。実体は
+`${XDG_DATA_HOME:-$HOME/.local/share}/dotfiles/settings.machine.json`
+という**世代を経由しない固定パス**（`current` や `generations/` と同じ階層）にあり、
+`~/.claude/settings.machine.json` はそこへの symlink です。deploy.sh がこれをベース設定と
+マージして `~/.claude/settings.json` を生成します。
+
+**settings.json のベース設定や CLAUDE.md と違い、machine 設定は世代を経由しない実パスから
+直接読まれる。** そのため、`~/.claude/settings.machine.json`（またはその実体）を編集した後は、
+単体の `claude/deploy.sh`（`current` さえあれば動く）でも `./deploy-all.sh` でも、
+どちらでも変更が反映される。
 
 ### 4.1 初回セットアップ
 
+初回 deploy 時に固定パスの実体が無ければ、deploy が自動的に空の `{}` を作成します。
+最初から内容を入れておきたい場合は、deploy 前に手動で固定パスへ作成してください:
+
 ```bash
-cd ~/.dotfiles/claude
+mkdir -p "${XDG_DATA_HOME:-$HOME/.local/share}/dotfiles"
+vim "${XDG_DATA_HOME:-$HOME/.local/share}/dotfiles/settings.machine.json"
+```
 
-# テンプレートから settings.machine.json を作成
-cp settings.machine.json.example settings.machine.json
+`settings.machine.json.example` は**内容を確認するための参照用サンプルであり、
+丸ごとコピーしてはいけません。** 中身は `"allow": ["Bash", "Read", "Edit", "WebFetch", ...]`
+という無条件の全許可と、存在しないパス（`/path/to/your/hook.sh`）を指す壊れた
+`SessionStart` フックです。この傘（計画書 [DOC-2609121700](../docs/planning/DOC-2609121700_autopilot-permissions_計画.md)
+背景3-I）が締め直した権限をこれで上書きすると、孫1のガードフックが `allow` を返しても
+無条件 `Bash` の `allow` が並び立ってしまい、権限ポリシーが実質的に無効化されます。
+固定パスはワークツリーをまたいで共有され `uninstall.sh` でも消えないため、一度ここに
+全許可が入ると以前より気づきにくく消えにくくなります。実際に必要な項目（自分の
+`additionalDirectories` や Herdr の `hooks.SessionStart` など）だけを、パスを自分の
+環境に合わせて書き換えたうえで手で書き写してください。
 
-# 自分の環境に合わせて編集
-vim settings.machine.json
+内容を書いたら、デプロイを実行します（ベース + machine をマージして
+`~/.claude/settings.json` を生成）:
 
-# デプロイ実行(ベース + machine をマージして ~/.claude/settings.json を生成)
-# 単体の ./deploy.sh ではなく、リポジトリルートから ./deploy-all.sh を実行すること。
-# 単体実行は配布実体(current)経由でしか settings.machine.json を読まないため、
-# 作業ツリー側で今編集した内容を拾わない(ルート AGENTS.md「デプロイの仕組み」節参照)。
+```bash
 cd ~/.dotfiles
 ./deploy-all.sh --only claude
 ```
 
-`settings.machine.json` は `.gitignore` で除外されているため、commit されません。
+すでに `~/.claude/settings.machine.json` が symlink として存在する場合は、それを直接
+編集して構いません（固定パスの実体を編集するのと同じことです）:
+
+```bash
+vim ~/.claude/settings.machine.json
+cd ~/.dotfiles && ./deploy-all.sh --only claude
+```
+
+固定パスの実体は `.gitignore` で除外されている旧パス（`claude/settings.machine.json`）とは
+別物で、そもそもリポジトリの外（`$XDG_DATA_HOME` 配下）にあるため commit されません。
+旧パスにファイルが残っている場合は、次の deploy で自動的に固定パスへ移行されます
+（§7「移行手順 — settings.machine.json の固定パス化」参照）。
 
 ### 4.2 `permissions.allow` の追加
 
@@ -416,9 +467,9 @@ cd ~/.dotfiles
 
 ### 4.7 設定の反映確認
 
-`settings.machine.json` を編集した後は、再デプロイで反映されます。**単体の `claude/deploy.sh`
-ではなく `./deploy-all.sh` を使うこと**（単体実行は配布実体経由でしか読まないため、
-作業ツリー側の編集を拾わない）:
+`settings.machine.json`（固定パスの実体、または `~/.claude/settings.machine.json` symlink
+経由）を編集した後は、再デプロイで反映されます。固定パスは世代を経由せず直接読まれるため、
+単体の `claude/deploy.sh`（`current` が既にある環境）でも `./deploy-all.sh` でも構いません:
 
 ```bash
 cd ~/.dotfiles
@@ -464,9 +515,8 @@ vim ~/.dotfiles/claude/CLAUDE.md   # 即座に ~/.claude/CLAUDE.md に反映さ�
 
 Claude Code は起動時に設定を読み込みます。
 
-- **マシン固有の設定を追加・変更する** → `claude/settings.machine.json` を編集して再デプロイ
-  （単体の `claude/deploy.sh` ではなく `./deploy-all.sh` を使うこと。単体実行は配布実体
-  経由でしか読まないため、今編集した内容を拾わない）:
+- **マシン固有の設定を追加・変更する** → `~/.claude/settings.machine.json`（固定パスへの
+  symlink）を編集して再デプロイ:
   ```bash
   cd ~/.dotfiles && ./deploy-all.sh --only claude
   ```
@@ -475,13 +525,19 @@ Claude Code は起動時に設定を読み込みます。
 
 ### `settings.machine.json` の変更が反映されない
 
-`settings.machine.json` を編集した後は、**必ず `./deploy-all.sh` で再デプロイ**してください。
-単体の `claude/deploy.sh` では配布実体（`current`）経由でしか読まないため、
-今編集した `settings.machine.json` の内容を拾いません。
+`settings.machine.json` は世代を経由しない固定パスから直接読まれるため、単体の
+`claude/deploy.sh` でも `./deploy-all.sh` でも編集内容は拾われます。それでも反映されない
+場合は、症状に応じて次を確認してください:
 
 ```bash
 cd ~/.dotfiles && ./deploy-all.sh --only claude
 ```
+
+- 固定パスとソースツリー（`claude/settings.machine.json`。旧パス）の**両方**にファイルが
+  あり、内容が異なる場合は deploy がエラーで停止します（§7参照）。deploy のログに
+  `Both ... exist with DIFFERENT content` が出ていないか確認してください
+- 編集した先が `~/.claude/settings.machine.json` の symlink 先（固定パス）と一致しているか
+  `readlink ~/.claude/settings.machine.json` で確認してください
 
 **`permissions.allow` の行を削除した場合はこれに当てはまらない。** 削除は再デプロイしても
 反映されない（§3.2.1「保全は一方通行」参照）。`allow` を取り消したいときは
@@ -520,7 +576,7 @@ sudo apt install python3
 ### `settings.machine.json` が JSON として invalid
 
 ```bash
-python3 -m json.tool claude/settings.machine.json
+python3 -m json.tool ~/.claude/settings.machine.json
 ```
 
 エラーが出たら JSON の構文を修正してください。
@@ -545,25 +601,45 @@ ls -la ~/.claude/CLAUDE.md
 設計3）と、孫1（git-guard フック。ADR
 [DOC-2609121719](../docs/adr/DOC-2609121719_git-operation-permission-policy.md)）が
 両方マージされたあと、実際に deploy する前に**必ず**次を行うこと。
-どちらも `claude/settings.machine.json` は git 非追跡のマシン固有ファイルなので、
+`settings.machine.json` は git 非追跡のマシン固有ファイルなので、
 AI はこのファイルを編集しない（PR の diff に乗らない変更を人間が知らないうちに
 受け取ることになるため）。**この節はその手順を文書化するだけで、AI 自身は実行しない。**
 
-1. **`claude/settings.machine.json` の `permissions.deny` から
-   `"Bash(git merge *)"` と `"Bash(git merge --*)"` の2行を削除する。**
-   この2行を消さないと、新しい git-guard フックが `allow` を返しても
+1. **`settings.machine.json`（`~/.claude/settings.machine.json` の symlink先。固定パスの
+   実体）の `permissions.deny` から `"Bash(git merge *)"` と `"Bash(git merge --*)"` の
+   2行を削除する。** この2行を消さないと、新しい git-guard フックが `allow` を返しても
    `deny` が勝つため（優先順位は `deny > ask > allow`）、`git merge` が
    保護ブランチ以外でも一切実行できないままになる（計画書 背景3-B参照）
-2. `settings.machine.json` は git 非追跡でワークツリーごとに独立している。
-   **`settings.machine.json` を持つワークツリー（通常は main ワークツリー）から
-   deploy すること。** 傘や孫のワークツリーには存在しないため、そこから
-   deploy すると machine.json ごと消えた生成物になる（`hooks` の Herdr
-   `SessionStart` などが一時的に失われる。§2の「⚠️ 重要」参照）
-3. 現在 `~/.claude/settings.json` に**手で**入っている `"Bash(git merge *)"`
+2. 現在 `~/.claude/settings.json` に**手で**入っている `"Bash(git merge *)"`
    （`permissions.ask`）は、この孫2の保全対象（`allow` のみ）に含まれないため
    **何もしなくても次の deploy で自然に消える**。これは意図した挙動であり
    （背景3-Aで指摘された「手で足された `ask` が永久に固定化する」状態を
    壊すのが目的）、復元する必要はない
 
-上記1・2を行わずに deploy すると、`git merge` が保護ブランチ以外でも
+上記1を行わずに deploy すると、`git merge` が保護ブランチ以外でも
 `deny` によって完全に不能になる（時限爆弾。背景3-B参照）。
+
+> 背景3-Bにはもう一つの側面（「machine.json を持たないワークツリーから deploy すると
+> machine.json ごと消える」）があったが、これは孫6（§7参照）で実体を固定パス化した
+> ことで解消済み。ワークツリーを選んで deploy する必要はもう無い。
+
+## 7. 移行手順 — settings.machine.json の固定パス化（孫6）
+
+孫6（計画書 [DOC-2609121700](../docs/planning/DOC-2609121700_autopilot-permissions_計画.md)
+設計6）で、`settings.machine.json` の実体は git 非追跡のソースツリー相対パス
+（`claude/settings.machine.json`）から、`${XDG_DATA_HOME:-$HOME/.local/share}/dotfiles/settings.machine.json`
+という世代を経由しない固定パスへ移った。
+
+- **旧パスにファイルがあり、固定パスに何も無い場合**: `claude/deploy.sh` が deploy 時に
+  自動的に移行する（`mv` して、何をどこへ移したかログに出す）。人間が事前に何かする
+  必要はない
+- **旧パスと固定パスの両方にファイルがあり、内容が同じ場合**: deploy は警告を出すだけで
+  続行する。旧パスのファイルは以後読まれないので、削除して構わない
+- **旧パスと固定パスの両方にファイルがあり、内容が異なる場合**: **deploy はどちらを
+  採用するか自動で決めず、エラーで停止する。** 該当するワークツリーの
+  `claude/settings.machine.json`（旧パス）を、固定パスの内容を見比べたうえで
+  手動で削除するかマージしてから再デプロイすること
+- 移行後は `~/.claude/settings.machine.json` が固定パスへの symlink になる。以後の編集は
+  この symlink（または固定パス自体）に対して行う
+- `uninstall.sh` はこの symlink だけを撤去し、固定パスの実体には触れない
+  （人間のマシン設定であり、この repo の配布物ではないため）

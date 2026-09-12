@@ -58,7 +58,8 @@ symlink_backup "$DOTFILES_DEPLOY_SRC/claude/hooks/git-guard.sh" "$CLAUDE_DIR/hoo
 # symlink_backup (used for CLAUDE.md above) always links through
 # DOTFILES_DEPLOY_SRC regardless of DRY_RUN — its DRY-RUN branch only prints
 # a planned `ln -fs`, so the source never needs to exist yet. But the code
-# below branches on "-f $MACHINE_SRC" to decide what to do, and in DRY_RUN
+# below (settings.json generation, and the settings.machine.json migration
+# check) branches on file existence to decide what to do, and in DRY_RUN
 # mode DOTFILES_DEPLOY_SRC/claude may not exist yet (current not switched,
 # or create_generation's own DRY-RUN branch never actually copies anything)
 # — so that existence check would silently see "nothing to merge" even when
@@ -71,11 +72,93 @@ else
   CLAUDE_SRC_DIR="$DOTFILES_DEPLOY_SRC/claude"
 fi
 
+# --- settings.machine.json: fixed-path entity + migration (design 6, DOC-2609121700) ---
+# The entity lives at a fixed path under the canonical prefix — a sibling of
+# generations/ and current, NOT inside a generation (dotfiles_machine_json_path,
+# shared/helpers.sh) — so it is shared across every worktree that deploys on
+# this machine and never lost by deploying from a worktree that happens to
+# have no claude/settings.machine.json of its own (the reason design 6's
+# option A — routing it through the generation as a "state file" — was
+# rejected).
+# ~/.claude/settings.machine.json is a symlink to this fixed path, matching
+# the settings.json it sits next to and making it discoverable (背景3-I).
+FIXED_MACHINE_PATH="$(dotfiles_machine_json_path)"
+# Deliberately SCRIPT_DIR, not CLAUDE_SRC_DIR: settings.machine.json is
+# git-untracked, per-worktree state, so "the old path" can only ever mean
+# the actual invoking source tree (where a human would have left it), never
+# a generation's cp -a snapshot of that tree. Using CLAUDE_SRC_DIR here in a
+# real (non-DRY_RUN) run — $DOTFILES_DEPLOY_SRC/claude, the generation
+# create_generation just built — would only ever see/move that generation's
+# own frozen copy: the `mv` below would "migrate" it away without touching
+# the real file still sitting in the source tree, so the very next deploy
+# would cp -a it into a fresh generation and hit this migration again,
+# forever colliding with the now-populated fixed path (found in review of
+# this PR — a real run reproduces it in two deploys). SCRIPT_DIR is always
+# the real source tree deploy.sh itself was invoked from, independent of
+# DRY_RUN or which generation `current` points at, unlike CLAUDE_SRC_DIR
+# (used below only for the tracked settings.json base, which intentionally
+# does follow the generation).
+OLD_MACHINE_SRC="$SCRIPT_DIR/settings.machine.json"
+
+if [ -f "$OLD_MACHINE_SRC" ]; then
+  if [ -f "$FIXED_MACHINE_PATH" ]; then
+    if cmp -s "$OLD_MACHINE_SRC" "$FIXED_MACHINE_PATH"; then
+      log_warn "$OLD_MACHINE_SRC still exists but is superseded by $FIXED_MACHINE_PATH (identical content) — safe to remove; only the fixed path is read from now on."
+    else
+      log_error "Both $OLD_MACHINE_SRC and $FIXED_MACHINE_PATH exist with DIFFERENT content."
+      log_error "Refusing to guess which one wins. Remove or merge one of them by hand, then re-run deploy."
+      if [ "${DRY_RUN:-0}" -eq 0 ]; then
+        FAIL=1
+      fi
+    fi
+  else
+    if [ "${DRY_RUN:-0}" -eq 1 ]; then
+      log_info "[DRY-RUN] Would migrate settings.machine.json: $OLD_MACHINE_SRC -> $FIXED_MACHINE_PATH"
+    else
+      mkdir -p "$(dirname "$FIXED_MACHINE_PATH")" || {
+        log_error "Failed to create directory: $(dirname "$FIXED_MACHINE_PATH")"
+        FAIL=1
+      }
+      if [ "$FAIL" -eq 0 ]; then
+        if mv "$OLD_MACHINE_SRC" "$FIXED_MACHINE_PATH"; then
+          log_ok "Migrated claude/settings.machine.json -> $FIXED_MACHINE_PATH (machine settings no longer live in the source tree)"
+        else
+          log_error "Failed to migrate settings.machine.json to $FIXED_MACHINE_PATH"
+          FAIL=1
+        fi
+      fi
+    fi
+  fi
+fi
+
+# --- Symlink settings.machine.json to the fixed-path entity ---
+symlink_backup "$FIXED_MACHINE_PATH" "$CLAUDE_DIR/settings.machine.json" || FAIL=1
+
+# --- Create an empty entity if none exists yet (never in --dry-run) ---
+if [ "$FAIL" -eq 0 ] && [ ! -f "$FIXED_MACHINE_PATH" ]; then
+  if [ "${DRY_RUN:-0}" -eq 1 ]; then
+    log_info "[DRY-RUN] Would create empty machine settings: $FIXED_MACHINE_PATH"
+  else
+    mkdir -p "$(dirname "$FIXED_MACHINE_PATH")" || {
+      log_error "Failed to create directory: $(dirname "$FIXED_MACHINE_PATH")"
+      FAIL=1
+    }
+    if [ "$FAIL" -eq 0 ]; then
+      printf '{}\n' >"$FIXED_MACHINE_PATH" || {
+        log_error "Failed to create empty machine settings: $FIXED_MACHINE_PATH"
+        FAIL=1
+      }
+      [ "$FAIL" -eq 0 ] && log_ok "Created empty machine settings: $FIXED_MACHINE_PATH"
+    fi
+  fi
+fi
+
 # --- Generate settings.json (NOT a symlink) ---
 # Claude Code does NOT read ~/.claude/settings.local.json at the user level
 # (only project-level .claude/settings.local.json is supported).
-# Instead, machine-specific overrides go in claude/settings.machine.json
-# (not tracked in git — copy from settings.machine.json.example).
+# Instead, machine-specific overrides go in settings.machine.json, at the
+# fixed path above (not tracked in git — see claude/settings.machine.json.example
+# for a reference sample; it is never copied there automatically).
 # deploy.sh merges three inputs into ~/.claude/settings.json: base settings
 # → machine overrides (if any) → permissions.allow already present in the
 # generated file being replaced. The third input is how allow entries
@@ -85,7 +168,18 @@ fi
 # entry can never outlive a deploy and calcify (see 背景3-A in the same doc).
 
 SETTINGS_SRC="$CLAUDE_SRC_DIR/settings.json"
-MACHINE_SRC="$CLAUDE_SRC_DIR/settings.machine.json"
+# In a real run FIXED_MACHINE_PATH is always what gets merged (migration, if
+# any, has already happened above). In --dry-run, migration never touches
+# the filesystem, so when the fixed path doesn't exist yet but a pending
+# migration was detected, preview against the not-yet-migrated old path
+# instead — otherwise a dry-run before the very first deploy (current does
+# not exist yet) would wrongly report "nothing to merge" for a
+# settings.machine.json that a real run would in fact pick up.
+if [ "${DRY_RUN:-0}" -eq 1 ] && [ ! -f "$FIXED_MACHINE_PATH" ] && [ -f "$OLD_MACHINE_SRC" ]; then
+  MACHINE_SRC="$OLD_MACHINE_SRC"
+else
+  MACHINE_SRC="$FIXED_MACHINE_PATH"
+fi
 SETTINGS_DST="$CLAUDE_DIR/settings.json"
 
 # merge_claude_settings <output> <base> <machine-or-empty> <existing-or-empty>
@@ -161,7 +255,7 @@ command -v python3 >/dev/null 2>&1 || HAVE_PYTHON3=0
 
 if [ -f "$MACHINE_SRC" ] && [ "$HAVE_PYTHON3" -eq 0 ]; then
   log_error "python3 is required to merge settings.machine.json."
-  log_error "Install python3, or remove claude/settings.machine.json to deploy base settings only."
+  log_error "Install python3, or remove $MACHINE_SRC to deploy base settings only."
   FAIL=1
 elif [ "$HAVE_PYTHON3" -eq 1 ]; then
   MACHINE_ARG=""
@@ -292,8 +386,8 @@ else
             log_error "Failed to back up existing settings.json"
             FAIL=1
           }
-          log_warn "To preserve custom settings across deploys, create claude/settings.machine.json"
-          log_warn "from claude/settings.machine.json.example and add your overrides there."
+          log_warn "To preserve custom settings across deploys, edit $FIXED_MACHINE_PATH"
+          log_warn "(see claude/settings.machine.json.example for a reference sample)."
         fi
       fi
       if [ "$FAIL" -eq 0 ]; then
@@ -329,5 +423,6 @@ if [ "$FAIL" -ne 0 ]; then
 fi
 
 log_ok "claude deployment complete."
-log_info "Tip: Copy claude/settings.machine.json.example → claude/settings.machine.json"
-log_info "     and customize it for this machine. It's gitignored — never committed."
+log_info "Tip: Edit $FIXED_MACHINE_PATH (symlinked as ~/.claude/settings.machine.json)"
+log_info "     to customize it for this machine. claude/settings.machine.json.example is a"
+log_info "     reference sample only — it is never copied there automatically."
