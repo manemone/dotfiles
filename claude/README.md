@@ -15,7 +15,7 @@ Claude Code の設定ファイル群。`~/.claude/` にデプロイして使う�
 | Tool | Why | Install |
 |---|---|---|
 | **Claude Code** CLI | 設定ファイルの読み取り元 | `npm install -g @anthropic-ai/claude-code` |
-| **Python 3** | `settings.machine.json` とのマージ、および学習済み `permissions.allow` の保全用（任意。無ければ両方スキップされ、ベース設定のみで生成される） | `mise use python@latest` |
+| **Python 3** | `settings.machine.json` とのマージ、および学習済み `permissions.allow` の保全用。**`settings.machine.json` が無い環境では任意**（無ければ保全だけがスキップされ、ベース設定のみで生成される）。**`settings.machine.json` がある環境では必須**（無いと deploy が失敗する） | `mise use python@latest` |
 
 ## 2. Quick Start
 
@@ -126,11 +126,25 @@ Claude Code が対話中に「今後確認しない」で `~/.claude/settings.js
 
 既存の生成物が無い・壊れている・`permissions.allow` を持たない場合は、
 何も保全せず従来どおりベース（+machine）だけで生成する（deploy は失敗しない）。
-`python3` が無い環境では保全そのものがスキップされ、警告を出したうえでベース設定を
-そのままコピーする（`settings.machine.json` を使わない限り `python3` は必須ではない）。
+`settings.machine.json` が無ければ `python3` が無くても保全をスキップして動作するが、
+`settings.machine.json` がある環境では `python3` は必須である（§1参照）。
 
 `--dry-run` では、何件の `allow` を保全する予定かをログに出す
 （実ファイルには一切書き込まない）。
+
+**保全は一方通行 — `allow` の取り消しは deploy では反映されない。** この仕組みは
+「既存生成物の `allow` を無条件に次の生成物へ足し戻す」ものなので、**一度
+`~/.claude/settings.json` の `permissions.allow` に入った項目は、以後どのような
+deploy を実行しても消えない。** これは学習した allow を残したい場合は意図どおりだが、
+`settings.machine.json` 由来の `allow` にも等しく効く。たとえば
+`settings.machine.json.example` や §4.2 が例示する `"Bash"`（無条件許可）を一度
+deploy した後、`settings.machine.json` からその行を削除して再デプロイしても、
+生成物の `allow` には `"Bash"` が残り続ける。
+
+取り消したい場合は、`~/.claude/settings.json` を直接編集する（または Claude Code の
+`/permissions` から削除する）こと。`settings.machine.json` の行を消す・
+`settings.machine.json` を削除する・`.backup` から復元する、のいずれも
+**削除の取り消しにはならない**（§4.2・§4.7・§5「デプロイで既存設定が消えた」も参照）。
 
 ### 3.3 Skills
 
@@ -314,6 +328,11 @@ cd ~/.dotfiles
 - `permissions` 内のリストキー（`allow`, `deny`, `ask`）は**結合**（重複除去、machine 側の項目が末尾に追加）
 - それ以外のキーは machine 側の値で上書き
 
+> **⚠️ ここで足した `allow` は、後で `settings.machine.json` から行を削除しても取り消せない。**
+> `~/.claude/settings.json` の生成物側に一度入った `allow` は deploy 越しに保全され続ける
+> （§3.2.1「保全は一方通行」参照）。取り消すには `~/.claude/settings.json` を直接編集する
+> （または `/permissions` から削除する）必要がある。
+
 ### 4.3 `hooks` の追加
 
 セッション開始時のフックを追加する例:
@@ -383,6 +402,11 @@ cd ~/.dotfiles
 
 Claude Code は起動時に設定を読み込むため、設定変更後は Claude Code を再起動してください。
 
+**例外: `permissions.allow` の削除は反映されない。** `settings.machine.json` から
+`allow` の行を削除して再デプロイしても、生成物側に既に入っている `allow` は消えない
+（§3.2.1「保全は一方通行」参照）。反映されるのは `allow` の**追加**と、`allow` 以外の
+キーの変更・削除だけである。
+
 ### 4.8 CLAUDE.md の編集
 
 既定（世代モード）では、`~/.claude/CLAUDE.md` は配布実体（世代ディレクトリ）内のコピーへの
@@ -434,6 +458,10 @@ Claude Code は起動時に設定を読み込みます。
 cd ~/.dotfiles && ./deploy-all.sh --only claude
 ```
 
+**`permissions.allow` の行を削除した場合はこれに当てはまらない。** 削除は再デプロイしても
+反映されない（§3.2.1「保全は一方通行」参照）。`allow` を取り消したいときは
+`~/.claude/settings.json` を直接編集すること。
+
 ### デプロイで既存設定が消えた
 
 deploy.sh は既存の `~/.claude/settings.json` を `.backup` 付きで退避します。
@@ -446,6 +474,10 @@ ls -la ~/.claude/settings.json.backup*
 # バックアップから復元（必要に応じて）
 cp ~/.claude/settings.json.backup ~/.claude/settings.json
 ```
+
+**このバックアップから `permissions.allow` を丸ごと復元すると、消したかったはずの
+`allow` エントリも一緒に恒久化される。** バックアップは「消えた設定を探す」ためだけに使い、
+`allow` は必要な項目だけを `~/.claude/settings.json` へ個別に転記すること。
 
 ### `python3` がないと言われる
 

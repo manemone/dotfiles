@@ -201,13 +201,23 @@ elif [ "$HAVE_PYTHON3" -eq 1 ]; then
       fi
       # Read-only preview: writes to a scratch temp file (never $SETTINGS_DST)
       # purely to compute the count, then discards it.
-      _dry_tmp="$(mktemp)"
-      _preserved_count="$(merge_claude_settings "$_dry_tmp" "$SETTINGS_SRC" "$MACHINE_ARG" "$EXISTING_ARG" 2>/dev/null)"
-      rm -f "$_dry_tmp"
-      case "$_preserved_count" in
-        '' | *[!0-9]*) _preserved_count=0 ;;
-      esac
-      log_info "[DRY-RUN] Would preserve $_preserved_count learned permissions.allow entries from the existing settings.json"
+      _dry_tmp="$(mktemp "${TMPDIR:-/tmp}/claude-settings-preview.XXXXXX")" || {
+        log_warn "Could not create a scratch file to preview allow preservation (mktemp failed) — skipping the count."
+        _dry_tmp=""
+      }
+      if [ -n "$_dry_tmp" ]; then
+        _preserved_count="$(merge_claude_settings "$_dry_tmp" "$SETTINGS_SRC" "$MACHINE_ARG" "$EXISTING_ARG")"
+        _preview_rc=$?
+        rm -f "$_dry_tmp"
+        if [ $_preview_rc -ne 0 ]; then
+          log_warn "Could not compute the allow-preservation preview (merge failed) — check settings.machine.json / the existing settings.json are valid JSON."
+        else
+          case "$_preserved_count" in
+            '' | *[!0-9]*) _preserved_count=0 ;;
+          esac
+          log_info "[DRY-RUN] Would preserve $_preserved_count learned permissions.allow entries from the existing settings.json"
+        fi
+      fi
     else
       MERGE_TMP="$SETTINGS_DST.tmp.$$"
       _preserved_count="$(merge_claude_settings "$MERGE_TMP" "$SETTINGS_SRC" "$MACHINE_ARG" "$EXISTING_ARG")"
