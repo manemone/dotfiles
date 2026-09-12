@@ -14,7 +14,18 @@
 #                  対象ブランチが保護ブランチなら deny。他は --force-with-lease
 #                  を allow、裸の --force/-f は ask
 #   git merge    : 現在のブランチ（マージ先）が保護ブランチなら deny、他は allow
+#   chmod        : -R/--recursive 無し・モードが実行ビット付与のみ（+x 等の
+#                  シンボリック指定。数値モードは対象外）・対象パスが全て
+#                  現在の git ワークツリー内かつ .git 配下でなければ allow。
+#                  1つでも満たさなければ ask（deny ではない）
+#   rm -r/-rf/-fr等: 対象パスが全て一時ディレクトリ配下（このセッションの
+#                  scratchpad、または $TMPDIR/`/tmp` 自身より深い場所）に
+#                  解決されれば allow。ワークツリー内は対象外（ask のまま）
 #   それ以外     : 何も言わず終了（既存の permissions.ask に委ねる）
+#
+# chmod/rm はいずれも「危険かどうかは対象がどこにあるかで決まる」ため、
+# git 操作と同じ理由でここで判定する（背景3-G）。判定できなければ ask に
+# 倒すのは git/gh の arm と同じ fail-safe（allow に倒すことは絶対にしない）。
 #
 # このフックは全 Bash 呼び出しで走るため、対象外のコマンドは JSON を
 # パースする前の文字列一致で弾く（速い経路）。
@@ -30,7 +41,7 @@ INPUT="$(cat)"
 # のようにグローバルオプションが挟まるケースを取りこぼして「何も言わない」
 # （本来は ask にすべき判定不能ケース）に落ちるのを防ぐため。
 case "$INPUT" in
-  *"git"*"merge"* | *"git"*"push"* | *"gh"*"pr"*"merge"*) ;;
+  *"git"*"merge"* | *"git"*"push"* | *"gh"*"pr"*"merge"* | *"chmod"* | *"rm"*) ;;
   *) exit 0 ;;
 esac
 
@@ -59,6 +70,22 @@ VALUE_TAKING_SHORT = {"-o"}
 VALUE_TAKING_LONG = ("--push-option", "--repo", "--receive-pack")
 
 FORCE_LEASE_RE = re.compile(r"^--force-with-lease(=.*)?$")
+
+# chmod: allow してよいのは、モードが実行ビット付与のみのシンボリック指定
+# （+x, u+x, a+x, ug+x 等）のときだけ。数値モード（755 等）や他の操作
+# （u+s, o+w, u-x 等）、複合指定（u+x,g-w）は対象外（ADR §背景3-G参照）。
+CHMOD_MODE_RE = re.compile(r"^[ugoa]*\+x$")
+CHMOD_RECURSIVE_FLAGS = {"-R", "--recursive"}
+# 出力の詳細さだけを変える無害なフラグ。これ以外の "-" 始まりトークンは
+# 未知として ask に倒す（--reference=RFILE 等、意味が変わるものを含む）。
+CHMOD_SAFE_FLAGS = {"-c", "--changes", "-v", "--verbose", "-f", "--silent", "--quiet"}
+
+# rm -r: allow してよいのは、対象パスが全て一時ディレクトリ配下に解決
+# されるときだけ（ADR §背景3-G参照。ワークツリー内は対象外）。
+RM_RECURSIVE_SHORT_CHARS = {"r", "R"}
+RM_KNOWN_SHORT_CHARS = {"r", "R", "f", "v", "i"}
+RM_SAFE_LONG_FLAGS = {"--force", "--verbose", "--interactive"}
+RM_RECURSIVE_LONG_FLAGS = {"--recursive"}
 
 
 def emit(decision, reason=None):
@@ -121,6 +148,61 @@ def gh_base_ref(target, cwd):
     return base or None
 
 
+def worktree_root(cwd):
+    proc = run(["git", "rev-parse", "--show-toplevel"], cwd, GIT_TIMEOUT)
+    if proc is None or proc.returncode != 0:
+        return None
+    root = proc.stdout.strip()
+    if not root:
+        return None
+    return os.path.realpath(root)
+
+
+def resolve_path(token, cwd):
+    # シンボリックリンクと ".." を解決した絶対パスを返す。存在しないパス
+    # でも lexical に正規化される（chmod/rm の対象は通常存在するファイルだが、
+    # 解決に失敗する場合のみ None を返し呼び出し側で ask に倒す）。
+    try:
+        base = cwd or os.getcwd()
+        path = token if os.path.isabs(token) else os.path.join(base, token)
+        return os.path.realpath(path)
+    except Exception:
+        return None
+
+
+def is_within(path, base):
+    return path == base or path.startswith(base + os.sep)
+
+
+def is_temp_allowed(resolved):
+    # このセッションの scratchpad（/tmp/claude-<id>/...）。"/tmp" 自体が
+    # シンボリックリンク（macOS の /tmp -> /private/tmp 等）でも一致するよう
+    # realpath したうえで比較する。
+    tmp_root = os.path.realpath("/tmp")
+    if re.match(re.escape(tmp_root) + r"/claude-[^/]+/", resolved):
+        return True
+    # $TMPDIR（未設定なら /tmp）自身より深い場所（mktemp -d が作る
+    # /tmp/tmp.XXXXXXXXXX を含む）。$TMPDIR 自身は allow にしない。
+    tmpdir = os.environ.get("TMPDIR") or "/tmp"
+    tmpdir_real = os.path.realpath(tmpdir)
+    if resolved == tmpdir_real:
+        return False
+    if resolved.startswith(tmpdir_real + os.sep):
+        return True
+    return False
+
+
+def find_prog(tokens, prog):
+    # tokens 内で prog（"chmod" または "rm"）が最初に現れる位置を返す。
+    # git/gh の subcommand_of と同じ理由（環境変数プレフィックス等を
+    # 取りこぼさない）で、位置0固定ではなく全体を走査する。見つからない
+    # 場合は None（このプログラムへの呼び出しではない）。
+    for i, tok in enumerate(tokens):
+        if tok == prog:
+            return i
+    return None
+
+
 def tokenize(command):
     try:
         return shlex.split(command)
@@ -153,6 +235,18 @@ def has_chain(command):
     # 複数コマンドが && / ; / | で連結されている場合、対象を一意に特定
     # できないため ask に倒す（fail-safe）。
     return bool(re.search(r"&&|;|\|", strip_quoted(command)))
+
+
+def mentions_guarded_command(command):
+    # トークン化不能・複数コマンド連結のとき、このフックが担保している
+    # コマンド（git/gh/chmod/rm）に言及している可能性があれば ask に倒す。
+    # 言及が無ければ何も言わず既存の permissions に委ねる。
+    return bool(
+        re.search(r"\bgit\b", command)
+        or re.search(r"\bgh\b", command)
+        or re.search(r"\bchmod\b", command)
+        or re.search(r"\brm\b", command)
+    )
 
 
 def subcommand_of(tokens, prog):
@@ -329,6 +423,130 @@ def handle_git_merge(command, cwd):
         allow()
 
 
+def handle_chmod(command, cwd):
+    tokens = tokenize(command)
+    if tokens is None:
+        ask("git-guard: chmod のコマンドを解析できませんでした")
+        return
+    idx = find_prog(tokens, "chmod")
+    if idx is None:
+        say_nothing()
+        return
+    rest = tokens[idx + 1 :]
+
+    mode = None
+    paths = []
+    for tok in rest:
+        if tok in CHMOD_RECURSIVE_FLAGS:
+            ask("git-guard: chmod -R/--recursive は対象範囲が広いため確認してください")
+            return
+        if tok in CHMOD_SAFE_FLAGS:
+            continue
+        if tok.startswith("-"):
+            ask(f"git-guard: chmod の未知のオプション '{tok}' のため安全に判定できません")
+            return
+        if mode is None:
+            mode = tok
+            continue
+        paths.append(tok)
+
+    if mode is None or not paths:
+        ask("git-guard: chmod のモード/対象を特定できませんでした")
+        return
+    if not CHMOD_MODE_RE.match(mode):
+        ask(
+            f"git-guard: chmod のモード '{mode}' は実行ビット付与（+x 等）ではないため"
+            "確認してください"
+        )
+        return
+
+    root = worktree_root(cwd)
+    if root is None:
+        ask("git-guard: git ワークツリーのルートを解決できませんでした")
+        return
+    git_meta = os.path.realpath(os.path.join(root, ".git"))
+
+    for p in paths:
+        resolved = resolve_path(p, cwd)
+        if resolved is None:
+            ask(f"git-guard: chmod の対象 '{p}' を解決できませんでした")
+            return
+        if not is_within(resolved, root):
+            ask(f"git-guard: chmod の対象 '{p}' が git ワークツリー外です")
+            return
+        if resolved == git_meta or is_within(resolved, git_meta):
+            ask(f"git-guard: chmod の対象 '{p}' が .git 配下です")
+            return
+
+    allow()
+
+
+def handle_rm(command, cwd):
+    tokens = tokenize(command)
+    if tokens is None:
+        ask("git-guard: rm のコマンドを解析できませんでした")
+        return
+    idx = find_prog(tokens, "rm")
+    if idx is None:
+        say_nothing()
+        return
+    rest = tokens[idx + 1 :]
+
+    recursive = False
+    paths = []
+    for tok in rest:
+        if tok == "--":
+            continue
+        if tok in RM_RECURSIVE_LONG_FLAGS:
+            recursive = True
+            continue
+        if tok in RM_SAFE_LONG_FLAGS:
+            continue
+        if tok.startswith("--"):
+            ask(f"git-guard: rm の未知のオプション '{tok}' のため安全に判定できません")
+            return
+        if tok.startswith("-") and len(tok) > 1:
+            chars = set(tok[1:])
+            if not chars <= RM_KNOWN_SHORT_CHARS:
+                ask(f"git-guard: rm の未知のオプション '{tok}' のため安全に判定できません")
+                return
+            if chars & RM_RECURSIVE_SHORT_CHARS:
+                recursive = True
+            continue
+        paths.append(tok)
+
+    if not recursive:
+        # -r/-R/--recursive の無い rm はこのフックの対象外
+        # （permissions.ask にも rm -r 系のパターンしか無いため元々ここへ来ない）。
+        say_nothing()
+        return
+
+    if not paths:
+        ask("git-guard: rm -r の対象を特定できませんでした")
+        return
+
+    # ワークツリー内は対象外（allow にしない）。通常ワークツリーは /tmp 配下
+    # には無いが、万一 /tmp 配下にチェックアウトされている場合でも
+    # is_temp_allowed() だけでは判定を誤るため、明示的に除外する。
+    # worktree_root が解決できない（git リポジトリ外）場合は、保護すべき
+    # ワークツリーが無いとみなし、この除外は行わない。
+    root = worktree_root(cwd)
+
+    for p in paths:
+        resolved = resolve_path(p, cwd)
+        if resolved is None or not is_temp_allowed(resolved):
+            ask(
+                f"git-guard: rm -r の対象 '{p}' が一時ディレクトリ配下と確認できません"
+                "（ワークツリー内の削除は人間が確認します）"
+            )
+            return
+        if root is not None and is_within(resolved, root):
+            ask(f"git-guard: rm -r の対象 '{p}' は git ワークツリー内です")
+            return
+
+    allow()
+
+
 def main():
     # 標準入力ではなくコマンドライン引数で受け取る: python3 - <json> の
     # ように "-"（スクリプトを stdin から読む指定）と併用する場合、stdin は
@@ -367,14 +585,14 @@ def main():
     # 倒す（allow への誤判定は絶対にしないという fail-safe を優先する）。
     tokens = tokenize(command)
     if tokens is None:
-        if re.search(r"\bgit\b", command) or re.search(r"\bgh\b", command):
+        if mentions_guarded_command(command):
             ask("git-guard: コマンドをトークン化できず安全に判定できません")
         else:
             say_nothing()
         return
 
     if has_chain(command):
-        if re.search(r"\bgit\b", command) or re.search(r"\bgh\b", command):
+        if mentions_guarded_command(command):
             ask("git-guard: 複数コマンドが連結されており対象を一意に特定できません")
         else:
             say_nothing()
@@ -401,6 +619,14 @@ def main():
         if pr_idx + 1 < len(tokens) and tokens[pr_idx + 1] == "merge":
             handle_gh_pr_merge(command, cwd)
             return
+
+    if find_prog(tokens, "chmod") is not None:
+        handle_chmod(command, cwd)
+        return
+
+    if find_prog(tokens, "rm") is not None:
+        handle_rm(command, cwd)
+        return
 
     say_nothing()
 

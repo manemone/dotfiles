@@ -36,10 +36,15 @@ cleanup() {
 trap cleanup EXIT
 
 STUB_DIR="$(mktemp -d)"
+WORKTREE_DIR="$STUB_DIR/worktree"
+mkdir -p "$WORKTREE_DIR/.git" "$WORKTREE_DIR/tests" "$WORKTREE_DIR/claude/hooks" "$STUB_DIR/outside"
+ln -s "$STUB_DIR/outside" "$WORKTREE_DIR/escape-link"
+export GIT_GUARD_TEST_WORKTREE_ROOT="$WORKTREE_DIR"
 
-# git スタブ: `git rev-parse --abbrev-ref HEAD` にのみ応答する。
-# GIT_GUARD_TEST_CURRENT_BRANCH（export 必須。未設定なら "current-branch"）を返す。
-# GIT_GUARD_TEST_GIT_FAIL=1 のときは非ゼロ終了する（現在のブランチ解決失敗を模擬）。
+# git スタブ: `git rev-parse --abbrev-ref HEAD` と `git rev-parse --show-toplevel`
+# に応答する。GIT_GUARD_TEST_CURRENT_BRANCH（export 必須。未設定なら
+# "current-branch"）/ GIT_GUARD_TEST_WORKTREE_ROOT（未設定なら $STUB_DIR/worktree）
+# を返す。GIT_GUARD_TEST_GIT_FAIL=1 のときは非ゼロ終了する（解決失敗を模擬）。
 cat >"$STUB_DIR/git" <<'STUB'
 #!/bin/sh
 if [ "${GIT_GUARD_TEST_GIT_FAIL:-0}" = "1" ]; then
@@ -47,6 +52,13 @@ if [ "${GIT_GUARD_TEST_GIT_FAIL:-0}" = "1" ]; then
 fi
 if [ "$1" = "rev-parse" ] && [ "$2" = "--abbrev-ref" ] && [ "$3" = "HEAD" ]; then
   printf '%s\n' "${GIT_GUARD_TEST_CURRENT_BRANCH:-current-branch}"
+  exit 0
+fi
+if [ "$1" = "rev-parse" ] && [ "$2" = "--show-toplevel" ]; then
+  if [ -z "${GIT_GUARD_TEST_WORKTREE_ROOT:-}" ]; then
+    exit 1
+  fi
+  printf '%s\n' "$GIT_GUARD_TEST_WORKTREE_ROOT"
   exit 0
 fi
 exit 1
@@ -243,6 +255,90 @@ assert_decision \
   "git -C <dir> merge: サブコマンド位置が特定できず ask（allow に倒れない）" \
   "ask" "$(run_hook "git -C /tmp/foo merge" | extract_decision)"
 
+# ── chmod（背景3-G） ────────────────────────────────────────────
+assert_decision \
+  "chmod +x: ワークツリー内の相対パスは allow" \
+  "allow" "$(run_hook "chmod +x tests/foo.sh" "$WORKTREE_DIR" | extract_decision)"
+
+assert_decision \
+  "chmod u+x: シンボリック指定のバリエーションも allow" \
+  "allow" "$(run_hook "chmod u+x claude/hooks/new-hook.sh" "$WORKTREE_DIR" | extract_decision)"
+
+assert_decision \
+  "chmod +x: ワークツリー外の絶対パスは ask（allow に倒れない）" \
+  "ask" "$(run_hook "chmod +x /etc/passwd" "$WORKTREE_DIR" | extract_decision)"
+
+assert_decision \
+  "chmod +x: '..' によるワークツリー脱出は ask（allow に倒れない）" \
+  "ask" "$(run_hook "chmod +x ../escaped.sh" "$WORKTREE_DIR" | extract_decision)"
+
+assert_decision \
+  "chmod +x: シンボリックリンク経由のワークツリー脱出は ask（allow に倒れない）" \
+  "ask" "$(run_hook "chmod +x escape-link/payload.sh" "$WORKTREE_DIR" | extract_decision)"
+
+assert_decision \
+  "chmod +x: .git 配下は ask（allow に倒れない）" \
+  "ask" "$(run_hook "chmod +x .git/hooks/pre-commit" "$WORKTREE_DIR" | extract_decision)"
+
+assert_decision \
+  "chmod -R +x: 再帰指定は ask（allow に倒れない）" \
+  "ask" "$(run_hook "chmod -R +x tests" "$WORKTREE_DIR" | extract_decision)"
+
+assert_decision \
+  "chmod 755: 数値モードは ask（allow に倒れない）" \
+  "ask" "$(run_hook "chmod 755 tests/foo.sh" "$WORKTREE_DIR" | extract_decision)"
+
+assert_decision \
+  "chmod u+x,g-w: 複合指定は ask（allow に倒れない）" \
+  "ask" "$(run_hook "chmod u+x,g-w tests/foo.sh" "$WORKTREE_DIR" | extract_decision)"
+
+assert_decision \
+  "chmod --reference: 未知の意味変更オプションは ask（allow に倒れない）" \
+  "ask" "$(run_hook "chmod --reference=tests/foo.sh tests/bar.sh" "$WORKTREE_DIR" | extract_decision)"
+
+# ── rm -r（背景3-G。mktemp -d の後片付けを通すのが目的） ──────────
+assert_decision \
+  "rm -rf: このセッションの scratchpad 配下は allow" \
+  "allow" "$(run_hook 'rm -rf /tmp/claude-1000/some-session/scratchpad' "$WORKTREE_DIR" | extract_decision)"
+
+assert_decision \
+  "rm -rf: mktemp -d が作る /tmp/tmp.XXXXXXXXXX は allow" \
+  "allow" "$(run_hook 'rm -rf /tmp/tmp.AbCdEfGhIj' "$WORKTREE_DIR" | extract_decision)"
+
+assert_decision \
+  "rm -fr: フラグの順序が違っても同じ判定（allow）" \
+  "allow" "$(run_hook 'rm -fr /tmp/tmp.AbCdEfGhIj' "$WORKTREE_DIR" | extract_decision)"
+
+assert_decision \
+  "rm -r: /tmp 自身は ask（allow に倒れない）" \
+  "ask" "$(run_hook 'rm -rf /tmp' "$WORKTREE_DIR" | extract_decision)"
+
+assert_decision \
+  "rm -r: ワークツリー内は ask（allow に倒れない。コミット前は git でも復元不能）" \
+  "ask" "$(run_hook "rm -rf tests/foo.sh" "$WORKTREE_DIR" | extract_decision)"
+
+assert_decision \
+  "rm -r: /home 配下の絶対パスは ask（allow に倒れない）" \
+  "ask" "$(run_hook 'rm -rf /home/someuser/data' "$WORKTREE_DIR" | extract_decision)"
+
+assert_decision \
+  "rm -r: 未知のオプションは ask（allow に倒れない）" \
+  "ask" "$(run_hook 'rm -r --unknown-opt /tmp/tmp.AbCdEfGhIj' "$WORKTREE_DIR" | extract_decision)"
+
+assert_decision \
+  "rm（-r 無し）はこのフックの対象外（何も言わない）" \
+  "(none)" "$(run_hook "rm tests/foo.sh" "$WORKTREE_DIR" | extract_decision)"
+
+export TMPDIR="$STUB_DIR/customtmp"
+mkdir -p "$TMPDIR"
+assert_decision \
+  "rm -rf: カスタム TMPDIR より深い場所は allow" \
+  "allow" "$(run_hook "rm -rf $TMPDIR/tmp.custom123" "$WORKTREE_DIR" | extract_decision)"
+assert_decision \
+  "rm -rf: カスタム TMPDIR 自身は ask（allow に倒れない）" \
+  "ask" "$(run_hook "rm -rf $TMPDIR" "$WORKTREE_DIR" | extract_decision)"
+unset TMPDIR
+
 # ── 無関係なコマンドには一切言及しない ───────────────────────────
 assert_decision \
   "git/gh と無関係なコマンドは何も言わない" \
@@ -268,6 +364,11 @@ assert_decision \
 # permissions.ask に上書きされてしまうため）。裸の --force / -f / +<refspec>
 # / --delete、ブランチ名が main/master を含む push は、フック不在でも
 # 無条件に止まる必要があるため、いずれかのパターンに一致しなければならない。
+# 孫5（背景3-G）で同じ理由により chmod / rm -r 系のパターンも narrow 化した:
+# ワークツリー内の chmod +x・/tmp 配下（scratchpad・mktemp -d 生成物）への
+# rm -r は一致してはいけない。-R/絶対パスの chmod、/home 等の名指しした
+# 危険な絶対パスへの rm -r は、フック不在でも無条件に止まる必要があるため
+# 一致しなければならない。
 # permissions.ask のマッチングは "*"（空白含む任意文字列）による glob なので
 # Python の fnmatch で近似検証する（ADR §3.3 参照）。
 PATTERN_CHECK=$(
@@ -304,6 +405,31 @@ cases = [
     ("git push origin main", True),
     ("git push origin master", True),
     ("git push origin feature", False),
+    # chmod（背景3-G）: ワークツリー内の相対パスへの +x は、フックが
+    # allow を返しても permissions.ask のどのパターンにも一致してはいけない。
+    ("chmod +x tests/foo.sh", False),
+    ("chmod u+x claude/hooks/new-hook.sh", False),
+    # フック不在でも無条件に止めたいもの（-R/絶対パス）は一致する必要がある。
+    ("chmod -R +x tests", True),
+    ("chmod --recursive +x tests", True),
+    ("chmod -v -R +x tests", True),
+    ("chmod +x /etc/passwd", True),
+    # rm -r（背景3-G。mktemp -d の後片付けを通すのが目的）:
+    # /tmp 配下（scratchpad・mktemp -d 生成物）は一致してはいけない。
+    ("rm -rf /tmp/tmp.AbCdEfGhIj", False),
+    ("rm -rf /tmp/claude-1000/some-session/scratchpad", False),
+    # フック不在でも無条件に止めたい、名指しした危険な絶対パスは一致する必要がある。
+    ("rm -rf /home/someuser/data", True),
+    ("rm -r /home/someuser/data", True),
+    ("rm -fr /usr/local/foo", True),
+    ("rm -rf /etc/foo", True),
+    ("rm -rf /var/foo", True),
+    ("rm -rf /mnt/foo", True),
+    ("rm -rf /opt/foo", True),
+    ("rm -rf ~/secrets", True),
+    # 受け入れる残余リスク（ADR に明記）: ワークツリー内の相対パスへの
+    # rm -r は名指しの網に無い。フックが唯一の担保（フック不在時は fail-open）。
+    ("rm -rf tests/foo.sh", False),
 ]
 
 ok = True
