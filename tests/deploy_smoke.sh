@@ -927,16 +927,46 @@ JSONEOF
   else
     fail "固定パス($fixed_path)に移行後の実体が存在する"
   fi
-  # 実際のdeployは copy_dir 自体ではなく、そこから cp -a された世代
-  # (DOTFILES_DEPLOY_SRC)を通して動く。移行のmvもその世代側のコピーに
-  # 対して行われるため、copy_dir 自身の settings.machine.json は
-  # 触られずに残る(コピー元のワークツリーを直接書き換えないのは
-  # 意図した設計であり、バグではない — 人間が安全に手動で消せる)。
+  # 移行元は「実際に deploy.sh を呼び出したソースツリー」(copy_dir)自身
+  # であって、そこから cp -a された世代(DOTFILES_DEPLOY_SRC)側のコピー
+  # ではない。世代側のコピーに対して mv しても、copy_dir 自身の
+  # settings.machine.json は移動されずに残ってしまい、次の deploy で
+  # 新しい世代へ再度コピーされて移行を無限に繰り返す(固定パスは既に
+  # 移行済みなので、2回目以降は必ず内容不一致でエラー停止する)。この
+  # 退化を検知する。
+  if [ -e "$copy_dir/claude/settings.machine.json" ]; then
+    fail "移行元(ソースツリー)の settings.machine.json が実際に消える(残っている: $copy_dir/claude/settings.machine.json)"
+  else
+    pass "移行元(ソースツリー)の settings.machine.json が実際に消える"
+  fi
   assert_symlink "$sbx/.claude/settings.machine.json" "$fixed_path"
   if printf '%s' "$out" | grep -qF "Migrated"; then
     pass "移行した旨がログに出る"
   else
     fail "移行した旨がログに出る"
+  fi
+
+  # 上記の退化(世代側コピーだけを消す)が起きると、移行後に人間が
+  # ~/.claude/settings.machine.json(固定パスの実体)を編集するだけで、
+  # 次のdeployが「固定パス/旧パスの内容が異なる」エラーで必ず止まる
+  # (レビューで実際にサンドボックス実測した再現手順そのもの)。
+  # ソースツリー側の残骸("smokeTestMarker")と食い違う内容に人間が
+  # 編集したと見立てて、同じソースツリーからの2回目のdeployが
+  # 何のエラーも無く成功することを直接確認する。
+  printf '{"humanEditedMarker":"edited-after-migration"}\n' >"$fixed_path"
+  wait_for_next_second
+  out="$(run_deploy_from "$copy_dir/deploy-all.sh" "$sbx" --force --only claude 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "移行後に固定パスを編集した状態での同じソースツリーからの2回目deployが失敗しない(exit=$rc、移行の無限ループ退化)"
+    log "$out"
+  else
+    pass "移行後に固定パスを編集した状態での同じソースツリーからの2回目deployが失敗しない(移行の無限ループ退化なし)"
+  fi
+  if grep -q "humanEditedMarker" "$sbx/.claude/settings.json" 2>/dev/null; then
+    pass "2回目deploy後もsettings.jsonは人間が編集した固定パスの内容を反映している"
+  else
+    fail "2回目deploy後もsettings.jsonは人間が編集した固定パスの内容を反映している"
   fi
 }
 

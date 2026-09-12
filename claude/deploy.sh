@@ -83,7 +83,22 @@ fi
 # ~/.claude/settings.machine.json is a symlink to this fixed path, matching
 # the settings.json it sits next to and making it discoverable (背景3-I).
 FIXED_MACHINE_PATH="$(dotfiles_machine_json_path)"
-OLD_MACHINE_SRC="$CLAUDE_SRC_DIR/settings.machine.json"
+# Deliberately SCRIPT_DIR, not CLAUDE_SRC_DIR: settings.machine.json is
+# git-untracked, per-worktree state, so "the old path" can only ever mean
+# the actual invoking source tree (where a human would have left it), never
+# a generation's cp -a snapshot of that tree. Using CLAUDE_SRC_DIR here in a
+# real (non-DRY_RUN) run — $DOTFILES_DEPLOY_SRC/claude, the generation
+# create_generation just built — would only ever see/move that generation's
+# own frozen copy: the `mv` below would "migrate" it away without touching
+# the real file still sitting in the source tree, so the very next deploy
+# would cp -a it into a fresh generation and hit this migration again,
+# forever colliding with the now-populated fixed path (found in review of
+# this PR — a real run reproduces it in two deploys). SCRIPT_DIR is always
+# the real source tree deploy.sh itself was invoked from, independent of
+# DRY_RUN or which generation `current` points at, unlike CLAUDE_SRC_DIR
+# (used below only for the tracked settings.json base, which intentionally
+# does follow the generation).
+OLD_MACHINE_SRC="$SCRIPT_DIR/settings.machine.json"
 
 if [ -f "$OLD_MACHINE_SRC" ]; then
   if [ -f "$FIXED_MACHINE_PATH" ]; then

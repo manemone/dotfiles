@@ -341,18 +341,28 @@ statusLine が描画のたびに呼ばれても書き込みが肥大しない。
 ### 4.1 初回セットアップ
 
 初回 deploy 時に固定パスの実体が無ければ、deploy が自動的に空の `{}` を作成します。
-最初から内容を入れておきたい場合は、deploy 前に手動でテンプレートをコピーしてください:
+最初から内容を入れておきたい場合は、deploy 前に手動で固定パスへ作成してください:
 
 ```bash
-# テンプレート(参照用サンプル。配布はされない)から固定パスへコピー
 mkdir -p "${XDG_DATA_HOME:-$HOME/.local/share}/dotfiles"
-cp ~/.dotfiles/claude/settings.machine.json.example \
-   "${XDG_DATA_HOME:-$HOME/.local/share}/dotfiles/settings.machine.json"
-
-# 自分の環境に合わせて編集(symlink 経由でも固定パス直接でもどちらでもよい)
 vim "${XDG_DATA_HOME:-$HOME/.local/share}/dotfiles/settings.machine.json"
+```
 
-# デプロイ実行(ベース + machine をマージして ~/.claude/settings.json を生成)
+`settings.machine.json.example` は**内容を確認するための参照用サンプルであり、
+丸ごとコピーしてはいけません。** 中身は `"allow": ["Bash", "Read", "Edit", "WebFetch", ...]`
+という無条件の全許可と、存在しないパス（`/path/to/your/hook.sh`）を指す壊れた
+`SessionStart` フックです。この傘（計画書 [DOC-2609121700](../docs/planning/DOC-2609121700_autopilot-permissions_計画.md)
+背景3-I）が締め直した権限をこれで上書きすると、孫1のガードフックが `allow` を返しても
+無条件 `Bash` の `allow` が並び立ってしまい、権限ポリシーが実質的に無効化されます。
+固定パスはワークツリーをまたいで共有され `uninstall.sh` でも消えないため、一度ここに
+全許可が入ると以前より気づきにくく消えにくくなります。実際に必要な項目（自分の
+`additionalDirectories` や Herdr の `hooks.SessionStart` など）だけを、パスを自分の
+環境に合わせて書き換えたうえで手で書き写してください。
+
+内容を書いたら、デプロイを実行します（ベース + machine をマージして
+`~/.claude/settings.json` を生成）:
+
+```bash
 cd ~/.dotfiles
 ./deploy-all.sh --only claude
 ```

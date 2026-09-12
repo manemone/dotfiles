@@ -646,7 +646,7 @@ dotfiles_current_link() {
 # prefix, NOT inside a generation: settings.machine.json is git-untracked
 # machine state, not distributed content, so it must not be tied to any
 # one generation's lifecycle (created, GC'd, rolled back). One entity is
-# shared across every worktree that deploys on this machine — see ADR
+# shared across every worktree that deploys on this machine — see plan doc
 # DOC-2609121700 design 6 / AGENTS.md's "claude の例外" note. Single source
 # of truth for claude/deploy.sh (reads/writes it) and
 # deploy-all.sh --status (reports its path and existence).
