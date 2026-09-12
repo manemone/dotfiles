@@ -252,7 +252,10 @@ tests/template_smoke.sh
 生成された `.pre-commit-config.yaml` / `ci.yml` が壊れていないか、生成された全 `.md`
 （`AGENTS.md` と `docs/` 配下の全ファイル）に Jinja 空白制御ミスによる Markdown の崩れ
 （行ゼロの表・見出し直前の空行欠落・二重空行・Jinja 構文の残骸）が無いか、`_exclude` の
-効き（`use_doc_id=false` 時に `docs/` `tools/` `.github/` が生成されないこと）を検証する
+効き（`use_doc_id=false` 時に `docs/` `tools/` `.github/` が生成されないこと）、
+`.claude/pr-review.yml`（回答に関わらず常に生成される）の `lint_cmd` / `test_cmd` が
+特殊文字を含む回答でも読み戻せて空欄ならキーごと出ないこと・`markers` が既定値であること・
+`convention_docs` が `use_doc_id` に応じて出し分けられ参照先が実在することを検証する
 （`.pre-commit-config.yaml.jinja` / `ci.yml.jinja` は拡張子が `.jinja` のため
 `check-yaml` フックの対象外であり、YAML の壊れもMarkdownの崩れもこのテストでしか
 検出できない）。**`templates/repo-baseline/` 配下のどのファイルを変更した場合も対象**

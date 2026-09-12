@@ -36,7 +36,7 @@ uv tool run copier copy <このリポジトリへのパスまたはURL>/template
 | 質問 | 型 | 既定値 | 効果 |
 |---|---|---|---|
 | `default_branch` | 文字列 | `master` | プルリクエストの作法のブランチ構成節に埋め込む |
-| `lint_cmd` | 文字列 | `""` | pre-commit の local フックと AGENTS.md に埋め込む lint コマンド。空欄なら生成しない |
+| `lint_cmd` | 文字列 | `""` | pre-commit の local フック・AGENTS.md・`.claude/pr-review.yml` に埋め込む lint コマンド。空欄なら生成しない |
 | `test_cmd` | 文字列 | `""` | 同上（test コマンド） |
 | `use_doc_id` | bool | `true` | DOC-ID 運用一式（`docs/`・`tools/doc-id/`・関連 pre-commit フック）を生成するか |
 | `use_ci` | bool | `true` | `.github/workflows/ci.yml` を生成するか |
@@ -44,9 +44,21 @@ uv tool run copier copy <このリポジトリへのパスまたはURL>/template
 | `use_adr` | bool | `false` | `docs/README.md` に adr/ フォルダの説明を含めるか（`use_doc_id` が true の場合のみ質問） |
 | `use_reference` | bool | `false` | `docs/README.md` に reference/ フォルダの説明を含めるか（同上） |
 
+質問の回答に関わらず常に `.claude/pr-review.yml` を生成します。`skills/pr-review-loop/`
+スキルが Phase 0.5 で最優先に読む設定ファイルで、`lint_cmd` / `test_cmd`（空欄なら省略）・
+`markers`（既定値を明示）・`convention_docs`（`use_doc_id` 選択時のみ、生成される
+PR作法 doc を1件）を埋めます。`.claude/` という名前ですが Claude Code 専用の設定ではなく、
+どの AI エージェントから実行しても同じように読めます。
+
 生成直後、まだ手を付けていない状態でやること:
 
 ```bash
+# git add より前に doc-id assign を実行しない（`doc-id assign` が参照を置換するのは
+# git ls-files --cached で列挙される追跡済みファイルだけであり、copier copy 直後の
+# 生成物は未追跡のため、先に git add しないと .claude/pr-review.yml の
+# convention_docs 等の参照が置換されずに残る）
+git add -A
+
 # DOC-ID の採番（プレースホルダのままのファイルがある場合）
 ./tools/doc-id/doc-id assign docs/design/DOC-DOCID_PLACEHOLDER_プルリクエストの作法.md
 ./tools/doc-id/doc-id assign docs/design/DOC-DOCID_PLACEHOLDER_コーディング方針.md
