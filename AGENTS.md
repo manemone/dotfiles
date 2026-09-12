@@ -18,11 +18,11 @@
   - 傘ブランチへの上流取り込みは `git fetch origin` + `git merge origin/master`
     で行う（傘ブランチは孫のマージで `master` より進んでいるため、ここは
     `--ff-only` ではなく通常の `merge` を使う）
-  - 孫ブランチの傘ブランチへの追随は `git fetch origin` +
-    `git merge --ff-only origin/<傘ブランチ>` で行う
-  - 孫ブランチを傘ブランチへ追随（rebase）させるときは
-    `git rebase origin/<傘ブランチ>` + **孫ブランチ限定**の
-    `git push --force-with-lease` で行う（`master` への force push は対象外）
+  - 孫ブランチを傘ブランチへ追随させるときは `git rebase origin/<傘ブランチ>` +
+    **孫ブランチ限定**の `git push --force-with-lease` で行う（`master` への
+    force push は対象外）。孫ブランチは自分の作業コミットを持つのが通常であり、
+    傘ブランチが他の孫のマージで進んでいれば孫と傘は必ず分岐するため、
+    `git merge --ff-only` は使わない
   - 上記の `fetch` + `merge` / `rebase` + `push` は、**`&&` 等で連結せず別々の
     コマンドとして実行する**（連結すると `claude/hooks/git-guard.sh` が対象を
     一意に特定できず `ask` に倒れる）

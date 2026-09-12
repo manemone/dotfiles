@@ -25,12 +25,11 @@
       `git merge origin/{{ default_branch }}` で行う（傘ブランチは孫のマージで
       `{{ default_branch }}` より進んでいるため、ここは `--ff-only` ではなく
       通常の `merge` を使う）
-    - 孫ブランチの傘ブランチへの追随は `git fetch origin` +
-      `git merge --ff-only origin/<傘ブランチ>` で行う
-    - 孫ブランチを傘ブランチへ追随（rebase）させるときは
-      `git rebase origin/<傘ブランチ>` + **孫ブランチ限定**の
-      `git push --force-with-lease` で行う（`{{ default_branch }}` への
-      force push は対象外）
+    - 孫ブランチを傘ブランチへ追随させるときは `git rebase origin/<傘ブランチ>` +
+      **孫ブランチ限定**の `git push --force-with-lease` で行う
+      （`{{ default_branch }}` への force push は対象外）。孫ブランチは自分の
+      作業コミットを持つのが通常であり、傘ブランチが他の孫のマージで進んでいれば
+      孫と傘は必ず分岐するため、`git merge --ff-only` は使わない
     - 上記の `fetch` + `merge` / `rebase` + `push` は、**`&&` 等で連結せず
       別々のコマンドとして実行する**
   - 傘ブランチ方式を使わない場合、上記の例外は適用されない
