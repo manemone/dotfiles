@@ -170,6 +170,12 @@ assert_decision \
   "gh pr merge: 末尾コメントをマージ対象と取り違えない（PR番号省略）" \
   "deny" "$(run_hook "gh pr merge --squash --delete-branch  # 承認済み" | extract_decision)"
 
+# クォートされた # はコメント開始ではない。posix=True のトークン列だけで判定すると
+# クォートが剥がれて区別できず、この行は # の位置で切られて gh pr merge が消える。
+assert_decision \
+  "gh pr merge: クォートされた # で行が切られない" \
+  "deny" "$(run_hook "grep -n '#' conf && gh pr merge 1 --squash" | extract_decision)"
+
 # herestring（<<<）と引用符の中の << をヒアドキュメント開始と誤認すると、
 # 以降の行を全部捨てて次の行の gh pr merge を素通りさせる。
 assert_decision \
@@ -288,6 +294,11 @@ assert_silent \
 # 本文中にインデントされた終端語がある形（ヒアドキュメントの例を含む文章）。
 # <<- と区別せず strip() で比較すると、ここで終端と誤判定して以降の本文が
 # 素のコマンド扱いになる。
+# 開始行にクォートされた # を含む別コマンドが同居する形。# の位置で行が切られると
+# << トークンごと消え、本文が剥がれずに deny へ倒れる（ただのファイル追記が止まる）。
+assert_silent \
+  "ヒアドキュメント: 開始行にクォートされた # があっても本文が剥がれる" \
+  "$(printf 'grep -v %s#%s conf > t; cat >> notes.md <<%sEOF%s\ngh pr merge 1 --squash を実行する\nEOF' "'" "'" "'" "'")"
 assert_silent \
   "ヒアドキュメント: 本文中のインデントされた終端語で切れない" \
   "$(printf 'cat >> notes.md <<%sEOF%s\n例: cat <<X ... 本文 ...\n  EOF\ngh pr merge 1 --squash を実行する\nEOF' "'" "'")"

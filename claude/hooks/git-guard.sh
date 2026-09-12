@@ -106,31 +106,42 @@ def say_nothing():
     sys.exit(0)
 
 
-def tokenize_line(line):
-    # 1行をトークン化する。解釈できない行（クォートが閉じていない等）は None。
-    #
+def lex(line, posix):
     # `;` が前の語に密着した形（`cd /tmp; gh pr merge 1`）でも区切りが残るよう、
     # `punctuation_chars` 付きの lexer で `;` / `&&` / `||` / `|` / `<<` などを
     # 独立したトークンにする。クォートは lexer が解釈するため、引用符の中の `;`
     # （`git commit -m "merge 済み; 掃除も"`）では切れない。
-    lexer = shlex.shlex(line, posix=True, punctuation_chars=True)
-    lexer.whitespace_split = True
+    #
     # `shlex.shlex` は `commenters = '#'` が既定で、`shlex.split()` のように
     # 自動で解除されない。有効なままだと URL のフラグメント等、行内の裸の `#`
     # 以降が丸ごと捨てられ、`curl https://x/y#z && gh pr merge 95` の
-    # `gh pr merge` を取りこぼす。コメントはトークン列側で落とす（下）。
+    # `gh pr merge` を取りこぼす。コメントは tokenize_line() 側で落とす。
+    lexer = shlex.shlex(line, posix=posix, punctuation_chars=True)
+    lexer.whitespace_split = True
     lexer.commenters = ""
     try:
-        tokens = list(lexer)
+        return list(lexer)
     except ValueError:
         return None
-    # 語の先頭が `#` のトークン以降は行コメント。生テキストで切ると URL の
-    # フラグメントまで巻き添えになり、逆に落とさないと
-    # `gh pr merge --squash  # 承認済み` の `#` がマージ対象として拾われ、
-    # `gh pr view '#'` が失敗して無音になる（PR 番号を省略した形が素通りする）。
-    for idx, tok in enumerate(tokens):
-        if tok.startswith("#"):
-            return tokens[:idx]
+
+
+def tokenize_line(line):
+    # 1行をトークン化する。解釈できない行（クォートが閉じていない等）は None。
+    tokens = lex(line, True)
+    if tokens is None:
+        return None
+    # 行コメント（語頭が裸の `#`）以降を落とす。**判定は posix=False の
+    # トークン列で行う。** posix=True はクォートを剥がすため、`grep -n '#' f`
+    # の `#` と末尾コメントの `#` が同じトークンになり、取りこぼし（`gh pr merge`
+    # が行ごと消える）と誤検知（ヒアドキュメント開始行が切られて `<<` が消え、
+    # 本文が剥がれず deny）の両方に倒れる。posix=False ならクォートが残るので
+    # 区別できる。並びが一致しないときは何も落とさない（誤って deny 側へ倒さず、
+    # 取りこぼしは「判定できないなら何も言わない」の方針どおり無音にする）。
+    quoted = lex(line, False)
+    if quoted is not None and len(quoted) == len(tokens):
+        for idx, tok in enumerate(quoted):
+            if tok.startswith("#"):
+                return tokens[:idx]
     return tokens
 
 
