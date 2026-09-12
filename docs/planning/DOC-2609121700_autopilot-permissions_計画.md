@@ -397,14 +397,70 @@ technically 成立しないと判明した場合は、実装を進める前に�
 - **フックが配布されていない／壊れている環境で黙って通らないこと。** そのため
   `claude/settings.json` の `ask` は**保険として残す**（設計2）
 
-### 設計2: `claude/settings.json` はフックの下敷き（fail-safe の網）として残す
+### 設計2（**2026-09-12 訂正**): フックは制限を足せるだけ。`ask` は「フック不在でも止めたいもの」だけを残す
 
-PreToolUse フックの `allow` 判定は permissions の `ask` より先に評価される。したがって
-「フックが安全と判定したものだけを通し、フックが黙っているものは従来どおり `ask` で
-止める」という二層構造が組める。
+> **この節は孫1 の実装中に技術的前提が崩れたため書き直された。** 当初は「フックが
+> `allow` を返せば `permissions.ask` を素通りできる」という二層構造を想定していたが、
+> **それは成立しない**。孫1 のレビューで発覚し、司令官が公式ドキュメント
+> （<https://code.claude.com/docs/en/permissions.md>）の原文で確認した。
+> 訂正前の記述に依拠した実装・レビューコメントは、この節の内容で読み替えること。
 
-- `ask` から `git push` 系のパターンを**消さない**。フックが `allow` を返したときだけ
-  素通りする形にする
+確認できた契約（原文ママ）:
+
+> Hook decisions don't bypass permission rules. Claude Code evaluates deny and ask rules
+> regardless of what a PreToolUse hook returns: a matching deny rule blocks the call, and a
+> matching ask rule still prompts even when the hook returned `"allow"` or `"ask"`.
+
+> A blocking hook also takes precedence over allow rules. A hook that exits with code 2 stops
+> the tool call before permission rules are evaluated (...). **To run all Bash commands without
+> prompts except for a few you want blocked, add `"Bash"` to your allow list and register a
+> PreToolUse hook that rejects those specific commands.**
+
+つまり **PreToolUse フックは制限を「足す」ことしかできない。** `ask` / `deny` を緩める
+方向には一切効かない。したがって本傘の構造はこうなる。
+
+- **AI に摩擦なくやらせたい操作は、`ask` / `deny` のどのパターンにも一致してはならない。**
+  その操作の安全性は**フックだけ**が担保する
+- **`permissions.ask` に残すのは「フックが不在でも無条件に止めたいもの」だけ**にする。
+  条件つき（ブランチ次第・パス次第）で許すものを `ask` に置いてはいけない。置いた瞬間、
+  フックが何を返しても止まる
+- フックの役割は「危険な部分集合を `ask` / `deny` へ引き上げること」。ドキュメントが
+  推奨している形（allow に `Bash` を置き、フックで個別に弾く）と同じ構造であり、
+  実際に人間の `~/.claude/settings.json` の `allow` には既に `"Bash"` が入っている
+
+#### `git push --force-with-lease` を摩擦なく通すための具体策
+
+`permissions` のパターンは `*` のみだが、**空白の有無を厳密に区別する**（原文:
+「A `*` in a Bash rule matches any text, including spaces」「**The space before a trailing
+`*` is part of the rule.**」）。これを使って「裸の `--force` だけ」を単語境界で拾える。
+
+- **削除する**（どちらも `--force-with-lease` に一致してしまうため。`*--force*` は
+  空白を挟んでいないので `--force-with-lease` の中の `--force` を拾う）:
+  - `"Bash(git push *--force*)"`
+  - `"Bash(git push *--force-with-lease*)"`
+- **代わりに置く**（裸の `--force` だけを拾う4パターン）:
+  - `"Bash(git push --force)"` / `"Bash(git push --force *)"`
+  - `"Bash(git push * --force)"` / `"Bash(git push * --force *)"`
+- **残す**: `"Bash(git push -f*)"` `"Bash(git push * -f*)"` `"Bash(git push *+*)"`
+  `"Bash(git push *--delete*)"`（いずれも `--force-with-lease` には一致しない。
+  `* -f*` が要求する「空白 + `-f`」は `--force-with-lease` の中に現れない）
+- **足す**（フックが不在でも効く、ブランチ名の形をした残余の網）:
+  - `"Bash(git push * main*)"` / `"Bash(git push * master*)"`
+  ブランチ名を明示した保護ブランチへの push は、force かどうかに関わらず人間の仕事
+  なので、ここで止まるのは正しい挙動である。孫ブランチ名には一致しない
+
+#### 受け入れる残余リスク（ADR に明記すること）
+
+パターンで表現できないのは「refspec を省略した `git push --force-with-lease` を、
+保護ブランチをチェックアウトした状態で叩く」形である。これは**フックが唯一の担保**で
+あり、フックが配布されていない／壊れている環境では素通りする（fail-open）。
+
+受け入れる根拠: (1) フックは `claude/deploy.sh` が配り、`deploy-all.sh --status` が
+リンク切れを検出する。(2) `--force-with-lease` は他人の更新を消さない。
+(3) 保護ブランチをチェックアウトして作業すること自体が本傘の運用では例外的である。
+
+#### 変わらない部分
+
 - 追跡されている `claude/settings.json` に `Bash(git merge *)` を**足さない**
   （フックが判定するため。生成物側に手で入っている1件は、人間が machine.json の
   移行と併せて片付ける）
@@ -596,7 +652,10 @@ JSON を受け取り、判定結果を標準出力へ返す。
 - `claude/settings.json` に `hooks.PreToolUse` を追加し、`"$HOME/.claude/hooks/git-guard.sh"`
   を呼ぶ。matcher は Bash ツールに限る。`timeout` を適切に設定する
   （`gh pr view` のネットワーク往復が入るため）
-- `claude/settings.json` の `ask` からは**何も消さない**（計画書「設計2」）
+- `claude/settings.json` の `ask` は**設計2（訂正版）のとおりに書き換える**。
+  `Bash(git push *--force*)` と `Bash(git push *--force-with-lease*)` を削除し、裸の
+  `--force` を拾う4パターンとブランチ名の形の網（`* main*` / `* master*`）を足す。
+  **フックの `allow` は `ask` を素通りさせられない**ので、消さないと目的を達成できない
 - `claude/README.md` にフックの節を足す（何を止めて何を通すか、無効化したいときどうするか）
 
 ### 4. テスト
@@ -1079,7 +1138,17 @@ reviewer は done 状態で完了し完了通知は来ないので、待機し�
 
 ### 3. `claude/settings.json` と ADR の追随
 
-- `ask` からは**何も消さない**（設計2 の二層構造。フックが黙っていれば従来どおり止まる）
+- **`ask` の該当パターンを消さないと、この孫の目的は達成できない**（設計2 の訂正版を読むこと。
+  フックの `allow` は `ask` を素通りさせられない）。`Bash(chmod *)` が残っている限り、
+  フックが何を返しても `chmod +x` は止まる。**`Bash(chmod *)` を削除し**、
+  「フックが不在でも無条件に止めたいもの」だけをパターンとして残すこと
+  （`-R` 付き・絶対パス・`sudo` 経由など。具体的なパターン集合は孫が設計してよいが、
+  **`chmod +x <ワークツリー内の相対パス>` がどのパターンにも一致しないこと**が要件）
+- `rm -r` も同様に、scratchpad 配下（`/tmp/claude-*`）がどのパターンにも一致しない形へ
+  絞り込む必要がある。`Bash(rm -r *)` `Bash(rm -rf *)` を丸ごと残したままでは目的を達成できない。
+  **ただし絞り込みすぎるとフック不在時の fail-open が広がる**ので、危険な絶対パス
+  （`/home` `/usr` `/etc` `/var` `/mnt` `/opt` `~` 等）を名指しする形の網は残すこと
+- **フックが不在／壊れている環境で素通りするようになる範囲を洗い出し、ADR に明記する**
 - 孫1 の ADR に「対象がどこにあるかで危険度が決まる操作は、パターンではなく
   フックで判定する」という一般則が書かれているはずなので、そこへ `chmod` / `rm -r` を
   適用した節を追記する（ADR は原則書き換えないが、**同じ決定の適用範囲を広げる追記**は
