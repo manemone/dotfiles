@@ -345,6 +345,10 @@ scenario_backup_symlink_idempotent_uninstall() {
     else
       pass "settings.json が実際に生成し直されている"
     fi
+    # git-guard フック（PreToolUse）の symlink。links_for_tool() の claude
+    # arm への追加漏れがあると、この symlink が張られないまま静かに
+    # スキップされる（AGENTS.md「実装時の注意」参照）。
+    assert_symlink "$sbx/.claude/hooks/git-guard.sh" "$prefix/current/claude/hooks/git-guard.sh"
   fi
 
   if has_tool codex; then
@@ -437,6 +441,10 @@ EOF
     else
       fail "uninstall で claude/CLAUDE.md が元のファイルに復元された"
     fi
+    # git-guard.sh は元々ダミーファイルを置いていない新規 symlink なので、
+    # 復元先ではなく「撤去されたこと」自体を確認する（links_for_tool() の
+    # claude arm への追加漏れがあると symlink が残ったままになる）。
+    assert_not_exists "$sbx/.claude/hooks/git-guard.sh"
   fi
   if has_tool codex; then
     # 過去に ocw-meter が uninstall.sh から撤去漏れした不具合（ADR

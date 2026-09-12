@@ -177,6 +177,53 @@ statusLine が描画のたびに呼ばれても書き込みが肥大しない。
 （**次回 `./deploy-all.sh` 実行時に `claude/settings.json` の内容で再度上書きされる**ので、
 恒久的に無効化したい場合はリポジトリ側の `claude/settings.json` から `statusLine` を削除すること）。
 
+### 3.5 git-guard フック — main/master への破壊的操作の機械的ガード
+
+`~/.claude/hooks/git-guard.sh`（`claude/hooks/git-guard.sh` から symlink される PreToolUse
+フック）が、「`main`/`master` へのマージ・push は人間、それ以外の git 操作は AI に任せる」
+という線引きを機械的に担保する。設計の根拠・却下案・PreToolUse フックの入出力契約の確認結果は
+ADR [DOC-2609121719](../docs/adr/DOC-2609121719_git-operation-permission-policy.md)
+を参照。
+
+**何を止めて何を通すか（判定表）:**
+
+| 対象コマンド | 判定 |
+|---|---|
+| `gh pr merge`（PR 番号 / URL / 省略＝現ブランチ） | base ブランチが `main`/`master` なら **deny**、それ以外は **allow** |
+| `git push` に `--force` / `--force-with-lease` / `-f` / `+<refspec>` が付く | 対象ブランチが `main`/`master` なら **deny**。それ以外は `--force-with-lease` を **allow**、裸の `--force`/`-f` は **ask** |
+| `git merge` | 現在のブランチ（マージ先）が `main`/`master` なら **deny**、それ以外は **allow** |
+| 上記以外の git/gh コマンド、対象を安全に判定できないコマンド | 何も言わず `permissions.ask` の判定に委ねる、または **ask** |
+
+判定できない入力（PR 番号が解決できない・`gh` の実行に失敗する・現在のブランチが
+取れない・複数コマンドが `&&`/`;`/`|` で連結されている等）は必ず `ask` に倒す。
+**`allow` に倒すことは絶対に無い。**
+
+**上の判定表はフック単体の判定であり、フックが `allow` を返しても
+`permissions.ask` に一致すれば確認は出る。** PreToolUse フックは
+`permissions` の判定を緩める方向には使えず、危険な部分集合を引き上げる
+（制限を足す）ことしかできない（公式ドキュメントより。ADR §3.2/§3.3 参照）。
+`git push --force-with-lease` を実際に無確認で通すため、`claude/settings.json`
+の `permissions.ask` からは `--force-with-lease` に一致するパターンを外し
+（`*--force*` / `*--force-with-lease*` は空白を挟まず一致してしまうため
+どちらも置かない）、裸の `--force` だけを単語境界で拾う4パターンに
+置き換えている（ADR §3.3「`git push --force-with-lease` を摩擦なく通すための
+具体策」）。
+
+**無効化したいとき:**
+
+`claude/settings.machine.json` に `hooks.PreToolUse` を定義すると、`claude/deploy.sh` の
+浅い `update()` マージによりベース側の `hooks.PreToolUse`（本フックの配線）が丸ごと
+上書きされる（§4.3・ADR §3.4 参照）。恒久的に無効化したい場合は、machine.json に
+空配列 `"PreToolUse": []` を持つ `hooks` を書くか、リポジトリ側の `claude/settings.json` から
+`hooks.PreToolUse` を削除する。
+
+`git merge` と、対象ブランチ名がコマンド文字列中に空白区切りの裸の単語として
+現れない書き方の `git push --force-with-lease`（refspec 省略・`HEAD`/`@`・
+`HEAD:master` のようなコロン区切り・`refs/heads/master` のような完全参照）
+には `permissions.ask` 側の保険が無い設計（ADR §3.3「受け入れる残余リスク」）
+なので、無効化すると保護ブランチへのこれらの操作がガード無しで通るように
+なることに注意すること。
+
 ## 4. Customization — マシン固有設定の追加
 
 `settings.json` にはマシン固有の設定（`permissions.allow`、`additionalDirectories`、`hooks`）が含まれていません。

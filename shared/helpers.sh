@@ -231,7 +231,8 @@ links_for_tool() {
       ;;
     claude)
       printf '%s\n' \
-        "$HOME/.claude/CLAUDE.md"
+        "$HOME/.claude/CLAUDE.md" \
+        "$HOME/.claude/hooks/git-guard.sh"
       ;;
     codex)
       # Only meaningful once skill_agent_home(codex) already exists —
