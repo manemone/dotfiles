@@ -9,8 +9,36 @@
 
 ## 最重要ルール
 
-- **人間の明示的指示がない限り、`git merge` / `git pull` / `git reset --hard` /
-  `git push --force` / `gh pr merge` を実行しない。例外はない。**
+- **`master` を書き換える操作（マージ・push・force push）は人間だけが行う。例外はない。**
+  - 傘ブランチ配下の操作は AI が行ってよい。孫ブランチ → 傘ブランチのマージは
+    **レビューで承認済みの PR に限り** AI が実行してよい
+    （`gh pr merge <PR番号> --squash --delete-branch`）。傘ブランチは孫を安全に
+    統合するための隔離された場所であり、そこへのマージまで人間待ちにすると
+    傘ブランチ方式が機能しない
+  - 傘ブランチへの上流取り込みは `git fetch origin` + `git merge origin/master`
+    で行う（傘ブランチは孫のマージで `master` より進んでいるため、ここは
+    `--ff-only` ではなく通常の `merge` を使う）
+  - 孫ブランチを傘ブランチへ追随させるときは `git rebase origin/<傘ブランチ>` +
+    **孫ブランチ限定**の `git push --force-with-lease` で行う（`master` への
+    force push は対象外）。孫ブランチは自分の作業コミットを持つのが通常であり、
+    傘ブランチが他の孫のマージで進んでいれば孫と傘は必ず分岐するため、
+    `git merge --ff-only` は使わない
+  - 上記の `fetch` + `merge` / `rebase` + `push` は、**`&&` 等で連結せず別々の
+    コマンドとして実行する**（連結すると `claude/hooks/git-guard.sh` が対象を
+    一意に特定できず `ask` に倒れる）
+  - `git pull` は使わない
+  - `git reset --hard` / `git clean` / 裸の `git push --force`（lease なし）は、
+    ブランチを問わず引き続き人間の承認が要る
+  - `claude/hooks/git-guard.sh`（PreToolUse フック。ADR
+    [DOC-2609121719](docs/adr/DOC-2609121719_git-operation-permission-policy.md)
+    参照）は、上記のうち `gh pr merge`・force系 `git push`・`git merge` の
+    保護ブランチ判定だけを機械的に担保する。**`git pull` を使わないこと・
+    孫→傘のマージをレビュー承認済みPRに限ることは、フックの対象外であり
+    この文言だけが歯止め。** また、フックは `permissions.allow` を返しても
+    `permissions.ask` / `deny` を上書きできない（制限を足すだけ）ため、
+    `claude/settings.json` 側の `ask` / `allow` パターンと矛盾がないか
+    合わせて確認すること
+
   すべての不可逆操作の前にこのルールを照合すること。
 - **deploy スクリプト（`deploy-all.sh` / `uninstall.sh` / `*/deploy.sh`）を実オペレーションで
   実行しない。** `$HOME` 側のシンボリックリンクは配布実体
@@ -181,9 +209,18 @@ uninstall 側の対応関数。ただし退避の前提は次の3点で崩れる
 ### claude の例外
 
 `claude/settings.json` だけは symlink ではなく、`current` 経由の `claude/settings.json` と
-`claude/settings.machine.json`（マシン固有・非追跡だが `cp -a` で世代内にコピーされる）を
-マージした**実ファイル**として生成される。マシンごとの上書き設定を git 管理下に置かずに
-反映するため。
+machine 設定をマージした**実ファイル**として生成される。マシンごとの上書き設定を git 管理下に
+置かずに反映するため。
+
+machine 設定（`settings.machine.json`）の実体は `${XDG_DATA_HOME:-$HOME/.local/share}/dotfiles/settings.machine.json`
+という**世代を経由しない固定パス**に置かれる（`current` や `generations/` と同じ階層。
+`shared/helpers.sh` の `dotfiles_machine_json_path()` が一次情報源）。`~/.claude/settings.machine.json`
+はこの固定パスへの symlink であり、人間はそちらを直接編集してよい。ソースツリー配下の
+`claude/settings.machine.json` は**旧方式の名残**でしかなく、`claude/deploy.sh` が検出したら
+固定パスへ自動移行する（詳細は計画書 DOC-2609121700 設計6）。固定パスに置く理由は、
+どのワークツリーから deploy しても同じ machine 設定を使い続けられるようにするため
+（ワークツリーごとに在ったり無かったりする非追跡ファイルを世代経由にすると、machine.json を
+持たないワークツリーから deploy した瞬間に空扱いされ、人間の設定が消えてしまう）。
 
 ### uninstall.sh の後片付け
 
@@ -193,6 +230,13 @@ uninstall 側の対応関数。ただし退避の前提は次の3点で崩れる
 行わず安全側に倒す。dev モード中（`current` が人間の作業ツリーを指している）でも
 `generations/` `.tmp/` と `current` 自体は通常どおり片付けられる。保護されるのは
 **`current` が指す作業ツリーの実体だけ**であり、そちらには一切触れない。
+
+`<prefix>` 直下の `settings.machine.json`（前節）も同様に保護対象であり、
+`uninstall.sh` は `~/.claude/settings.machine.json` という symlink だけを撤去し、
+固定パスの実体には触れない。したがって machine 設定を作成済みのマシンでは、
+uninstall 後も `<prefix>` 直下に `settings.machine.json` だけが残り続け、
+末尾の `rmdir <prefix>`（空のときだけ実行）は恒久的に no-op になる。
+**これは意図した挙動である**（人間のマシン設定が uninstall を生き延びる）。
 
 ## クロスプラットフォーム制約
 

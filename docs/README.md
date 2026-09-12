@@ -18,6 +18,7 @@
 | なぜ `ocw-meter` をこの設計にしたかを知る | [adr/DOC-2608021229_llm-cost-observability-collection-method.md](adr/DOC-2608021229_llm-cost-observability-collection-method.md) | feasibility probe の実測結果に基づく収集方式の決定記録 |
 | なぜスキルを複数の AI エージェントへ配るようにしたかを知る | [adr/DOC-2608272128_skills-multi-agent-distribution.md](adr/DOC-2608272128_skills-multi-agent-distribution.md) | `skills/` の切り出し・配布先エージェントの決め方・却下した案 |
 | なぜ Codex / OpenCode のグローバル指示を `claude/CLAUDE.md` から配るようにしたかを知る | [adr/DOC-2609072334_codex-opencode-global-instructions-distribution.md](adr/DOC-2609072334_codex-opencode-global-instructions-distribution.md) | `codex/` `opencode/` の新設・単一ソース symlink 方式・却下した案 |
+| なぜ git 操作の許可ポリシーを今の形にしたかを知る | [adr/DOC-2609121719_git-operation-permission-policy.md](adr/DOC-2609121719_git-operation-permission-policy.md) | `main`/`master` へのマージ・push だけを人間に残す線引きを PreToolUse フックで担保する決定と、却下した案 |
 | `ocw-meter` のイベントスキーマを調べる | [reference/DOC-2608021229-c_ocw-meterイベントスキーマ.md](reference/DOC-2608021229-c_ocw-meterイベントスキーマ.md) | 全 event_type・全フィールド・費用計算式の一次情報源 |
 | LLM費用のベースラインを測る手順を知る | [reference/DOC-2608021229-b_LLM費用観測ベースライン計測手順.md](reference/DOC-2608021229-b_LLM費用観測ベースライン計測手順.md) | 実PR 5〜10本での計測手順 |
 | 傘ブランチの計画を確認する | [planning/](planning/) 配下の各計画書 | 進行中・完了した傘ブランチの計画書 |
@@ -65,6 +66,7 @@
 | DOC-2608272128 | [skills-multi-agent-distribution.md](adr/DOC-2608272128_skills-multi-agent-distribution.md) | スキルの配布方式の決定。`claude/skills/` を `skills/` へ切り出して独立したツールとし、Claude Code だけでなく Codex・OpenCode のスキルディレクトリへも同じ実体を symlink する方式を採用した。3者が同じ SKILL.md 形式を読むという実機調査が根拠。`claude/deploy.sh` の拡張・スキルごとの配布先指定などの却下理由も記録 |
 | DOC-2609072215 | [ai-to-ai-messaging-channel.md](adr/DOC-2609072215_ai-to-ai-messaging-channel.md) | AI間（司令官／実装AI／レビューAI）の受け渡しの決定。`herdr pane run` キーストローク注入一本から、相手が Claude Code だと判別できるときは `SendMessage` を使い、そうでなければ従来手順へ落ちる二段構えへ変更した。`herdr pane list` の `agent_session.value` から `~/.claude/sessions/` を引いて宛先セッション名を解決する橋渡し手順の実測と、ADR DOC-2608272128 §2.4（エージェント非依存の原則）に対する但し書きの位置づけを記録 |
 | DOC-2609072334 | [codex-opencode-global-instructions-distribution.md](adr/DOC-2609072334_codex-opencode-global-instructions-distribution.md) | Codex / OpenCode のグローバル指示ファイル配布方式の決定。新しいツールディレクトリ `codex/` `opencode/` を追加し、それぞれの `deploy.sh` が `claude/CLAUDE.md` を単一ソースとして symlink する方式を採用した。`~/.codex/AGENTS.md` が既に同一内容を手作業で複製していた事実を出発点に、内容の複製・ファイルの物理移動を却下した理由を記録 |
+| DOC-2609121719 | [git-operation-permission-policy.md](adr/DOC-2609121719_git-operation-permission-policy.md) | git 操作の許可ポリシーの決定。「`main`/`master` へのマージ・push は人間、それ以外は AI」という線引きを、`permissions` のパターンマッチではなく PreToolUse フック（`claude/hooks/git-guard.sh`）で機械的に担保する方式を採用した。`gh pr merge` の base ブランチや `git push --force-with-lease` の対象ブランチがコマンドライン文字列に現れないためパターンマッチでは表現不能という実測結果、フックと `permissions.ask` の二層構造、判定できない入力を必ず `ask` に倒す fail-safe 設計、`--dangerously-skip-permissions` 相当への逃げ道を却下した理由を記録 |
 
 ### planning/ — ロードマップ・計画
 
@@ -78,6 +80,7 @@
 | DOC-2608062259 | [ai-ocw-naming-and-layout_計画.md](planning/DOC-2608062259_ai-ocw-naming-and-layout_計画.md) | `ocw` のワークツリー命名とリポジトリレイアウト外部化の傘ブランチ計画書（傘 `ai/ocw-naming-and-layout`）。ADR DOC-2608062258 で確定した方式を4本の孫へ分解したもの |
 | DOC-2608081456 | [ocw-meter-accuracy_計画.md](planning/DOC-2608081456_ocw-meter-accuracy_計画.md) | `ocw-meter` の計測精度是正の傘ブランチ計画書（傘 `ocw-meter-accuracy`）。実ストア突合で判明した6件の計測ズレ（ingest 欠測・費用メトリクスの空洞化・帰属不能・テストによるストア汚染・価格表のズレ・退避キャッシュのプルーニング漏れ）を6本の孫へ分解したもの |
 | DOC-2609031400 | [ocw-pane-roles-and-workspace-labels_計画.md](planning/DOC-2609031400_ocw-pane-roles-and-workspace-labels_計画.md) | `ocw -H` のペイン構成切り替えと Herdr ワークスペースラベル日本語化の傘ブランチ計画書（傘 `ai/ocw-pane-roles`）。commander を省いた2ペインモードの追加、`umbrella-orchestrator` の孫 spawn とラベル付けの更新、スキル文書に残る `ai/` 接頭辞前提の除去を2本の孫へ分解したもの |
+| DOC-2609121700 | [autopilot-permissions_計画.md](planning/DOC-2609121700_autopilot-permissions_計画.md) | 傘 autopilot が承認ダイアログで止まる問題を解消する傘ブランチ計画書（傘 `autopilot-permissions`）。「`main`/`master` へのマージは人間、それ以外は AI」という線引きを、許可設定のガードフック・deploy による学習 allow の保全・`AGENTS.md` とテンプレートの文言・配布スキル、無人ペインを止める非 git 操作（`chmod +x` 等）、`settings.machine.json` の発見性の6本の孫へ分解したもの |
 
 ### reference/ — 運用リファレンス
 

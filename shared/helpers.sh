@@ -231,7 +231,9 @@ links_for_tool() {
       ;;
     claude)
       printf '%s\n' \
-        "$HOME/.claude/CLAUDE.md"
+        "$HOME/.claude/CLAUDE.md" \
+        "$HOME/.claude/hooks/git-guard.sh" \
+        "$HOME/.claude/settings.machine.json"
       ;;
     codex)
       # Only meaningful once skill_agent_home(codex) already exists —
@@ -636,6 +638,20 @@ dotfiles_prefix() {
 # re-linking anything under $HOME.
 dotfiles_current_link() {
   printf '%s' "$(dotfiles_prefix)/current"
+}
+
+# dotfiles_machine_json_path
+# Print the path to the machine-specific settings.machine.json entity.
+# Deliberately a sibling of generations/ and current under the canonical
+# prefix, NOT inside a generation: settings.machine.json is git-untracked
+# machine state, not distributed content, so it must not be tied to any
+# one generation's lifecycle (created, GC'd, rolled back). One entity is
+# shared across every worktree that deploys on this machine — see plan doc
+# DOC-2609121700 design 6 / AGENTS.md's "claude の例外" note. Single source
+# of truth for claude/deploy.sh (reads/writes it) and
+# deploy-all.sh --status (reports its path and existence).
+dotfiles_machine_json_path() {
+  printf '%s' "$(dotfiles_prefix)/settings.machine.json"
 }
 
 # dotfiles_keep_generations

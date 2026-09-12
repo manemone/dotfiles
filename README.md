@@ -199,6 +199,13 @@ override with `DOTFILES_KEEP_GENERATIONS`) so a broken deploy can be undone with
 effect on `$HOME` unless you're in dev mode (see below) — `$HOME` reads from the
 generation snapshot, not the live working tree.
 
+The one exception is `~/.claude/settings.machine.json`: it links straight to a
+fixed path directly under the canonical prefix (a sibling of `generations/` and
+`current`, not inside any generation), because it holds git-untracked,
+machine-specific Claude Code settings that must survive regardless of which
+generation is current or which worktree last deployed. See
+[claude/README.md](claude/README.md) §4.
+
 See
 [docs/adr/DOC-2608040229_deploy-distribution-method.md](docs/adr/DOC-2608040229_deploy-distribution-method.md)
 for the full rationale, and
@@ -275,10 +282,14 @@ any `$HOME` symlink is broken) without side effects:
 The uninstall script removes **known symlinks**, restores backed-up config files
 (`*.backup`), and — once no remaining tool still references it — cleans up the
 distribution artifacts themselves (the `generations/` directory, the scratch `.tmp/`
-directory, the `current` symlink, and the canonical prefix itself once empty). If
-`current` is in dev mode (pointing at a working tree), `generations/` / `.tmp/` /
-`current` are still cleaned up as usual; only the working tree `current` points at
-is protected and never touched.
+directory, and the `current` symlink). If `current` is in dev mode (pointing at a
+working tree), `generations/` / `.tmp/` / `current` are still cleaned up as usual;
+the working tree `current` points at is protected and never touched. The canonical
+prefix itself is only removed once empty, and it stays non-empty on any machine
+that has created `settings.machine.json` (see [claude/README.md](claude/README.md)
+§4): that file is machine-specific, not a distribution artifact, so uninstall
+deliberately leaves it — and the prefix it lives in — in place rather than deleting
+it.
 See each tool's deploy script for the full list of files it creates.
 
 ## Next Steps

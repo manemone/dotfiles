@@ -345,6 +345,10 @@ scenario_backup_symlink_idempotent_uninstall() {
     else
       pass "settings.json が実際に生成し直されている"
     fi
+    # git-guard フック（PreToolUse）の symlink。links_for_tool() の claude
+    # arm への追加漏れがあると、この symlink が張られないまま静かに
+    # スキップされる（AGENTS.md「実装時の注意」参照）。
+    assert_symlink "$sbx/.claude/hooks/git-guard.sh" "$prefix/current/claude/hooks/git-guard.sh"
   fi
 
   if has_tool codex; then
@@ -437,6 +441,10 @@ EOF
     else
       fail "uninstall で claude/CLAUDE.md が元のファイルに復元された"
     fi
+    # git-guard.sh は元々ダミーファイルを置いていない新規 symlink なので、
+    # 復元先ではなく「撤去されたこと」自体を確認する（links_for_tool() の
+    # claude arm への追加漏れがあると symlink が残ったままになる）。
+    assert_not_exists "$sbx/.claude/hooks/git-guard.sh"
   fi
   if has_tool codex; then
     # 過去に ocw-meter が uninstall.sh から撤去漏れした不具合（ADR
@@ -866,18 +874,21 @@ scenario_claude_settings_machine_merge() {
   if ! has_tool claude; then
     return
   fi
-  log "=== シナリオ10: settings.machine.json が世代に入りマージが効く ==="
-  local sbx copy_dir out rc
+  log "=== シナリオ10: settings.machine.json が固定パスへ移行されマージが効く ==="
+  local sbx copy_dir out rc prefix fixed_path
 
   new_sandbox
   sbx="$SANDBOX_DIR"
+  prefix="$(dotfiles_prefix_for "$sbx")"
+  fixed_path="$prefix/settings.machine.json"
   copy_dir="$(mktemp -d)"
   CREATED_DIRS+=("$copy_dir")
   copy_repo_snapshot "$copy_dir"
 
-  # settings.machine.json は非追跡(.gitignore)だが、create_generation は
-  # 作業ツリーのファイルコピー(cp -a)であって git archive ではないので、
-  # このコピー側に置いたファイルも世代に入るはず(ADR §2.4)。
+  # 旧パス(ワークツリー相対の claude/settings.machine.json)に置く。
+  # 固定パス(dotfiles_machine_json_path)にはまだ何も無いので、この
+  # deploy は「移行してから同じ実行内でマージする」経路を通るはず
+  # (設計6、計画書 DOC-2609121700)。
   cat >"$copy_dir/claude/settings.machine.json" <<'JSONEOF'
 {
   "smokeTestMarker": "smoke-test-value"
@@ -893,9 +904,9 @@ JSONEOF
   fi
 
   if grep -q "smokeTestMarker" "$sbx/.claude/settings.json" 2>/dev/null; then
-    pass "非追跡の settings.machine.json が世代にコピーされ、マージ結果が settings.json に反映される"
+    pass "旧パスの settings.machine.json が固定パスへ移行され、マージ結果が settings.json に反映される"
   else
-    fail "非追跡の settings.machine.json が世代にコピーされ、マージ結果が settings.json に反映される"
+    fail "旧パスの settings.machine.json が固定パスへ移行され、マージ結果が settings.json に反映される"
   fi
 
   # smokeTestMarker の有無だけでは、settings.machine.json を「マージ」でなく
@@ -906,6 +917,335 @@ JSONEOF
     pass "ベース設定(claude/settings.json)側のキーもマージ後に残っている(丸ごと上書きされていない)"
   else
     fail "ベース設定(claude/settings.json)側のキーもマージ後に残っている(丸ごと上書きされていない)"
+  fi
+
+  # 移行そのものの検証: 固定パスに実体が作られ、旧パスは消え、
+  # ~/.claude/settings.machine.json はそこへの symlink になり、
+  # ログに移行した旨が出ていること(案A却下理由そのものの回帰検知)。
+  if grep -q "smokeTestMarker" "$fixed_path" 2>/dev/null; then
+    pass "固定パス($fixed_path)に移行後の実体が存在する"
+  else
+    fail "固定パス($fixed_path)に移行後の実体が存在する"
+  fi
+  # 移行元は「実際に deploy.sh を呼び出したソースツリー」(copy_dir)自身
+  # であって、そこから cp -a された世代(DOTFILES_DEPLOY_SRC)側のコピー
+  # ではない。世代側のコピーに対して mv しても、copy_dir 自身の
+  # settings.machine.json は移動されずに残ってしまい、次の deploy で
+  # 新しい世代へ再度コピーされて移行を無限に繰り返す(固定パスは既に
+  # 移行済みなので、2回目以降は必ず内容不一致でエラー停止する)。この
+  # 退化を検知する。
+  if [ -e "$copy_dir/claude/settings.machine.json" ]; then
+    fail "移行元(ソースツリー)の settings.machine.json が実際に消える(残っている: $copy_dir/claude/settings.machine.json)"
+  else
+    pass "移行元(ソースツリー)の settings.machine.json が実際に消える"
+  fi
+  assert_symlink "$sbx/.claude/settings.machine.json" "$fixed_path"
+  if printf '%s' "$out" | grep -qF "Migrated"; then
+    pass "移行した旨がログに出る"
+  else
+    fail "移行した旨がログに出る"
+  fi
+
+  # 上記の退化(世代側コピーだけを消す)が起きると、移行後に人間が
+  # ~/.claude/settings.machine.json(固定パスの実体)を編集するだけで、
+  # 次のdeployが「固定パス/旧パスの内容が異なる」エラーで必ず止まる
+  # (レビューで実際にサンドボックス実測した再現手順そのもの)。
+  # ソースツリー側の残骸("smokeTestMarker")と食い違う内容に人間が
+  # 編集したと見立てて、同じソースツリーからの2回目のdeployが
+  # 何のエラーも無く成功することを直接確認する。
+  printf '{"humanEditedMarker":"edited-after-migration"}\n' >"$fixed_path"
+  wait_for_next_second
+  out="$(run_deploy_from "$copy_dir/deploy-all.sh" "$sbx" --force --only claude 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "移行後に固定パスを編集した状態での同じソースツリーからの2回目deployが失敗しない(exit=$rc、移行の無限ループ退化)"
+    log "$out"
+  else
+    pass "移行後に固定パスを編集した状態での同じソースツリーからの2回目deployが失敗しない(移行の無限ループ退化なし)"
+  fi
+  if grep -q "humanEditedMarker" "$sbx/.claude/settings.json" 2>/dev/null; then
+    pass "2回目deploy後もsettings.jsonは人間が編集した固定パスの内容を反映している"
+  else
+    fail "2回目deploy後もsettings.jsonは人間が編集した固定パスの内容を反映している"
+  fi
+}
+
+# ── シナリオ10b: 学習した allow が deploy 越しに保全される（孫2 設計3） ───
+
+scenario_claude_allow_preservation() {
+  if ! has_tool claude; then
+    return
+  fi
+  log "=== シナリオ10b: 学習した allow が deploy 越しに保全される（孫2 設計3） ==="
+  local sbx out rc copy_dir _count
+
+  # --- ケースA: settings.machine.json 無しでも、既存生成物の allow が
+  #     保全される。保全対象外の ask（手で足された分。背景3-Aの再現）は
+  #     引き継がれず、ベースの deny/ask も弱められないこと。 ---
+  new_sandbox
+  sbx="$SANDBOX_DIR"
+  mkdir -p "$sbx/.claude"
+  cat >"$sbx/.claude/settings.json" <<'JSONEOF'
+{
+  "permissions": {
+    "allow": ["Bash(git checkout *)", "Bash(smoke-learned-cmd *)"],
+    "ask": ["Bash(git merge *)"]
+  }
+}
+JSONEOF
+
+  out="$(run_deploy "$sbx" --force --only claude 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "machine.json無しでの学習allow保全deployが失敗 (exit=$rc)"
+    log "$out"
+  else
+    if grep -qF '"Bash(smoke-learned-cmd *)"' "$sbx/.claude/settings.json"; then
+      pass "machine.json無しでも既存の学習allowが保全される"
+    else
+      fail "machine.json無しでも既存の学習allowが保全される"
+    fi
+    if grep -qF '"Bash(git merge *)"' "$sbx/.claude/settings.json"; then
+      fail "保全対象外のask(手動追加分)は引き継がれない(allowだけを保全するはずが ask も引きずっている)"
+    else
+      pass "保全対象外のask(手動追加分)は引き継がれない(allowだけを保全)"
+    fi
+    if grep -qF '"Bash(git push --force)"' "$sbx/.claude/settings.json" &&
+      grep -qF 'Read(./.env)' "$sbx/.claude/settings.json"; then
+      pass "保全されたallowがベースのdeny/askを弱めていない"
+    else
+      fail "保全されたallowがベースのdeny/askを弱めていない"
+    fi
+  fi
+
+  # --- 冪等性: 同じ状態で2回目を実行してもallowが増殖しない ---
+  wait_for_next_second
+  out="$(run_deploy "$sbx" --force --only claude 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "学習allow保全ありでの2回目deployが失敗 (exit=$rc、冪等性なし)"
+  else
+    _count="$(grep -cF '"Bash(smoke-learned-cmd *)"' "$sbx/.claude/settings.json")"
+    if [ "$_count" = "1" ]; then
+      pass "2回目のdeployでもallowが重複しない(冪等)"
+    else
+      fail "2回目のdeployでallowが重複増殖した(件数=$_count)"
+    fi
+  fi
+
+  # --- ケースB: 既存生成物が壊れたJSONでもdeployを失敗させない ---
+  new_sandbox
+  sbx="$SANDBOX_DIR"
+  mkdir -p "$sbx/.claude"
+  printf '{ this is not valid json' >"$sbx/.claude/settings.json"
+  out="$(run_deploy "$sbx" --force --only claude 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "既存settings.jsonが壊れたJSONでもdeployは失敗しない (exit=$rc)"
+    log "$out"
+  else
+    pass "既存settings.jsonが壊れたJSONでもdeployは失敗しない"
+    if python3 -m json.tool "$sbx/.claude/settings.json" >/dev/null 2>&1; then
+      pass "既存settings.jsonが壊れたJSONでも生成物自体はvalid JSONになる"
+    else
+      fail "既存settings.jsonが壊れたJSONでも生成物自体はvalid JSONになる"
+    fi
+  fi
+
+  # --- ケースC: settings.machine.json あり + 既存allow ---
+  # (両方のソース由来のallowが共存すること。machine.jsonのallow結合と
+  #  孫2の既存allow保全は別経路なので、片方だけ効いていないかを検知する)
+  new_sandbox
+  sbx="$SANDBOX_DIR"
+  mkdir -p "$sbx/.claude"
+  cat >"$sbx/.claude/settings.json" <<'JSONEOF'
+{
+  "permissions": {
+    "allow": ["Bash(smoke-learned-cmd-2 *)"]
+  }
+}
+JSONEOF
+  copy_dir="$(mktemp -d)"
+  CREATED_DIRS+=("$copy_dir")
+  copy_repo_snapshot "$copy_dir"
+  cat >"$copy_dir/claude/settings.machine.json" <<'JSONEOF'
+{
+  "permissions": {
+    "allow": ["Bash(git fetch *)"]
+  }
+}
+JSONEOF
+  out="$(run_deploy_from "$copy_dir/deploy-all.sh" "$sbx" --force --only claude 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "machine.jsonありでの学習allow保全deployが失敗 (exit=$rc)"
+    log "$out"
+  else
+    if grep -qF '"Bash(smoke-learned-cmd-2 *)"' "$sbx/.claude/settings.json" &&
+      grep -qF '"Bash(git fetch *)"' "$sbx/.claude/settings.json"; then
+      pass "machine.jsonありでも既存の学習allowとmachine側allowの両方が残る"
+    else
+      fail "machine.jsonありでも既存の学習allowとmachine側allowの両方が残る"
+    fi
+  fi
+
+  # --- ケースD: --dry-run は実ファイルを書き換えず、保全予定件数だけ報告する ---
+  new_sandbox
+  sbx="$SANDBOX_DIR"
+  mkdir -p "$sbx/.claude"
+  cat >"$sbx/.claude/settings.json" <<'JSONEOF'
+{
+  "permissions": {
+    "allow": ["Bash(smoke-learned-cmd-3 *)"]
+  }
+}
+JSONEOF
+  out="$(run_deploy "$sbx" --dry-run --only claude 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "学習allowありでの--dry-runが失敗 (exit=$rc)"
+    log "$out"
+  else
+    if printf '%s' "$out" | grep -qE "Would preserve 1 learned permissions.allow"; then
+      pass "--dry-runで保全予定件数が報告される"
+    else
+      fail "--dry-runで保全予定件数が報告される"
+    fi
+    # 実際にマージが走っていればbase由来の"model"キーが書き込まれるはず。
+    # それが無いことで「dry-runなのに実ファイルへ書いた」退化を検知する。
+    if grep -q '"model"' "$sbx/.claude/settings.json" 2>/dev/null; then
+      fail "--dry-runでも既存settings.jsonの内容は変更されない(実際に書き込まれた)"
+    else
+      pass "--dry-runでも既存settings.jsonの内容は変更されない"
+    fi
+  fi
+}
+
+# ── シナリオ10c: settings.machine.json の固定パス化（孫6・設計6）────────
+# 案A（世代経由の状態ファイル方式）を却下した理由そのものの回帰検知:
+# machine.json を持たないソースツリーから deploy しても、固定パスの
+# 既存 machine 設定が失われないこと。加えて、初回deployでの空{}作成
+# (--dry-runでは作らない)と、固定パス/旧パスの内容が食い違う場合に
+# deployが自動でどちらかを採用せず停止することを検証する。
+
+scenario_claude_machine_json_fixed_path() {
+  if ! has_tool claude; then
+    return
+  fi
+  log "=== シナリオ10c: settings.machine.json の固定パス化(孫6) ==="
+  local sbx prefix fixed_path out rc copy_dir_a copy_dir_b
+
+  # --- (1) 初回deploy: 固定パスに何も無ければ空の{}が作られる ---
+  new_sandbox
+  sbx="$SANDBOX_DIR"
+  prefix="$(dotfiles_prefix_for "$sbx")"
+  fixed_path="$prefix/settings.machine.json"
+
+  out="$(run_deploy "$sbx" --dry-run --only claude 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "machine.json無し状態でのdeploy-all.sh --dry-run --only claudeが失敗 (exit=$rc)"
+    log "$out"
+  else
+    assert_not_exists "$fixed_path"
+  fi
+
+  out="$(run_deploy "$sbx" --force --only claude 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "machine.json無し状態でのdeploy-all.sh --force --only claudeが失敗 (exit=$rc)"
+    log "$out"
+    return
+  fi
+  if [ "$(cat "$fixed_path" 2>/dev/null)" = "{}" ]; then
+    pass "固定パスに機械設定が無ければ空の{}が作られる"
+  else
+    fail "固定パスに機械設定が無ければ空の{}が作られる(内容: $(cat "$fixed_path" 2>/dev/null))"
+  fi
+  assert_symlink "$sbx/.claude/settings.machine.json" "$fixed_path"
+
+  # --- (2) machine.json を持たないソースツリーから再deployしても、固定
+  #     パスの既存内容(このケースでは人間が編集したと見立てた内容)は
+  #     失われない。案A却下理由そのものの最重要回帰。 ---
+  printf '{"humanEditedMarker":"kept-across-deploys"}\n' >"$fixed_path"
+
+  copy_dir_a="$(mktemp -d)"
+  CREATED_DIRS+=("$copy_dir_a")
+  copy_repo_snapshot "$copy_dir_a"
+  # このコピーは claude/settings.machine.json を持たない(=傘や孫の
+  # ワークツリーを模している)。
+
+  wait_for_next_second
+  out="$(run_deploy_from "$copy_dir_a/deploy-all.sh" "$sbx" --force --only claude 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "machine.jsonを持たないソースツリーからのdeployが失敗 (exit=$rc)"
+    log "$out"
+  else
+    if grep -q "humanEditedMarker" "$fixed_path" 2>/dev/null; then
+      pass "machine.jsonを持たないソースツリーからdeployしても固定パスの既存内容が失われない"
+    else
+      fail "machine.jsonを持たないソースツリーからdeployしても固定パスの既存内容が失われない"
+    fi
+    if grep -q "humanEditedMarker" "$sbx/.claude/settings.json" 2>/dev/null; then
+      pass "固定パスの既存内容が生成物(settings.json)にも引き続きマージされる"
+    else
+      fail "固定パスの既存内容が生成物(settings.json)にも引き続きマージされる"
+    fi
+  fi
+
+  # --- (3) 固定パスと旧パス(ソースツリー相対)の両方に存在し、内容が
+  #     同じなら警告のみで続行する ---
+  copy_dir_b="$(mktemp -d)"
+  CREATED_DIRS+=("$copy_dir_b")
+  copy_repo_snapshot "$copy_dir_b"
+  printf '{"humanEditedMarker":"kept-across-deploys"}\n' >"$copy_dir_b/claude/settings.machine.json"
+
+  wait_for_next_second
+  out="$(run_deploy_from "$copy_dir_b/deploy-all.sh" "$sbx" --force --only claude 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "固定パス/旧パスの内容が同じ場合のdeployが失敗 (exit=$rc)"
+    log "$out"
+  else
+    pass "固定パス/旧パスの内容が同じ場合はdeployが続行する"
+    if printf '%s' "$out" | grep -qF "superseded"; then
+      pass "旧パスが無視される旨の警告が出る"
+    else
+      fail "旧パスが無視される旨の警告が出る"
+    fi
+  fi
+
+  # --- (4) 固定パスと旧パスの内容が異なる場合は、どちらかを自動で採用
+  #     せずエラーで停止する。settings.jsonは書き換えられない。 ---
+  printf '{"conflictingMarker":"old-path-value"}\n' >"$copy_dir_b/claude/settings.machine.json"
+  wait_for_next_second
+  out="$(run_deploy_from "$copy_dir_b/deploy-all.sh" "$sbx" --force --only claude 2>&1)"
+  rc=$?
+  if [ "$rc" -eq 0 ]; then
+    fail "固定パス/旧パスの内容が異なる場合、deployがエラーで停止する (exit=0のままだった)"
+  else
+    pass "固定パス/旧パスの内容が異なる場合、deployがエラーで停止する (exit=$rc)"
+  fi
+  if printf '%s' "$out" | grep -qF "DIFFERENT content"; then
+    pass "内容が異なる旨のエラーメッセージが出る"
+  else
+    fail "内容が異なる旨のエラーメッセージが出る"
+  fi
+  if grep -q "humanEditedMarker" "$fixed_path" 2>/dev/null && ! grep -q "conflictingMarker" "$fixed_path" 2>/dev/null; then
+    pass "衝突時、固定パスの内容は書き換えられない"
+  else
+    fail "衝突時、固定パスの内容は書き換えられない"
+  fi
+  if grep -q "conflictingMarker" "$copy_dir_b/claude/settings.machine.json" 2>/dev/null; then
+    pass "衝突時、旧パスのファイルも移動・削除されない"
+  else
+    fail "衝突時、旧パスのファイルも移動・削除されない"
+  fi
+  if grep -q "conflictingMarker" "$sbx/.claude/settings.json" 2>/dev/null; then
+    fail "衝突時、settings.jsonが誤った内容で書き換わっていない(書き換わってしまった)"
+  else
+    pass "衝突時、settings.jsonが誤った内容で書き換わっていない"
   fi
 }
 
@@ -1246,16 +1586,27 @@ scenario_distribution_artifact_cleanup() {
     return
   fi
   log "=== シナリオ14: uninstallで配布実体(generations/current)が片付く ==="
-  local sbx prefix out rc
+  local sbx prefix out rc deploy_tools with_claude=0
 
   new_sandbox
   sbx="$SANDBOX_DIR"
   prefix="$(dotfiles_prefix_for "$sbx")"
 
-  out="$(run_deploy "$sbx" --force --only bin 2>&1)"
+  # claude が対象に含まれる実行では、settings.machine.json（固定パスの
+  # 実体。dotfiles_machine_json_path、shared/helpers.sh）も一緒に作らせて
+  # 「prefix直下のこのファイルはuninstallで消えない」ところまで検証する
+  # （設計6、計画書 DOC-2609121700）。含まれない実行（例:
+  # tests/deploy_smoke.sh bin）では従来どおり bin のみで cleanup を見る。
+  deploy_tools="bin"
+  if has_tool claude; then
+    deploy_tools="bin,claude"
+    with_claude=1
+  fi
+
+  out="$(run_deploy "$sbx" --force --only "$deploy_tools" 2>&1)"
   rc=$?
   if [ "$rc" -ne 0 ]; then
-    fail "deploy-all.sh --force --only bin が失敗 (exit=$rc)"
+    fail "deploy-all.sh --force --only $deploy_tools が失敗 (exit=$rc)"
     log "$out"
     return
   fi
@@ -1267,22 +1618,42 @@ scenario_distribution_artifact_cleanup() {
     return
   fi
 
-  out="$(run_uninstall "$sbx" --force --only bin 2>&1)"
+  if [ "$with_claude" -eq 1 ]; then
+    assert_exists "$prefix/settings.machine.json"
+    assert_symlink "$sbx/.claude/settings.machine.json" "$prefix/settings.machine.json"
+  fi
+
+  out="$(run_uninstall "$sbx" --force --only "$deploy_tools" 2>&1)"
   rc=$?
   if [ "$rc" -ne 0 ]; then
-    fail "uninstall.sh --force --only bin が失敗 (exit=$rc)"
+    fail "uninstall.sh --force --only $deploy_tools が失敗 (exit=$rc)"
     log "$out"
     return
   fi
 
   assert_not_exists "$prefix/generations"
   assert_not_exists "$prefix/current"
-  # generations/ と current だけでなく、prefix自体(.tmp/を含む)も片付く
-  # ことを確認する。create_generation はビルド用scratchを
-  # <prefix>/.tmp/ に作り(shared/helpers.sh)、成功時にgenerations/へ
-  # mvするが .tmp ディレクトリ自体は残り続けるため、これを消し忘れると
-  # prefixがいつまでも空にならない(rmdirが常に失敗する)。
-  assert_not_exists "$prefix"
+  assert_not_exists "$prefix/.tmp"
+
+  if [ "$with_claude" -eq 1 ]; then
+    # settings.machine.json は人間のマシン設定であり、この repo の配布物
+    # ではないため uninstall は symlink だけを撤去し実体は消さない
+    # （AGENTS.md「claude の例外」）。したがって generations/current/.tmp
+    # がすべて片付いても prefix 自体は空にならず残り続ける — これは
+    # バグではなく設計6の意図した挙動。
+    assert_not_exists "$sbx/.claude/settings.machine.json"
+    assert_exists "$prefix"
+    assert_exists "$prefix/settings.machine.json"
+  else
+    # generations/ と current だけでなく、prefix自体(.tmp/を含む)も片付く
+    # ことを確認する。create_generation はビルド用scratchを
+    # <prefix>/.tmp/ に作り(shared/helpers.sh)、成功時にgenerations/へ
+    # mvするが .tmp ディレクトリ自体は残り続けるため、これを消し忘れると
+    # prefixがいつまでも空にならない(rmdirが常に失敗する)。claude を
+    # 対象に含めない場合、settings.machine.json は一切作られないため
+    # prefix は完全に消えるのが正しい。
+    assert_not_exists "$prefix"
+  fi
 }
 
 # ── シナリオ15: devモード(currentがソースツリーを指す)でのソースツリー保護 ──
@@ -1728,6 +2099,13 @@ scenario_cleanup_removes_orphaned_scratch_without_generation() {
   mkdir -p "$prefix/.tmp/gen.CRASH1/bin"
   printf 'dummy\n' >"$prefix/.tmp/gen.CRASH1/bin/ocw"
 
+  # settings.machine.json（固定パスの実体）は世代/current のライフサイクル
+  # と無関係にprefix直下へ置かれるマシン設定なので、世代すら存在しない
+  # このクラッシュ状態でも生き残るべきことを確認する（uninstallの
+  # 後片付けが「prefix配下を無差別に一掃する」実装に戻っていないことの
+  # 回帰検知。設計6、計画書 DOC-2609121700）。
+  printf '{"dummy-machine-setting":true}\n' >"$prefix/settings.machine.json"
+
   out="$(run_uninstall "$sbx" --force 2>&1)"
   rc=$?
   if [ "$rc" -ne 0 ]; then
@@ -1736,7 +2114,14 @@ scenario_cleanup_removes_orphaned_scratch_without_generation() {
     return
   fi
 
-  assert_not_exists "$prefix"
+  assert_not_exists "$prefix/.tmp"
+  assert_exists "$prefix"
+  assert_exists "$prefix/settings.machine.json"
+  if [ "$(cat "$prefix/settings.machine.json" 2>/dev/null)" = '{"dummy-machine-setting":true}' ]; then
+    pass "settings.machine.json の内容が uninstall で書き換わっていない"
+  else
+    fail "settings.machine.json の内容が uninstall で書き換わっていない"
+  fi
 }
 
 # ── シナリオ23: --status ────────────────────────────────────────────────
@@ -1788,6 +2173,16 @@ scenario_status() {
     pass "--status が世代一覧でcurrentを明示する"
   else
     fail "--status が世代一覧でcurrentを明示する"
+  fi
+
+  if has_tool claude; then
+    # settings.machine.json（固定パスの実体）の場所と有無を人間がドキュメント
+    # を読まずに知れること（背景3-I の要求そのもの。必須項目）。
+    if printf '%s' "$out" | grep -qF "Machine settings: $prefix/settings.machine.json (exists)"; then
+      pass "--status がmachine.jsonの固定パスと存在を報告する"
+    else
+      fail "--status がmachine.jsonの固定パスと存在を報告する"
+    fi
   fi
 
   if printf '%s' "$out" | grep -qE "\[OK\][[:space:]]+$sbx/bin/ocw$"; then
@@ -2520,6 +2915,10 @@ log
 scenario_claude_source_tree_disappears
 log
 scenario_claude_settings_machine_merge
+log
+scenario_claude_allow_preservation
+log
+scenario_claude_machine_json_fixed_path
 log
 scenario_skill_migration
 log
