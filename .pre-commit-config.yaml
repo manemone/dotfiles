@@ -67,6 +67,13 @@ repos:
         pass_filenames: false
         files: ^(deploy-all\.sh|uninstall\.sh|shared/helpers\.sh|[^/]+/deploy\.sh)$
 
+      - id: git-guard-test
+        name: tests/git_guard_test.sh (git-guard フックの判定表と無音一覧)
+        entry: tests/git_guard_test.sh
+        language: system
+        pass_filenames: false
+        files: ^(claude/hooks/git-guard\.sh|tests/git_guard_test\.sh)$
+
       - id: bin-lint
         name: bin/tests/lint.sh (bash -n / py_compile)
         entry: bin/tests/lint.sh

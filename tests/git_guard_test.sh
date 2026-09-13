@@ -2,9 +2,18 @@
 #
 # tests/git_guard_test.sh — claude/hooks/git-guard.sh のスタンドアロンテスト。
 #
-# git / gh を PATH 先頭のスタブに差し替えて判定表（ADR
-# docs/adr/DOC-2609121719_git-operation-permission-policy.md、claude/README.md
-# §3.5）を検証する。ネットワークにも実リポジトリの状態にも依存しない。
+# 2つの観点を同じ重みで検証する（ADR
+# docs/adr/DOC-2609121719_git-operation-permission-policy.md、claude/README.md §3.5）。
+#
+#   1. 判定表: `gh pr merge` の base が保護ブランチなら deny、それ以外は allow
+#   2. **無音でなければならない操作**: autopilot（傘ブランチ方式の無人運転）が
+#      日常的に行うコマンドが1つも承認ダイアログを出さない（= フックが何も言わない）
+#
+# 2 は PR #94 のレビューが見落とした観点であり、そのまま「`cd <repo> && git status`
+# が全部 ask になる」回帰を通した直接の原因になった。**1 を足すときは必ず 2 も足す。**
+#
+# gh を PATH 先頭のスタブに差し替えるため、ネットワークにも実リポジトリの状態にも
+# 依存しない。
 #
 # Usage:
 #   tests/git_guard_test.sh
@@ -36,46 +45,30 @@ cleanup() {
 trap cleanup EXIT
 
 STUB_DIR="$(mktemp -d)"
-WORKTREE_DIR="$STUB_DIR/worktree"
-mkdir -p "$WORKTREE_DIR/.git" "$WORKTREE_DIR/tests" "$WORKTREE_DIR/claude/hooks" "$STUB_DIR/outside"
-ln -s "$STUB_DIR/outside" "$WORKTREE_DIR/escape-link"
-export GIT_GUARD_TEST_WORKTREE_ROOT="$WORKTREE_DIR"
+GH_ARGS_FILE="$STUB_DIR/gh-args"
 
-# git スタブ: `git rev-parse --abbrev-ref HEAD` と `git rev-parse --show-toplevel`
-# に応答する。GIT_GUARD_TEST_CURRENT_BRANCH（export 必須。未設定なら
-# "current-branch"）/ GIT_GUARD_TEST_WORKTREE_ROOT（未設定なら $STUB_DIR/worktree）
-# を返す。GIT_GUARD_TEST_GIT_FAIL=1 のときは非ゼロ終了する（解決失敗を模擬）。
-cat >"$STUB_DIR/git" <<'STUB'
-#!/bin/sh
-if [ "${GIT_GUARD_TEST_GIT_FAIL:-0}" = "1" ]; then
-  exit 1
-fi
-if [ "$1" = "rev-parse" ] && [ "$2" = "--abbrev-ref" ] && [ "$3" = "HEAD" ]; then
-  printf '%s\n' "${GIT_GUARD_TEST_CURRENT_BRANCH:-current-branch}"
-  exit 0
-fi
-if [ "$1" = "rev-parse" ] && [ "$2" = "--show-toplevel" ]; then
-  if [ -z "${GIT_GUARD_TEST_WORKTREE_ROOT:-}" ]; then
-    exit 1
-  fi
-  printf '%s\n' "$GIT_GUARD_TEST_WORKTREE_ROOT"
-  exit 0
-fi
-exit 1
-STUB
-chmod +x "$STUB_DIR/git"
-
-# gh スタブ: `gh pr view [<target>] --json baseRefName -q .baseRefName` に応答する。
-# GIT_GUARD_TEST_BASE_REF（export 必須）が空なら失敗する（PR 解決不能を模擬）。
+# gh スタブ: `gh [<グローバルオプション>] pr view [<target>] --json baseRefName -q ...`
+# に応答する。受け取った引数を $GH_ARGS_FILE に記録するので、フックが
+# `-R <owner/repo>` を引き継いだかを検証できる。
+# GIT_GUARD_TEST_BASE_REF（export 必須）が空なら失敗する（base 解決不能を模擬）。
 cat >"$STUB_DIR/gh" <<'STUB'
 #!/bin/sh
+printf '%s\n' "$*" >"$GH_ARGS_FILE"
 if [ -z "${GIT_GUARD_TEST_BASE_REF:-}" ]; then
   exit 1
 fi
+# 実物と同じく、PR 番号 / URL / ブランチ名として解決できない target では失敗する。
+# （行コメントの `#` をマージ対象として渡してしまう回帰を、ここで初めて検出できる）
+for arg in "$@"; do
+  case "$arg" in
+    '#'*) exit 1 ;;
+  esac
+done
 printf '%s\n' "$GIT_GUARD_TEST_BASE_REF"
 exit 0
 STUB
 chmod +x "$STUB_DIR/gh"
+export GH_ARGS_FILE
 
 # run_hook <command> [cwd]
 # 最小限の PreToolUse JSON をフックへ流し込み、stdout を返す。
@@ -103,7 +96,7 @@ run_hook_raw() {
 
 # extract_decision
 # フックの stdout（空、または hookSpecificOutput JSON）から permissionDecision
-# を取り出す。出力が空なら "(none)" を返す（判定表の「何も言わない」）。
+# を取り出す。出力が空なら "(none)" を返す（＝何も言わない）。
 extract_decision() {
   python3 -c '
 import json, sys
@@ -129,458 +122,199 @@ assert_decision() {
   fi
 }
 
+# assert_silent <label> <command>
+# 「何も言わない」ことだけを主張する。無音一覧はこれで固定する。
+assert_silent() {
+  assert_decision "$1" "(none)" "$(run_hook "$2" | extract_decision)"
+}
+
 log "=== git-guard.sh テスト ==="
 
-# ── gh pr merge ──────────────────────────────────────────────────
+# ── 1. 判定表（フックが担保する唯一の1点） ───────────────────────
+log "--- gh pr merge の base 判定 ---"
+
 export GIT_GUARD_TEST_BASE_REF="master"
 assert_decision \
-  "gh pr merge: base=master（保護ブランチ）は deny" \
-  "deny" "$(run_hook "gh pr merge 1 --squash" | extract_decision)"
+  "gh pr merge: base=master は deny" \
+  "deny" "$(run_hook "gh pr merge 1 --squash --delete-branch" | extract_decision)"
+
+assert_decision \
+  "gh pr merge: 連結コマンドの中でも deny（連結で迂回できない）" \
+  "deny" "$(run_hook "cd /tmp && gh pr merge 1 --squash" | extract_decision)"
+
+assert_decision \
+  "gh pr merge: --body の値をマージ対象と取り違えない" \
+  "deny" "$(run_hook "gh pr merge --squash -b 'merge 済み' 42" | extract_decision)"
+
+# コマンド位置の判定が「直前のトークン」だけを見ていると、区切りが消える形で
+# 取りこぼす。shlex は改行を空白として捨て、`;` は前の語に密着したままになる。
+# 無音一覧（ヒアドキュメント本文を deny しない）と対になる裏側であり、
+# 片方だけ固定すると位置判定を触るたびに同じ穴が再生産される。
+assert_decision \
+  "gh pr merge: 改行区切りの2行目でも deny" \
+  "deny" "$(run_hook "$(printf 'gh pr view 1 --json reviewDecision\ngh pr merge 1 --squash')" | extract_decision)"
+
+assert_decision \
+  "gh pr merge: ; が前の語に密着していても deny" \
+  "deny" "$(run_hook "cd /tmp; gh pr merge 1 --squash" | extract_decision)"
+
+# shlex.shlex は commenters='#' が既定（shlex.split と違って自動解除されない）。
+# 有効なままだと行内の裸の # 以降が捨てられ、gh pr merge を取りこぼす。
+assert_decision \
+  "gh pr merge: 行内に裸の # があっても deny" \
+  "deny" "$(run_hook "curl https://example.com/x#frag && gh pr merge 1 --squash" | extract_decision)"
+
+# 逆に、語頭が # のトークン以降は行コメント。落とさないと PR 番号を省略した形で
+# コメントがマージ対象として拾われ、gh pr view '#' が失敗して無音になる。
+assert_decision \
+  "gh pr merge: 末尾コメントをマージ対象と取り違えない（PR番号省略）" \
+  "deny" "$(run_hook "gh pr merge --squash --delete-branch  # 承認済み" | extract_decision)"
+
+# クォートされた # はコメント開始ではない。posix=True のトークン列だけで判定すると
+# クォートが剥がれて区別できず、この行は # の位置で切られて gh pr merge が消える。
+assert_decision \
+  "gh pr merge: クォートされた # で行が切られない" \
+  "deny" "$(run_hook "grep -n '#' conf && gh pr merge 1 --squash" | extract_decision)"
+
+# herestring（<<<）と引用符の中の << をヒアドキュメント開始と誤認すると、
+# 以降の行を全部捨てて次の行の gh pr merge を素通りさせる。
+assert_decision \
+  "gh pr merge: herestring の次の行でも deny" \
+  "deny" "$(run_hook "$(printf 'grep foo <<<"本文"\ngh pr merge 1 --squash')" | extract_decision)"
+assert_decision \
+  "gh pr merge: 引用符の中の << の次の行でも deny" \
+  "deny" "$(run_hook "$(printf 'echo "cat <<EOF"\ngh pr merge 1 --squash')" | extract_decision)"
+
+# -R / --repo は対象リポジトリを cwd から動かすため、cwd 基準の base 解決は
+# 成立しない。gh pr view 側へ引き継げているかを引数の実物で検証する。
+# `--repo` は `gh pr` 配下の inherited flag であり、gh の直後だけでなく
+# `pr merge` の後ろにも書ける。片側しか見ないと、その値をマージ対象と
+# 取り違えて cwd 基準で解決し、別リポジトリの master へのマージを allow に
+# 倒す（引き継ぎロジックが gh〜pr 間にしか無い状態では、この一覧のうち
+# 最初の1件しか落ちない）。
+assert_repo_forwarded() {
+  local label="$1" command="$2" expect_arg="$3"
+  : >"$GH_ARGS_FILE"
+  assert_decision "$label: base=master なら deny" \
+    "deny" "$(run_hook "$command" | extract_decision)"
+  if grep -q -- "$expect_arg" "$GH_ARGS_FILE"; then
+    pass "$label: リポジトリ指定が gh pr view へ引き継がれている"
+  else
+    fail "$label: リポジトリ指定が引き継がれていない (args: $(cat "$GH_ARGS_FILE"))"
+  fi
+}
+
+assert_repo_forwarded "gh -R <owner/repo> pr merge <N>" \
+  "gh -R other/repo pr merge 7 --squash" "-R other/repo"
+assert_repo_forwarded "gh pr merge -R <owner/repo> <N>" \
+  "gh pr merge -R other/repo 7 --squash" "-R other/repo"
+assert_repo_forwarded "gh pr merge <N> --repo <owner/repo>" \
+  "gh pr merge 7 --repo other/repo --squash" "--repo other/repo"
+assert_repo_forwarded "gh pr merge --repo=<owner/repo> <N>" \
+  "gh pr merge --repo=other/repo 7 --squash" "--repo=other/repo"
+assert_repo_forwarded "gh pr merge -R<owner/repo>（密着形）<N>" \
+  "gh pr merge -Rother/repo 7 --squash" "-Rother/repo"
+
+export GIT_GUARD_TEST_BASE_REF="main"
+assert_decision \
+  "gh pr merge: base=main は deny" \
+  "deny" "$(run_hook "gh pr merge --squash" | extract_decision)"
+
+export GIT_GUARD_TEST_BASE_REF="git-guard-regressions"
+assert_decision \
+  "gh pr merge: base=傘ブランチは allow（孫→傘のマージは無音で通す）" \
+  "allow" "$(run_hook "gh pr merge 12 --squash --delete-branch" | extract_decision)"
 unset GIT_GUARD_TEST_BASE_REF
 
-export GIT_GUARD_TEST_BASE_REF="autopilot-permissions"
-assert_decision \
-  "gh pr merge: base=傘ブランチ（非保護）は allow" \
-  "allow" "$(run_hook "gh pr merge 1 --squash" | extract_decision)"
-unset GIT_GUARD_TEST_BASE_REF
+# GIT_GUARD_TEST_BASE_REF 未設定 → gh スタブが失敗 → base 解決不能。
+# 初版は ask に倒していた。判定できないときは何も言わない（既存の permissions に委ねる）。
+assert_silent \
+  "gh pr merge: base 解決不能でも ask に倒さない" \
+  "gh pr merge 999999 --squash"
 
-# GIT_GUARD_TEST_BASE_REF 未設定 → gh スタブが失敗 → base 解決不能
-assert_decision \
-  "gh pr merge: gh 実行失敗（PR 解決不能）は ask（allow に倒れない）" \
-  "ask" "$(run_hook "gh pr merge 999999 --squash" | extract_decision)"
+assert_silent \
+  "gh pr view（merge 以外のサブコマンド）は対象外" \
+  "gh pr view 12 --json title"
 
-# ── git push ─────────────────────────────────────────────────────
-export GIT_GUARD_TEST_CURRENT_BRANCH="feature"
-assert_decision \
-  "git push --force-with-lease: 非保護ブランチ（refspec 省略）は allow" \
-  "allow" "$(run_hook "git push --force-with-lease origin" | extract_decision)"
-unset GIT_GUARD_TEST_CURRENT_BRANCH
-
-assert_decision \
-  "git push --force-with-lease: 保護ブランチへの明示 refspec は deny" \
-  "deny" "$(run_hook "git push --force-with-lease origin master" | extract_decision)"
-
-assert_decision \
-  "裸の git push --force: 非保護ブランチでも ask" \
-  "ask" "$(run_hook "git push --force origin feature" | extract_decision)"
-
-assert_decision \
-  "git push -f: 保護ブランチは deny" \
-  "deny" "$(run_hook "git push -f origin master" | extract_decision)"
-
-assert_decision \
-  "git push +<refspec>: 保護ブランチは deny（lease 無し force 相当）" \
-  "deny" "$(run_hook "git push origin +feature:master" | extract_decision)"
-
-assert_decision \
-  "force 系フラグも +refspec も無い git push は対象外（何も言わない）" \
-  "(none)" "$(run_hook "git push origin feature" | extract_decision)"
-
-assert_decision \
-  "git push に未知の値取りオプションが混入: 安全に解決できず ask" \
-  "ask" "$(run_hook "git push --unknown-opt value origin feature --force" | extract_decision)"
-
-# force 系フラグを一切伴わない push は、未知オプション（force とは無関係）が
-# 混ざっていても対象外（何も言わない）であること。孫ブランチの初回 push
-# （git push -u origin <新ブランチ>）そのものであり、この判定を誤ると
-# 本PRの目的（無人ペインの承認ダイアログ詰まり解消）に逆行する退行になる
-# （レビュー指摘の回帰）。
-assert_decision \
-  "git push -u origin <branch>: force を伴わないので未知オプションがあっても対象外" \
-  "(none)" "$(run_hook "git push -u origin feature" | extract_decision)"
-
-assert_decision \
-  "git push --set-upstream origin <branch>: 同上" \
-  "(none)" "$(run_hook "git push --set-upstream origin feature" | extract_decision)"
-
-assert_decision \
-  "git push -q --force-with-lease origin <branch>: force はあるが未知の -q が混在 → ask" \
-  "ask" "$(run_hook "git push -q --force-with-lease origin feature" | extract_decision)"
-
-# git の parse-options は短オプションの結合を受け付けるため、"-uf" のような
-# 束ねたオプションに "f" が混ざっていれば force push である。force マーカー
-# 判定がこれを見落とすと、保護ブランチへの force push が未知オプション扱いにも
-# ならずそのまま (none) に落ち、フックが唯一の担保である refspec 省略形
-# （ADR §3.3「受け入れる残余リスク」）が無防備になる（レビュー指摘の回帰）。
-export GIT_GUARD_TEST_CURRENT_BRANCH="master"
-assert_decision \
-  "git push -uf origin HEAD: 束ねた短オプションのforceを保護ブランチで見落とさず ask 以上" \
-  "ask" "$(run_hook "git push -uf origin HEAD" | extract_decision)"
-unset GIT_GUARD_TEST_CURRENT_BRANCH
-
-assert_decision \
-  "git push -uf origin feature: 束ねた短オプションのforceは非保護ブランチでも ask（未知オプションのfail-safe）" \
-  "ask" "$(run_hook "git push -uf origin feature" | extract_decision)"
-
-# refspec が "HEAD" / "@"（現在のブランチを指す特殊参照）のとき、文字列
-# のまま比較せず現在のブランチへ解決すること（レビュー指摘2の回帰）。
-export GIT_GUARD_TEST_CURRENT_BRANCH="master"
-assert_decision \
-  "git push --force-with-lease origin HEAD: 現在のブランチ(保護)へ解決して deny" \
-  "deny" "$(run_hook "git push --force-with-lease origin HEAD" | extract_decision)"
-assert_decision \
-  "git push --force-with-lease origin @: 現在のブランチ(保護)へ解決して deny" \
-  "deny" "$(run_hook "git push --force-with-lease origin @" | extract_decision)"
-unset GIT_GUARD_TEST_CURRENT_BRANCH
-
-export GIT_GUARD_TEST_CURRENT_BRANCH="feature"
-assert_decision \
-  "git push --force-with-lease origin HEAD: 現在のブランチ(非保護)へ解決して allow" \
-  "allow" "$(run_hook "git push --force-with-lease origin HEAD" | extract_decision)"
-unset GIT_GUARD_TEST_CURRENT_BRANCH
-
-# ── gh pr merge に --repo/-R が付くケース（レビュー指摘3の回帰）────
-# --repo/-R は gh pr view の対象リポジトリを cwd 以外へ切り替えるため、
-# 安全に base を解決できない。base=非保護でも allow に倒れないこと。
-export GIT_GUARD_TEST_BASE_REF="autopilot-permissions"
-assert_decision \
-  "gh pr merge --repo <owner/repo>: 対象リポジトリを安全に解決できず ask" \
-  "ask" "$(run_hook "gh pr merge 1 --repo other/repo --squash" | extract_decision)"
-assert_decision \
-  "gh pr merge -R <owner/repo>: 対象リポジトリを安全に解決できず ask" \
-  "ask" "$(run_hook "gh pr merge 1 -R other/repo --squash" | extract_decision)"
-assert_decision \
-  "gh pr merge --repo=<owner/repo>: 対象リポジトリを安全に解決できず ask" \
-  "ask" "$(run_hook "gh pr merge 1 --repo=other/repo --squash" | extract_decision)"
-unset GIT_GUARD_TEST_BASE_REF
-
-# ── has_chain の引用符誤検出対策（レビュー指摘4の回帰）────────────
-# コミットメッセージ等の引用符の中に ; / | があるだけの無関係なコマンドを
-# 連結と誤認して ask に倒さないこと。
-assert_decision \
-  "引用符内の ';' はコマンド連結と誤認しない" \
-  "(none)" "$(run_hook 'git commit -m "merge 済み判定を追加; 掃除も"' | extract_decision)"
-assert_decision \
-  "引用符内の '|' はコマンド連結と誤認しない" \
-  "(none)" "$(run_hook 'git commit -m "push|pull を整理"' | extract_decision)"
-
-# ── git merge ────────────────────────────────────────────────────
-export GIT_GUARD_TEST_CURRENT_BRANCH="master"
-assert_decision \
-  "git merge: 現在のブランチ（マージ先）が保護ブランチなら deny" \
-  "deny" "$(run_hook "git merge origin/master" | extract_decision)"
-unset GIT_GUARD_TEST_CURRENT_BRANCH
-
-export GIT_GUARD_TEST_CURRENT_BRANCH="feature"
-assert_decision \
-  "git merge: 現在のブランチが非保護なら allow" \
-  "allow" "$(run_hook "git merge origin/master" | extract_decision)"
-unset GIT_GUARD_TEST_CURRENT_BRANCH
-
-export GIT_GUARD_TEST_GIT_FAIL=1
-assert_decision \
-  "git merge: 現在のブランチ解決失敗は ask（allow に倒れない）" \
-  "ask" "$(run_hook "git merge origin/master" | extract_decision)"
-unset GIT_GUARD_TEST_GIT_FAIL
-
-# ── fail-safe: 複数コマンドの連結 ───────────────────────────────
-assert_decision \
-  "複数コマンド連結（&&）は ask（allow に倒れない）" \
-  "ask" "$(run_hook "git merge foo && rm -rf /" | extract_decision)"
-
-assert_decision \
-  "複数コマンド連結（;）は ask（allow に倒れない）" \
-  "ask" "$(run_hook "git push --force origin master; echo done" | extract_decision)"
-
-# ── グローバルオプションでサブコマンド位置が特定できないケース ──
-assert_decision \
-  "git -C <dir> merge: サブコマンド位置が特定できず ask（allow に倒れない）" \
-  "ask" "$(run_hook "git -C /tmp/foo merge" | extract_decision)"
-
-# ── chmod（背景3-G） ────────────────────────────────────────────
-assert_decision \
-  "chmod +x: ワークツリー内の相対パスは allow" \
-  "allow" "$(run_hook "chmod +x tests/foo.sh" "$WORKTREE_DIR" | extract_decision)"
-
-assert_decision \
-  "chmod u+x: シンボリック指定のバリエーションも allow" \
-  "allow" "$(run_hook "chmod u+x claude/hooks/new-hook.sh" "$WORKTREE_DIR" | extract_decision)"
-
-assert_decision \
-  "chmod +x: ワークツリー外の絶対パスは ask（allow に倒れない）" \
-  "ask" "$(run_hook "chmod +x /etc/passwd" "$WORKTREE_DIR" | extract_decision)"
-
-assert_decision \
-  "chmod +x: '..' によるワークツリー脱出は ask（allow に倒れない）" \
-  "ask" "$(run_hook "chmod +x ../escaped.sh" "$WORKTREE_DIR" | extract_decision)"
-
-assert_decision \
-  "chmod +x: シンボリックリンク経由のワークツリー脱出は ask（allow に倒れない）" \
-  "ask" "$(run_hook "chmod +x escape-link/payload.sh" "$WORKTREE_DIR" | extract_decision)"
-
-assert_decision \
-  "chmod +x: .git 配下は ask（allow に倒れない）" \
-  "ask" "$(run_hook "chmod +x .git/hooks/pre-commit" "$WORKTREE_DIR" | extract_decision)"
-
-assert_decision \
-  "chmod -R +x: 再帰指定は ask（allow に倒れない）" \
-  "ask" "$(run_hook "chmod -R +x tests" "$WORKTREE_DIR" | extract_decision)"
-
-assert_decision \
-  "chmod 755: 数値モードは ask（allow に倒れない）" \
-  "ask" "$(run_hook "chmod 755 tests/foo.sh" "$WORKTREE_DIR" | extract_decision)"
-
-assert_decision \
-  "chmod u+x,g-w: 複合指定は ask（allow に倒れない）" \
-  "ask" "$(run_hook "chmod u+x,g-w tests/foo.sh" "$WORKTREE_DIR" | extract_decision)"
-
-assert_decision \
-  "chmod --reference: 未知の意味変更オプションは ask（allow に倒れない）" \
-  "ask" "$(run_hook "chmod --reference=tests/foo.sh tests/bar.sh" "$WORKTREE_DIR" | extract_decision)"
-
-# ── chmod/rm: シェル展開前のリテラルを誤って解決しない（レビュー指摘1の回帰）
-# bash 自身がこのフックより後でチルダ展開・変数展開・glob・find の {} 展開を
-# 行うため、展開後の実際のパスはフックには見えない。フックがこれらのトークンを
-# 「たまたま cwd 配下に見える文字列」として誤って解決し allow してしまうと、
-# 実際には bash がワークツリー外（実ホームディレクトリ等）へ展開して実行する。
-assert_decision \
-  "chmod +x ~/bin/x: チルダ展開前の文字列を誤ってワークツリー内と判定しない" \
-  "ask" "$(run_hook "chmod +x ~/bin/x" "$WORKTREE_DIR" | extract_decision)"
-
-assert_decision \
-  "chmod +x \$HOME/foo: 変数展開前の文字列を誤ってワークツリー内と判定しない" \
-  "ask" "$(run_hook "chmod +x \$HOME/foo" "$WORKTREE_DIR" | extract_decision)"
-
-assert_decision \
-  "find -exec chmod +x {} +: findのプレースホルダを対象パスとして解決しない" \
-  "ask" "$(run_hook "find . -name '*.sh' -exec chmod +x {} +" "$WORKTREE_DIR" | extract_decision)"
-
-assert_decision \
-  "chmod +x foo*.sh: glob展開前の文字列を対象パスとして解決しない" \
-  "ask" "$(run_hook "chmod +x foo*.sh" "$WORKTREE_DIR" | extract_decision)"
-
-assert_decision \
-  "rm -rf \$TMPDIR/foo: 変数展開前の文字列は一時ディレクトリ配下と判定しない（ask）" \
-  "ask" "$(run_hook "rm -rf \$TMPDIR/foo" "$WORKTREE_DIR" | extract_decision)"
-
-# ── mentions_guarded_command のクォート誤検出対策（レビュー指摘5の回帰） ──
-# 引用符の中に語として現れるだけの chmod/rm を、複数コマンド連結時の
-# フォールバック判定で誤って ask に倒さない（read-only なコマンドが無人ペインを
-# 止める新たな原因にならないようにする）。
-assert_decision \
-  "grep で 'chmod' を検索するだけの読み取り専用コマンドは連結があっても何も言わない" \
-  "(none)" "$(run_hook 'grep -rn "chmod" claude/ | head' "$WORKTREE_DIR" | extract_decision)"
-
-assert_decision \
-  "grep で 'rm' を検索するだけの読み取り専用コマンドは連結があっても何も言わない" \
-  "(none)" "$(run_hook 'grep -rn "rm -rf" claude/ | head' "$WORKTREE_DIR" | extract_decision)"
-
-# ── git/gh は strip_quoted を通さない（ラウンド2レビュー指摘の回帰） ──────
-# 引用符の"中身自体が実際に実行されるコマンド"であるケース（sh -c 等）で
-# git/gh への言及を見逃すと、フックが唯一の担保である git push --force 等が
-# 何の判定も受けずに素通りしてしまう。chmod/rm 用に strip_quoted 化した際、
-# git/gh もまとめて strip_quoted してしまっていた回帰（孫1のフェイルセーフを
-# 弱めていた）。
-assert_decision \
-  "sh -c 経由の git push --force は引用符内でも連結扱いで ask（allow に倒れない）" \
-  "ask" "$(run_hook 'echo x | sh -c "git push --force origin master"' "$WORKTREE_DIR" | extract_decision)"
-
-# ── rm -r（背景3-G。mktemp -d の後片付けを通すのが目的） ──────────
-assert_decision \
-  "rm -rf: このセッションの scratchpad 配下は allow" \
-  "allow" "$(run_hook 'rm -rf /tmp/claude-1000/some-session/scratchpad' "$WORKTREE_DIR" | extract_decision)"
-
-assert_decision \
-  "rm -rf: mktemp -d が作る /tmp/tmp.XXXXXXXXXX は allow" \
-  "allow" "$(run_hook 'rm -rf /tmp/tmp.AbCdEfGhIj' "$WORKTREE_DIR" | extract_decision)"
-
-assert_decision \
-  "rm -fr: フラグの順序が違っても同じ判定（allow）" \
-  "allow" "$(run_hook 'rm -fr /tmp/tmp.AbCdEfGhIj' "$WORKTREE_DIR" | extract_decision)"
-
-assert_decision \
-  "rm -r: /tmp 自身は ask（allow に倒れない）" \
-  "ask" "$(run_hook 'rm -rf /tmp' "$WORKTREE_DIR" | extract_decision)"
-
-assert_decision \
-  "rm -r: ワークツリー内は ask（allow に倒れない。コミット前は git でも復元不能）" \
-  "ask" "$(run_hook "rm -rf tests/foo.sh" "$WORKTREE_DIR" | extract_decision)"
-
-assert_decision \
-  "rm -r: /home 配下の絶対パスは ask（allow に倒れない）" \
-  "ask" "$(run_hook 'rm -rf /home/someuser/data' "$WORKTREE_DIR" | extract_decision)"
-
-assert_decision \
-  "rm -r: 未知のオプションは ask（allow に倒れない）" \
-  "ask" "$(run_hook 'rm -r --unknown-opt /tmp/tmp.AbCdEfGhIj' "$WORKTREE_DIR" | extract_decision)"
-
-assert_decision \
-  "rm（-r 無し）はこのフックの対象外（何も言わない）" \
-  "(none)" "$(run_hook "rm tests/foo.sh" "$WORKTREE_DIR" | extract_decision)"
-
-export TMPDIR="$STUB_DIR/customtmp"
-mkdir -p "$TMPDIR"
-assert_decision \
-  "rm -rf: カスタム TMPDIR より深い場所は allow" \
-  "allow" "$(run_hook "rm -rf $TMPDIR/tmp.custom123" "$WORKTREE_DIR" | extract_decision)"
-assert_decision \
-  "rm -rf: カスタム TMPDIR 自身は ask（allow に倒れない）" \
-  "ask" "$(run_hook "rm -rf $TMPDIR" "$WORKTREE_DIR" | extract_decision)"
-unset TMPDIR
-
-# ── 無関係なコマンドには一切言及しない ───────────────────────────
-assert_decision \
-  "git/gh と無関係なコマンドは何も言わない" \
-  "(none)" "$(run_hook "npm run build" | extract_decision)"
-
-assert_decision \
-  "merge/push を伴わない git サブコマンドは何も言わない" \
-  "(none)" "$(run_hook "git status" | extract_decision)"
-
-assert_decision \
-  "'merge' を含むだけの無関係なコマンド（誤検出対策）は何も言わない" \
-  "(none)" "$(run_hook 'git commit -m "merge conflict fix"' | extract_decision)"
-
-# ── Bash 以外のツール呼び出しは対象外 ────────────────────────────
-NON_BASH_JSON=$(python3 -c 'import json; print(json.dumps({"tool_name": "Edit", "tool_input": {"command": "git merge master"}}))')
 assert_decision \
   "tool_name が Bash 以外なら何も言わない" \
-  "(none)" "$(run_hook_raw "$NON_BASH_JSON" | extract_decision)"
+  "(none)" "$(run_hook_raw '{"tool_name":"Read","tool_input":{"file_path":"gh pr merge"}}' | extract_decision)"
 
-# ── 速い経路が "rm" の部分文字列一致で実質無効化されない（レビュー指摘3の回帰） ──
-# cwd が "...permissions..." のような "rm" を部分文字列として含むパスのとき、
-# 単純な `*"rm"*` では速い経路が常に不成立になり、無関係なコマンドでも
-# 毎回 python3 が起動してしまう（実測: 1.7ms → 57ms）。python3 を偽の
-# スタブに差し替え、無関係なコマンドでは実際に起動されないことを確認する。
-NOPY_DIR="$STUB_DIR/nopython"
-mkdir -p "$NOPY_DIR"
-cat >"$NOPY_DIR/python3" <<'STUB'
-#!/bin/sh
-[ -n "${GIT_GUARD_TEST_MARKER:-}" ] && : >"$GIT_GUARD_TEST_MARKER"
-exit 1
-STUB
-chmod +x "$NOPY_DIR/python3"
+# ── 2. 無音でなければならない操作 ────────────────────────────────
+# autopilot が日常的に行うコマンド。ここに1つでも ask が出ると無人ペインが
+# 止まり、傘ブランチ方式が成立しない。フックは「何も言わない」こと。
+log "--- 無音でなければならない操作 ---"
 
-PERMISSIONS_CWD="/tmp/tmp.fakeworkdir/autopilot-permissions-05-fast-path-test"
-FAST_PATH_MARKER="$STUB_DIR/python3-invoked-marker"
+assert_silent "傘の上流追随: git fetch" "git fetch origin"
+assert_silent "傘の上流追随: git merge origin/master" "git merge origin/master"
+assert_silent "傘の rebase 追随" "git rebase origin/master"
+assert_silent \
+  "傘ブランチへの force-with-lease" \
+  "git push --force-with-lease origin git-guard-regressions"
+assert_silent \
+  "孫ブランチへの force-with-lease（refspec 省略）" \
+  "git push --force-with-lease"
+assert_silent "孫ブランチの初回 push" "git push -u origin ph-01-foo"
+assert_silent "読み取り専用の連結: cd && git status" "cd /home/x/repo && git status"
+assert_silent \
+  "読み取り専用の連結: ; 区切り" \
+  "git log --oneline -1; git branch --show-current"
+assert_silent "読み取り専用の連結: パイプ" "git log | head"
+assert_silent "読み取り専用の連結: パイプ + grep" "git status | grep modified"
+assert_silent "連結した書き込み操作: add && commit" 'git add -A && git commit -m "回帰を潰す"'
+assert_silent "別ディレクトリ指定: git -C <dir> status" "git -C /home/x/other status"
+assert_silent "別ディレクトリ指定: git -C <dir> log" "git -C /home/x/other log --oneline -1"
+assert_silent "別ディレクトリ指定: git -C <dir> merge" "git -C /home/x/other merge origin/master"
+assert_silent \
+  "ループ内の cd && git（PR #94 で実際に最初に止まったコマンド）" \
+  "for r in a b; do cd \$r && git config --get ocw.worktreeDir; done"
+assert_silent "chmod +x" "chmod +x tools/doc-id/doc-id"
+assert_silent "一時ディレクトリの後片付け" "rm -rf /tmp/tmp.AbCdEf"
+assert_silent "コミットメッセージに merge を含む" 'git commit -m "merge 済み; 掃除も"'
+assert_silent "トークン化できない入力（git）" 'git commit -m "unbalanced'
+assert_silent "トークン化できない入力（gh pr merge）" 'gh pr merge "unbalanced'
+# 実 PR 番号を含む文章をファイルへ書き込むだけのコマンド。shlex はヒア
+# ドキュメントの本文も同じトークン列に混ぜるため、コマンド位置を見ないと
+# 本文中の `gh pr merge <実PR番号>` を実コマンドと誤認して deny する
+# （deny は bypassPermissions でも覆せないぶん ask より強く止まる）。
+# 傘の commander が計画書や対応報告を書き込む経路そのもの。
+# base を解決できると deny になる状況（gh スタブが master を返す）で試さないと、
+# この経路は「gh が失敗したので無音」に化けて素通りする。
+export GIT_GUARD_TEST_BASE_REF="master"
+assert_silent "gh pr merge に言及するだけの文字列" 'grep -rn "gh pr merge 1" docs/'
+assert_silent \
+  "実 PR 番号を含むヒアドキュメントの書き込み" \
+  "$(printf 'cat >> notes.md <<%sEOF%s\n承認されたら gh pr merge 1 --squash --delete-branch を実行する\nEOF' "'" "'")"
+assert_silent "echo での言及（クォートなし）" "echo gh pr merge 1"
+# delimiter が EOF 以外（ハイフン・ドットを含む形）でも本文が剥がれること。
+# 文字クラスを狭めると本文が素のコマンド扱いになり deny へ倒れる。
+assert_silent \
+  "ヒアドキュメント: delimiter が EOF-1" \
+  "$(printf 'cat >> notes.md <<%sEOF-1%s\ngh pr merge 1 --squash を実行する\nEOF-1' "'" "'")"
+# 本文中にインデントされた終端語がある形（ヒアドキュメントの例を含む文章）。
+# <<- と区別せず strip() で比較すると、ここで終端と誤判定して以降の本文が
+# 素のコマンド扱いになる。
+# 開始行にクォートされた # を含む別コマンドが同居する形。# の位置で行が切られると
+# << トークンごと消え、本文が剥がれずに deny へ倒れる（ただのファイル追記が止まる）。
+assert_silent \
+  "ヒアドキュメント: 開始行にクォートされた # があっても本文が剥がれる" \
+  "$(printf 'grep -v %s#%s conf > t; cat >> notes.md <<%sEOF%s\ngh pr merge 1 --squash を実行する\nEOF' "'" "'" "'" "'")"
+assert_silent \
+  "ヒアドキュメント: 本文中のインデントされた終端語で切れない" \
+  "$(printf 'cat >> notes.md <<%sEOF%s\n例: cat <<X ... 本文 ...\n  EOF\ngh pr merge 1 --squash を実行する\nEOF' "'" "'")"
+unset GIT_GUARD_TEST_BASE_REF
 
-rm -f "$FAST_PATH_MARKER"
-IRRELEVANT_JSON=$(python3 -c 'import json,sys; print(json.dumps({"cwd": sys.argv[1], "hook_event_name": "PreToolUse", "tool_name": "Bash", "tool_input": {"command": "npm run build"}}))' "$PERMISSIONS_CWD")
-RAW_OUTPUT=$(printf '%s' "$IRRELEVANT_JSON" | GIT_GUARD_TEST_MARKER="$FAST_PATH_MARKER" PATH="$NOPY_DIR:$STUB_DIR:$PATH" "$HOOK")
-if [ -z "$RAW_OUTPUT" ] && [ ! -e "$FAST_PATH_MARKER" ]; then
-  pass "速い経路: cwdに'permissions'を含んでいても無関係なコマンドではpython3を起動しない"
-else
-  fail "速い経路: cwdに'permissions'を含む場合の無関係コマンド判定（raw_output='$RAW_OUTPUT'、marker存在=$([ -e "$FAST_PATH_MARKER" ] && echo yes || echo no)）"
-fi
+# master への push はフックではなく claude/settings.json の permissions.ask
+# グロブ（Bash(git push * master*)）が受け持つ。フック側は無音であること。
+assert_silent \
+  "master への push はフックの担当外（グロブが受け持つ）" \
+  "git push origin master"
 
-rm -f "$FAST_PATH_MARKER"
-RELEVANT_JSON=$(python3 -c 'import json,sys; print(json.dumps({"cwd": sys.argv[1], "hook_event_name": "PreToolUse", "tool_name": "Bash", "tool_input": {"command": "rm -rf /tmp/foo"}}))' "$PERMISSIONS_CWD")
-printf '%s' "$RELEVANT_JSON" | GIT_GUARD_TEST_MARKER="$FAST_PATH_MARKER" PATH="$NOPY_DIR:$STUB_DIR:$PATH" "$HOOK" >/dev/null
-if [ -e "$FAST_PATH_MARKER" ]; then
-  pass "速い経路: cwdに'permissions'を含んでいても実際の rm コマンドは python3 起動まで届く"
-else
-  fail "速い経路: 実際の rm コマンドが cwd の 'permissions' 文字列に埋もれて素通りしてしまっている"
-fi
-rm -f "$FAST_PATH_MARKER"
-
-# ── claude/settings.json の permissions.ask パターン検証 ──────────
-# 計画書「設計2」（2026-09-12 訂正）の要求: git push --force-with-lease は
-# permissions.ask のどのパターンにも一致してはいけない（フックの allow が
-# permissions.ask に上書きされてしまうため）。裸の --force / -f / +<refspec>
-# / --delete、ブランチ名が main/master を含む push は、フック不在でも
-# 無条件に止まる必要があるため、いずれかのパターンに一致しなければならない。
-# 孫5（背景3-G）で同じ理由により chmod / rm -r 系のパターンも narrow 化した:
-# ワークツリー内の chmod +x・/tmp 配下（scratchpad・mktemp -d 生成物）への
-# rm -r は一致してはいけない。-R/絶対パスの chmod、/home・$HOME・/Users（macOS
-# のホーム）等の名指しした危険な絶対パスへの rm -r・chmod は、フック不在でも
-# 無条件に止まる必要があるため一致しなければならない（レビュー指摘2の回帰）。
-# permissions.ask のマッチングは "*"（空白含む任意文字列）による glob なので
-# Python の fnmatch で近似検証する（ADR §3.3 参照）。
-PATTERN_CHECK=$(
-  python3 - "$REPO_ROOT/claude/settings.json" <<'PYEOF'
-import fnmatch
-import json
-import sys
-
-with open(sys.argv[1]) as f:
-    settings = json.load(f)
-
-ask_patterns = [
-    p[len("Bash(") : -1]
-    for p in settings.get("permissions", {}).get("ask", [])
-    if p.startswith("Bash(") and p.endswith(")")
-]
-
-
-def matches_any(command):
-    return any(fnmatch.fnmatchcase(command, p) for p in ask_patterns)
-
-
-# (コマンド, permissions.ask のどれかに一致すべきか)
-cases = [
-    ("git push --force-with-lease origin feature", False),
-    ("git push origin feature --force-with-lease", False),
-    ("git push --force-with-lease", False),
-    ("git push --force origin feature", True),
-    ("git push origin feature --force", True),
-    ("git push --force", True),
-    ("git push -f origin feature", True),
-    ("git push origin +feature:feature", True),
-    ("git push origin --delete feature", True),
-    ("git push origin main", True),
-    ("git push origin master", True),
-    ("git push origin feature", False),
-    # 束ねた短オプション（-uf 等）による force push は permissions.ask の
-    # どのパターンにも一致しない（受け入れる残余リスク。フックが唯一の
-    # 担保）。git-guard.sh 側の _has_force_marker() がこれを force と
-    # 認識し ask に倒すことは tests/git_guard_test.sh 本体で検証している
-    # （レビュー指摘の回帰）。
-    ("git push -uf origin HEAD", False),
-    # chmod（背景3-G）: ワークツリー内の相対パスへの +x は、フックが
-    # allow を返しても permissions.ask のどのパターンにも一致してはいけない。
-    ("chmod +x tests/foo.sh", False),
-    ("chmod u+x claude/hooks/new-hook.sh", False),
-    # フック不在でも無条件に止めたいもの（-R/絶対パス）は一致する必要がある。
-    ("chmod -R +x tests", True),
-    ("chmod --recursive +x tests", True),
-    ("chmod -v -R +x tests", True),
-    ("chmod +x /etc/passwd", True),
-    # rm -r（背景3-G。mktemp -d の後片付けを通すのが目的）:
-    # /tmp 配下（scratchpad・mktemp -d 生成物）は一致してはいけない。
-    ("rm -rf /tmp/tmp.AbCdEfGhIj", False),
-    ("rm -rf /tmp/claude-1000/some-session/scratchpad", False),
-    # フック不在でも無条件に止めたい、名指しした危険な絶対パスは一致する必要がある。
-    ("rm -rf /home/someuser/data", True),
-    ("rm -r /home/someuser/data", True),
-    ("rm -fr /usr/local/foo", True),
-    ("rm -rf /etc/foo", True),
-    ("rm -rf /var/foo", True),
-    ("rm -rf /mnt/foo", True),
-    ("rm -rf /opt/foo", True),
-    ("rm -rf ~/secrets", True),
-    # レビュー指摘2の回帰: $HOME・macOS のホーム /Users も名指しした網に要る。
-    ("rm -rf $HOME/secrets", True),
-    ("rm -r $HOME/secrets", True),
-    ("rm -fr /Users/someuser/data", True),
-    ("rm -rf /Users/someuser/data", True),
-    ("chmod +x ~/bin/x", True),
-    ("chmod +x $HOME/bin/x", True),
-    # 受け入れる残余リスク（ADR に明記）: ワークツリー内の相対パスへの
-    # rm -r は名指しの網に無い。フックが唯一の担保（フック不在時は fail-open）。
-    ("rm -rf tests/foo.sh", False),
-]
-
-ok = True
-for command, expected in cases:
-    actual = matches_any(command)
-    if actual != expected:
-        ok = False
-        print(f"NG: {command!r} -> matches={actual} expected={expected}", file=sys.stderr)
-
-sys.exit(0 if ok else 1)
-PYEOF
-)
-PATTERN_CHECK_RC=$?
-if [ "$PATTERN_CHECK_RC" -eq 0 ]; then
-  pass "claude/settings.json の permissions.ask: force-with-lease 非一致・裸force等の一致を確認"
-else
-  fail "claude/settings.json の permissions.ask パターン検証: $PATTERN_CHECK"
-fi
-
+log ""
 if [ "$FAIL" -eq 0 ]; then
   log "=== git-guard.sh テスト: 全件成功 ==="
 else
-  log "=== git-guard.sh テスト: 失敗あり ==="
+  log "=== git-guard.sh テスト: 失敗あり ===" >&2
 fi
 
 # 明示的な exit は使わない（tests/deploy_smoke.sh と同じ理由）。shellcheck は

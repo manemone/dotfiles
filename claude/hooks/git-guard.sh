@@ -2,101 +2,91 @@
 #
 # claude/hooks/git-guard.sh — PreToolUse フック。
 #
-# 「main / master へのマージ・push は人間、それ以外の git 操作は AI に
-# 任せる」という線引きを機械的に担保する。判定できない入力は必ず ask に
-# 倒す（allow に倒すことは絶対にしない）。設計の根拠・入出力契約の確認結果・
-# 却下案は docs/adr/DOC-2609121719_git-operation-permission-policy.md を参照。
+# 担保するのは**1点だけ**:
 #
-# 判定表（この関数の外に判定ロジックを重複させないこと。保護ブランチの
-# 定義もこのスクリプト内の1箇所——下の GIT_GUARD_PROTECTED_BRANCHES——のみ）:
-#   gh pr merge  : base を gh pr view で解決。保護ブランチなら deny、他は allow
-#   git push     : --force/--force-with-lease/-f/+<refspec> が付く場合のみ対象。
-#                  対象ブランチが保護ブランチなら deny。他は --force-with-lease
-#                  を allow、裸の --force/-f は ask
-#   git merge    : 現在のブランチ（マージ先）が保護ブランチなら deny、他は allow
-#   chmod        : -R/--recursive 無し・モードが実行ビット付与のみ（+x 等の
-#                  シンボリック指定。数値モードは対象外）・対象パスが1つ残らず
-#                  シェル展開に使われうる文字（~ $ * ? [ ] { } ` < >）を含まず、
-#                  かつ現在の git ワークツリー内かつ .git 配下でなければ allow。
-#                  1つでも満たさなければ ask（deny ではない）
-#   rm -r/-rf/-fr等: 対象パスが1つ残らず上記と同じ意味でシェル展開文字を
-#                  含まず、一時ディレクトリ配下（このセッションの scratchpad、
-#                  または $TMPDIR/`/tmp` 自身より深い場所）に解決されれば
-#                  allow。ワークツリー内は対象外（ask のまま）
-#   それ以外     : 何も言わず終了（既存の permissions.ask に委ねる）
+#   `gh pr merge` のマージ先（base）が保護ブランチ（main / master）なら deny。
 #
-# chmod/rm はいずれも「危険かどうかは対象がどこにあるかで決まる」ため、
-# git 操作と同じ理由でここで判定する（背景3-G）。判定できなければ ask に
-# 倒すのは git/gh の arm と同じ fail-safe（allow に倒すことは絶対にしない）。
+# それ以外は何も言わない（既存の `permissions` に委ねる）。**判定できない入力も
+# 何も言わない。** 「判定できなければ ask に倒す」という初版（PR #94）の設計思想は
+# 破棄した。シェルコマンドの大半は静的解析できないため、その方針は事実上
+# 「大半を ask にする」と同義であり、`cd <repo> && git status` のような読み取り
+# 専用コマンドまで承認ダイアログを出して無人ペインを止めていた。
 #
-# このフックは全 Bash 呼び出しで走るため、対象外のコマンドは JSON を
-# パースする前の文字列一致で弾く（速い経路）。
+# なぜ `gh pr merge` だけがフックの仕事なのか: 不可逆なのは「リモートを書き換える
+# 操作」だけであり、そのうち `git push` は対象が**コマンド文字列に現れる**ため
+# `claude/settings.json` の `permissions.ask` グロブ（`Bash(git push * main*)` /
+# `Bash(git push * master*)` ほか）で表現できる。base が PR 側の属性であり
+# コマンド文字列に現れない `gh pr merge` だけが、グロブで表現できずフックを要する。
+# ローカルの `git merge` は push しなければ巻き戻せるため対象外。
+#
+# 設計の根拠・却下案・受け入れた残余リスクは
+# docs/adr/DOC-2609121719_git-operation-permission-policy.md を参照。
 
 # 保護ブランチの定義はここ1箇所のみ。
 GIT_GUARD_PROTECTED_BRANCHES="main master"
 
 INPUT="$(cat)"
 
-# 速い経路: git ... merge / git ... push / gh ... pr ... merge のいずれの
-# 字面も含まれない入力は、JSON パースすら行わず即座に抜ける。"git merge" の
-# ような連続文字列ではなく緩い間隔一致にしているのは、`git -C <dir> merge`
-# のようにグローバルオプションが挟まるケースを取りこぼして「何も言わない」
-# （本来は ask にすべき判定不能ケース）に落ちるのを防ぐため。
-#
-# "rm" だけは単純な部分文字列一致にしない。"rm" は "permissions" "confirm"
-# "term" のような英単語の一部としてもごく普通に現れ、しかもこのフック自身が
-# 全 Bash 呼び出しに渡って評価される cwd の JSON フィールド（例: このリポジトリの
-# 傘ブランチ名 "...permissions..." 自体に "rm" を含む）にも常時出現しうるため、
-# 単純な `*"rm"*` では速い経路が実質ほぼ常に不成立になり「速い経路」の意味が
-# 無くなる（レビュー指摘で実測）。英数字境界（`[!a-zA-Z0-9]`）で挟まれた "rm" だけを
-# 拾うことで、"rm -rf ..." のような実際のコマンド呼び出しは確実に拾いつつ、
-# 英単語中の "rm" は除外する。
+# 速い経路: `gh` `pr` `merge` の字面が揃わない入力は JSON パースすら行わず抜ける。
+# このフックは全 Bash 呼び出しで走るため、対象外のコマンドを安く捨てる。
 case "$INPUT" in
-  *"git"*"merge"* | *"git"*"push"* | *"gh"*"pr"*"merge"* | *"chmod"* | *[!a-zA-Z0-9]rm[!a-zA-Z0-9]*) ;;
+  *"gh"*"pr"*"merge"*) ;;
   *) exit 0 ;;
 esac
 
-if ! command -v python3 >/dev/null 2>&1; then
-  # 判定不能。allow には倒さず、固定の ask 応答を返す。
-  printf '%s\n' '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"ask","permissionDecisionReason":"git-guard: python3 が見つからないため git/gh コマンドの安全性を判定できません"}}'
-  exit 0
-fi
+# python3 が無ければ何も言わない（ask に倒さない）。フックが唯一の担保である
+# のは事実だが、判定できないことを理由に人間を呼ぶのは上記のとおり破棄した方針。
+command -v python3 >/dev/null 2>&1 || exit 0
 
 GIT_GUARD_PROTECTED_BRANCHES="$GIT_GUARD_PROTECTED_BRANCHES" python3 - "$INPUT" <<'PYEOF'
 import json
 import os
-import re
 import shlex
 import subprocess
 import sys
 
 PROTECTED = set(os.environ.get("GIT_GUARD_PROTECTED_BRANCHES", "main master").split())
-GH_TIMEOUT = 8
-GIT_TIMEOUT = 5
+# `claude/settings.json` のフック側 timeout（15秒）より短くしておく。ただし
+# 「gh は生きているが遅い」状態ではフックだけが先に諦めて無音になり、後続の
+# `gh pr merge` 本体（タイムアウト無し）は成功しうる。この窓は ADR §7 に
+# 残余リスクとして明記してある。
+GH_TIMEOUT = 12
 
-# git push のオプションのうち、値をスペース区切りで取りうるもの。
-# これ以外の未知の "-" 始まりトークンが出てきたら、安全に対象ブランチを
-# 解決できないと判断して ask に倒す（ADR「既知の制限」参照）。
-VALUE_TAKING_SHORT = {"-o"}
-VALUE_TAKING_LONG = ("--push-option", "--repo", "--receive-pack")
+# `gh pr merge` のうち、値をスペース区切りで取るオプション。次のトークンを
+# マージ対象（PR 番号 / URL / ブランチ名）と取り違えないために読み飛ばす。
+MERGE_VALUE_TAKING = {
+    "-b",
+    "--body",
+    "-F",
+    "--body-file",
+    "-t",
+    "--subject",
+    "--match-head-commit",
+    "--author-email",
+}
 
-FORCE_LEASE_RE = re.compile(r"^--force-with-lease(=.*)?$")
+# 対象リポジトリを cwd から動かすオプション。base の解決を cwd 任せにすると
+# 別リポジトリのブランチで判定してしまうため、`gh pr view` 側へ引き継ぐ。
+# `--repo` は `gh pr` 配下の inherited flag であり、`gh` の直後だけでなく
+# `pr merge` の後ろにも書ける（`gh pr merge 7 -R owner/repo`）。片側しか
+# 見ないと、その値をマージ対象と取り違えて cwd 基準で解決してしまう。
+REPO_FLAGS = {"-R", "--repo"}
 
-# chmod: allow してよいのは、モードが実行ビット付与のみのシンボリック指定
-# （+x, u+x, a+x, ug+x 等）のときだけ。数値モード（755 等）や他の操作
-# （u+s, o+w, u-x 等）、複合指定（u+x,g-w）は対象外（ADR §背景3-G参照）。
-CHMOD_MODE_RE = re.compile(r"^[ugoa]*\+x$")
-CHMOD_RECURSIVE_FLAGS = {"-R", "--recursive"}
-# 出力の詳細さだけを変える無害なフラグ。これ以外の "-" 始まりトークンは
-# 未知として ask に倒す（--reference=RFILE 等、意味が変わるものを含む）。
-CHMOD_SAFE_FLAGS = {"-c", "--changes", "-v", "--verbose", "-f", "--silent", "--quiet"}
+# `gh` をコマンドとして扱ってよい位置。行頭、または直前がこれらのいずれか。
+# そうでなければ他コマンドの引数として現れた `gh`（`echo gh pr merge 1` 等）
+# であり実行されない。誤って deny すると無人ペインが止まる（deny は
+# bypassPermissions でも覆せないぶん ask より強く止まる）。
+COMMAND_POSITION_PREV = {"&&", "||", ";", ";;", "|", "|&", "(", ")", "{", "}", "do", "then", "else", "!"}
 
-# rm -r: allow してよいのは、対象パスが全て一時ディレクトリ配下に解決
-# されるときだけ（ADR §背景3-G参照。ワークツリー内は対象外）。
-RM_RECURSIVE_SHORT_CHARS = {"r", "R"}
-RM_KNOWN_SHORT_CHARS = {"r", "R", "f", "v", "i"}
-RM_SAFE_LONG_FLAGS = {"--force", "--verbose", "--interactive"}
-RM_RECURSIVE_LONG_FLAGS = {"--recursive"}
+# ヒアドキュメントの開始を表すトークン（`<<EOF` / `<<'EOF'` / `<<-"EOF"`）。
+# 本文は実行されないため丸ごと落とす。落とさないと、本文の行頭に来た
+# `gh pr merge <実PR番号>` を実コマンドと誤認して deny する（ただのファイル
+# 書き込みが止まる）。`punctuation_chars` 付きの lexer は
+# `<<` `<<-` `<<<` をそれぞれ別のトークンにするため、herestring（`<<<`）や
+# 引用符の中の `<<`（`echo "cat <<EOF"` は1つの語になる）と取り違えない。
+# 生テキストへの正規表現でこれを判定すると、herestring を開始と誤認して
+# 以降の行を全部捨て、次の行の `gh pr merge` を素通りさせる。
+HEREDOC_TOKENS = ("<<", "<<-")
 
 
 def emit(decision, reason=None):
@@ -116,613 +106,218 @@ def say_nothing():
     sys.exit(0)
 
 
-def ask(reason):
-    emit("ask", reason)
-
-
-def allow():
-    emit("allow")
-
-
-def deny(reason):
-    emit("deny", reason)
-
-
-def run(cmd, cwd, timeout):
+def lex(line, posix):
+    # `;` が前の語に密着した形（`cd /tmp; gh pr merge 1`）でも区切りが残るよう、
+    # `punctuation_chars` 付きの lexer で `;` / `&&` / `||` / `|` / `<<` などを
+    # 独立したトークンにする。クォートは lexer が解釈するため、引用符の中の `;`
+    # （`git commit -m "merge 済み; 掃除も"`）では切れない。
+    #
+    # `shlex.shlex` は `commenters = '#'` が既定で、`shlex.split()` のように
+    # 自動で解除されない。有効なままだと URL のフラグメント等、行内の裸の `#`
+    # 以降が丸ごと捨てられ、`curl https://x/y#z && gh pr merge 95` の
+    # `gh pr merge` を取りこぼす。コメントは tokenize_line() 側で落とす。
+    lexer = shlex.shlex(line, posix=posix, punctuation_chars=True)
+    lexer.whitespace_split = True
+    lexer.commenters = ""
     try:
-        return subprocess.run(
-            cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout
+        return list(lexer)
+    except ValueError:
+        return None
+
+
+def tokenize_line(line):
+    # 1行をトークン化する。解釈できない行（クォートが閉じていない等）は None。
+    tokens = lex(line, True)
+    if tokens is None:
+        return None
+    # 行コメント（語頭が裸の `#`）以降を落とす。**判定は posix=False の
+    # トークン列で行う。** posix=True はクォートを剥がすため、`grep -n '#' f`
+    # の `#` と末尾コメントの `#` が同じトークンになり、取りこぼし（`gh pr merge`
+    # が行ごと消える）と誤検知（ヒアドキュメント開始行が切られて `<<` が消え、
+    # 本文が剥がれず deny）の両方に倒れる。posix=False ならクォートが残るので
+    # 区別できる。並びが一致しないときは何も落とさない（誤って deny 側へ倒さず、
+    # 取りこぼしは「判定できないなら何も言わない」の方針どおり無音にする）。
+    quoted = lex(line, False)
+    if quoted is not None and len(quoted) == len(tokens):
+        for idx, tok in enumerate(quoted):
+            if tok.startswith("#"):
+                return tokens[:idx]
+    return tokens
+
+
+def heredoc_delimiter(tokens):
+    # 行のトークン列がヒアドキュメントを開始していれば (終端語, `<<-` か) を返す。
+    # `<<-'EOF'` は `-` が語頭に残って `-EOF` になるため、そこで判別する。
+    for idx, tok in enumerate(tokens):
+        if tok in HEREDOC_TOKENS and idx + 1 < len(tokens):
+            delimiter = tokens[idx + 1]
+            if tok == "<<-" or delimiter.startswith("-"):
+                return delimiter.lstrip("-"), True
+            return delimiter, False
+    return None, False
+
+
+def command_lines(command):
+    # コマンドを行ごとのトークン列にして返す。**行を1単位にするのは、shlex が
+    # 改行を単なる空白として捨ててしまい、`cd /tmp` 改行 `gh pr merge 1` の
+    # 2 行目がコマンド位置だと分からなくなるため。**
+    #
+    # ヒアドキュメントの本文と終端行は落とす（開始行自体は残す）。落とさないと
+    # 本文の行頭に来た `gh pr merge <実PR番号>` を実コマンドと誤認して deny し、
+    # ただのファイル書き込みが止まる。
+    raw = command.split("\n")
+    result = []
+    i = 0
+    while i < len(raw):
+        tokens = tokenize_line(raw[i])
+        i += 1
+        if tokens is None:
+            continue
+        result.append(tokens)
+        delimiter, dash = heredoc_delimiter(tokens)
+        if delimiter is None:
+            continue
+        # `<<-` のときだけ先頭の空白を剥がして比較する。区別せずに strip() すると、
+        # 本文中のインデントされた終端語（ヒアドキュメントの例を含む文章など）で
+        # 早々に終端と誤判定し、以降の本文が素のコマンド扱いになる。
+        while i < len(raw) and (
+            raw[i].lstrip() != delimiter if dash else raw[i] != delimiter
+        ):
+            i += 1
+        i += 1  # 終端行そのものも落とす（無ければループを抜ける）
+    return result
+
+
+def repo_arg_of(tok, nxt):
+    # トークンが `--repo` 指定なら (repo_args, 次のトークンも消費するか) を返す。
+    # そうでなければ (None, False)。`-Rowner/repo` の密着形も `gh` は受け付ける。
+    if tok in REPO_FLAGS:
+        return ([tok, nxt], True) if nxt is not None else (None, False)
+    if tok.startswith("--repo=") or (tok.startswith("-R") and len(tok) > 2):
+        return [tok], False
+    return None, False
+
+
+def find_pr_merge(tokens):
+    # tokens 内の `gh ... pr merge` を探し、(repo_args, target) を返す。
+    # 見つからなければ None。`cd <dir> && gh pr merge 1` のように連結されて
+    # いても、`gh` 以降のトークン列だけを見るので同じように拾える。
+    for i, tok in enumerate(tokens):
+        if tok != "gh":
+            continue
+        if i > 0 and tokens[i - 1] not in COMMAND_POSITION_PREV:
+            # 実行されない `gh`（`echo gh pr merge 95` の引数など）。拾うと
+            # 無関係なコマンドが deny される。
+            continue
+        repo_args = []
+        j = i + 1
+        while j < len(tokens) and tokens[j] != "pr":
+            tok_j = tokens[j]
+            found, consumed = repo_arg_of(
+                tok_j, tokens[j + 1] if j + 1 < len(tokens) else None
+            )
+            if found is not None:
+                repo_args = found
+                j += 2 if consumed else 1
+                continue
+            if not tok_j.startswith("-"):
+                # `pr` 以外のサブコマンドだった（gh issue ... 等）。
+                break
+            j += 1
+        if j >= len(tokens) or tokens[j] != "pr":
+            continue
+        if j + 1 >= len(tokens) or tokens[j + 1] != "merge":
+            continue
+        rest_repo_args, target = scan_merge_args(tokens[j + 2 :])
+        return (rest_repo_args or repo_args), target
+    return None
+
+
+def scan_merge_args(rest):
+    # `gh pr merge` の後ろから、`--repo` 指定とマージ対象（PR 番号 / URL /
+    # ブランチ名）を取り出す。`--repo` は inherited flag なのでここにも書ける。
+    # 対象が省略されていれば None（`gh pr view` 側も省略時は現在のブランチの
+    # PR を引く）。
+    repo_args = []
+    target = None
+    skip = False
+    for idx, tok in enumerate(rest):
+        if skip:
+            skip = False
+            continue
+        found, consumed = repo_arg_of(
+            tok, rest[idx + 1] if idx + 1 < len(rest) else None
+        )
+        if found is not None:
+            repo_args = found
+            skip = consumed
+            continue
+        if tok.startswith("-"):
+            if tok in MERGE_VALUE_TAKING:
+                skip = True
+            continue
+        if target is None:
+            target = tok
+    return repo_args, target
+
+
+def resolve_base(repo_args, target, cwd):
+    cmd = ["gh"] + repo_args + ["pr", "view"]
+    if target is not None:
+        cmd.append(target)
+    cmd += ["--json", "baseRefName", "-q", ".baseRefName"]
+    try:
+        proc = subprocess.run(
+            cmd, cwd=cwd, capture_output=True, text=True, timeout=GH_TIMEOUT
         )
     except Exception:
         return None
-
-
-def current_branch(cwd):
-    proc = run(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd, GIT_TIMEOUT)
-    if proc is None or proc.returncode != 0:
-        return None
-    branch = proc.stdout.strip()
-    if not branch or branch == "HEAD":
-        return None
-    return branch
-
-
-def gh_base_ref(target, cwd):
-    cmd = ["gh", "pr", "view"]
-    if target:
-        cmd.append(target)
-    cmd += ["--json", "baseRefName", "-q", ".baseRefName"]
-    proc = run(cmd, cwd, GH_TIMEOUT)
-    if proc is None or proc.returncode != 0:
+    if proc.returncode != 0:
         return None
     base = proc.stdout.strip()
     return base or None
 
 
-def worktree_root(cwd):
-    proc = run(["git", "rev-parse", "--show-toplevel"], cwd, GIT_TIMEOUT)
-    if proc is None or proc.returncode != 0:
-        return None
-    root = proc.stdout.strip()
-    if not root:
-        return None
-    return os.path.realpath(root)
-
-
-def resolve_path(token, cwd):
-    # シンボリックリンクと ".." を解決した絶対パスを返す。存在しないパス
-    # でも lexical に正規化される（chmod/rm の対象は通常存在するファイルだが、
-    # 解決に失敗する場合のみ None を返し呼び出し側で ask に倒す）。
-    #
-    # **呼び出し前に has_unsafe_path_chars() で弾いていることが前提。**
-    # このフックは実際にシェルへ渡される直前のコマンド文字列（tool_input.command）
-    # を shlex でトークン化しただけであり、bash 自身が行うチルダ展開・変数展開・
-    # glob展開・コマンド置換は一切行っていない。したがって `~/bin/x` や
-    # `$HOME/foo` のようなトークンをここでそのまま解決すると、bash が実際に
-    # 展開する先（例: 実ホームディレクトリ）とは無関係な、たまたま cwd 配下に
-    # 見える文字列として誤って「ワークツリー内」と判定してしまう
-    # （レビューで実測。has_unsafe_path_chars() のガードで防ぐ）。
-    try:
-        base = cwd or os.getcwd()
-        path = token if os.path.isabs(token) else os.path.join(base, token)
-        return os.path.realpath(path)
-    except Exception:
-        return None
-
-
-# chmod/rm の対象パスに現れてはいけない文字。bash 自身がこのフックより後で
-# 展開する可能性がある構文（チルダ展開・変数展開・glob・コマンド置換・
-# find の `{}` プレースホルダ等）を広く弾く。1つでも含まれていれば、
-# このフックが見ているリテラル文字列と実際に bash が渡す最終的な引数が
-# 一致する保証が無いため、静的解決を諦めて ask に倒す。
-UNSAFE_PATH_CHARS = set("~$*?[]{}`<>")
-
-
-def has_unsafe_path_chars(token):
-    return any(ch in UNSAFE_PATH_CHARS for ch in token)
-
-
-def is_within(path, base):
-    return path == base or path.startswith(base + os.sep)
-
-
-def is_temp_allowed(resolved):
-    # このセッションの scratchpad（/tmp/claude-<id>/...）。"/tmp" 自体が
-    # シンボリックリンク（macOS の /tmp -> /private/tmp 等）でも一致するよう
-    # realpath したうえで比較する。
-    tmp_root = os.path.realpath("/tmp")
-    if re.match(re.escape(tmp_root) + r"/claude-[^/]+/", resolved):
-        return True
-    # $TMPDIR（未設定なら /tmp）自身より深い場所（mktemp -d が作る
-    # /tmp/tmp.XXXXXXXXXX を含む）。$TMPDIR 自身は allow にしない。
-    tmpdir = os.environ.get("TMPDIR") or "/tmp"
-    tmpdir_real = os.path.realpath(tmpdir)
-    if resolved == tmpdir_real:
-        return False
-    if resolved.startswith(tmpdir_real + os.sep):
-        return True
-    return False
-
-
-def find_prog(tokens, prog):
-    # tokens 内で prog（"chmod" または "rm"）が最初に現れる位置を返す。
-    # git/gh の subcommand_of と同じ理由（環境変数プレフィックス等を
-    # 取りこぼさない）で、位置0固定ではなく全体を走査する。見つからない
-    # 場合は None（このプログラムへの呼び出しではない）。
-    for i, tok in enumerate(tokens):
-        if tok == prog:
-            return i
-    return None
-
-
-def tokenize(command):
-    try:
-        return shlex.split(command)
-    except ValueError:
-        return None
-
-
-def find_subcommand(tokens, words):
-    # tokens 内で words（例: ["gh", "pr", "merge"]）が連続して出現する
-    # 最初の位置の直後インデックスを返す。グローバルオプション（git -C dir
-    # merge、gh --repo o/r pr merge 等）が挟まると一致せず None になり、
-    # 呼び出し側は ask に倒す（安全側）。
-    n = len(words)
-    for i in range(len(tokens) - n + 1):
-        if tokens[i : i + n] == words:
-            return i + n
-    return None
-
-
-def strip_quoted(command):
-    # シングル/ダブルクォートで囲まれた区間を取り除く。has_chain() の
-    # 判定にだけ使う（コミットメッセージ中の "merge 済み; 掃除も" のような
-    # 引用符内の ; / | を連結と誤認しないため）。エスケープされた引用符や
-    # ネストしたクォートを厳密に再現するものではないが、万一取りこぼしても
-    # && / ; / | が残っていれば ask に倒れるだけで allow 方向には振れない。
-    return re.sub(r"'[^']*'|\"[^\"]*\"", "", command)
-
-
-def has_chain(command):
-    # 複数コマンドが && / ; / | で連結されている場合、対象を一意に特定
-    # できないため ask に倒す（fail-safe）。
-    return bool(re.search(r"&&|;|\|", strip_quoted(command)))
-
-
-def mentions_guarded_command(command):
-    # トークン化不能・複数コマンド連結のとき、このフックが担保している
-    # コマンド（git/gh/chmod/rm）に言及している可能性があれば ask に倒す。
-    # 言及が無ければ何も言わず既存の permissions に委ねる。
-    #
-    # git/gh は生の command を見る（孫1のフェイルセーフをそのまま踏襲。
-    # `git merge` には permissions.ask 側の保険が無くこのフックだけが
-    # 唯一の担保のため、`echo x | sh -c "git push --force origin master"`
-    # のように引用符の**中身自体が実際に実行されるコマンド**であるケースを
-    # strip_quoted() で除外すると、実行される git コマンドを見逃して
-    # allow 方向（＝ askにもならない）へ倒れてしまう。レビューで実測・指摘）。
-    #
-    # chmod/rm だけ strip_quoted() を通す。`grep -rn "chmod" claude/ | head`
-    # のように、引用符の中身が実際には実行されず単なる検索パターン等の
-    # 文字列として使われるだけの無関係なコマンドを誤検出しないため
-    # （has_chain() が同じ理由で strip_quoted() を使うのと同じ配慮）。
-    #
-    # git/gh と異なりこの選択が新たな危険を生まないのは、そもそも
-    # handle_chmod()/handle_rm() が find_prog() で「トークン化した結果
-    # 独立した "chmod"/"rm" が存在する」ときにしか動作しないため
-    # （handle_git_merge 等が subcommand_of() で同じ制約を持つのと同じ
-    # 理由）。`sh -c "chmod ..."` のように chmod/rm が引用符の中にしか
-    # 現れない形は、strip_quoted() の有無に関わらずそもそも
-    # handle_chmod()/handle_rm() 自体に届かない。この分岐（mentions_
-    # guarded_command 経由の ask フォールバック）は git/gh にとっては
-    # 「唯一の担保」だが、chmod/rm にとってはあくまで補助的な安全側の
-    # 上乗せであり、ここで見逃しても §7.2 の判定表そのものが元々
-    # カバーしていない範囲が広がるわけではない。
-    stripped = strip_quoted(command)
-    return bool(
-        re.search(r"\bgit\b", command)
-        or re.search(r"\bgh\b", command)
-        or re.search(r"\bchmod\b", stripped)
-        or re.search(r"\brm\b", stripped)
-    )
-
-
-def subcommand_of(tokens, prog):
-    # tokens 内で prog（"git" または "gh"）が最初に現れる位置を探し、
-    # その直後の非オプショントークンをサブコマンドとして返す。
-    # 戻り値: (subcommand, uncertain)
-    #   - prog が見つからない: (None, False) — このプログラムへの呼び出しではない
-    #   - 直後のトークンが "-" 始まり（グローバルオプション）: (None, True) —
-    #     サブコマンドを安全に断定できない
-    #   - それ以外: (トークン, False)
-    #
-    # 単純な「最初の出現位置」判定であり、`echo git merge` のように prog が
-    # 別コマンドの引数値として現れる場合を誤検出することがあるが、その
-    # 場合でも実際には git/gh が実行されないため deny/ask になっても実害は
-    # 無い（fail-safe の本質——main/master への操作を allow に倒さない——は
-    # 損なわれない）。
-    for i, tok in enumerate(tokens):
-        if tok == prog:
-            if i + 1 < len(tokens):
-                nxt = tokens[i + 1]
-                if nxt.startswith("-"):
-                    return None, True
-                return nxt, False
-            return None, False
-    return None, False
-
-
-def handle_gh_pr_merge(command, cwd):
-    tokens = tokenize(command)
-    if tokens is None:
-        ask("git-guard: gh pr merge のコマンドを解析できませんでした")
-        return
-    start = find_subcommand(tokens, ["gh", "pr", "merge"])
-    if start is None:
-        ask("git-guard: gh pr merge の対象を特定できませんでした（グローバルオプションの可能性）")
-        return
-    # --repo/-R は gh pr view の対象リポジトリを cwd 以外へ切り替える。
-    # これを無視すると、判定対象（cwd のリポジトリ）と実際にマージされる
-    # リポジトリが食い違い、別リポジトリの base を見て誤って allow しうる。
-    if any(
-        tok in ("--repo", "-R") or tok.startswith("--repo=") for tok in tokens
-    ):
-        ask("git-guard: --repo/-R 指定付き gh pr merge は対象リポジトリを安全に解決できません")
-        return
-    target = None
-    for tok in tokens[start:]:
-        if tok.startswith("-"):
-            continue
-        target = tok
-        break
-    base = gh_base_ref(target, cwd)
-    if base is None:
-        ask(
-            "git-guard: gh pr view で base ブランチを解決できませんでした"
-            "（PR 番号の解決失敗・gh 実行失敗の可能性）"
-        )
-        return
-    if base in PROTECTED:
-        deny(
-            f"base ブランチ '{base}' は保護ブランチです。"
-            "main/master へのマージは人間が行います"
-        )
-    else:
-        allow()
-
-
-def _has_force_marker(rest):
-    """rest（'git push'以降のトークン列）に force 系マーカーが1つでも現れるか。
-
-    詳細パース前の粗い文字列判定でよい。force マーカーが1つも無ければ
-    force push ではないと確定でき、他の未知オプションの解釈精度に関わらず
-    このフックは対象外（何も言わない）にできる。
-    """
-    for tok in rest:
-        if FORCE_LEASE_RE.match(tok):
-            return True
-        if tok in ("--force", "-f"):
-            return True
-        # 束ねた短オプション（-fu / -uf / -qf 等）。git の parse-options は
-        # 短オプションの結合を受け付けるため、f が混ざっていれば force push。
-        # ここで拾えば詳細パース側で「未知オプション → ask」に落ちる。
-        if len(tok) > 1 and tok.startswith("-") and not tok.startswith("--") and "f" in tok[1:]:
-            return True
-        if tok.startswith("+") and not tok.startswith("++"):
-            return True
-    return False
-
-
-def handle_git_push(command, cwd):
-    tokens = tokenize(command)
-    if tokens is None:
-        ask("git-guard: git push のコマンドを解析できませんでした")
-        return
-    start = find_subcommand(tokens, ["git", "push"])
-    if start is None:
-        ask("git-guard: git push の対象を特定できませんでした（グローバルオプションの可能性）")
-        return
-
-    rest = tokens[start:]
-
-    if not _has_force_marker(rest):
-        # force 系フラグも +refspec も一切現れていない ⇒ このフックの対象外。
-        # ここで先に判定することで、-u / --set-upstream / -q のような
-        # force と無関係な未知オプションを含む通常の push が、下の詳細パースで
-        # 「未知オプションだから ask」に巻き込まれるのを防ぐ（ADR
-        # DOC-2609121719「6. 既知の制限」の契約: force を伴わない push は
-        # 何も言わず permissions の判定に委ねる）。
-        say_nothing()
-        return
-
-    has_force_lease = False
-    has_bare_force = False
-    positional = []
-
-    i = 0
-    while i < len(rest):
-        tok = rest[i]
-        if FORCE_LEASE_RE.match(tok):
-            has_force_lease = True
-            i += 1
-            continue
-        if tok in ("--force", "-f"):
-            has_bare_force = True
-            i += 1
-            continue
-        if tok in VALUE_TAKING_SHORT:
-            i += 2
-            continue
-        if any(tok == p or tok.startswith(p + "=") for p in VALUE_TAKING_LONG):
-            i += 1 if "=" in tok else 2
-            continue
-        if tok.startswith("-"):
-            ask(
-                f"git-guard: 未知の git push オプション '{tok}' のため"
-                "対象ブランチを安全に解決できません"
-            )
-            return
-        positional.append(tok)
-        i += 1
-
-    if len(positional) == 0:
-        refspec = None
-    elif len(positional) == 1:
-        refspec = None  # positional[0] はリモート名
-    elif len(positional) == 2:
-        refspec = positional[1]
-    else:
-        ask("git-guard: git push の引数から対象ブランチを一意に特定できませんでした（複数の refspec）")
-        return
-
-    if refspec is not None and refspec.startswith("+"):
-        has_bare_force = True  # 先頭 "+" は lease 無しの force 相当
-        refspec = refspec[1:]
-
-    if refspec:
-        dst = refspec.split(":")[-1] if ":" in refspec else refspec
-        if dst.startswith("refs/heads/"):
-            dst = dst[len("refs/heads/") :]
-        if dst in ("HEAD", "@"):
-            # "HEAD" / "@" は「現在チェックアウトしているブランチ」を指す
-            # git の特殊参照であり、ブランチ名そのものではない。文字列の
-            # まま比較すると常に非保護扱いになってしまう。
-            target_branch = current_branch(cwd)
-        else:
-            target_branch = dst
-    else:
-        target_branch = current_branch(cwd)
-
-    if not target_branch:
-        ask("git-guard: git push の対象ブランチを解決できませんでした")
-        return
-
-    if target_branch in PROTECTED:
-        deny(f"'{target_branch}' は保護ブランチです。force push は人間が行います")
-        return
-
-    if has_force_lease and not has_bare_force:
-        allow()
-    else:
-        ask(f"'{target_branch}' への force push（lease 無し）です。内容を確認してください")
-
-
-def handle_git_merge(command, cwd):
-    tokens = tokenize(command)
-    if tokens is None:
-        ask("git-guard: git merge のコマンドを解析できませんでした")
-        return
-    start = find_subcommand(tokens, ["git", "merge"])
-    if start is None:
-        ask("git-guard: git merge の対象を特定できませんでした（グローバルオプションの可能性）")
-        return
-    branch = current_branch(cwd)
-    if not branch:
-        ask("git-guard: 現在のブランチを解決できませんでした")
-        return
-    if branch in PROTECTED:
-        deny(f"現在のブランチ '{branch}' は保護ブランチです。マージは人間が行います")
-    else:
-        allow()
-
-
-def handle_chmod(command, cwd):
-    tokens = tokenize(command)
-    if tokens is None:
-        ask("git-guard: chmod のコマンドを解析できませんでした")
-        return
-    idx = find_prog(tokens, "chmod")
-    if idx is None:
-        say_nothing()
-        return
-    rest = tokens[idx + 1 :]
-
-    mode = None
-    paths = []
-    for tok in rest:
-        if tok in CHMOD_RECURSIVE_FLAGS:
-            ask("git-guard: chmod -R/--recursive は対象範囲が広いため確認してください")
-            return
-        if tok in CHMOD_SAFE_FLAGS:
-            continue
-        if tok.startswith("-"):
-            ask(f"git-guard: chmod の未知のオプション '{tok}' のため安全に判定できません")
-            return
-        if mode is None:
-            mode = tok
-            continue
-        paths.append(tok)
-
-    if mode is None or not paths:
-        ask("git-guard: chmod のモード/対象を特定できませんでした")
-        return
-    if not CHMOD_MODE_RE.match(mode):
-        ask(
-            f"git-guard: chmod のモード '{mode}' は実行ビット付与（+x 等）ではないため"
-            "確認してください"
-        )
-        return
-
-    root = worktree_root(cwd)
-    if root is None:
-        ask("git-guard: git ワークツリーのルートを解決できませんでした")
-        return
-    git_meta = os.path.realpath(os.path.join(root, ".git"))
-
-    for p in paths:
-        if has_unsafe_path_chars(p):
-            ask(
-                f"git-guard: chmod の対象 '{p}' はシェル展開（~/$変数/glob/`find` の"
-                "プレースホルダ等）を含む可能性があり安全に解決できません"
-            )
-            return
-        resolved = resolve_path(p, cwd)
-        if resolved is None:
-            ask(f"git-guard: chmod の対象 '{p}' を解決できませんでした")
-            return
-        if not is_within(resolved, root):
-            ask(f"git-guard: chmod の対象 '{p}' が git ワークツリー外です")
-            return
-        if resolved == git_meta or is_within(resolved, git_meta):
-            ask(f"git-guard: chmod の対象 '{p}' が .git 配下です")
-            return
-
-    allow()
-
-
-def handle_rm(command, cwd):
-    tokens = tokenize(command)
-    if tokens is None:
-        ask("git-guard: rm のコマンドを解析できませんでした")
-        return
-    idx = find_prog(tokens, "rm")
-    if idx is None:
-        say_nothing()
-        return
-    rest = tokens[idx + 1 :]
-
-    recursive = False
-    paths = []
-    for tok in rest:
-        if tok == "--":
-            continue
-        if tok in RM_RECURSIVE_LONG_FLAGS:
-            recursive = True
-            continue
-        if tok in RM_SAFE_LONG_FLAGS:
-            continue
-        if tok.startswith("--"):
-            ask(f"git-guard: rm の未知のオプション '{tok}' のため安全に判定できません")
-            return
-        if tok.startswith("-") and len(tok) > 1:
-            chars = set(tok[1:])
-            if not chars <= RM_KNOWN_SHORT_CHARS:
-                ask(f"git-guard: rm の未知のオプション '{tok}' のため安全に判定できません")
-                return
-            if chars & RM_RECURSIVE_SHORT_CHARS:
-                recursive = True
-            continue
-        paths.append(tok)
-
-    if not recursive:
-        # -r/-R/--recursive の無い rm はこのフックの対象外
-        # （permissions.ask にも rm -r 系のパターンしか無いため元々ここへ来ない）。
-        say_nothing()
-        return
-
-    if not paths:
-        ask("git-guard: rm -r の対象を特定できませんでした")
-        return
-
-    # ワークツリー内は対象外（allow にしない）。通常ワークツリーは /tmp 配下
-    # には無いが、万一 /tmp 配下にチェックアウトされている場合でも
-    # is_temp_allowed() だけでは判定を誤るため、明示的に除外する。
-    # worktree_root が解決できない（git リポジトリ外）場合は、保護すべき
-    # ワークツリーが無いとみなし、この除外は行わない。
-    root = worktree_root(cwd)
-
-    for p in paths:
-        if has_unsafe_path_chars(p):
-            ask(
-                f"git-guard: rm -r の対象 '{p}' はシェル展開（~/$変数/glob/`find` の"
-                "プレースホルダ等）を含む可能性があり安全に解決できません"
-            )
-            return
-        resolved = resolve_path(p, cwd)
-        if resolved is None or not is_temp_allowed(resolved):
-            ask(
-                f"git-guard: rm -r の対象 '{p}' が一時ディレクトリ配下と確認できません"
-                "（ワークツリー内の削除は人間が確認します）"
-            )
-            return
-        if root is not None and is_within(resolved, root):
-            ask(f"git-guard: rm -r の対象 '{p}' は git ワークツリー内です")
-            return
-
-    allow()
-
-
 def main():
-    # 標準入力ではなくコマンドライン引数で受け取る: python3 - <json> の
-    # ように "-"（スクリプトを stdin から読む指定）と併用する場合、stdin は
-    # このヒアドキュメント自身に占有されるため、ペイロードを stdin 経由で
-    # 渡すことができない（claude/deploy.sh の既存パターンと同じ理由で
-    # ファイル/引数渡しにしている）。
+    # ペイロードは stdin ではなくコマンドライン引数で受け取る: `python3 - <json>`
+    # のヒアドキュメント方式では stdin がスクリプト本体に占有されるため。
     if len(sys.argv) < 2:
         say_nothing()
-        return
     try:
         payload = json.loads(sys.argv[1])
     except Exception:
         say_nothing()
-        return
 
     if payload.get("tool_name") != "Bash":
         say_nothing()
-        return
 
-    tool_input = payload.get("tool_input") or {}
-    command = tool_input.get("command")
+    command = (payload.get("tool_input") or {}).get("command")
     if not isinstance(command, str) or not command.strip():
         say_nothing()
-        return
 
-    cwd = payload.get("cwd") or None
+    found = None
+    for tokens in command_lines(command):
+        found = find_pr_merge(tokens)
+        if found is not None:
+            break
+    if found is None:
+        say_nothing()
 
-    # トークンベースでサブコマンドを特定する（"git merge" のような連続
-    # 文字列一致ではなく）。理由: git merge には permissions.ask 側の保険が
-    # 無い（設計上フックだけが唯一のガード）ため、単純な文字列一致だと
-    # `git commit -m "merge conflict fix"` のような日常的なコマンドまで
-    # "merge" を含むという理由で誤って対象扱いしてしまい、無関係な
-    # コマンドで頻繁に ask が出て autopilot の目的を損なう。一方で
-    # `git -C <dir> merge` のようにサブコマンドの位置にグローバル
-    # オプションが挟まって安全に断定できない場合は、素通りさせず ask に
-    # 倒す（allow への誤判定は絶対にしないという fail-safe を優先する）。
-    tokens = tokenize(command)
-    if tokens is None:
-        if mentions_guarded_command(command):
-            ask("git-guard: コマンドをトークン化できず安全に判定できません")
-        else:
-            say_nothing()
-        return
+    repo_args, target = found
+    base = resolve_base(repo_args, target, payload.get("cwd") or None)
+    if base is None:
+        # base を解決できない（gh の実行失敗・PR 不明）。ask には倒さない。
+        say_nothing()
 
-    if has_chain(command):
-        if mentions_guarded_command(command):
-            ask("git-guard: 複数コマンドが連結されており対象を一意に特定できません")
-        else:
-            say_nothing()
-        return
-
-    git_sub, git_uncertain = subcommand_of(tokens, "git")
-    if git_uncertain:
-        ask("git-guard: git のグローバルオプションによりサブコマンドを特定できません")
-        return
-    if git_sub == "merge":
-        handle_git_merge(command, cwd)
-        return
-    if git_sub == "push":
-        handle_git_push(command, cwd)
-        return
-
-    gh_sub, gh_uncertain = subcommand_of(tokens, "gh")
-    if gh_uncertain:
-        ask("git-guard: gh のグローバルオプションによりサブコマンドを特定できません")
-        return
-    if gh_sub == "pr":
-        gh_idx = tokens.index("gh")
-        pr_idx = gh_idx + 1
-        if pr_idx + 1 < len(tokens) and tokens[pr_idx + 1] == "merge":
-            handle_gh_pr_merge(command, cwd)
-            return
-
-    if find_prog(tokens, "chmod") is not None:
-        handle_chmod(command, cwd)
-        return
-
-    if find_prog(tokens, "rm") is not None:
-        handle_rm(command, cwd)
-        return
-
-    say_nothing()
+    if base in PROTECTED:
+        emit(
+            "deny",
+            f"git-guard: この PR の base は '{base}' です。"
+            "保護ブランチへのマージは人間が行います（AGENTS.md 最重要ルール）",
+        )
+    # base が保護ブランチでないと確定した場合だけ allow を返す。孫→傘のマージを
+    # 確実に無音で通すための積極的な allow であり、判定不能時の allow ではない。
+    emit("allow")
 
 
 main()
