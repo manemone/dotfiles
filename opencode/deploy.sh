@@ -43,30 +43,36 @@ symlink_backup "$DOTFILES_DEPLOY_SRC/claude/CLAUDE.md" "$OPENCODE_HOME_DIR/AGENT
 # OpenCode's own Config.updateGlobal() (desktop/web settings UI: shell
 # choice, disabled_providers, custom-provider baseURL/headers — which can
 # include an auth token) writes to whichever of opencode.jsonc / opencode.json
-# / config.json globalConfigFile() finds first, in that order. If none of
-# the three exist yet when OpenCode is first run, loadGlobal() auto-creates
-# opencode.jsonc — but only when none exist. Once we symlink opencode.json
-# below, it satisfies that existence check, so on a machine that has never
-# run OpenCode before, updateGlobal() would target OUR symlink, and the
-# write would land through it into the running *generation* — the same
-# writeback pattern as nvim/lazy-lock.json, EXCEPT what's written here can
-# be machine-local settings or secrets, not something that belongs in the
-# tracked, all-machines-shared opencode/opencode.json. Treating it as a
-# state file (an earlier revision of this file did — see git history) would
-# make `--adopt-state` copy that machine-local/secret content into the
-# tracked file and, from there, out to every other machine. So instead of
-# capturing the writeback, we prevent it: create a real, machine-local
-# opencode.jsonc *before* symlinking opencode.json, so OpenCode always finds
-# a real file first and never picks the symlink as a write target. Content
-# matches what loadGlobal() itself would generate (schema only, no
-# `instructions` key — mergeDeep only overwrites keys jsonc actually has,
-# so opencode.json's `instructions` below survives the merge untouched).
-# Never overwrite an existing real file (any of the three) — that would
-# either clobber genuine machine settings or fight with content someone put
-# there on purpose (see the opencode.jsonc warning further below).
-if [ ! -f "$OPENCODE_HOME_DIR/opencode.jsonc" ] &&
-  [ ! -f "$OPENCODE_HOME_DIR/opencode.json" ] &&
-  [ ! -f "$OPENCODE_HOME_DIR/config.json" ]; then
+# / config.json globalConfigFile() finds first, in that order. Whether
+# updateGlobal() ends up targeting OUR opencode.json symlink below depends
+# only on whether opencode.jsonc exists — it is first in that order, so its
+# mere presence always wins the write-target race regardless of what else
+# exists. Gating this on "none of the three exist" (an earlier revision of
+# this file did) is therefore both too narrow and wrong: a machine with a
+# pre-existing real opencode.json (about to be moved to .backup by
+# symlink_backup below, leaving only our symlink as a candidate) or with
+# only a config.json (legacy TOML-migration output; opencode.json — our
+# symlink — still sorts before it) would both still end up with
+# updateGlobal() writing through the symlink into the running *generation*
+# — the same writeback pattern as nvim/lazy-lock.json, EXCEPT what's
+# written here can be machine-local settings or secrets, not something that
+# belongs in the tracked, all-machines-shared opencode/opencode.json.
+# Treating it as a state file (an earlier revision of this file did — see
+# git history) would make `--adopt-state` copy that machine-local/secret
+# content into the tracked file and, from there, out to every other
+# machine. So instead of capturing the writeback, we prevent it
+# unconditionally: create a real, machine-local opencode.jsonc *before*
+# symlinking opencode.json below, whenever opencode.jsonc itself doesn't
+# already exist — independent of opencode.json / config.json. Content
+# matches what loadGlobal() itself would generate on a machine with no
+# candidate file at all (schema only, no `instructions` key — mergeDeep
+# only overwrites keys jsonc actually has, so it never overwrites keys from
+# an existing opencode.json or config.json, and opencode.json's
+# `instructions` below still survives the merge untouched). Never overwrite
+# an existing opencode.jsonc — that would clobber genuine machine settings
+# or fight with content someone put there on purpose (see the
+# opencode.jsonc warning further below).
+if [ ! -e "$OPENCODE_HOME_DIR/opencode.jsonc" ]; then
   if [ "${DRY_RUN:-0}" -eq 1 ]; then
     log_info "[DRY-RUN] Would create $OPENCODE_HOME_DIR/opencode.jsonc (machine-local; steers OpenCode's own settings writes away from the opencode.json symlink below)"
   else
@@ -117,9 +123,9 @@ symlink_backup "$DOTFILES_DEPLOY_SRC/opencode/opencode.json" "$OPENCODE_HOME_DIR
 # ~/.claude/CLAUDE.machine.md stops reaching OpenCode — no error, no log
 # from OpenCode itself. Only warn when opencode.jsonc both exists AND
 # actually declares "instructions": the block above now creates a
-# schema-only opencode.jsonc on a machine that has none of the three files
-# yet, and that always-exists-afterward file must not turn this into a
-# warning on every single deploy. A plain grep (not a JSONC parser) is
+# schema-only opencode.jsonc whenever one doesn't already exist, and that
+# always-exists-afterward file must not turn this into a warning on every
+# single deploy. A plain grep (not a JSONC parser) is
 # enough — a false-positive match inside a comment or string only causes an
 # extra (harmless) warning, never a missed one.
 if [ -f "$OPENCODE_HOME_DIR/opencode.jsonc" ] && grep -q '"instructions"' "$OPENCODE_HOME_DIR/opencode.jsonc" 2>/dev/null; then

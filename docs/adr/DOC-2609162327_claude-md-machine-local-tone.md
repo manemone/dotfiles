@@ -275,28 +275,46 @@ OpenCode 1.18.31 の `packages/opencode/src/config/config.ts` を調べると、
 （全マシンへ配る成果物）へコピーし、コミットすれば**マシン固有の設定や認証情報が git と
 全マシンへの配布物に混入する**。「消えるのを防ぐ」ことだけを見て「防ぎ方」を誤った。
 
-**決定（確定版）**: 書き戻しそのものを起こさせない。`opencode/deploy.sh` は、
-`opencode.jsonc` / `opencode.json`（symlink を張る前の既存の実ファイル） / `config.json` の
-いずれも無いマシンでのみ、`opencode.json` を symlink する**前に**
+**決定（第2版・レビューで再度修正）**: 書き戻しそのものを起こさせない、という方向性は
+第2版でも維持しつつ、`opencode.jsonc` / `opencode.json`（symlink を張る前の既存の
+実ファイル） / `config.json` の**いずれも無いマシンでのみ** `opencode.jsonc` を作る、という
+条件にした。**この条件も誤りだった（2回連続の判断ミス）。** `globalConfigFile()` の候補順は
+`opencode.jsonc` → `opencode.json` → `config.json` であり、書き込み先が symlink に
+ならないために必要なのは「`opencode.jsonc` が存在すること」**だけ**である。「3ファイルとも
+無い」という条件は次の2パターンを取りこぼす:
+
+- 既存の実ファイル `opencode.json` があり `opencode.jsonc` は無い場合:
+  条件が偽になり `opencode.jsonc` は作られない → 直後の `symlink_backup` が既存の
+  `opencode.json` を `.backup` へ退避して symlink に置き換える → 候補は symlink の
+  `opencode.json` だけになり、書き込みは symlink 経由で世代へ向かう
+- `config.json` だけがある場合（`loadGlobal()` のレガシー TOML 移行が作る）:
+  条件が偽になり `opencode.jsonc` は作られない → 候補順で symlink の `opencode.json` が
+  `config.json` より先に選ばれ、同じく symlink 経由で世代へ向かう
+
+**決定（確定版）**: `opencode/deploy.sh` は `opencode.jsonc` を、`opencode.json` /
+`config.json` の有無に関わらず、**`opencode.jsonc` 自身が無いときにだけ**（`[ ! -e
+"$OPENCODE_HOME_DIR/opencode.jsonc" ]`）、`opencode.json` を symlink する**前に**
 `$OPENCODE_HOME_DIR/opencode.jsonc` を `{"$schema": "https://opencode.ai/config.json"}`
 という中身の**マシンローカルな実ファイル**として作る（`loadGlobal()` が初回起動時に自動生成
-する内容と同じ）。`globalConfigFile()` は `opencode.jsonc` を最優先で選ぶため、以降
-`updateGlobal()` の書き込みはこの実ファイルへ向かい、symlink 経由で世代へ書き戻されることは
-無くなる。この `opencode.jsonc` に `instructions` キーは含めない（空の状態なら
-`mergeDeep` はそのキーに触れないため、`opencode.json` の `instructions` はマージ後も残る）。
-`shared/helpers.sh` の `state_files_for_tool()` からは `opencode` arm を削除した
-（`opencode.jsonc` はこのリポジトリの追跡対象でも `current` 経由の symlink でもない、
-純粋にマシンローカルな実ファイルなので、検知・`--status`・`--adopt-state` のいずれの
-対象にもならない。「配布物へ書き込ませない」ことがこの機構の代わりになる）。
+する内容と同じ）。`opencode.jsonc` は候補順で最優先のため、これさえ実ファイルとして
+存在すれば他の2ファイルの有無に関わらず書き込み先はこの実ファイルになり、symlink 経由で
+世代へ書き戻されることは無くなる。この `opencode.jsonc` に `instructions` キーは
+含めない（`mergeDeep` はそのキーに触れないため、既存の `opencode.json` や `config.json` の
+内容・`opencode.json` の `instructions` はマージ後もそのまま残る）。`shared/helpers.sh` の
+`state_files_for_tool()` からは `opencode` arm を削除した（`opencode.jsonc` はこの
+リポジトリの追跡対象でも `current` 経由の symlink でもない、純粋にマシンローカルな
+実ファイルなので、検知・`--status`・`--adopt-state` のいずれの対象にもならない。
+「配布物へ書き込ませない」ことがこの機構の代わりになる）。
 
-既存の `opencode.jsonc` / `opencode.json`（実ファイル） / `config.json` を上書きしない
-（他の目的で使っている環境の設定を壊さない・`--dry-run` では作らない）ことは、
-`--force` の有無を問わず一貫させた。専用のサンドボックステストを追加した
-（`tests/deploy_smoke.sh` シナリオ10e）: (a) 3ファイルとも無いマシンで実ファイルとして
-`opencode.jsonc` が作られること・`--dry-run` では作られないこと、(b) 既存の
-`opencode.jsonc`（`instructions` 無し）が deploy で上書きされないこと・その場合は警告も
-出ないこと、(c) 既存の `opencode.jsonc`（`instructions` あり）が上書きされないこと・
-その場合は5.3.2の警告が出ること。
+既存の `opencode.jsonc` を上書きしない（他の目的で使っている環境の設定を壊さない・
+`--dry-run` では作らない）ことは、`--force` の有無を問わず一貫させた。専用のサンドボックス
+テストを追加した（`tests/deploy_smoke.sh` シナリオ10e）: (a) `opencode.jsonc` が無い
+マシンで実ファイルとして作られること・`--dry-run` では作られないこと、(a') 既存の実ファイル
+`opencode.json` だけがある（`opencode.jsonc` は無い）マシンでも `opencode.jsonc` が
+作られること（第2版で取りこぼしていたケースの回帰確認）、(b) 既存の `opencode.jsonc`
+（`instructions` 無し）が deploy で上書きされないこと・その場合は警告も出ないこと、
+(c) 既存の `opencode.jsonc`（`instructions` あり）が上書きされないこと・その場合は
+5.3.2の警告が出ること。
 
 ### 5.3.2 追加論点B（レビューで判明）: `opencode.jsonc` 併存時の `instructions` 上書き
 
@@ -342,8 +360,8 @@ OpenCode 1.18.31 の `packages/opencode/src/config/config.ts` を調べると、
   （OpenCode 未導入マシンでは既存の早期 return によりスキップされる）
 - `shared/helpers.sh` の `links_for_tool()` `opencode)` arm に
   `$(skill_agent_home opencode)/opencode.json` を追加
-- `opencode/deploy.sh` が、`opencode.jsonc` / `opencode.json`（既存実ファイル） /
-  `config.json` のいずれも無いマシンに限り、`opencode.json` を symlink する前に
+- `opencode/deploy.sh` が、`opencode.jsonc` が無いマシンでは（`opencode.json` /
+  `config.json` の有無に関わらず）、`opencode.json` を symlink する前に
   マシンローカルな実ファイル `opencode.jsonc`（schema のみ）を作る
   （5.3.1。OpenCode自身の設定UI書き込みが配布物へ混入するのを防ぐ。
   `shared/helpers.sh` の `state_files_for_tool()` に `opencode` arm は**追加しない**

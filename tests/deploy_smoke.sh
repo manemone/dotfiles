@@ -1525,6 +1525,34 @@ JSONC_EOF
     pass "opencode.jsonの世代側改変は状態ファイル書き戻しとして検知されない(state_files_for_tool()にopencode armが無い)"
   fi
 
+  # --- (4') 既存の実ファイルopencode.jsonだけがある(opencode.jsoncは無い)
+  #     状態でのdeploy: それでもopencode.jsoncが実ファイルとして作られる
+  #     こと（レビュー再指摘。ADR DOC-2609162327 §5.3.1第2版の回帰確認。
+  #     「3ファイルとも無い場合だけ作る」という条件では、既存の
+  #     opencode.jsonがsymlink_backupで退避された後に候補がsymlinkだけに
+  #     なり、この確認が取りこぼされていた）---
+  new_sandbox
+  sbx="$SANDBOX_DIR"
+  mkdir -p "$sbx/.config/opencode"
+  printf '{"provider": {"custom": {"baseURL": "https://example.com"}}}\n' >"$sbx/.config/opencode/opencode.json"
+
+  out="$(run_deploy "$sbx" --force --only opencode 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "既存の実ファイルopencode.jsonだけがある状態でのdeployが失敗 (exit=$rc)"
+    log "$out"
+  else
+    if [ -f "$sbx/.config/opencode/opencode.jsonc" ] && [ ! -L "$sbx/.config/opencode/opencode.jsonc" ]; then
+      pass "既存の実ファイルopencode.jsonだけがある状態でもopencode.jsoncが実ファイルとして作られる"
+    else
+      fail "既存の実ファイルopencode.jsonだけがある状態でもopencode.jsoncが実ファイルとして作られる"
+    fi
+    # opencode.json(既存の実ファイル)自体はsymlink_backupで退避されて
+    # symlinkに置き換わる(既存の挙動どおり)。
+    assert_symlink "$sbx/.config/opencode/opencode.json" "$(dotfiles_prefix_for "$sbx")/current/opencode/opencode.json"
+    assert_exists "$sbx/.config/opencode/opencode.json.backup"
+  fi
+
   # --- (5) 既存opencode.jsonc(instructionsなし)がある場合: 上書きされず、
   #     警告も出ない ---
   new_sandbox

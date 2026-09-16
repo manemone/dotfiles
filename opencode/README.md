@@ -99,13 +99,15 @@ OpenCode の `instructions` 内の `~/` は `$HOME` からの展開であり、
 
 **`~/.config/opencode/opencode.jsonc` について**: OpenCode 自身の設定UI（デスクトップ/Web
 アプリの provider 設定など）は、`opencode.jsonc` / `opencode.json` / `config.json` のうち
-存在する最初のファイルへ書き込みます。このディレクトリが配る `opencode.json` は symlink
-（配布物）なので、そこへ書き込ませるとマシン固有の設定・場合によっては認証情報が
-配布物へ紛れ込みます。それを避けるため、deploy はこれら3ファイルがどれも無いマシンでは
+**存在する最初のファイル**へ書き込みます（`opencode.jsonc` が最優先）。このディレクトリが
+配る `opencode.json` は symlink（配布物）なので、そこへ書き込ませるとマシン固有の設定・
+場合によっては認証情報が配布物へ紛れ込みます。それを避けるため、deploy は
+`opencode.jsonc` が無いマシンでは（`opencode.json` や `config.json` の有無に関わらず）
 `opencode.jsonc`（`{"$schema": "https://opencode.ai/config.json"}` のみの空の実ファイル）を
-先に作ります。これは**このリポジトリの追跡対象ではない、マシンローカルなファイル**です
-（`opencode/deploy.sh`）。**設定UIでの変更はこの `opencode.jsonc` へ書かれ、`opencode.json`
-（配布物）には触れません。**
+先に作ります。`opencode.jsonc` が最優先で選ばれる以上、これさえ実ファイルとして存在すれば
+他の2ファイルの有無は書き込み先に影響しません。これは
+**このリポジトリの追跡対象ではない、マシンローカルなファイル**です（`opencode/deploy.sh`）。
+**設定UIでの変更はこの `opencode.jsonc` へ書かれ、`opencode.json`（配布物）には触れません。**
 
 **⚠️ `opencode.jsonc` に独自の `instructions` がある場合の注意**: OpenCode はグローバル設定を
 `config.json` → `opencode.json` → `opencode.jsonc` の順に重ね合わせて読み込み、
