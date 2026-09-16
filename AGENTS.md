@@ -78,10 +78,10 @@
 | `zsh/` | Zsh 設定（Antidote でプラグイン管理） |
 | `nvim/` | NeoVim 設定（lazy.nvim でプラグイン管理） |
 | `tmux/` | tmux 設定 |
-| `bin/` | スタンドアロンの CLI ツール（`ocw`, `claude-ds`, `ocw-meter`）。`bin/tests/` は `ocw-meter` 等の Python テスト、`bin/prices/` は費用計算用の価格表 |
+| `bin/` | スタンドアロンの CLI ツール（`ocw`, `claude-ds`, `ocw-meter`, `persona`）。`bin/tests/` は `ocw-meter` 等の Python テスト、`bin/prices/` は費用計算用の価格表 |
 | `claude/` | Claude Code 向け配布物（`CLAUDE.md` / `settings.json`） |
 | `skills/` | AI コーディングエージェント向けのスキル。Claude Code だけでなく Codex・OpenCode にも同じ実体を配る（ADR DOC-2608272128） |
-| `codex/` | Codex CLI のグローバル指示（`~/.codex/AGENTS.md`）を `claude/CLAUDE.md` から symlink で配る（ADR DOC-2609072334） |
+| `codex/` | Codex CLI のグローバル指示（`~/.codex/AGENTS.md`）を、`claude/CLAUDE.md` + 人格のパーソナライズ（`CLAUDE.machine.md`）を連結生成した実ファイルから symlink で配る（基本構造は ADR DOC-2609072334、連結生成の理由は ADR DOC-2609162327 §6） |
 | `opencode/` | OpenCode のグローバル指示（`~/.config/opencode/AGENTS.md`）を `claude/CLAUDE.md` から symlink で配る（ADR DOC-2609072334）。加えて `opencode.json` で `instructions` を配り、マシンローカルな人格のパーソナライズを OpenCode にも効かせる（ADR DOC-2609162327 §5） |
 | `shared/` | 全 deploy スクリプトが共有するヘルパー（`helpers.sh`） |
 | `docs/` | このリポジトリ自体の設計文書・ADR・計画書・運用リファレンス。`design/`（現役の規約）・`adr/`（確定した技術決定の記録）・`planning/`（傘ブランチ計画書）・`reference/`（運用中に繰り返し引く事実）の4フォルダに分かれる。詳細は [docs/README.md](docs/README.md) を参照 |
@@ -89,9 +89,13 @@
 | `templates/` | 他リポジトリへ配布する copier テンプレート（`repo-baseline` など）。`$HOME` へは配布せず、dotfiles 本体にも依存しない自己完結ディレクトリ |
 
 各ツールディレクトリは「設定ファイル本体 + `deploy.sh` + `README.md`」という共通構造を持つ。
-例外は `codex/` で、設定ファイル本体を持たず、`deploy.sh` が `claude/CLAUDE.md` を symlink で
-指す（内容がエージェント非依存の個人指示のため。理由は ADR DOC-2609072334 参照）。
-`opencode/` も同じ理由で `AGENTS.md`（`claude/CLAUDE.md` の symlink）を持つが、
+例外は `codex/` で、設定ファイル本体を持たず、`deploy.sh` が `claude/CLAUDE.md` + 人格の
+パーソナライズ（`CLAUDE.machine.md`）を連結生成した実ファイル（世代を経由しない固定パス。
+`shared/helpers.sh` の `dotfiles_codex_agents_md_path()` が一次情報源）を symlink で
+指す（内容がエージェント非依存の個人指示であることの基本構造は ADR DOC-2609072334、
+Codex だけ連結生成が要る理由〈Codex には追加読み込み手段が無い〉は ADR DOC-2609162327 §6
+参照）。`opencode/` も同じ理由で `AGENTS.md`（`claude/CLAUDE.md` の symlink。ただし
+Codex と異なり生成を挟まない直接 symlink）を持つが、
 `opencode.json`（トラッキング対象のこのツール自身の設定ファイル本体）も持つため、
 この例外には完全には当てはまらない。`opencode.json` の役割は「3つの領域」節と
 [opencode/README.md](opencode/README.md) を参照。
@@ -262,7 +266,7 @@ DOC-2609162327）。`claude/CLAUDE.md` 自体は今までどおり symlink の�
 
 - `shared/helpers.sh` は POSIX sh。bashism を書かない。
 - `deploy-all.sh` `uninstall.sh` `*/deploy.sh` も `#!/bin/sh`。
-- `bin/ocw` `bin/claude-ds` は bash（`#!/usr/bin/env bash`）。
+- `bin/ocw` `bin/claude-ds` `bin/persona` は bash（`#!/usr/bin/env bash`）。
 - プラットフォーム分岐は `is_macos` / `is_linux` / `is_wsl` / `get_brew_prefix` を使い、
   直接 `uname` を叩かない。
 - macOS の BSD 版コマンドと GNU 版の差異（`sed -i`、`date`、`readlink -f` など）に注意する。

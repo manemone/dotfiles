@@ -373,4 +373,83 @@ OpenCode 1.18.31 の `packages/opencode/src/config/config.ts` を調べると、
 
 ## 6. 孫3（Codex）の決着
 
-（孫3のPRで追記）
+### 6.1 未解決論点4: `AGENTS.override.md` の実挙動
+
+計画書 DOC-2609162320 背景4.1 時点では、Codex の `@include` 相当の手段（issue
+[openai/codex#17401](https://github.com/openai/codex/issues/17401)）は open のまま・
+`AGENTS.override.md` の実挙動は「未検証」だった。孫3で OpenAI の公式ドキュメント
+（`developers.openai.com/codex/guides/agents-md` → リダイレクト先
+`learn.chatgpt.com/docs/agent-configuration/agents-md`）を確認したところ、**global
+スコープ（`~/.codex`）の記述が明記されていた**:
+
+> Codex reads `AGENTS.override.md` if it exists. Otherwise, Codex reads
+> `AGENTS.md`. Codex uses only the first non-empty file at this level.
+
+**`AGENTS.override.md` は存在すれば `AGENTS.md` を完全に置き換える（replace）のであって、
+追加で読み込む（add）のではない。** プロジェクトスコープ（ディレクトリ階層）側は
+ディレクトリ間では連結される（"Codex concatenates files from the root down"）が、
+**同一ディレクトリ内では `AGENTS.override.md` と `AGENTS.md` はどちらか一方しか
+読まれない**（"Codex includes at most one file per directory"）。global スコープの
+`~/.codex` はこの「1ディレクトリ」に相当するため、`~/.codex/AGENTS.override.md` を
+足しても `~/.codex/AGENTS.md`（このツールが配る個人指示そのもの）が読まれなくなるだけで、
+「ベース文言 + パーソナライズ」を両方読ませる手段にはならない。
+
+**結論: 追加読み込みではないと確認できたため、計画書の判断基準（「追加読み込みだと確認
+できた場合に限り override 側に切り替えてよい」）どおり、連結生成（§6.2）を採用する。**
+override.md へ切り替える設計変更は行わない。
+
+### 6.2 連結生成の実装
+
+- 生成物の固定パス: `<prefix>/codex/AGENTS.md`
+  （`shared/helpers.sh` の `dotfiles_codex_agents_md_path()`）。`CLAUDE.machine.md` /
+  `settings.machine.json` と同じ「世代を経由しない固定パス」だが、意味は異なる:
+  後者2つは人間が書く machine データ（保護対象）、こちらは **常に再生成可能な
+  build artifact**（`uninstall.sh` の撤去対象）。1階層ネストした
+  `<prefix>/codex/AGENTS.md` にしたのは、ディレクトリ一覧上で
+  「保護される machine データ」と「使い捨ての生成物」を視覚的に分けるため
+- 連結の実装: `shared/helpers.sh` に `generate_codex_agents_md()` を新設し、
+  `codex/deploy.sh` と `persona`（`bin/persona`）の両方から呼ぶ（二重管理しない —
+  計画書の要求どおり）。ベース `claude/CLAUDE.md` 中の `@~/.claude/CLAUDE.machine.md`
+  という行（文字列完全一致）を `CLAUDE.machine.md` の中身でそのまま置き換える
+  （awk の `getline` で該当行だけ差し替える「行置換」方式。計画書設計4が挙げた
+  「行置換で展開 or 追記」のうち行置換を採った）。`CLAUDE.machine.md` が空/存在しない
+  場合はその行が単に消えるだけで、直前の「空であればパーソナライズの指定は無し」という
+  説明文はそのまま残るため、設計2の「空ならパーソナライズ指定なし」というデフォルトを
+  Codex 向けでも特別扱いなしに満たせる
+- `codex/deploy.sh` は Codex 未導入マシン（`${CODEX_HOME:-$HOME/.codex}` が存在しない）
+  では従来どおり何もしない。`--dry-run` では生成しない（ログのみ）
+- `links_for_tool()` の `codex)` arm は **変更なし**（`$HOME` 側のパス
+  `~/.codex/AGENTS.md` 自体は変わらず、その symlink の**指す先**だけが
+  `claude/CLAUDE.md` 直接から生成物へ変わった）
+
+### 6.3 未解決論点3: 再生成コマンド
+
+名前は `persona`（`bin/persona`）。既存メンバー（`ocw` / `claude-ds` / `ocw-meter`）と
+衝突しない、かつ計画書「用語」節の方針（`tone` ではなく人格/パーソナライズを表す名前）に
+従った。計画書設計4の司令官判断どおり、単体実行（`persona`）で `$EDITOR` により
+`CLAUDE.machine.md` を編集→閉じたら自動で Codex 向け生成物を再生成、`persona --regen`
+で再生成のみのサブコマンドを用意する最小構成にした。bash（`#!/usr/bin/env bash`）。
+自身の実体パスの解決（symlink 越しに `shared/helpers.sh` を source するため）は
+`bin/ocw-meter` の `OCW_METER_SCRIPT_DIR` と同じ「symlink チェーンを手で辿る」方式を
+踏襲した（`readlink -f` は GNU 限定で macOS に無いため）。
+
+### 6.4 uninstall.sh / `deploy-all.sh --status` の追随
+
+- `uninstall.sh`: `CLAUDE.machine.md` の実体とは異なり、生成物
+  （`dotfiles_codex_agents_md_path()` のディレクトリごと）は **codex がスコープに
+  含まれる場合にのみ撤去する**（`--only claude` のような他ツール限定の実行では触れない）。
+  実装は per-tool ループ内で `_tool = codex` のときだけ発火する専用ブロックとして追加した
+  （`KNOWN_GENERATED_claude` と同じ「real file, not symlink」系の既存フローには乗せていない
+  — そちらは `$HOME` 側の実ファイルの退避・復元用で、こちらは prefix 配下の使い捨て
+  生成物の単純削除のため、扱いが異なる）
+- `deploy-all.sh --status` は `settings.machine.json` / `CLAUDE.machine.md` と並べて
+  生成物の実体パスと有無を1行出す
+
+### 6.5 変更点まとめ
+
+- 新規: `shared/helpers.sh` の `dotfiles_codex_agents_md_path()` /
+  `generate_codex_agents_md()`
+- 新規: `bin/persona`（`bin/deploy.sh` が symlink、`links_for_tool()` の `bin)` arm に追加）
+- 変更: `codex/deploy.sh`（生成 + symlink先の変更）、`uninstall.sh`（生成物の撤去）、
+  `deploy-all.sh --status`（生成物の状態表示）、`codex/README.md` / `bin/README.md` /
+  ルート `README.md` / ルート `AGENTS.md`（追随）
