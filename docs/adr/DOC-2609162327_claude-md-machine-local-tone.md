@@ -168,11 +168,14 @@ file)" という記述があり、ユーザーレベル `CLAUDE.md` が import �
 ### 5.1 未解決論点1: `instructions` のパス解決
 
 計画書 DOC-2609162320 設計3 が挙げた3案のうち、**opencode.json からの相対パスは成立しない**
-ことをソースコードで確認した（`opencode/opencode.json` — この dotfiles 自身が開発時に使う
-プロジェクト設定 — から `git clone` した [sst/opencode](https://github.com/sst/opencode) の
+ことをソースコードで確認した。このリポジトリ自身の開発用設定であるルート `opencode.json`
+（`instructions: ["AGENTS.md", "docs/design/..."]`。プロジェクトスコープでの相対パス解決の
+実例）とは別物として、`opencode/opencode.json`（本PRで新たに追加する、`~/.config/opencode/`
+へ配布するグローバル設定）についてこの挙動を確認する必要があったため、
+[sst/opencode](https://github.com/sst/opencode) を `git clone` し、
 `packages/opencode/src/session/instruction.ts` の `systemPaths()` を読んだ。参照した clone は
 `package.json` の `version: 1.18.31`、インストール済みバイナリは `opencode --version` で
-`1.18.23` — ごく近いバージョンで、この経路のロジックが変わっている可能性は低い）。
+`1.18.23` — ごく近いバージョンで、この経路のロジックが変わっている可能性は低い。
 
 `config.instructions` の各エントリは次のように解決される（`systemPaths()` 135〜150行目）:
 
@@ -242,6 +245,57 @@ const matches = yield* (
 下りなかったため試みを止めた）。既存の `opencode.json` がある環境では `symlink_backup` の
 退避で `.backup` に逃がされる。
 
+### 5.3.1 追加論点A（レビューで判明）: OpenCode 自身の書き戻しによる状態ファイル消失
+
+OpenCode 1.18.31 の `packages/opencode/src/config/config.ts` を調べると、
+`Config.updateGlobal()`（656〜677行目。設定UI ─ デスクトップ/Webアプリの
+シェル選択・`disabled_providers`・カスタムプロバイダ追加など ─ から
+`PATCH /global/config` 経由で呼ばれる）が `globalConfigFile()`（140行目。
+`opencode.jsonc` → `opencode.json` → `config.json` の順で**存在する最初の
+ファイル**を返す）へ `fs.writeFileString` で書き込む。
+
+このリポジトリの `opencode.json` は `symlink_backup` で配る symlink であり、
+`$HOME` 側から見ると `~/.config/opencode/opencode.json` だが、実体は
+`current` 経由で世代ディレクトリ（`<prefix>/generations/<世代>/opencode/opencode.json`）を
+指す。`loadGlobal()`（265〜269行目）は候補ファイルが1つも無いときに限り
+`opencode.jsonc` を自動生成するため、**このリポジトリの deploy を OpenCode の
+初回起動より先に行うと `opencode.jsonc` は作られず、このsymlinkが書き込み先として
+選ばれる。** 設定UIで何か変更すると、その書き込みは symlink 経由で世代ディレクトリの
+中へ着地し、次の deploy で新世代が作られるとソースツリーの `opencode/opencode.json` から
+上書きコピーされて**警告なく消える**（`nvim/lazy-lock.json` と同じ「`$HOME` 側 symlink 経由の
+世代への書き戻し」パターン。ADR DOC-2608040229 §4.9 / ルート `AGENTS.md`「状態ファイル」節）。
+
+**決定**: `shared/helpers.sh` の `state_files_for_tool()` に `opencode) printf '%s\n'
+"opencode.json" ;;` を追加した。これにより、デプロイ時の検知・`deploy-all.sh --status`
+での表示・`--adopt-state` による取り込みのいずれもがこの経路を対象に含む
+（`nvim/lazy-lock.json` と全く同じ汎用機構に乗るため、専用のサンドボックステストは
+追加していない。機構自体は既存の nvim 向けシナリオが検証済みであり、今回追加したのは
+そのデータ駆動リストへの1エントリのみ。実際に `--force --only opencode` で世代を作った後
+世代側の `opencode.json` を書き換えて再deployし、`--force` 無しでは検知して停止する
+ことを手元で確認した）。
+
+### 5.3.2 追加論点B（レビューで判明）: `opencode.jsonc` 併存時の `instructions` 上書き
+
+`config.ts` の `loadGlobal()`（272〜274行目）は `config.json` → `opencode.json` →
+`opencode.jsonc` の順に `mergeConfig`（= remeda の `mergeDeep`）で重ねる。グローバル設定
+同士のマージには（プロジェクト設定と違って）`mergeConfigConcatArrays` ではなく
+`mergeDeep` が使われるため、**配列は連結されず、後から読んだ側（`opencode.jsonc`）が
+丸ごと勝つ**（`remeda@2.26.0` で
+`mergeDeep({instructions:["~/.claude/CLAUDE.machine.md"]},{instructions:["foo.md"]})` →
+`{"instructions":["foo.md"]}` になることを実行して確認済み）。
+
+`loadGlobal()` は前節のとおり候補ファイルが無いときに `opencode.jsonc` を自動生成するため、
+**OpenCode を使ったことがあるマシンでは `opencode.jsonc` が存在するのが普通の状態**である
+（実際、司令官が計画書起草時に確認した検証機にも存在した — 5.3参照）。`opencode.jsonc` に
+独自の `instructions` があると、このディレクトリが配る `opencode.json` の `instructions`
+（`~/.claude/CLAUDE.machine.md`）は**エラーも警告も無しに無視される**。
+
+**決定**: 中身（`opencode.jsonc` に実際に `instructions` があるかどうか）までは検証しない
+（POSIX sh で JSONC を安全にパースする手段が無く、コストに見合わない）。`opencode/deploy.sh`
+は `$OPENCODE_HOME_DIR/opencode.jsonc` の**存在**だけを見て `log_warn` を出し、
+`opencode/README.md` §4 に対処法（`opencode.jsonc` 側の `instructions` に
+`~/.claude/CLAUDE.machine.md` を追記する）を明記した。
+
 ### 5.4 変更点まとめ
 
 - 新規トラッキングファイル `opencode/opencode.json`:
@@ -255,6 +309,10 @@ const matches = yield* (
   （OpenCode 未導入マシンでは既存の早期 return によりスキップされる）
 - `shared/helpers.sh` の `links_for_tool()` `opencode)` arm に
   `$(skill_agent_home opencode)/opencode.json` を追加
+- `shared/helpers.sh` の `state_files_for_tool()` に `opencode) opencode.json` arm を追加
+  （5.3.1。OpenCode自身の設定UI書き込みによる状態ファイル消失を防ぐ）
+- `opencode/deploy.sh` が `opencode.jsonc` の存在を検出して `log_warn` を出す
+  （5.3.2。`instructions` が jsonc 側で黙って上書きされる問題への対処）
 
 ## 6. 孫3（Codex）の決着
 

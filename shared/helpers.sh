@@ -301,6 +301,19 @@ state_files_for_tool() {
       printf '%s\n' \
         "lazy-lock.json"
       ;;
+    opencode)
+      # OpenCode's own Config.updateGlobal() (used by its settings UI —
+      # provider/shell/custom-provider changes) writes to whichever of
+      # opencode.jsonc / opencode.json / config.json exists first, in that
+      # order. Deploying opencode.json as a symlink means that, on a
+      # machine with none of the three yet, OpenCode picks this symlink and
+      # writes settings-UI changes straight through it into the running
+      # generation — the same class of writeback as nvim's lazy-lock.json
+      # above (ADR DOC-2609162327 §5.3, found in PR review of the change
+      # that added opencode.json).
+      printf '%s\n' \
+        "opencode.json"
+      ;;
   esac
 }
 

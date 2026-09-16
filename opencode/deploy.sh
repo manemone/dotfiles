@@ -61,6 +61,25 @@ symlink_backup "$DOTFILES_DEPLOY_SRC/claude/CLAUDE.md" "$OPENCODE_HOME_DIR/AGENT
 # no-personalization default as an empty CLAUDE.machine.md, not an error.
 symlink_backup "$DOTFILES_DEPLOY_SRC/opencode/opencode.json" "$OPENCODE_HOME_DIR/opencode.json" || FAIL=1
 
+# --- Warn if opencode.jsonc coexists (ADR DOC-2609162327 §5.3) ---
+# OpenCode's loadGlobal() merges config.json -> opencode.json -> opencode.jsonc
+# with mergeDeep (remeda), last-loaded wins per key and arrays are NOT
+# concatenated. If opencode.jsonc has its own `instructions` array, it
+# silently replaces the `instructions` this symlink just deployed and
+# ~/.claude/CLAUDE.machine.md stops reaching OpenCode — no error, no log
+# from OpenCode itself. loadGlobal() also auto-creates opencode.jsonc on an
+# agent's very first run when none of the three candidate files exist yet,
+# so this is a normal (not just hypothetical) state on any machine that has
+# used OpenCode before deploying this. Detecting the *content* of
+# opencode.jsonc (does it actually declare `instructions`?) would require a
+# JSONC parser in POSIX sh; warning on mere coexistence is simpler and
+# matches what plan/ADR §5.3 documents as the mitigation.
+if [ -f "$OPENCODE_HOME_DIR/opencode.jsonc" ]; then
+  log_warn "opencode.jsonc also exists at $OPENCODE_HOME_DIR/opencode.jsonc."
+  log_warn "OpenCode merges opencode.json -> opencode.jsonc (jsonc wins per key, arrays are replaced, not concatenated)."
+  log_warn "If opencode.jsonc has its own 'instructions', add ~/.claude/CLAUDE.machine.md there too — see opencode/README.md §4."
+fi
+
 if [ "$FAIL" -ne 0 ]; then
   log_error "opencode deployment completed with errors."
   exit 1

@@ -1451,6 +1451,39 @@ scenario_opencode_machine_md_instructions() {
     pass "claude抜きでの uninstall.sh --force --only opencode が成功"
   fi
   assert_not_exists "$sbx/.config/opencode/opencode.json"
+
+  # --- (4) opencode.jsonc 併存時の警告（レビュー指摘。ADR DOC-2609162327 §5.3）---
+  # OpenCode 自身の loadGlobal() は config.json → opencode.json → opencode.jsonc
+  # の順に mergeDeep で重ね、jsonc 側の instructions が(配列連結ではなく)
+  # 丸ごと勝つ。jsonc に独自の instructions があると、このPRが配った
+  # opencode.json の instructions が黙って効かなくなるため、deploy時に警告を
+  # 出す設計にした(opencode/deploy.sh)。中身の解析はしない(POSIX shでの
+  # JSONC解析コストを避けるため。存在するだけで警告する)。
+  new_sandbox
+  sbx="$SANDBOX_DIR"
+  mkdir -p "$sbx/.config/opencode"
+  printf '{"instructions": ["独自のルール.md"]}\n' >"$sbx/.config/opencode/opencode.jsonc"
+
+  out="$(run_deploy "$sbx" --force --only opencode 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "opencode.jsonc併存下でのdeploy-all.sh --force --only opencodeが失敗 (exit=$rc)"
+    log "$out"
+  else
+    if printf '%s' "$out" | grep -qF "opencode.jsonc"; then
+      pass "opencode.jsonc併存時にdeployが警告を出す"
+    else
+      fail "opencode.jsonc併存時にdeployが警告を出す"
+    fi
+  fi
+  # jsonc自体は既存の実ファイルなのでsymlink_backupの対象ではない
+  # (opencode.jsonという別名にだけ配る)。deployで書き換わっていないことも
+  # 確認する。
+  if [ "$(cat "$sbx/.config/opencode/opencode.jsonc" 2>/dev/null)" = '{"instructions": ["独自のルール.md"]}' ]; then
+    pass "opencode.jsonc自体はdeployで書き換わらない"
+  else
+    fail "opencode.jsonc自体はdeployで書き換わらない"
+  fi
 }
 
 # ── シナリオ11: 旧方式(直リンク)skill symlinkの移行 + stale掃除 ──────────
