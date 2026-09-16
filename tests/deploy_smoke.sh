@@ -372,6 +372,10 @@ scenario_backup_symlink_idempotent_uninstall() {
     else
       fail "既存の ~/.config/opencode/AGENTS.md が退避先に保存されている"
     fi
+    # opencode.json（孫2・設計3、ADR DOC-2609162327 §5）。links_for_tool() の
+    # opencode arm への追加漏れがあると、このsymlinkが張られないまま
+    # 静かにスキップされる（AGENTS.md「実装時の注意」と同種の regression）。
+    assert_symlink "$sbx/.config/opencode/opencode.json" "$prefix/current/opencode/opencode.json"
   fi
 
   if has_tool skills; then
@@ -462,6 +466,9 @@ EOF
     else
       fail "uninstall で ~/.config/opencode/AGENTS.md が元のファイルに復元された"
     fi
+    # opencode.json は元々ダミーファイルを置いていない新規symlinkなので、
+    # git-guard.sh と同じく「撤去されたこと」自体を確認する。
+    assert_not_exists "$sbx/.config/opencode/opencode.json"
   fi
   if has_tool skills; then
     if [ -n "$existing_skill" ]; then
@@ -1329,6 +1336,275 @@ scenario_claude_machine_md_fixed_path() {
     pass "\$HOME側のsymlink経由の書き込みが固定パスの実体へ届く"
   else
     fail "\$HOME側のsymlink経由の書き込みが固定パスの実体へ届く"
+  fi
+}
+
+# ── シナリオ10e: opencode.json の instructions 経由での CLAUDE.machine.md 反映
+#     （孫2・設計3、ADR DOC-2609162327 §5）─────────────────────────────────
+# 案1（opencode.json 自身のディレクトリからの相対パス）は成立せず、
+# `~/.claude/CLAUDE.machine.md`（$XDG_CONFIG_HOME に依存しないClaude Code側の
+# 固定パスsymlink）を直接指す案2を採った、という決着そのものの回帰を守る:
+# (1) claude も一緒にデプロイした場合、固定パスへの書き込みが
+#     ~/.claude/CLAUDE.machine.md 経由で即座に読める(編集即反映)こと。
+# (2) --only opencode のように claude を一度もデプロイしていない場合でも
+#     opencode 自体のdeployは失敗せず、単に~/.claude/CLAUDE.machine.mdが
+#     存在しないまま(グレースフルな劣化)になること。
+# (3) uninstall --only opencode は opencode 側のsymlinkだけを撤去し、
+#     固定パスの実体(CLAUDE.machine.md)には触れないこと。
+
+scenario_opencode_machine_md_instructions() {
+  if ! has_tool opencode; then
+    return
+  fi
+  log "=== シナリオ10e: opencode.jsonのinstructions経由でのCLAUDE.machine.md反映(孫2) ==="
+  local sbx prefix out rc fixed_path expected_jsonc
+
+  # --- (1) claude も対象に含めてデプロイ: 編集即反映の確認 ---
+  new_sandbox
+  sbx="$SANDBOX_DIR"
+  prefix="$(dotfiles_prefix_for "$sbx")"
+  fixed_path="$prefix/CLAUDE.machine.md"
+  mkdir -p "$sbx/.config/opencode"
+
+  if has_tool claude; then
+    out="$(run_deploy "$sbx" --dry-run --only opencode,claude 2>&1)"
+    rc=$?
+    if [ "$rc" -ne 0 ]; then
+      fail "opencode,claude の deploy-all.sh --dry-run が失敗 (exit=$rc)"
+      log "$out"
+    else
+      assert_not_exists "$sbx/.config/opencode/opencode.json"
+      assert_not_exists "$fixed_path"
+    fi
+
+    out="$(run_deploy "$sbx" --force --only opencode,claude 2>&1)"
+    rc=$?
+    if [ "$rc" -ne 0 ]; then
+      fail "opencode,claude の deploy-all.sh --force が失敗 (exit=$rc)"
+      log "$out"
+      return
+    fi
+    assert_symlink "$sbx/.config/opencode/opencode.json" "$prefix/current/opencode/opencode.json"
+    if grep -qF '.claude/CLAUDE.machine.md' "$sbx/.config/opencode/opencode.json" 2>/dev/null; then
+      pass "opencode.json の instructions が ~/.claude/CLAUDE.machine.md を指している"
+    else
+      fail "opencode.json の instructions が ~/.claude/CLAUDE.machine.md を指している"
+    fi
+
+    printf 'OpenCodeからも読めるべき人格のパーソナライズ\n' >"$fixed_path"
+    # OpenCode 自身の instructions 解決(~/ 展開 → glob) は再現せず、
+    # opencode.json が指す先を辿った実体が固定パスと一致することだけを
+    # 確認する(instruction.ts の glob ロジック自体はADRで読んだソースを
+    # 根拠とし、ここでは配布側の配線だけを検証する)。
+    if [ "$(cat "$sbx/.claude/CLAUDE.machine.md" 2>/dev/null)" = "OpenCodeからも読めるべき人格のパーソナライズ" ]; then
+      pass "固定パスへの書き込みが ~/.claude/CLAUDE.machine.md(opencode.jsonの参照先)経由で即座に読める"
+    else
+      fail "固定パスへの書き込みが ~/.claude/CLAUDE.machine.md(opencode.jsonの参照先)経由で即座に読める"
+    fi
+
+    # --- (3) uninstall --only opencode: opencode側のsymlinkだけ撤去され、
+    #     claudeのCLAUDE.machine.mdやその固定パス実体には触れない ---
+    out="$(run_uninstall "$sbx" --force --only opencode 2>&1)"
+    rc=$?
+    if [ "$rc" -ne 0 ]; then
+      fail "uninstall.sh --force --only opencode が失敗 (exit=$rc)"
+      log "$out"
+    else
+      pass "uninstall.sh --force --only opencode が成功"
+    fi
+    assert_not_exists "$sbx/.config/opencode/opencode.json"
+    assert_symlink "$sbx/.claude/CLAUDE.machine.md" "$fixed_path"
+    if [ "$(cat "$fixed_path" 2>/dev/null)" = "OpenCodeからも読めるべき人格のパーソナライズ" ]; then
+      pass "uninstall --only opencode の後も固定パスの実体(人格のパーソナライズ)が消えない"
+    else
+      fail "uninstall --only opencode の後も固定パスの実体(人格のパーソナライズ)が消えない"
+    fi
+  fi
+
+  # --- (2) claude を一度もデプロイしないマシンでの劣化確認 ---
+  new_sandbox
+  sbx="$SANDBOX_DIR"
+  prefix="$(dotfiles_prefix_for "$sbx")"
+  mkdir -p "$sbx/.config/opencode"
+
+  out="$(run_deploy "$sbx" --force --only opencode 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "claude抜きでの deploy-all.sh --force --only opencode が失敗 (exit=$rc)"
+    log "$out"
+    return
+  fi
+  pass "claudeを一度もデプロイしていなくても opencode 単体のdeployは成功する"
+  assert_symlink "$sbx/.config/opencode/opencode.json" "$prefix/current/opencode/opencode.json"
+  # claudeを一度もデプロイしていないので ~/.claude 自体が無く、
+  # opencode.json が参照する ~/.claude/CLAUDE.machine.md も存在しない
+  # (エラーにはならず「パーソナライズ指定なし」に自然劣化する — ADR
+  # DOC-2609162327 §5.2 のトレードオフそのものの回帰)。
+  assert_not_exists "$sbx/.claude/CLAUDE.machine.md"
+
+  out="$(run_uninstall "$sbx" --force --only opencode 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "claude抜きでの uninstall.sh --force --only opencode が失敗 (exit=$rc)"
+    log "$out"
+  else
+    pass "claude抜きでの uninstall.sh --force --only opencode が成功"
+  fi
+  assert_not_exists "$sbx/.config/opencode/opencode.json"
+
+  # --- (4) 3ファイル(opencode.jsonc/opencode.json/config.json)とも無いマシン:
+  #     OpenCode自身の設定UI書き込み(updateGlobal())が配布物のsymlinkへ
+  #     向かわないよう、symlinkを張る前にマシンローカルなopencode.jsoncを
+  #     実ファイルとして作る（レビュー指摘・ADR DOC-2609162327 §5.3.1。
+  #     初版はstate_files_for_tool()に乗せて『検知して--adopt-stateで
+  #     取り込む』設計にしたが、取り込み先がマシン固有設定・認証情報を
+  #     含みうる全マシン共有の配布物になるため撤回し、書き戻し自体を
+  #     防ぐ設計にした）---
+  new_sandbox
+  sbx="$SANDBOX_DIR"
+  mkdir -p "$sbx/.config/opencode"
+
+  out="$(run_deploy "$sbx" --dry-run --only opencode 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "3ファイルとも無い状態でのdeploy-all.sh --dry-run --only opencodeが失敗 (exit=$rc)"
+    log "$out"
+  else
+    assert_not_exists "$sbx/.config/opencode/opencode.jsonc"
+  fi
+
+  out="$(run_deploy "$sbx" --force --only opencode 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "3ファイルとも無い状態でのdeploy-all.sh --force --only opencodeが失敗 (exit=$rc)"
+    log "$out"
+    return
+  fi
+  if [ -f "$sbx/.config/opencode/opencode.jsonc" ] && [ ! -L "$sbx/.config/opencode/opencode.jsonc" ]; then
+    pass "opencode.jsoncが実ファイル(symlinkでない)として作られる"
+  else
+    fail "opencode.jsoncが実ファイル(symlinkでない)として作られる"
+  fi
+  # ヒアドキュメントの区切り文字を引用符で囲むことで $schema をシェル展開の
+  # 対象外にする(printf引数の単一引用符リテラルよりshellcheck SC2016を
+  # 誘発しない)。opencode/deploy.shが実際に書き込む中身と同じ構成。
+  expected_jsonc="$(
+    cat <<'JSONC_EOF'
+{"$schema": "https://opencode.ai/config.json"}
+JSONC_EOF
+  )"
+  if [ "$(cat "$sbx/.config/opencode/opencode.jsonc" 2>/dev/null)" = "$expected_jsonc" ]; then
+    pass "opencode.jsoncの中身がschemaのみ(instructionsを含まない)"
+  else
+    fail "opencode.jsoncの中身がschemaのみ(instructionsを含まない): $(cat "$sbx/.config/opencode/opencode.jsonc" 2>/dev/null)"
+  fi
+  # instructionsキーが無いため5.3.2の警告は出ない。「Created ... opencode.jsonc」
+  # という成功ログ自体もファイル名を含むため、grepは警告メッセージ特有の
+  # 文言で絞る(単なるファイル名一致だと上のCreatedログに誤ヒットする)。
+  if printf '%s' "$out" | grep -qF "declares its own"; then
+    fail "instructionsの無いopencode.jsoncでは警告が出ない(deployが作った直後のschema-onlyな状態)"
+  else
+    pass "instructionsの無いopencode.jsoncでは警告が出ない(deployが作った直後のschema-onlyな状態)"
+  fi
+
+  # opencode.jsoncがstate file扱いされていないこと(state_files_for_tool()に
+  # opencode armが無いこと)の回帰確認: 世代側のopencode.jsonを書き換えて
+  # 再deployしても、状態ファイル書き戻しとして検知されない(検知されるなら
+  # 「Plugin/state lockfile changed since last deploy」で停止するはず)。
+  # このサンドボックスにはTTYが無いため、--forceを付けない限り
+  # deploy-all.shは(検知の有無によらず)最終的に「stdin is not a
+  # terminal」で失敗する(exit=1は両ケースで共通なので判定に使えない)。
+  # シナリオ27(nvim/lazy-lock.json)と同じ書き換え方。
+  wait_for_next_second
+  printf '{"tampered": true}\n' >"$(current_target_for "$sbx")/opencode/opencode.json"
+  out="$(run_deploy "$sbx" --only opencode </dev/null 2>&1)"
+  if printf '%s' "$out" | grep -qF "Plugin/state lockfile changed"; then
+    fail "opencode.jsonの世代側改変は状態ファイル書き戻しとして検知されない(state_files_for_tool()にopencode armが無い)"
+    log "$out"
+  else
+    pass "opencode.jsonの世代側改変は状態ファイル書き戻しとして検知されない(state_files_for_tool()にopencode armが無い)"
+  fi
+
+  # --- (4') 既存の実ファイルopencode.jsonだけがある(opencode.jsoncは無い)
+  #     状態でのdeploy: それでもopencode.jsoncが実ファイルとして作られる
+  #     こと（レビュー再指摘。ADR DOC-2609162327 §5.3.1第2版の回帰確認。
+  #     「3ファイルとも無い場合だけ作る」という条件では、既存の
+  #     opencode.jsonがsymlink_backupで退避された後に候補がsymlinkだけに
+  #     なり、この確認が取りこぼされていた）---
+  new_sandbox
+  sbx="$SANDBOX_DIR"
+  mkdir -p "$sbx/.config/opencode"
+  printf '{"provider": {"custom": {"baseURL": "https://example.com"}}}\n' >"$sbx/.config/opencode/opencode.json"
+
+  out="$(run_deploy "$sbx" --force --only opencode 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "既存の実ファイルopencode.jsonだけがある状態でのdeployが失敗 (exit=$rc)"
+    log "$out"
+  else
+    if [ -f "$sbx/.config/opencode/opencode.jsonc" ] && [ ! -L "$sbx/.config/opencode/opencode.jsonc" ]; then
+      pass "既存の実ファイルopencode.jsonだけがある状態でもopencode.jsoncが実ファイルとして作られる"
+    else
+      fail "既存の実ファイルopencode.jsonだけがある状態でもopencode.jsoncが実ファイルとして作られる"
+    fi
+    # opencode.json(既存の実ファイル)自体はsymlink_backupで退避されて
+    # symlinkに置き換わる(既存の挙動どおり)。
+    assert_symlink "$sbx/.config/opencode/opencode.json" "$(dotfiles_prefix_for "$sbx")/current/opencode/opencode.json"
+    assert_exists "$sbx/.config/opencode/opencode.json.backup"
+  fi
+
+  # --- (5) 既存opencode.jsonc(instructionsなし)がある場合: 上書きされず、
+  #     警告も出ない ---
+  new_sandbox
+  sbx="$SANDBOX_DIR"
+  mkdir -p "$sbx/.config/opencode"
+  printf '{"provider": {"custom": {"baseURL": "https://example.com"}}}\n' >"$sbx/.config/opencode/opencode.jsonc"
+
+  out="$(run_deploy "$sbx" --force --only opencode 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "instructionsの無い既存opencode.jsoncがある状態でのdeployが失敗 (exit=$rc)"
+    log "$out"
+  else
+    if [ "$(cat "$sbx/.config/opencode/opencode.jsonc" 2>/dev/null)" = '{"provider": {"custom": {"baseURL": "https://example.com"}}}' ]; then
+      pass "instructionsの無い既存opencode.jsoncはdeployで上書きされない"
+    else
+      fail "instructionsの無い既存opencode.jsoncはdeployで上書きされない"
+    fi
+    if printf '%s' "$out" | grep -qF "opencode.jsonc"; then
+      fail "instructionsの無い既存opencode.jsoncでは警告が出ない"
+    else
+      pass "instructionsの無い既存opencode.jsoncでは警告が出ない"
+    fi
+  fi
+
+  # --- (6) 既存opencode.jsonc(instructionsあり)が併存する場合: 上書きされず、
+  #     instructionsがjsonc側で黙って上書きされる旨の警告が出る
+  #     （レビュー指摘・ADR DOC-2609162327 §5.3.2）---
+  new_sandbox
+  sbx="$SANDBOX_DIR"
+  mkdir -p "$sbx/.config/opencode"
+  printf '{"instructions": ["独自のルール.md"]}\n' >"$sbx/.config/opencode/opencode.jsonc"
+
+  out="$(run_deploy "$sbx" --force --only opencode 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "opencode.jsonc併存下でのdeploy-all.sh --force --only opencodeが失敗 (exit=$rc)"
+    log "$out"
+  else
+    if printf '%s' "$out" | grep -qF "opencode.jsonc"; then
+      pass "instructionsのあるopencode.jsonc併存時にdeployが警告を出す"
+    else
+      fail "instructionsのあるopencode.jsonc併存時にdeployが警告を出す"
+    fi
+  fi
+  # jsonc自体は既存の実ファイルなのでsymlink_backupの対象ではない
+  # (opencode.jsonという別名にだけ配る)。deployで書き換わっていないことも
+  # 確認する。
+  if [ "$(cat "$sbx/.config/opencode/opencode.jsonc" 2>/dev/null)" = '{"instructions": ["独自のルール.md"]}' ]; then
+    pass "instructionsのあるopencode.jsonc自体はdeployで書き換わらない"
+  else
+    fail "instructionsのあるopencode.jsonc自体はdeployで書き換わらない"
   fi
 }
 
@@ -3029,6 +3305,8 @@ log
 scenario_claude_machine_json_fixed_path
 log
 scenario_claude_machine_md_fixed_path
+log
+scenario_opencode_machine_md_instructions
 log
 scenario_skill_migration
 log

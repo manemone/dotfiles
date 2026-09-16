@@ -82,22 +82,26 @@
 | `claude/` | Claude Code 向け配布物（`CLAUDE.md` / `settings.json`） |
 | `skills/` | AI コーディングエージェント向けのスキル。Claude Code だけでなく Codex・OpenCode にも同じ実体を配る（ADR DOC-2608272128） |
 | `codex/` | Codex CLI のグローバル指示（`~/.codex/AGENTS.md`）を `claude/CLAUDE.md` から symlink で配る（ADR DOC-2609072334） |
-| `opencode/` | OpenCode のグローバル指示（`~/.config/opencode/AGENTS.md`）を `claude/CLAUDE.md` から symlink で配る（ADR DOC-2609072334） |
+| `opencode/` | OpenCode のグローバル指示（`~/.config/opencode/AGENTS.md`）を `claude/CLAUDE.md` から symlink で配る（ADR DOC-2609072334）。加えて `opencode.json` で `instructions` を配り、マシンローカルな人格のパーソナライズを OpenCode にも効かせる（ADR DOC-2609162327 §5） |
 | `shared/` | 全 deploy スクリプトが共有するヘルパー（`helpers.sh`） |
 | `docs/` | このリポジトリ自体の設計文書・ADR・計画書・運用リファレンス。`design/`（現役の規約）・`adr/`（確定した技術決定の記録）・`planning/`（傘ブランチ計画書）・`reference/`（運用中に繰り返し引く事実）の4フォルダに分かれる。詳細は [docs/README.md](docs/README.md) を参照 |
 | `tools/` | このリポジトリ自体の開発を支援するツール（`doc-id` など）。`bin/` と異なり `$HOME` へは配布しない |
 | `templates/` | 他リポジトリへ配布する copier テンプレート（`repo-baseline` など）。`$HOME` へは配布せず、dotfiles 本体にも依存しない自己完結ディレクトリ |
 
 各ツールディレクトリは「設定ファイル本体 + `deploy.sh` + `README.md`」という共通構造を持つ。
-例外は `codex/` と `opencode/` で、この2つは設定ファイル本体を持たず、`deploy.sh` が
-`claude/CLAUDE.md` を symlink で指す（内容がエージェント非依存の個人指示のため。理由は
-ADR DOC-2609072334 参照）。
+例外は `codex/` で、設定ファイル本体を持たず、`deploy.sh` が `claude/CLAUDE.md` を symlink で
+指す（内容がエージェント非依存の個人指示のため。理由は ADR DOC-2609072334 参照）。
+`opencode/` も同じ理由で `AGENTS.md`（`claude/CLAUDE.md` の symlink）を持つが、
+`opencode.json`（トラッキング対象のこのツール自身の設定ファイル本体）も持つため、
+この例外には完全には当てはまらない。`opencode.json` の役割は「3つの領域」節と
+[opencode/README.md](opencode/README.md) を参照。
 
 ## 3つの領域（混同しないこと）
 
 | 対象 | 正体 | 誰が読むか |
 |---|---|---|
 | `claude/CLAUDE.md`, `claude/settings.json` | **配布される成果物。** `claude/deploy.sh` がユーザーの `~/.claude/` 配下へ配置する（`CLAUDE.md` は symlink、`settings.json` は生成。詳細は「デプロイの仕組み」参照） | このリポジトリを使う人間のマシンの Claude Code |
+| `opencode/opencode.json` | **配布される成果物。** `opencode/deploy.sh` がユーザーの `~/.config/opencode/` 配下へ symlink する。`instructions` に `~/.claude/CLAUDE.machine.md` を列挙し、マシンローカルな人格のパーソナライズを OpenCode にも効かせる（ADR DOC-2609162327 §5） | このリポジトリを使う人間のマシンの OpenCode |
 | `skills/` | **配布される成果物。** `skills/deploy.sh` が各 AI エージェントのスキルディレクトリへスキルごとに symlink する | このリポジトリを使う人間のマシンの Claude Code / Codex / OpenCode |
 | ルート `AGENTS.md` / `CLAUDE.md`（このファイル） | **このリポジトリを開発するためのルール** | このリポジトリで作業する AI |
 | `.claude/settings.json` | リポジトリで作業する AI 向けの permissions を置く場所 | このリポジトリで作業する Claude Code |
@@ -107,6 +111,9 @@ ADR DOC-2609072334 参照）。
 `CLAUDE.machine.md` への import（`@~/.claude/CLAUDE.machine.md`）のみを持つ（ADR
 DOC-2609162327）。`codex/deploy.sh` と `opencode/deploy.sh` もこのファイルを symlink 元に
 している（ADR DOC-2609072334）ため、編集の影響は3エージェントへ及ぶことに注意する。
+`opencode/opencode.json` はこの import 行とは別経路で、`instructions` から直接
+`~/.claude/CLAUDE.machine.md` を指す（`@` import は Claude Code だけが解釈する記法で
+OpenCode には効かないため。詳細は ADR DOC-2609162327 §5 / [opencode/README.md](opencode/README.md)）。
 
 ## AI 支援ツールの設定
 

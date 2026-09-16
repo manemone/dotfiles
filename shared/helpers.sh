@@ -246,8 +246,16 @@ links_for_tool() {
         "$(skill_agent_home codex)/AGENTS.md"
       ;;
     opencode)
+      # opencode.json (design 3, plan DOC-2609162320 / ADR DOC-2609162327 §5):
+      # a tracked config file (unlike codex, which still has none), symlinked
+      # the same way as AGENTS.md above. Its `instructions` array is what
+      # makes machine-local personality personalization reach OpenCode — see
+      # opencode/opencode.json and opencode/deploy.sh for why it points at
+      # ~/.claude/CLAUDE.machine.md rather than a path under this agent's own
+      # (XDG_CONFIG_HOME-relative) home.
       printf '%s\n' \
-        "$(skill_agent_home opencode)/AGENTS.md"
+        "$(skill_agent_home opencode)/AGENTS.md" \
+        "$(skill_agent_home opencode)/opencode.json"
       ;;
       # skills deliberately has no arm: its $HOME-side links are one per
       # skill directory auto-detected under skills/, across every agent in
@@ -287,6 +295,19 @@ links_for_tool() {
 # is a generated real file (ADR §4.8), not a $HOME-side writeback into the
 # generation, and is out of scope here (see AGENTS.md / the task that added
 # this function).
+#
+# opencode.json is also deliberately absent, despite OpenCode's own
+# Config.updateGlobal() (settings UI) being able to write through it exactly
+# like a state file would (a symlink into the running generation). Unlike
+# nvim/lazy-lock.json — something every machine SHOULD share — what
+# updateGlobal() writes can be machine-local settings or secrets (e.g. a
+# custom provider's `headers` with an auth token). Listing it here would
+# make --adopt-state copy that into the tracked, all-machines-shared
+# opencode/opencode.json. opencode/deploy.sh instead prevents the writeback
+# at the source (creates a real, machine-local opencode.jsonc before
+# symlinking opencode.json, so OpenCode never picks the symlink as a write
+# target) — see ADR DOC-2609162327 §5.3.1 for the full reasoning and the
+# state-file approach this rejected.
 state_files_for_tool() {
   case "$1" in
     nvim)
