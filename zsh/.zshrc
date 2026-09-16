@@ -245,6 +245,25 @@ if command -v mise >/dev/null 2>&1; then
 fi
 
 # =============================================================================
+# ocw — commands started in Herdr panes
+# =============================================================================
+# `ocw -H` starts each pane with `herdr pane run <pane> "$<ROLE>_COMMAND"`,
+# which types the string into the pane's shell and presses Enter, so a command
+# with arguments works exactly as if typed by hand (`ocw help env`).
+#
+# Auto mode is where these panes actually get used, and the permission rules in
+# claude/settings.json are already written around its classifier — but the mode
+# has to be entered by hand on every pane. Ask for it at launch instead. Only
+# ocw-created panes are affected; `claude` in an ordinary terminal still starts
+# in whatever settings.json says.
+#
+# :=  so an OCW_*_COMMAND exported before this file is sourced still wins.
+: "${OCW_COMMANDER_COMMAND:=claude --permission-mode auto}"
+: "${OCW_IMPLEMENTER_COMMAND:=claude --permission-mode auto}"
+: "${OCW_REVIEWER_COMMAND:=claude --permission-mode auto}"
+export OCW_COMMANDER_COMMAND OCW_IMPLEMENTER_COMMAND OCW_REVIEWER_COMMAND
+
+# =============================================================================
 # Machine-local overrides
 # =============================================================================
 # ~/.zshrc.local is intentionally NOT tracked in this repository. Put anything

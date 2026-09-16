@@ -514,7 +514,11 @@ GitHub token形式（`ghp_...` 等 / `github_pat_...`）に一致する値、キ
 
 ### ocw のコマンド差し替え
 
-環境変数で commander / implementer / reviewer の実行コマンドを上書きできる:
+環境変数で commander / implementer / reviewer の実行コマンドを上書きできる。
+
+**このリポジトリの zsh 設定は、3つとも `claude --permission-mode auto` を既定として
+export する**（[zsh/README.md](../zsh/README.md)「ocw の Herdr ペインで起動するコマンド」）。
+以下はそれをさらに上書きする例:
 
 ```bash
 # DeepSeek を使う場合（旧デフォルト）

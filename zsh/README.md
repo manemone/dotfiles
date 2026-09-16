@@ -121,6 +121,34 @@ hand-written scripts take precedence over shims.
 | `$HOME/.opencode/bin` | opencode CLI |
 | `$HOME/.cargo/bin` | Rust toolchain |
 
+### ocw の Herdr ペインで起動するコマンド
+
+`ocw -H` が commander / implementer / reviewer の各ペインで実行するコマンドを、
+auto mode 付きの Claude Code に固定する。
+
+| 環境変数 | このリポジトリが設定する値 | `ocw` 側の既定値 |
+|---|---|---|
+| `OCW_COMMANDER_COMMAND` | `claude --permission-mode auto` | `claude` |
+| `OCW_IMPLEMENTER_COMMAND` | `claude --permission-mode auto` | `claude` |
+| `OCW_REVIEWER_COMMAND` | `claude --permission-mode auto` | `claude` |
+
+`ocw` はこの値を `herdr pane run <pane> "<コマンド>"` へ1引数のまま渡し、Herdr は
+それをペインのシェルへ打ち込んで Enter を送る。手で打つのと同じ扱いなので、
+引数付きのコマンドがそのまま通る（`ocw help env` / `ocw help herdr`）。
+
+**効く範囲はこの3ペインだけ。** 普通のターミナルで `claude` と打った場合の権限モードは
+`claude/settings.json` の `permissions.defaultMode` のままで、こちらは変わらない。
+
+代入は `:=` なので、このファイルが読まれる前に export しておけばそちらが優先される。
+恒久的に変えたい場合は `~/.zshrc.local`（後述）に書く:
+
+```bash
+export OCW_REVIEWER_COMMAND=claude   # reviewer だけ auto mode をやめる
+```
+
+コマンド自体を別のツールへ差し替える例は
+[bin/README.md](../bin/README.md)「ocw のコマンド差し替え」を参照。
+
 ### History
 
 - File: `~/.zsh_history`
