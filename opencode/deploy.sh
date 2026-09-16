@@ -38,6 +38,53 @@ fi
 # points at claude/CLAUDE.md instead of a content file of its own.
 symlink_backup "$DOTFILES_DEPLOY_SRC/claude/CLAUDE.md" "$OPENCODE_HOME_DIR/AGENTS.md" || FAIL=1
 
+# --- Steer OpenCode's own settings-UI writes away from the opencode.json
+# symlink (ADR DOC-2609162327 §5.3.1) ---
+# OpenCode's own Config.updateGlobal() (desktop/web settings UI: shell
+# choice, disabled_providers, custom-provider baseURL/headers — which can
+# include an auth token) writes to whichever of opencode.jsonc / opencode.json
+# / config.json globalConfigFile() finds first, in that order. If none of
+# the three exist yet when OpenCode is first run, loadGlobal() auto-creates
+# opencode.jsonc — but only when none exist. Once we symlink opencode.json
+# below, it satisfies that existence check, so on a machine that has never
+# run OpenCode before, updateGlobal() would target OUR symlink, and the
+# write would land through it into the running *generation* — the same
+# writeback pattern as nvim/lazy-lock.json, EXCEPT what's written here can
+# be machine-local settings or secrets, not something that belongs in the
+# tracked, all-machines-shared opencode/opencode.json. Treating it as a
+# state file (an earlier revision of this file did — see git history) would
+# make `--adopt-state` copy that machine-local/secret content into the
+# tracked file and, from there, out to every other machine. So instead of
+# capturing the writeback, we prevent it: create a real, machine-local
+# opencode.jsonc *before* symlinking opencode.json, so OpenCode always finds
+# a real file first and never picks the symlink as a write target. Content
+# matches what loadGlobal() itself would generate (schema only, no
+# `instructions` key — mergeDeep only overwrites keys jsonc actually has,
+# so opencode.json's `instructions` below survives the merge untouched).
+# Never overwrite an existing real file (any of the three) — that would
+# either clobber genuine machine settings or fight with content someone put
+# there on purpose (see the opencode.jsonc warning further below).
+if [ ! -f "$OPENCODE_HOME_DIR/opencode.jsonc" ] &&
+  [ ! -f "$OPENCODE_HOME_DIR/opencode.json" ] &&
+  [ ! -f "$OPENCODE_HOME_DIR/config.json" ]; then
+  if [ "${DRY_RUN:-0}" -eq 1 ]; then
+    log_info "[DRY-RUN] Would create $OPENCODE_HOME_DIR/opencode.jsonc (machine-local; steers OpenCode's own settings writes away from the opencode.json symlink below)"
+  else
+    # Quoted heredoc delimiter: the $ in $schema is a literal JSON key, not
+    # a shell expansion (avoids shellcheck SC2016, which single-quoting the
+    # same literal in a printf argument would trigger instead).
+    if cat >"$OPENCODE_HOME_DIR/opencode.jsonc" <<'JSONC_EOF'; then
+{"$schema": "https://opencode.ai/config.json"}
+JSONC_EOF
+      :
+    else
+      log_error "Failed to create $OPENCODE_HOME_DIR/opencode.jsonc"
+      FAIL=1
+    fi
+    [ "$FAIL" -eq 0 ] && log_ok "Created $OPENCODE_HOME_DIR/opencode.jsonc (machine-local; not tracked by this repo)"
+  fi
+fi
+
 # --- Symlink opencode.json (design 3, plan DOC-2609162320 / ADR
 # DOC-2609162327 §5) ---
 # Unlike AGENTS.md above (which carries the base personal-instructions text,
@@ -61,23 +108,25 @@ symlink_backup "$DOTFILES_DEPLOY_SRC/claude/CLAUDE.md" "$OPENCODE_HOME_DIR/AGENT
 # no-personalization default as an empty CLAUDE.machine.md, not an error.
 symlink_backup "$DOTFILES_DEPLOY_SRC/opencode/opencode.json" "$OPENCODE_HOME_DIR/opencode.json" || FAIL=1
 
-# --- Warn if opencode.jsonc coexists (ADR DOC-2609162327 §5.3) ---
+# --- Warn if an existing opencode.jsonc declares its own `instructions`
+# (ADR DOC-2609162327 §5.3.2) ---
 # OpenCode's loadGlobal() merges config.json -> opencode.json -> opencode.jsonc
 # with mergeDeep (remeda), last-loaded wins per key and arrays are NOT
 # concatenated. If opencode.jsonc has its own `instructions` array, it
 # silently replaces the `instructions` this symlink just deployed and
 # ~/.claude/CLAUDE.machine.md stops reaching OpenCode — no error, no log
-# from OpenCode itself. loadGlobal() also auto-creates opencode.jsonc on an
-# agent's very first run when none of the three candidate files exist yet,
-# so this is a normal (not just hypothetical) state on any machine that has
-# used OpenCode before deploying this. Detecting the *content* of
-# opencode.jsonc (does it actually declare `instructions`?) would require a
-# JSONC parser in POSIX sh; warning on mere coexistence is simpler and
-# matches what plan/ADR §5.3 documents as the mitigation.
-if [ -f "$OPENCODE_HOME_DIR/opencode.jsonc" ]; then
-  log_warn "opencode.jsonc also exists at $OPENCODE_HOME_DIR/opencode.jsonc."
+# from OpenCode itself. Only warn when opencode.jsonc both exists AND
+# actually declares "instructions": the block above now creates a
+# schema-only opencode.jsonc on a machine that has none of the three files
+# yet, and that always-exists-afterward file must not turn this into a
+# warning on every single deploy. A plain grep (not a JSONC parser) is
+# enough — a false-positive match inside a comment or string only causes an
+# extra (harmless) warning, never a missed one.
+if [ -f "$OPENCODE_HOME_DIR/opencode.jsonc" ] && grep -q '"instructions"' "$OPENCODE_HOME_DIR/opencode.jsonc" 2>/dev/null; then
+  log_warn "opencode.jsonc declares its own 'instructions' at $OPENCODE_HOME_DIR/opencode.jsonc."
   log_warn "OpenCode merges opencode.json -> opencode.jsonc (jsonc wins per key, arrays are replaced, not concatenated)."
-  log_warn "If opencode.jsonc has its own 'instructions', add ~/.claude/CLAUDE.machine.md there too — see opencode/README.md §4."
+  log_warn "So ~/.claude/CLAUDE.machine.md (added via opencode.json) is being silently dropped."
+  log_warn "Add ~/.claude/CLAUDE.machine.md to opencode.jsonc's own 'instructions' too — see opencode/README.md §4."
 fi
 
 if [ "$FAIL" -ne 0 ]; then

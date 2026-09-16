@@ -97,15 +97,26 @@ OpenCode の `instructions` 内の `~/` は `$HOME` からの展開であり、
 同じ「パーソナライズ指定なし」がデフォルトになる。詳細と検証根拠は
 [ADR DOC-2609162327](../docs/adr/DOC-2609162327_claude-md-machine-local-tone.md) §5 を参照。
 
-**⚠️ `opencode.jsonc` が併存する環境での注意**: OpenCode はグローバル設定を
+**`~/.config/opencode/opencode.jsonc` について**: OpenCode 自身の設定UI（デスクトップ/Web
+アプリの provider 設定など）は、`opencode.jsonc` / `opencode.json` / `config.json` のうち
+存在する最初のファイルへ書き込みます。このディレクトリが配る `opencode.json` は symlink
+（配布物）なので、そこへ書き込ませるとマシン固有の設定・場合によっては認証情報が
+配布物へ紛れ込みます。それを避けるため、deploy はこれら3ファイルがどれも無いマシンでは
+`opencode.jsonc`（`{"$schema": "https://opencode.ai/config.json"}` のみの空の実ファイル）を
+先に作ります。これは**このリポジトリの追跡対象ではない、マシンローカルなファイル**です
+（`opencode/deploy.sh`）。**設定UIでの変更はこの `opencode.jsonc` へ書かれ、`opencode.json`
+（配布物）には触れません。**
+
+**⚠️ `opencode.jsonc` に独自の `instructions` がある場合の注意**: OpenCode はグローバル設定を
 `config.json` → `opencode.json` → `opencode.jsonc` の順に重ね合わせて読み込み、
 後から読んだ側（`opencode.jsonc`）が優先されます。オブジェクトのキー単位で上書きされ、
 配列（`instructions` を含む）は連結されず丸ごと置き換わります。そのため、
-`opencode.jsonc` に独自の `instructions` を書いている環境では、このディレクトリが配る
-`opencode.json` の `instructions`（`~/.claude/CLAUDE.machine.md`）が**エラーも警告も
-出さずに無視されます**。`opencode.jsonc` は OpenCode を一度でも使ったことがあるマシンでは
-自動生成されているのが普通の状態なので、他人事ではありません。deploy 時に
-`opencode.jsonc` の存在（中身は見ません）を検出して警告します
-（`opencode/deploy.sh`）。警告が出た場合は、`opencode.jsonc` 側の `instructions` に
+`opencode.jsonc` に独自の `instructions` を書いている環境（deploy が作った上記の
+schema-only な `opencode.jsonc` を手で書き換えた場合や、deploy より前から別の目的で
+`opencode.jsonc` を使っていた場合）では、このディレクトリが配る `opencode.json` の
+`instructions`（`~/.claude/CLAUDE.machine.md`）が**エラーも警告も出さずに無視されます**。
+deploy 時に `opencode.jsonc` に `instructions` キーがあるかどうかを検出して警告します
+（`opencode/deploy.sh`。中身は `"instructions"` という文字列の有無を見るだけで、JSONC の
+構文解析はしません）。警告が出た場合は、`opencode.jsonc` 側の `instructions` にも
 `~/.claude/CLAUDE.machine.md` を追記してください。決着の詳細は
 [ADR DOC-2609162327](../docs/adr/DOC-2609162327_claude-md-machine-local-tone.md) §5.3 を参照。

@@ -1357,7 +1357,7 @@ scenario_opencode_machine_md_instructions() {
     return
   fi
   log "=== シナリオ10e: opencode.jsonのinstructions経由でのCLAUDE.machine.md反映(孫2) ==="
-  local sbx prefix out rc fixed_path
+  local sbx prefix out rc fixed_path expected_jsonc
 
   # --- (1) claude も対象に含めてデプロイ: 編集即反映の確認 ---
   new_sandbox
@@ -1452,13 +1452,107 @@ scenario_opencode_machine_md_instructions() {
   fi
   assert_not_exists "$sbx/.config/opencode/opencode.json"
 
-  # --- (4) opencode.jsonc 併存時の警告（レビュー指摘。ADR DOC-2609162327 §5.3）---
-  # OpenCode 自身の loadGlobal() は config.json → opencode.json → opencode.jsonc
-  # の順に mergeDeep で重ね、jsonc 側の instructions が(配列連結ではなく)
-  # 丸ごと勝つ。jsonc に独自の instructions があると、このPRが配った
-  # opencode.json の instructions が黙って効かなくなるため、deploy時に警告を
-  # 出す設計にした(opencode/deploy.sh)。中身の解析はしない(POSIX shでの
-  # JSONC解析コストを避けるため。存在するだけで警告する)。
+  # --- (4) 3ファイル(opencode.jsonc/opencode.json/config.json)とも無いマシン:
+  #     OpenCode自身の設定UI書き込み(updateGlobal())が配布物のsymlinkへ
+  #     向かわないよう、symlinkを張る前にマシンローカルなopencode.jsoncを
+  #     実ファイルとして作る（レビュー指摘・ADR DOC-2609162327 §5.3.1。
+  #     初版はstate_files_for_tool()に乗せて『検知して--adopt-stateで
+  #     取り込む』設計にしたが、取り込み先がマシン固有設定・認証情報を
+  #     含みうる全マシン共有の配布物になるため撤回し、書き戻し自体を
+  #     防ぐ設計にした）---
+  new_sandbox
+  sbx="$SANDBOX_DIR"
+  mkdir -p "$sbx/.config/opencode"
+
+  out="$(run_deploy "$sbx" --dry-run --only opencode 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "3ファイルとも無い状態でのdeploy-all.sh --dry-run --only opencodeが失敗 (exit=$rc)"
+    log "$out"
+  else
+    assert_not_exists "$sbx/.config/opencode/opencode.jsonc"
+  fi
+
+  out="$(run_deploy "$sbx" --force --only opencode 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "3ファイルとも無い状態でのdeploy-all.sh --force --only opencodeが失敗 (exit=$rc)"
+    log "$out"
+    return
+  fi
+  if [ -f "$sbx/.config/opencode/opencode.jsonc" ] && [ ! -L "$sbx/.config/opencode/opencode.jsonc" ]; then
+    pass "opencode.jsoncが実ファイル(symlinkでない)として作られる"
+  else
+    fail "opencode.jsoncが実ファイル(symlinkでない)として作られる"
+  fi
+  # ヒアドキュメントの区切り文字を引用符で囲むことで $schema をシェル展開の
+  # 対象外にする(printf引数の単一引用符リテラルよりshellcheck SC2016を
+  # 誘発しない)。opencode/deploy.shが実際に書き込む中身と同じ構成。
+  expected_jsonc="$(
+    cat <<'JSONC_EOF'
+{"$schema": "https://opencode.ai/config.json"}
+JSONC_EOF
+  )"
+  if [ "$(cat "$sbx/.config/opencode/opencode.jsonc" 2>/dev/null)" = "$expected_jsonc" ]; then
+    pass "opencode.jsoncの中身がschemaのみ(instructionsを含まない)"
+  else
+    fail "opencode.jsoncの中身がschemaのみ(instructionsを含まない): $(cat "$sbx/.config/opencode/opencode.jsonc" 2>/dev/null)"
+  fi
+  # instructionsキーが無いため5.3.2の警告は出ない。「Created ... opencode.jsonc」
+  # という成功ログ自体もファイル名を含むため、grepは警告メッセージ特有の
+  # 文言で絞る(単なるファイル名一致だと上のCreatedログに誤ヒットする)。
+  if printf '%s' "$out" | grep -qF "declares its own"; then
+    fail "instructionsの無いopencode.jsoncでは警告が出ない(deployが作った直後のschema-onlyな状態)"
+  else
+    pass "instructionsの無いopencode.jsoncでは警告が出ない(deployが作った直後のschema-onlyな状態)"
+  fi
+
+  # opencode.jsoncがstate file扱いされていないこと(state_files_for_tool()に
+  # opencode armが無いこと)の回帰確認: 世代側のopencode.jsonを書き換えて
+  # 再deployしても、状態ファイル書き戻しとして検知されない(検知されるなら
+  # 「Plugin/state lockfile changed since last deploy」で停止するはず)。
+  # このサンドボックスにはTTYが無いため、--forceを付けない限り
+  # deploy-all.shは(検知の有無によらず)最終的に「stdin is not a
+  # terminal」で失敗する(exit=1は両ケースで共通なので判定に使えない)。
+  # シナリオ27(nvim/lazy-lock.json)と同じ書き換え方。
+  wait_for_next_second
+  printf '{"tampered": true}\n' >"$(current_target_for "$sbx")/opencode/opencode.json"
+  out="$(run_deploy "$sbx" --only opencode </dev/null 2>&1)"
+  if printf '%s' "$out" | grep -qF "Plugin/state lockfile changed"; then
+    fail "opencode.jsonの世代側改変は状態ファイル書き戻しとして検知されない(state_files_for_tool()にopencode armが無い)"
+    log "$out"
+  else
+    pass "opencode.jsonの世代側改変は状態ファイル書き戻しとして検知されない(state_files_for_tool()にopencode armが無い)"
+  fi
+
+  # --- (5) 既存opencode.jsonc(instructionsなし)がある場合: 上書きされず、
+  #     警告も出ない ---
+  new_sandbox
+  sbx="$SANDBOX_DIR"
+  mkdir -p "$sbx/.config/opencode"
+  printf '{"provider": {"custom": {"baseURL": "https://example.com"}}}\n' >"$sbx/.config/opencode/opencode.jsonc"
+
+  out="$(run_deploy "$sbx" --force --only opencode 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "instructionsの無い既存opencode.jsoncがある状態でのdeployが失敗 (exit=$rc)"
+    log "$out"
+  else
+    if [ "$(cat "$sbx/.config/opencode/opencode.jsonc" 2>/dev/null)" = '{"provider": {"custom": {"baseURL": "https://example.com"}}}' ]; then
+      pass "instructionsの無い既存opencode.jsoncはdeployで上書きされない"
+    else
+      fail "instructionsの無い既存opencode.jsoncはdeployで上書きされない"
+    fi
+    if printf '%s' "$out" | grep -qF "opencode.jsonc"; then
+      fail "instructionsの無い既存opencode.jsoncでは警告が出ない"
+    else
+      pass "instructionsの無い既存opencode.jsoncでは警告が出ない"
+    fi
+  fi
+
+  # --- (6) 既存opencode.jsonc(instructionsあり)が併存する場合: 上書きされず、
+  #     instructionsがjsonc側で黙って上書きされる旨の警告が出る
+  #     （レビュー指摘・ADR DOC-2609162327 §5.3.2）---
   new_sandbox
   sbx="$SANDBOX_DIR"
   mkdir -p "$sbx/.config/opencode"
@@ -1471,18 +1565,18 @@ scenario_opencode_machine_md_instructions() {
     log "$out"
   else
     if printf '%s' "$out" | grep -qF "opencode.jsonc"; then
-      pass "opencode.jsonc併存時にdeployが警告を出す"
+      pass "instructionsのあるopencode.jsonc併存時にdeployが警告を出す"
     else
-      fail "opencode.jsonc併存時にdeployが警告を出す"
+      fail "instructionsのあるopencode.jsonc併存時にdeployが警告を出す"
     fi
   fi
   # jsonc自体は既存の実ファイルなのでsymlink_backupの対象ではない
   # (opencode.jsonという別名にだけ配る)。deployで書き換わっていないことも
   # 確認する。
   if [ "$(cat "$sbx/.config/opencode/opencode.jsonc" 2>/dev/null)" = '{"instructions": ["独自のルール.md"]}' ]; then
-    pass "opencode.jsonc自体はdeployで書き換わらない"
+    pass "instructionsのあるopencode.jsonc自体はdeployで書き換わらない"
   else
-    fail "opencode.jsonc自体はdeployで書き換わらない"
+    fail "instructionsのあるopencode.jsonc自体はdeployで書き換わらない"
   fi
 }
 

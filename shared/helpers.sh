@@ -295,24 +295,24 @@ links_for_tool() {
 # is a generated real file (ADR §4.8), not a $HOME-side writeback into the
 # generation, and is out of scope here (see AGENTS.md / the task that added
 # this function).
+#
+# opencode.json is also deliberately absent, despite OpenCode's own
+# Config.updateGlobal() (settings UI) being able to write through it exactly
+# like a state file would (a symlink into the running generation). Unlike
+# nvim/lazy-lock.json — something every machine SHOULD share — what
+# updateGlobal() writes can be machine-local settings or secrets (e.g. a
+# custom provider's `headers` with an auth token). Listing it here would
+# make --adopt-state copy that into the tracked, all-machines-shared
+# opencode/opencode.json. opencode/deploy.sh instead prevents the writeback
+# at the source (creates a real, machine-local opencode.jsonc before
+# symlinking opencode.json, so OpenCode never picks the symlink as a write
+# target) — see ADR DOC-2609162327 §5.3.1 for the full reasoning and the
+# state-file approach this rejected.
 state_files_for_tool() {
   case "$1" in
     nvim)
       printf '%s\n' \
         "lazy-lock.json"
-      ;;
-    opencode)
-      # OpenCode's own Config.updateGlobal() (used by its settings UI —
-      # provider/shell/custom-provider changes) writes to whichever of
-      # opencode.jsonc / opencode.json / config.json exists first, in that
-      # order. Deploying opencode.json as a symlink means that, on a
-      # machine with none of the three yet, OpenCode picks this symlink and
-      # writes settings-UI changes straight through it into the running
-      # generation — the same class of writeback as nvim's lazy-lock.json
-      # above (ADR DOC-2609162327 §5.3, found in PR review of the change
-      # that added opencode.json).
-      printf '%s\n' \
-        "opencode.json"
       ;;
   esac
 }

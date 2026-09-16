@@ -245,7 +245,7 @@ const matches = yield* (
 下りなかったため試みを止めた）。既存の `opencode.json` がある環境では `symlink_backup` の
 退避で `.backup` に逃がされる。
 
-### 5.3.1 追加論点A（レビューで判明）: OpenCode 自身の書き戻しによる状態ファイル消失
+### 5.3.1 追加論点A（レビューで判明）: OpenCode 自身の書き戻し先が配布物のsymlinkになる
 
 OpenCode 1.18.31 の `packages/opencode/src/config/config.ts` を調べると、
 `Config.updateGlobal()`（656〜677行目。設定UI ─ デスクトップ/Webアプリの
@@ -265,14 +265,38 @@ OpenCode 1.18.31 の `packages/opencode/src/config/config.ts` を調べると、
 上書きコピーされて**警告なく消える**（`nvim/lazy-lock.json` と同じ「`$HOME` 側 symlink 経由の
 世代への書き戻し」パターン。ADR DOC-2608040229 §4.9 / ルート `AGENTS.md`「状態ファイル」節）。
 
-**決定**: `shared/helpers.sh` の `state_files_for_tool()` に `opencode) printf '%s\n'
-"opencode.json" ;;` を追加した。これにより、デプロイ時の検知・`deploy-all.sh --status`
-での表示・`--adopt-state` による取り込みのいずれもがこの経路を対象に含む
-（`nvim/lazy-lock.json` と全く同じ汎用機構に乗るため、専用のサンドボックステストは
-追加していない。機構自体は既存の nvim 向けシナリオが検証済みであり、今回追加したのは
-そのデータ駆動リストへの1エントリのみ。実際に `--force --only opencode` で世代を作った後
-世代側の `opencode.json` を書き換えて再deployし、`--force` 無しでは検知して停止する
-ことを手元で確認した）。
+**決定（初版・レビューで撤回）**: 当初は `shared/helpers.sh` の `state_files_for_tool()` に
+`opencode) printf '%s\n' "opencode.json" ;;` を追加し、`nvim/lazy-lock.json` と同じ
+「検知して `--adopt-state` で取り込む」経路に乗せた。**この決定はレビューの再指摘で撤回した
+（判断ミスだった）。** `nvim/lazy-lock.json` は全マシンで共有したい内容（プラグインの
+バージョンロック）だが、`updateGlobal()` が書くのはカスタムプロバイダの `baseURL` /
+`headers`（認証トークンを含み得る）や `disabled_providers` という**マシン固有の設定**である。
+状態ファイル扱いにすると、`--adopt-state` がこれをトラッキング対象の `opencode/opencode.json`
+（全マシンへ配る成果物）へコピーし、コミットすれば**マシン固有の設定や認証情報が git と
+全マシンへの配布物に混入する**。「消えるのを防ぐ」ことだけを見て「防ぎ方」を誤った。
+
+**決定（確定版）**: 書き戻しそのものを起こさせない。`opencode/deploy.sh` は、
+`opencode.jsonc` / `opencode.json`（symlink を張る前の既存の実ファイル） / `config.json` の
+いずれも無いマシンでのみ、`opencode.json` を symlink する**前に**
+`$OPENCODE_HOME_DIR/opencode.jsonc` を `{"$schema": "https://opencode.ai/config.json"}`
+という中身の**マシンローカルな実ファイル**として作る（`loadGlobal()` が初回起動時に自動生成
+する内容と同じ）。`globalConfigFile()` は `opencode.jsonc` を最優先で選ぶため、以降
+`updateGlobal()` の書き込みはこの実ファイルへ向かい、symlink 経由で世代へ書き戻されることは
+無くなる。この `opencode.jsonc` に `instructions` キーは含めない（空の状態なら
+`mergeDeep` はそのキーに触れないため、`opencode.json` の `instructions` はマージ後も残る）。
+`shared/helpers.sh` の `state_files_for_tool()` からは `opencode` arm を削除した
+（`opencode.jsonc` はこのリポジトリの追跡対象でも `current` 経由の symlink でもない、
+純粋にマシンローカルな実ファイルなので、検知・`--status`・`--adopt-state` のいずれの
+対象にもならない。「配布物へ書き込ませない」ことがこの機構の代わりになる）。
+
+既存の `opencode.jsonc` / `opencode.json`（実ファイル） / `config.json` を上書きしない
+（他の目的で使っている環境の設定を壊さない・`--dry-run` では作らない）ことは、
+`--force` の有無を問わず一貫させた。専用のサンドボックステストを追加した
+（`tests/deploy_smoke.sh` シナリオ10e）: (a) 3ファイルとも無いマシンで実ファイルとして
+`opencode.jsonc` が作られること・`--dry-run` では作られないこと、(b) 既存の
+`opencode.jsonc`（`instructions` 無し）が deploy で上書きされないこと・その場合は警告も
+出ないこと、(c) 既存の `opencode.jsonc`（`instructions` あり）が上書きされないこと・
+その場合は5.3.2の警告が出ること。
 
 ### 5.3.2 追加論点B（レビューで判明）: `opencode.jsonc` 併存時の `instructions` 上書き
 
@@ -286,15 +310,24 @@ OpenCode 1.18.31 の `packages/opencode/src/config/config.ts` を調べると、
 
 `loadGlobal()` は前節のとおり候補ファイルが無いときに `opencode.jsonc` を自動生成するため、
 **OpenCode を使ったことがあるマシンでは `opencode.jsonc` が存在するのが普通の状態**である
-（実際、司令官が計画書起草時に確認した検証機にも存在した — 5.3参照）。`opencode.jsonc` に
-独自の `instructions` があると、このディレクトリが配る `opencode.json` の `instructions`
+（実際、司令官が計画書起草時に確認した検証機にも存在した — 5.3参照）。5.3.1 の決定により、
+このリポジトリの deploy も（無ければ）`opencode.jsonc` を作るため、**この deploy 後は
+常に `opencode.jsonc` が存在する状態になる。** `opencode.jsonc` に独自の `instructions`
+があると、このディレクトリが配る `opencode.json` の `instructions`
 （`~/.claude/CLAUDE.machine.md`）は**エラーも警告も無しに無視される**。
 
-**決定**: 中身（`opencode.jsonc` に実際に `instructions` があるかどうか）までは検証しない
-（POSIX sh で JSONC を安全にパースする手段が無く、コストに見合わない）。`opencode/deploy.sh`
-は `$OPENCODE_HOME_DIR/opencode.jsonc` の**存在**だけを見て `log_warn` を出し、
-`opencode/README.md` §4 に対処法（`opencode.jsonc` 側の `instructions` に
-`~/.claude/CLAUDE.machine.md` を追記する）を明記した。
+**決定（初版・レビューで修正）**: 当初は `opencode.jsonc` の**存在**だけを見て `log_warn` を
+出していた。5.3.1 の決定で deploy が常に `opencode.jsonc` を作るようになった結果、この条件は
+**毎回のdeployで無条件に成立してしまい**、警告が常時出るだけのノイズになる。
+
+**決定（確定版）**: 中身を厳密にパースはしない（POSIX sh で JSONC を安全にパースする手段が無く、
+コストに見合わない）が、`grep -q '"instructions"' "$OPENCODE_HOME_DIR/opencode.jsonc"` で
+`instructions` キーの**有無**だけを見て、無い（5.3.1 が作った schema のみの空ファイル、
+または `instructions` を書いていない既存ファイル）ときは警告を出さない。
+コメント中の文字列に誤ってマッチしても、余計な警告が出るだけで実害は無い
+（JSONC 構文解析までは不要と判断する根拠）。`opencode/README.md` §4 に対処法
+（`opencode.jsonc` 側の `instructions` にも `~/.claude/CLAUDE.machine.md` を追記する）を
+明記した。
 
 ### 5.4 変更点まとめ
 
@@ -309,10 +342,16 @@ OpenCode 1.18.31 の `packages/opencode/src/config/config.ts` を調べると、
   （OpenCode 未導入マシンでは既存の早期 return によりスキップされる）
 - `shared/helpers.sh` の `links_for_tool()` `opencode)` arm に
   `$(skill_agent_home opencode)/opencode.json` を追加
-- `shared/helpers.sh` の `state_files_for_tool()` に `opencode) opencode.json` arm を追加
-  （5.3.1。OpenCode自身の設定UI書き込みによる状態ファイル消失を防ぐ）
-- `opencode/deploy.sh` が `opencode.jsonc` の存在を検出して `log_warn` を出す
-  （5.3.2。`instructions` が jsonc 側で黙って上書きされる問題への対処）
+- `opencode/deploy.sh` が、`opencode.jsonc` / `opencode.json`（既存実ファイル） /
+  `config.json` のいずれも無いマシンに限り、`opencode.json` を symlink する前に
+  マシンローカルな実ファイル `opencode.jsonc`（schema のみ）を作る
+  （5.3.1。OpenCode自身の設定UI書き込みが配布物へ混入するのを防ぐ。
+  `shared/helpers.sh` の `state_files_for_tool()` に `opencode` arm は**追加しない**
+  — 状態ファイル扱いにすると `--adopt-state` がマシン固有設定を配布物へ取り込んでしまう
+  ため、そもそも書き戻しを起こさせない設計にした）
+- `opencode/deploy.sh` が `opencode.jsonc` に `instructions` キーがあるときだけ
+  `log_warn` を出す（5.3.2。既存の `grep -qF` ではなく `"instructions"` の有無で判定し、
+  5.3.1 が常時作るようになった空の `opencode.jsonc` では警告が出ないようにした）
 
 ## 6. 孫3（Codex）の決着
 
