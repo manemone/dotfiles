@@ -9,10 +9,10 @@ Easily deployable, cross-platform dotfiles managed with [mise](https://mise.jdx.
 | **Zsh** | Shell | [Antidote](https://github.com/mattmc3/antidote) |
 | **NeoVim** | Editor | [lazy.nvim](https://github.com/folke/lazy.nvim) |
 | **tmux** | Terminal multiplexer | — (built-in) |
-| **bin** | Custom CLI tools (ocw, claude-ds, ocw-meter) | — (standalone scripts) |
+| **bin** | Custom CLI tools (ocw, claude-ds, ocw-meter, persona) | — (standalone scripts) |
 | **claude** | Claude Code config | — (built-in) |
 | **skills** | AI agent skills, shared across Claude Code / Codex / OpenCode | — (built-in) |
-| **codex** | Codex CLI global instructions (symlinked from `claude/CLAUDE.md`) | — (built-in) |
+| **codex** | Codex CLI global instructions (`AGENTS.md` symlinked from a generated concatenation of `claude/CLAUDE.md` + machine-local personalization) | — (built-in) |
 | **opencode** | OpenCode global instructions (`AGENTS.md` symlinked from `claude/CLAUDE.md`; `opencode.json` wires in machine-local personalization) | — (built-in) |
 
 ## Supported Platforms
@@ -142,6 +142,7 @@ for details. `bin/` changes should additionally be verified with
 │   ├── ocw                    # Git worktree manager with Herdr integration
 │   ├── claude-ds              # Claude Code via DeepSeek API wrapper
 │   ├── ocw-meter              # LLM cost / Claude quota observability (report auto-ingests; prune-diagnostics writes)
+│   ├── persona                # Edit CLAUDE.machine.md + regenerate Codex's AGENTS.md (single entry point)
 │   ├── tests/                 # Python unit tests for ocw-meter etc. (bin/tests/lint.sh + unittest suite)
 │   ├── prices/                # Price tables used for cost calculation
 │   ├── deploy.sh              # bin deployment script
@@ -162,7 +163,7 @@ for details. `bin/` changes should additionally be verified with
 │   ├── deploy.sh              # skills deployment script (all agents, auto-detected)
 │   └── README.md
 ├── codex/
-│   ├── deploy.sh               # Symlinks ~/.codex/AGENTS.md → claude/CLAUDE.md
+│   ├── deploy.sh               # Generates AGENTS.md (claude/CLAUDE.md + CLAUDE.machine.md concatenated) and symlinks ~/.codex/AGENTS.md to it
 │   └── README.md
 ├── opencode/
 │   ├── opencode.json           # instructions: ["~/.claude/CLAUDE.machine.md"] (machine-local personalization)
@@ -213,6 +214,19 @@ import reads it directly through the symlink, no redeploy needed. Editing
 `settings.machine.json` still requires a redeploy: `claude/deploy.sh` merges
 it into a generated `~/.claude/settings.json`, so the fixed-path file alone
 isn't what Claude Code reads. See [claude/README.md](claude/README.md) §4.
+
+`~/.codex/AGENTS.md` follows the same "fixed path outside any generation"
+shape, but for a different reason: it isn't machine-specific human data to
+preserve, it's a *build artifact* — `claude/CLAUDE.md` + `CLAUDE.machine.md`
+concatenated into a real file, because Codex has no import mechanism that
+reads a second file the way Claude Code and OpenCode do (see
+[codex/README.md](codex/README.md)). It's still not tied to any one
+generation's lifecycle for the usual reason (nothing to derive it from would
+survive deploying from a worktree without a `CLAUDE.machine.md` of its own),
+but unlike the two files above, `uninstall.sh` removes it (it's disposable
+and cheaply regenerated) rather than protecting it. Run `persona` (or
+`persona --regen`) to regenerate it without a redeploy — see
+[bin/README.md](bin/README.md) §3.4.
 
 See
 [docs/adr/DOC-2608040229_deploy-distribution-method.md](docs/adr/DOC-2608040229_deploy-distribution-method.md)
@@ -304,10 +318,10 @@ See each tool's deploy script for the full list of files it creates.
 
 See each tool's README for detailed configuration and troubleshooting:
 
-- [bin/README.md](bin/README.md) — CLI tools (ocw worktree manager, claude-ds DeepSeek wrapper, ocw-meter observability)
+- [bin/README.md](bin/README.md) — CLI tools (ocw worktree manager, claude-ds DeepSeek wrapper, ocw-meter observability, persona personalization editor)
 - [claude/README.md](claude/README.md) — Claude Code config, machine-specific customization
 - [skills/README.md](skills/README.md) — AI agent skills and how they reach Claude Code, Codex and OpenCode
-- [codex/README.md](codex/README.md) — Codex CLI global instructions (symlinked from claude/CLAUDE.md)
+- [codex/README.md](codex/README.md) — Codex CLI global instructions (generated concatenation of claude/CLAUDE.md + machine-local personalization)
 - [opencode/README.md](opencode/README.md) — OpenCode global instructions, machine-local personalization
 - [zsh/README.md](zsh/README.md) — shell setup, plugin management, aliases, version managers
 - [nvim/README.md](nvim/README.md) — editor setup, LSP servers, keybindings, plugins
