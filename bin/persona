@@ -90,7 +90,11 @@ mkdir -p "$(dirname "$MACHINE_MD")"
 
 if [ "$MODE" = "edit" ]; then
   : "${EDITOR:?EDITOR environment variable is not set. Set it, e.g. export EDITOR=vim}"
-  "$EDITOR" "$MACHINE_MD"
+  # $EDITOR may itself carry arguments (e.g. `code --wait`, `emacsclient -t`),
+  # so it must go through shell word-splitting rather than being invoked as a
+  # single command name. $MACHINE_MD is passed as "$1" to stay quoted and
+  # avoid re-splitting/injection through the path.
+  sh -c "$EDITOR \"\$1\"" persona-editor "$MACHINE_MD"
 fi
 
 regen_codex

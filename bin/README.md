@@ -21,7 +21,7 @@
 | **DeepSeek API key** | `claude-ds` の認証 | `~/.config/deepseek/api_key` に保存 |
 | **VS Code** `code` CLI (optional) | `ocw` のデフォルトモードで worktree を開く | `code` コマンドを PATH に通す（macOS: Cmd+Shift+P → "Shell Command: Install 'code' command in PATH"） |
 | **Herdr** (optional) | `ocw --herdr` のマルチペイン管理 | Herdr プロジェクトのインストール手順に従う（スタティックリンクされたバイナリとして配布） |
-| **`$EDITOR`** | `persona`（編集モード。`--regen` のみなら不要） | 通常のシェル環境変数として設定（例: `export EDITOR=vim`） |
+| **`$EDITOR`** | `persona`（編集モード。`--regen` のみなら不要） | 通常のシェル環境変数として設定。引数付きでもよい（例: `export EDITOR=vim`、`export EDITOR="code --wait"`） |
 
 ## 2. Quick Start
 

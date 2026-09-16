@@ -115,16 +115,18 @@ ${XDG_CONFIG_HOME:-~/.config}/opencode/AGENTS.md → <current>/claude/CLAUDE.md 
 `claude/CLAUDE.md` は「定義元を指す」`@~/.claude/CLAUDE.machine.md` import
 だけを持つ形に変わった。
 
-**本 ADR（DOC-2609072334）の決定（「ソースファイルは1つだけ・3リンク」構造）自体は
-崩れていない。** `claude/CLAUDE.md` は今までどおり1実体・3リンクの symlink のままで、
-その中身のうちパーソナライズ節だけが「定義元を指す」文言に変わっただけである。
-`codex/deploy.sh` / `opencode/deploy.sh` が symlink する対象
-（`$DOTFILES_DEPLOY_SRC/claude/CLAUDE.md`）にも変更は無い。
+**本 ADR（DOC-2609072334）の「ソースファイルは1つだけ・3リンク」という決定は、
+Claude Code と OpenCode については引き続き有効である。** 両エージェントが symlink する
+対象は変わらず `$DOTFILES_DEPLOY_SRC/claude/CLAUDE.md` のままで、その中身のうち
+パーソナライズ節だけが「定義元を指す」文言に変わった。
 
-ただし、傘 `local-persona`（計画書
-[DOC-2609162320](../planning/DOC-2609162320_local-persona_計画.md)）の途中状態
-（孫1マージ後・孫2/孫3マージ前）では、`@` import は Claude Code だけが解決する記法の
-ため、**Codex / OpenCode には import 行が文字列のまま届き、パーソナライズは効かない**
-（デフォルト＝パーソナライズ指定なしの状態になる）。傘は `master` へまとめて入るため
-実害は無いが、傘ワークツリーから deploy して人間が使うことは想定しない
-（計画書 DOC-2609162320「傘の途中状態について」参照）。
+**一方、Codex だけは本 ADR の前提が崩れている。** `@` import は Claude Code だけが
+解釈する記法で Codex には効かないため、ADR
+[DOC-2609162327](DOC-2609162327_claude-md-machine-local-tone.md) §6 の決定により、
+`codex/deploy.sh` は `claude/CLAUDE.md` への直接 symlink をやめ、`claude/CLAUDE.md` +
+`CLAUDE.machine.md` を連結生成した実ファイル（`<prefix>/codex/AGENTS.md`。世代を
+経由しない固定パス）への symlink に変わった。したがって現在の構成は「1ソース・3リンク」
+ではなく、**「1ソース・2リンク（Claude Code / OpenCode） + Codex 向け生成物1本」**
+である。この生成物は常に再生成可能な build artifact であり、`CLAUDE.machine.md` の
+実体とは異なり `uninstall.sh` の撤去対象になる（保護されない）。詳細は ADR
+DOC-2609162327 §6 を参照。

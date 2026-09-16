@@ -1758,6 +1758,11 @@ scenario_persona_cli() {
   editor_script="$sbx/fake-editor.sh"
   cat >"$editor_script" <<'EOF'
 #!/bin/sh
+# 呼び出し元が $EDITOR="fake-editor.sh --flag" のように引数付きで渡す
+# ケース（例: 実際の `code --wait`）も想定し、末尾の引数だけを編集対象パスとして扱う。
+while [ "$#" -gt 1 ]; do
+  shift
+done
 touch "$EDITOR_MARKER"
 printf '偽エディタで書いた人格のパーソナライズ\n' >"$1"
 EOF
@@ -1778,9 +1783,11 @@ EOF
   assert_exists "$generated"
 
   # --- (2) デフォルト（引数無し）は $EDITOR を起動し、閉じたら再生成する ---
+  # $EDITOR に引数付き（`code --wait` 等を模した `fake-editor.sh --flag`）を
+  # 設定しても起動できることも同時に確認する。
   rm -f "$editor_marker"
   sandbox_env "$sbx"
-  out="$(env "${SANDBOX_ENV[@]}" EDITOR="$editor_script" EDITOR_MARKER="$editor_marker" "$REPO_ROOT/bin/persona" 2>&1)"
+  out="$(env "${SANDBOX_ENV[@]}" EDITOR="$editor_script --flag" EDITOR_MARKER="$editor_marker" "$REPO_ROOT/bin/persona" 2>&1)"
   rc=$?
   if [ "$rc" -ne 0 ]; then
     fail "persona(デフォルト)が失敗 (exit=$rc)"

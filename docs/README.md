@@ -19,6 +19,7 @@
 | なぜスキルを複数の AI エージェントへ配るようにしたかを知る | [adr/DOC-2608272128_skills-multi-agent-distribution.md](adr/DOC-2608272128_skills-multi-agent-distribution.md) | `skills/` の切り出し・配布先エージェントの決め方・却下した案 |
 | なぜ Codex / OpenCode のグローバル指示を `claude/CLAUDE.md` から配るようにしたかを知る | [adr/DOC-2609072334_codex-opencode-global-instructions-distribution.md](adr/DOC-2609072334_codex-opencode-global-instructions-distribution.md) | `codex/` `opencode/` の新設・単一ソース symlink 方式・却下した案 |
 | なぜ git 操作の許可ポリシーを今の形にしたかを知る | [adr/DOC-2609121719_git-operation-permission-policy.md](adr/DOC-2609121719_git-operation-permission-policy.md) | `main`/`master` へのマージだけを人間に残す線引きと、PreToolUse フックの担保範囲を `gh pr merge` の base 判定1点に絞った決定、却下した案 |
+| なぜ人格のパーソナライズをマシンローカルな固定パスへ切り出したかを知る | [adr/DOC-2609162327_claude-md-machine-local-tone.md](adr/DOC-2609162327_claude-md-machine-local-tone.md) | `CLAUDE.machine.md` の固定パス実体・「定義元を指す」ベース文言・エージェント別の読み込み手段（Claude Code の `@import` / OpenCode の `instructions` / Codex の連結生成）の決定と、却下した案 |
 | `ocw-meter` のイベントスキーマを調べる | [reference/DOC-2608021229-c_ocw-meterイベントスキーマ.md](reference/DOC-2608021229-c_ocw-meterイベントスキーマ.md) | 全 event_type・全フィールド・費用計算式の一次情報源 |
 | LLM費用のベースラインを測る手順を知る | [reference/DOC-2608021229-b_LLM費用観測ベースライン計測手順.md](reference/DOC-2608021229-b_LLM費用観測ベースライン計測手順.md) | 実PR 5〜10本での計測手順 |
 | 傘ブランチの計画を確認する | [planning/](planning/) 配下の各計画書 | 進行中・完了した傘ブランチの計画書 |
@@ -67,6 +68,7 @@
 | DOC-2609072215 | [ai-to-ai-messaging-channel.md](adr/DOC-2609072215_ai-to-ai-messaging-channel.md) | AI間（司令官／実装AI／レビューAI）の受け渡しの決定。`herdr pane run` キーストローク注入一本から、相手が Claude Code だと判別できるときは `SendMessage` を使い、そうでなければ従来手順へ落ちる二段構えへ変更した。`herdr pane list` の `agent_session.value` から `~/.claude/sessions/` を引いて宛先セッション名を解決する橋渡し手順の実測と、ADR DOC-2608272128 §2.4（エージェント非依存の原則）に対する但し書きの位置づけを記録 |
 | DOC-2609072334 | [codex-opencode-global-instructions-distribution.md](adr/DOC-2609072334_codex-opencode-global-instructions-distribution.md) | Codex / OpenCode のグローバル指示ファイル配布方式の決定。新しいツールディレクトリ `codex/` `opencode/` を追加し、それぞれの `deploy.sh` が `claude/CLAUDE.md` を単一ソースとして symlink する方式を採用した。`~/.codex/AGENTS.md` が既に同一内容を手作業で複製していた事実を出発点に、内容の複製・ファイルの物理移動を却下した理由を記録 |
 | DOC-2609121719 | [git-operation-permission-policy.md](adr/DOC-2609121719_git-operation-permission-policy.md) | git 操作の許可ポリシーの決定。PreToolUse フック（`claude/hooks/git-guard.sh`）が担保するのは「`gh pr merge` の base が `main`/`master` なら deny」の1点だけで、判定できない入力には何も言わない。base が PR 側の属性でコマンド文字列に現れずグロブで表現できないという実測結果、`main`/`master` への `git push` を `permissions.ask` のグロブへ寄せた理由、`chmod`/`rm -r` を狭い `permissions.allow` へ移した理由、`--dangerously-skip-permissions` 相当への逃げ道を却下した理由を記録。**2026-09-13 改訂**: 「判定できない入力は必ず `ask` に倒す」という初版（PR #94）の fail-safe が `cd <repo> && git status` のような読み取り専用コマンドまで止め、承認ダイアログを減らす目的と逆の結果を出したため破棄した経緯も記録 |
+| DOC-2609162327 | [claude-md-machine-local-tone.md](adr/DOC-2609162327_claude-md-machine-local-tone.md) | 人格のパーソナライズ設定（口調など）のマシンローカル化の決定。`claude/CLAUDE.md` の直書き文言を、世代を経由しない固定パス実体 `CLAUDE.machine.md` へ切り出し、ベースは「定義元を指す」`@~/.claude/CLAUDE.machine.md` import だけを持つ形にした。OpenCode は `opencode.json` の `instructions` から同じ実体を直接参照し、Codex はファイル取り込み手段が無いため `claude/CLAUDE.md` + `CLAUDE.machine.md` を連結生成した実ファイル（`<prefix>/codex/AGENTS.md`）へ切り替えた。エージェントごとに異なる読み込み手段の実測、Claude Code の `@import` 実機解決が未検証である旨、`CLAUDE.local.md` 命名・相対 import・3エージェント共通の連結生成を却下した理由を記録 |
 
 ### planning/ — ロードマップ・計画
 
@@ -81,6 +83,7 @@
 | DOC-2608081456 | [ocw-meter-accuracy_計画.md](planning/DOC-2608081456_ocw-meter-accuracy_計画.md) | `ocw-meter` の計測精度是正の傘ブランチ計画書（傘 `ocw-meter-accuracy`）。実ストア突合で判明した6件の計測ズレ（ingest 欠測・費用メトリクスの空洞化・帰属不能・テストによるストア汚染・価格表のズレ・退避キャッシュのプルーニング漏れ）を6本の孫へ分解したもの |
 | DOC-2609031400 | [ocw-pane-roles-and-workspace-labels_計画.md](planning/DOC-2609031400_ocw-pane-roles-and-workspace-labels_計画.md) | `ocw -H` のペイン構成切り替えと Herdr ワークスペースラベル日本語化の傘ブランチ計画書（傘 `ai/ocw-pane-roles`）。commander を省いた2ペインモードの追加、`umbrella-orchestrator` の孫 spawn とラベル付けの更新、スキル文書に残る `ai/` 接頭辞前提の除去を2本の孫へ分解したもの |
 | DOC-2609121700 | [autopilot-permissions_計画.md](planning/DOC-2609121700_autopilot-permissions_計画.md) | 傘 autopilot が承認ダイアログで止まる問題を解消する傘ブランチ計画書（傘 `autopilot-permissions`）。「`main`/`master` へのマージは人間、それ以外は AI」という線引きを、許可設定のガードフック・deploy による学習 allow の保全・`AGENTS.md` とテンプレートの文言・配布スキル、無人ペインを止める非 git 操作（`chmod +x` 等）、`settings.machine.json` の発見性の6本の孫へ分解したもの |
+| DOC-2609162320 | [local-persona_計画.md](planning/DOC-2609162320_local-persona_計画.md) | 配布される人格のパーソナライズ設定をデプロイ先でローカルにカスタマイズ可能にする傘ブランチ計画書（傘 `local-persona`）。ADR DOC-2609162327 で確定した固定パス実体・「定義元を指す」ベース文言の方式を、Claude Code向けの土台・OpenCode対応・Codexとパーソナライズ編集コマンドの3本の孫へ分解したもの |
 
 ### reference/ — 運用リファレンス
 
