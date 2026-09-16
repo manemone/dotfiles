@@ -38,6 +38,29 @@ fi
 # points at claude/CLAUDE.md instead of a content file of its own.
 symlink_backup "$DOTFILES_DEPLOY_SRC/claude/CLAUDE.md" "$OPENCODE_HOME_DIR/AGENTS.md" || FAIL=1
 
+# --- Symlink opencode.json (design 3, plan DOC-2609162320 / ADR
+# DOC-2609162327 §5) ---
+# Unlike AGENTS.md above (which carries the base personal-instructions text,
+# same as Claude Code/Codex), opencode.json is a config file specific to
+# this tool: its `instructions` array is OpenCode's own mechanism for
+# layering in extra files, and this repo's copy points a single entry at
+# ~/.claude/CLAUDE.machine.md — the fixed-path machine-local personality
+# personalization entity claude/deploy.sh already symlinks there
+# (dotfiles_machine_md_path, shared/helpers.sh). That path is deliberately
+# NOT under this agent's own (XDG_CONFIG_HOME-relative) home: OpenCode
+# expands a leading "~/" in an instructions entry against $HOME only, never
+# against XDG_CONFIG_HOME, so a literal path assuming the default
+# ~/.config/opencode location would silently stop resolving on any machine
+# with a customized XDG_CONFIG_HOME. ~/.claude is not XDG-configurable
+# (skill_agent_home claude is always $HOME/.claude), so this reference stays
+# correct regardless. The trade-off: on a machine that deploys `--only
+# opencode` without ever deploying `claude`, ~/.claude/CLAUDE.machine.md
+# doesn't exist yet, and OpenCode's instructions resolution just finds no
+# match for that entry (see instruction.ts's systemPaths(), which silently
+# drops entries whose glob doesn't match) — the same graceful
+# no-personalization default as an empty CLAUDE.machine.md, not an error.
+symlink_backup "$DOTFILES_DEPLOY_SRC/opencode/opencode.json" "$OPENCODE_HOME_DIR/opencode.json" || FAIL=1
+
 if [ "$FAIL" -ne 0 ]; then
   log_error "opencode deployment completed with errors."
   exit 1

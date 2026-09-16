@@ -372,6 +372,10 @@ scenario_backup_symlink_idempotent_uninstall() {
     else
       fail "既存の ~/.config/opencode/AGENTS.md が退避先に保存されている"
     fi
+    # opencode.json（孫2・設計3、ADR DOC-2609162327 §5）。links_for_tool() の
+    # opencode arm への追加漏れがあると、このsymlinkが張られないまま
+    # 静かにスキップされる（AGENTS.md「実装時の注意」と同種の regression）。
+    assert_symlink "$sbx/.config/opencode/opencode.json" "$prefix/current/opencode/opencode.json"
   fi
 
   if has_tool skills; then
@@ -462,6 +466,9 @@ EOF
     else
       fail "uninstall で ~/.config/opencode/AGENTS.md が元のファイルに復元された"
     fi
+    # opencode.json は元々ダミーファイルを置いていない新規symlinkなので、
+    # git-guard.sh と同じく「撤去されたこと」自体を確認する。
+    assert_not_exists "$sbx/.config/opencode/opencode.json"
   fi
   if has_tool skills; then
     if [ -n "$existing_skill" ]; then
@@ -1330,6 +1337,120 @@ scenario_claude_machine_md_fixed_path() {
   else
     fail "\$HOME側のsymlink経由の書き込みが固定パスの実体へ届く"
   fi
+}
+
+# ── シナリオ10e: opencode.json の instructions 経由での CLAUDE.machine.md 反映
+#     （孫2・設計3、ADR DOC-2609162327 §5）─────────────────────────────────
+# 案1（opencode.json 自身のディレクトリからの相対パス）は成立せず、
+# `~/.claude/CLAUDE.machine.md`（$XDG_CONFIG_HOME に依存しないClaude Code側の
+# 固定パスsymlink）を直接指す案2を採った、という決着そのものの回帰を守る:
+# (1) claude も一緒にデプロイした場合、固定パスへの書き込みが
+#     ~/.claude/CLAUDE.machine.md 経由で即座に読める(編集即反映)こと。
+# (2) --only opencode のように claude を一度もデプロイしていない場合でも
+#     opencode 自体のdeployは失敗せず、単に~/.claude/CLAUDE.machine.mdが
+#     存在しないまま(グレースフルな劣化)になること。
+# (3) uninstall --only opencode は opencode 側のsymlinkだけを撤去し、
+#     固定パスの実体(CLAUDE.machine.md)には触れないこと。
+
+scenario_opencode_machine_md_instructions() {
+  if ! has_tool opencode; then
+    return
+  fi
+  log "=== シナリオ10e: opencode.jsonのinstructions経由でのCLAUDE.machine.md反映(孫2) ==="
+  local sbx prefix out rc fixed_path
+
+  # --- (1) claude も対象に含めてデプロイ: 編集即反映の確認 ---
+  new_sandbox
+  sbx="$SANDBOX_DIR"
+  prefix="$(dotfiles_prefix_for "$sbx")"
+  fixed_path="$prefix/CLAUDE.machine.md"
+  mkdir -p "$sbx/.config/opencode"
+
+  if has_tool claude; then
+    out="$(run_deploy "$sbx" --dry-run --only opencode,claude 2>&1)"
+    rc=$?
+    if [ "$rc" -ne 0 ]; then
+      fail "opencode,claude の deploy-all.sh --dry-run が失敗 (exit=$rc)"
+      log "$out"
+    else
+      assert_not_exists "$sbx/.config/opencode/opencode.json"
+      assert_not_exists "$fixed_path"
+    fi
+
+    out="$(run_deploy "$sbx" --force --only opencode,claude 2>&1)"
+    rc=$?
+    if [ "$rc" -ne 0 ]; then
+      fail "opencode,claude の deploy-all.sh --force が失敗 (exit=$rc)"
+      log "$out"
+      return
+    fi
+    assert_symlink "$sbx/.config/opencode/opencode.json" "$prefix/current/opencode/opencode.json"
+    if grep -qF '.claude/CLAUDE.machine.md' "$sbx/.config/opencode/opencode.json" 2>/dev/null; then
+      pass "opencode.json の instructions が ~/.claude/CLAUDE.machine.md を指している"
+    else
+      fail "opencode.json の instructions が ~/.claude/CLAUDE.machine.md を指している"
+    fi
+
+    printf 'OpenCodeからも読めるべき人格のパーソナライズ\n' >"$fixed_path"
+    # OpenCode 自身の instructions 解決(~/ 展開 → glob) は再現せず、
+    # opencode.json が指す先を辿った実体が固定パスと一致することだけを
+    # 確認する(instruction.ts の glob ロジック自体はADRで読んだソースを
+    # 根拠とし、ここでは配布側の配線だけを検証する)。
+    if [ "$(cat "$sbx/.claude/CLAUDE.machine.md" 2>/dev/null)" = "OpenCodeからも読めるべき人格のパーソナライズ" ]; then
+      pass "固定パスへの書き込みが ~/.claude/CLAUDE.machine.md(opencode.jsonの参照先)経由で即座に読める"
+    else
+      fail "固定パスへの書き込みが ~/.claude/CLAUDE.machine.md(opencode.jsonの参照先)経由で即座に読める"
+    fi
+
+    # --- (3) uninstall --only opencode: opencode側のsymlinkだけ撤去され、
+    #     claudeのCLAUDE.machine.mdやその固定パス実体には触れない ---
+    out="$(run_uninstall "$sbx" --force --only opencode 2>&1)"
+    rc=$?
+    if [ "$rc" -ne 0 ]; then
+      fail "uninstall.sh --force --only opencode が失敗 (exit=$rc)"
+      log "$out"
+    else
+      pass "uninstall.sh --force --only opencode が成功"
+    fi
+    assert_not_exists "$sbx/.config/opencode/opencode.json"
+    assert_symlink "$sbx/.claude/CLAUDE.machine.md" "$fixed_path"
+    if [ "$(cat "$fixed_path" 2>/dev/null)" = "OpenCodeからも読めるべき人格のパーソナライズ" ]; then
+      pass "uninstall --only opencode の後も固定パスの実体(人格のパーソナライズ)が消えない"
+    else
+      fail "uninstall --only opencode の後も固定パスの実体(人格のパーソナライズ)が消えない"
+    fi
+  fi
+
+  # --- (2) claude を一度もデプロイしないマシンでの劣化確認 ---
+  new_sandbox
+  sbx="$SANDBOX_DIR"
+  prefix="$(dotfiles_prefix_for "$sbx")"
+  mkdir -p "$sbx/.config/opencode"
+
+  out="$(run_deploy "$sbx" --force --only opencode 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "claude抜きでの deploy-all.sh --force --only opencode が失敗 (exit=$rc)"
+    log "$out"
+    return
+  fi
+  pass "claudeを一度もデプロイしていなくても opencode 単体のdeployは成功する"
+  assert_symlink "$sbx/.config/opencode/opencode.json" "$prefix/current/opencode/opencode.json"
+  # claudeを一度もデプロイしていないので ~/.claude 自体が無く、
+  # opencode.json が参照する ~/.claude/CLAUDE.machine.md も存在しない
+  # (エラーにはならず「パーソナライズ指定なし」に自然劣化する — ADR
+  # DOC-2609162327 §5.2 のトレードオフそのものの回帰)。
+  assert_not_exists "$sbx/.claude/CLAUDE.machine.md"
+
+  out="$(run_uninstall "$sbx" --force --only opencode 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "claude抜きでの uninstall.sh --force --only opencode が失敗 (exit=$rc)"
+    log "$out"
+  else
+    pass "claude抜きでの uninstall.sh --force --only opencode が成功"
+  fi
+  assert_not_exists "$sbx/.config/opencode/opencode.json"
 }
 
 # ── シナリオ11: 旧方式(直リンク)skill symlinkの移行 + stale掃除 ──────────
@@ -3029,6 +3150,8 @@ log
 scenario_claude_machine_json_fixed_path
 log
 scenario_claude_machine_md_fixed_path
+log
+scenario_opencode_machine_md_instructions
 log
 scenario_skill_migration
 log

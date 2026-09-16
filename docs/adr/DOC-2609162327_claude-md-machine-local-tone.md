@@ -165,7 +165,96 @@ file)" という記述があり、ユーザーレベル `CLAUDE.md` が import �
 
 ## 5. 孫2（OpenCode）の決着
 
-（孫2のPRで追記）
+### 5.1 未解決論点1: `instructions` のパス解決
+
+計画書 DOC-2609162320 設計3 が挙げた3案のうち、**opencode.json からの相対パスは成立しない**
+ことをソースコードで確認した（`opencode/opencode.json` — この dotfiles 自身が開発時に使う
+プロジェクト設定 — から `git clone` した [sst/opencode](https://github.com/sst/opencode) の
+`packages/opencode/src/session/instruction.ts` の `systemPaths()` を読んだ。参照した clone は
+`package.json` の `version: 1.18.31`、インストール済みバイナリは `opencode --version` で
+`1.18.23` — ごく近いバージョンで、この経路のロジックが変わっている可能性は低い）。
+
+`config.instructions` の各エントリは次のように解決される（`systemPaths()` 135〜150行目）:
+
+```js
+const instruction = raw.startsWith("~/") ? path.join(global.home, raw.slice(2)) : raw
+const matches = yield* (
+  path.isAbsolute(instruction)
+    ? fs.glob(path.basename(instruction), { cwd: path.dirname(instruction), absolute: true, include: "file" })
+    : relative(instruction)  // = fs.globUp(instruction, ctx.directory, ctx.worktree)
+)
+```
+
+- **`~/` で始まるエントリは `$HOME` からの展開で絶対パスになる。** 展開後は
+  `fs.glob(basename, { cwd: dirname })` で解決される — **成立する**
+- **`~/` で始まらない相対パスは `globUp(instruction, ctx.directory, ctx.worktree)` で
+  解決される。** `ctx.directory` は「今動いている OpenCode セッションのプロジェクト
+  ディレクトリ（cwd）」であり、**グローバル `opencode.json` 自身が置かれているディレクトリ
+  （`${XDG_CONFIG_HOME:-$HOME/.config}/opencode/`）とは無関係。** 実機の
+  `opencode debug config`（`$XDG_CONFIG_HOME` を `mktemp -d` の一時ディレクトリへ差し替えて
+  実行）でも、`instructions: ["CLAUDE.machine.md"]` は raw な文字列として返るのみで
+  グローバル config 自身のディレクトリを基準にした解決は行われないことを確認した
+  （本 dotfiles リポジトリ自身の `opencode.json` の `"AGENTS.md"` のようなプロジェクト内
+  相対パスは、そのプロジェクトの cwd で動いているときだけ意図通りに解決される —
+  グローバル config の相対パスとして使う用途とは別物）。
+  **→ 未成立。計画書の案1は採らない**
+
+**結論: 案2（`~/` 展開）を採用する。**
+
+### 5.2 未解決論点1（続き）: `~/` の参照先 — `~/.claude/CLAUDE.machine.md` を再利用する
+
+計画書は案2として「Claude Code 側の symlink（`~/.claude/CLAUDE.machine.md`）を再利用する」
+案と「OpenCode 自身の配下に別途 symlink を張る」案を両にらみで挙げていたが、**後者は
+`$XDG_CONFIG_HOME` のカスタマイズ耐性が無いため採らない。**
+
+`~/` 展開は `global.home`（= `$HOME`）からの展開であり、**`$XDG_CONFIG_HOME` からの展開では
+ない。** もし `opencode/opencode.json` の `instructions` に
+`"~/.config/opencode/CLAUDE.machine.md"` のような「OpenCode 自身のホームが既定値
+（`$HOME/.config/opencode`）である前提」の決め打ちパスを書き、かつ OpenCode 自身の symlink
+先もその決め打ちパスに作るとしても、`$XDG_CONFIG_HOME` を変更しているマシンでは
+`skill_agent_home opencode`（実際の配布先）と `~/.config/opencode`（instructions に書いた
+決め打ちパス）が一致しなくなり、**instructions のエントリだけが静かに解決しなくなる**
+（symlink 自体は正しい場所に作られるので気づきにくい regression になる）。
+
+`~/.claude` は Claude Code の固定パス（`skill_agent_home claude` は常に `$HOME/.claude`。
+`$XDG_CONFIG_HOME` に依存しない — ADR DOC-2608272128 の分類でも claude だけが特別扱いされて
+いる）であり、この問題が起こらない。**そのため `opencode/opencode.json` は
+`~/.claude/CLAUDE.machine.md`（claude/deploy.sh が既に固定パス実体へ symlink 済みのもの）を
+直接指す。** OpenCode 自身の配下に別の symlink を新設しない（作らない分、
+`opencode/deploy.sh` に固定パス実体の空ファイル生成ロジックを複製する必要も無くなる）。
+
+**トレードオフ（計画書が評価を求めていた点）**: `--only opencode` のように `claude` を
+一度もデプロイしていないマシンでは `~/.claude/CLAUDE.machine.md` が存在しない。この場合
+`fs.glob` はマッチ無しを返し（`systemPaths()` の `.pipe(Effect.catch(() => Effect.succeed([])))`
+で例外も握り潰される）、そのエントリはただ無視される — エラーにはならず、
+`CLAUDE.machine.md` が空のときと同じ「パーソナライズ指定なし」に自然劣化する。
+`deploy-all.sh`（引数無し）は常に全ツールを対象にするため、通常の使い方でこの状態には
+ならない。受容できるトレードオフと判断した。
+
+### 5.3 未解決論点2: `opencode.json` の配布方式
+
+論点1が静的配布（symlink）で決着したため、計画書の司令官判断どおり
+**`opencode/opencode.json`（新規トラッキングファイル）を `symlink_backup` で配る。**
+マージ生成機構は作らない。実測（計画書 DOC-2609162320 背景4.2 時点）でこのマシンに
+`opencode.json` は存在しなかった（`opencode.jsonc` という別拡張子のファイルはあったが、
+これは人間の実設定であり検証のために読んでいない — 計画書背景5「人間の実設定
+ディレクトリを検証のために書き換えない」に準拠し、`cat` の実行はユーザーの承認が
+下りなかったため試みを止めた）。既存の `opencode.json` がある環境では `symlink_backup` の
+退避で `.backup` に逃がされる。
+
+### 5.4 変更点まとめ
+
+- 新規トラッキングファイル `opencode/opencode.json`:
+  ```json
+  {
+    "$schema": "https://opencode.ai/config.json",
+    "instructions": ["~/.claude/CLAUDE.machine.md"]
+  }
+  ```
+- `opencode/deploy.sh` が `$OPENCODE_HOME_DIR/opencode.json` へ `symlink_backup` する
+  （OpenCode 未導入マシンでは既存の早期 return によりスキップされる）
+- `shared/helpers.sh` の `links_for_tool()` `opencode)` arm に
+  `$(skill_agent_home opencode)/opencode.json` を追加
 
 ## 6. 孫3（Codex）の決着
 

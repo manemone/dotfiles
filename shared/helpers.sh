@@ -246,8 +246,16 @@ links_for_tool() {
         "$(skill_agent_home codex)/AGENTS.md"
       ;;
     opencode)
+      # opencode.json (design 3, plan DOC-2609162320 / ADR DOC-2609162327 §5):
+      # a tracked config file (unlike codex, which still has none), symlinked
+      # the same way as AGENTS.md above. Its `instructions` array is what
+      # makes machine-local personality personalization reach OpenCode — see
+      # opencode/opencode.json and opencode/deploy.sh for why it points at
+      # ~/.claude/CLAUDE.machine.md rather than a path under this agent's own
+      # (XDG_CONFIG_HOME-relative) home.
       printf '%s\n' \
-        "$(skill_agent_home opencode)/AGENTS.md"
+        "$(skill_agent_home opencode)/AGENTS.md" \
+        "$(skill_agent_home opencode)/opencode.json"
       ;;
       # skills deliberately has no arm: its $HOME-side links are one per
       # skill directory auto-detected under skills/, across every agent in
