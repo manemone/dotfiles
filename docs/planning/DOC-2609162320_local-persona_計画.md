@@ -40,7 +40,7 @@ symlink である以上、デプロイ先でパーソナライズをいじる＝
 |---|---|---|---|
 | 1 | `local-persona-01-claude-machine-md` | Claude Code 向けの土台（固定パス実体 `CLAUDE.machine.md`・`@` import・ベースのデフォルト文言・deploy/uninstall/status・新規 ADR） | ✅ PR #96 マージ済 |
 | 2 | `local-persona-02-opencode` | OpenCode 対応（`opencode.json` の新規配布。未解決論点1・2の検証と決着） | ✅ PR #98 マージ済 |
-| 3 | `local-persona-03-codex` | Codex 対応（ベース + machine の連結生成と `bin/` の再生成コマンド。未解決論点3・4の決着） | 🔄 実装中 |
+| 3 | `local-persona-03-codex` | Codex 対応（ベース + machine の連結生成と `bin/` の再生成コマンド。未解決論点3・4の決着） | ✅ PR #100 マージ済 |
 
 ## ワークスペースラベル
 
