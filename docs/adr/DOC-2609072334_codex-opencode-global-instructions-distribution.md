@@ -106,3 +106,25 @@ ${XDG_CONFIG_HOME:-~/.config}/opencode/AGENTS.md → <current>/claude/CLAUDE.md 
   という前提（複数ファイルの合成をサポートしない）で設計した。将来どちらかが
   複数ファイルの合成をサポートするようになっても、既存の symlink 配布方式が壊れることはない
   （単に選択肢が増えるだけ）
+
+## 5. 前提の変化（ADR DOC-2609162327）
+
+`claude/CLAUDE.md` の冒頭の人格のパーソナライズ設定は、当初は直書きの固定文言（口調など）
+だった。ADR [DOC-2609162327](DOC-2609162327_claude-md-machine-local-tone.md) で、その部分を
+マシンローカルな固定パス実体（`CLAUDE.machine.md`）へ切り出し、ベースの
+`claude/CLAUDE.md` は「定義元を指す」`@~/.claude/CLAUDE.machine.md` import
+だけを持つ形に変わった。
+
+**本 ADR（DOC-2609072334）の決定（「ソースファイルは1つだけ・3リンク」構造）自体は
+崩れていない。** `claude/CLAUDE.md` は今までどおり1実体・3リンクの symlink のままで、
+その中身のうちパーソナライズ節だけが「定義元を指す」文言に変わっただけである。
+`codex/deploy.sh` / `opencode/deploy.sh` が symlink する対象
+（`$DOTFILES_DEPLOY_SRC/claude/CLAUDE.md`）にも変更は無い。
+
+ただし、傘 `local-persona`（計画書
+[DOC-2609162320](../planning/DOC-2609162320_local-persona_計画.md)）の途中状態
+（孫1マージ後・孫2/孫3マージ前）では、`@` import は Claude Code だけが解決する記法の
+ため、**Codex / OpenCode には import 行が文字列のまま届き、パーソナライズは効かない**
+（デフォルト＝パーソナライズ指定なしの状態になる）。傘は `master` へまとめて入るため
+実害は無いが、傘ワークツリーから deploy して人間が使うことは想定しない
+（計画書 DOC-2609162320「傘の途中状態について」参照）。

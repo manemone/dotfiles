@@ -232,6 +232,7 @@ links_for_tool() {
     claude)
       printf '%s\n' \
         "$HOME/.claude/CLAUDE.md" \
+        "$HOME/.claude/CLAUDE.machine.md" \
         "$HOME/.claude/hooks/git-guard.sh" \
         "$HOME/.claude/settings.machine.json"
       ;;
@@ -652,6 +653,22 @@ dotfiles_current_link() {
 # deploy-all.sh --status (reports its path and existence).
 dotfiles_machine_json_path() {
   printf '%s' "$(dotfiles_prefix)/settings.machine.json"
+}
+
+# dotfiles_machine_md_path
+# Print the path to the machine-specific CLAUDE.machine.md entity — the
+# machine-local personality personalization override (tone, pronouns,
+# character, etc.) that claude/CLAUDE.md's `@` import resolves to (design 1,
+# plan doc DOC-2609162320). Same shape and same reasoning as
+# dotfiles_machine_json_path() (sibling of generations/ and current, not
+# inside a generation): a human's personalization must not be tied to any
+# one generation's lifecycle, and must survive deploying from a worktree
+# that happens to have no CLAUDE.machine.md of its own. Unlike
+# settings.machine.json, this entity never had a source-tree-relative
+# predecessor to migrate from — it is new as of this design — so
+# claude/deploy.sh needs no migration branch for it.
+dotfiles_machine_md_path() {
+  printf '%s' "$(dotfiles_prefix)/CLAUDE.machine.md"
 }
 
 # dotfiles_keep_generations

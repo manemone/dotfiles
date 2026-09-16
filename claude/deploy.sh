@@ -47,6 +47,36 @@ fi
 # --- Symlink CLAUDE.md ---
 symlink_backup "$DOTFILES_DEPLOY_SRC/claude/CLAUDE.md" "$CLAUDE_DIR/CLAUDE.md" || FAIL=1
 
+# --- CLAUDE.machine.md: fixed-path entity for machine-local personality
+# personalization (tone, pronouns, character, etc. — design 1, plan
+# DOC-2609162320) ---
+# Same fixed-path pattern as settings.machine.json below (dotfiles_machine_md_path,
+# shared/helpers.sh): lives outside any generation so it survives deploying
+# from a worktree that has no CLAUDE.machine.md of its own. Unlike
+# settings.machine.json, there is no source-tree-relative predecessor to
+# migrate from — this entity is new — so no migration branch is needed here.
+FIXED_MACHINE_MD_PATH="$(dotfiles_machine_md_path)"
+symlink_backup "$FIXED_MACHINE_MD_PATH" "$CLAUDE_DIR/CLAUDE.machine.md" || FAIL=1
+
+# --- Create an empty entity if none exists yet (never in --dry-run) ---
+if [ "$FAIL" -eq 0 ] && [ ! -f "$FIXED_MACHINE_MD_PATH" ]; then
+  if [ "${DRY_RUN:-0}" -eq 1 ]; then
+    log_info "[DRY-RUN] Would create empty machine personalization file: $FIXED_MACHINE_MD_PATH"
+  else
+    mkdir -p "$(dirname "$FIXED_MACHINE_MD_PATH")" || {
+      log_error "Failed to create directory: $(dirname "$FIXED_MACHINE_MD_PATH")"
+      FAIL=1
+    }
+    if [ "$FAIL" -eq 0 ]; then
+      : >"$FIXED_MACHINE_MD_PATH" || {
+        log_error "Failed to create empty machine personalization file: $FIXED_MACHINE_MD_PATH"
+        FAIL=1
+      }
+      [ "$FAIL" -eq 0 ] && log_ok "Created empty machine personalization file: $FIXED_MACHINE_MD_PATH"
+    fi
+  fi
+fi
+
 # --- Symlink git-guard.sh (PreToolUse hook) ---
 # ~/.claude/hooks/ には dotfiles 由来でないフック（herdr-agent-state.sh）が
 # 既に居るため、ディレクトリごとではなくファイル単位で symlink する。
@@ -426,3 +456,6 @@ log_ok "claude deployment complete."
 log_info "Tip: Edit $FIXED_MACHINE_PATH (symlinked as ~/.claude/settings.machine.json)"
 log_info "     to customize it for this machine. claude/settings.machine.json.example is a"
 log_info "     reference sample only — it is never copied there automatically."
+log_info "Tip: Edit $FIXED_MACHINE_MD_PATH (symlinked as ~/.claude/CLAUDE.machine.md)"
+log_info "     to customize this machine's personality personalization (tone, etc.)."
+log_info "     No redeploy needed — CLAUDE.md imports it by path (@~/.claude/CLAUDE.machine.md)."
