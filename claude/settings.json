@@ -96,7 +96,7 @@
       "Bash(shred *)",
       "Bash(truncate *)"
     ],
-    "defaultMode": "acceptEdits"
+    "defaultMode": "auto"
   },
   "hooks": {
     "PreToolUse": [

@@ -113,7 +113,7 @@ Claude Code の設定ファイル。以下の汎用設定を含む（マシン�
 | `autoCompactEnabled` | `true` | 自動コンパクション |
 | `switchModelsOnFlag` | `true` | フラグによるモデル切り替え |
 | `skipWorkflowUsageWarning` | `true` | ワークフロー警告スキップ |
-| `permissions.defaultMode` | `acceptEdits` | 権限のデフォルトモード |
+| `permissions.defaultMode` | `auto` | 権限のデフォルトモード。起動直後から auto mode（分類器が可否を判定する。§3.5・ADR DOC-2609121719 §3.3 参照）で始まるので、ペインを開くたびに手で切り替える必要がない |
 | `permissions.allow` | 分類器対策の狭いルール（8件） | `mkdir -p` / `chmod +x` / 一時ディレクトリの `rm -r` は auto mode の分類器待ちになるため、`permissions` 側で即決させる（§3.5・ADR §3.3/§3.5） |
 | `permissions.deny` | セキュリティポリシー（24件） | `.env`, `.ssh`, `.aws`, API キー等へのアクセスをブロック |
 | `permissions.ask` | 危険コマンドパターン（57件） | `git push --force`, `rm -r /home*` 等の名指しした絶対パス, `sudo` 等の実行前に確認（§3.5参照） |
@@ -450,6 +450,9 @@ cd ~/.dotfiles && ./deploy-all.sh --only claude
 ```
 
 ### 4.6 `defaultMode` の上書き
+
+既定は `auto`。分類器の判定を挟まずファイル編集だけ即決させたいマシンでは
+`acceptEdits` へ、毎回すべて確認したいマシンでは `default` へ落とせる。
 
 ```json
 {
