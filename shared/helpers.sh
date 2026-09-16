@@ -227,11 +227,13 @@ links_for_tool() {
       printf '%s\n' \
         "$HOME/bin/ocw" \
         "$HOME/bin/claude-ds" \
-        "$HOME/bin/ocw-meter"
+        "$HOME/bin/ocw-meter" \
+        "$HOME/bin/persona"
       ;;
     claude)
       printf '%s\n' \
         "$HOME/.claude/CLAUDE.md" \
+        "$HOME/.claude/CLAUDE.machine.md" \
         "$HOME/.claude/hooks/git-guard.sh" \
         "$HOME/.claude/settings.machine.json"
       ;;
@@ -241,12 +243,25 @@ links_for_tool() {
       # ADR DOC-2609072334). links_for_tool() itself doesn't gate on that:
       # deploy-all.sh --status reports a missing path as "[MISSING] ... (not
       # deployed)" either way, same as every other tool here.
+      #
+      # The $HOME-side path is unchanged by design4 (plan DOC-2609162320 /
+      # ADR DOC-2609162327 §6): what changed is only what this symlink
+      # points AT (dotfiles_codex_agents_md_path()'s generated, concatenated
+      # file, instead of claude/CLAUDE.md directly) — see codex/deploy.sh.
       printf '%s\n' \
         "$(skill_agent_home codex)/AGENTS.md"
       ;;
     opencode)
+      # opencode.json (design 3, plan DOC-2609162320 / ADR DOC-2609162327 §5):
+      # a tracked config file (unlike codex, which still has none), symlinked
+      # the same way as AGENTS.md above. Its `instructions` array is what
+      # makes machine-local personality personalization reach OpenCode — see
+      # opencode/opencode.json and opencode/deploy.sh for why it points at
+      # ~/.claude/CLAUDE.machine.md rather than a path under this agent's own
+      # (XDG_CONFIG_HOME-relative) home.
       printf '%s\n' \
-        "$(skill_agent_home opencode)/AGENTS.md"
+        "$(skill_agent_home opencode)/AGENTS.md" \
+        "$(skill_agent_home opencode)/opencode.json"
       ;;
       # skills deliberately has no arm: its $HOME-side links are one per
       # skill directory auto-detected under skills/, across every agent in
@@ -286,6 +301,19 @@ links_for_tool() {
 # is a generated real file (ADR §4.8), not a $HOME-side writeback into the
 # generation, and is out of scope here (see AGENTS.md / the task that added
 # this function).
+#
+# opencode.json is also deliberately absent, despite OpenCode's own
+# Config.updateGlobal() (settings UI) being able to write through it exactly
+# like a state file would (a symlink into the running generation). Unlike
+# nvim/lazy-lock.json — something every machine SHOULD share — what
+# updateGlobal() writes can be machine-local settings or secrets (e.g. a
+# custom provider's `headers` with an auth token). Listing it here would
+# make --adopt-state copy that into the tracked, all-machines-shared
+# opencode/opencode.json. opencode/deploy.sh instead prevents the writeback
+# at the source (creates a real, machine-local opencode.jsonc before
+# symlinking opencode.json, so OpenCode never picks the symlink as a write
+# target) — see ADR DOC-2609162327 §5.3.1 for the full reasoning and the
+# state-file approach this rejected.
 state_files_for_tool() {
   case "$1" in
     nvim)
@@ -652,6 +680,85 @@ dotfiles_current_link() {
 # deploy-all.sh --status (reports its path and existence).
 dotfiles_machine_json_path() {
   printf '%s' "$(dotfiles_prefix)/settings.machine.json"
+}
+
+# dotfiles_machine_md_path
+# Print the path to the machine-specific CLAUDE.machine.md entity — the
+# machine-local personality personalization override (tone, pronouns,
+# character, etc.) that claude/CLAUDE.md's `@` import resolves to (design 1,
+# plan doc DOC-2609162320). Same shape and same reasoning as
+# dotfiles_machine_json_path() (sibling of generations/ and current, not
+# inside a generation): a human's personalization must not be tied to any
+# one generation's lifecycle, and must survive deploying from a worktree
+# that happens to have no CLAUDE.machine.md of its own. Unlike
+# settings.machine.json, this entity never had a source-tree-relative
+# predecessor to migrate from — it is new as of this design — so
+# claude/deploy.sh needs no migration branch for it.
+dotfiles_machine_md_path() {
+  printf '%s' "$(dotfiles_prefix)/CLAUDE.machine.md"
+}
+
+# dotfiles_codex_agents_md_path
+# Print the path to the generated, concatenated Codex AGENTS.md — base
+# claude/CLAUDE.md content with the `@~/.claude/CLAUDE.machine.md` import
+# line resolved into the actual machine-local personality personalization
+# content (see generate_codex_agents_md below). Codex has no @include-
+# equivalent that reads IN ADDITION to its own AGENTS.md: an
+# AGENTS.override.md, if present, REPLACES the corresponding AGENTS.md
+# rather than adding to it (confirmed against OpenAI's own docs — see ADR
+# DOC-2609162327 §6), so a real, pre-rendered file is the only way to get
+# personalization into Codex at all (design4, plan DOC-2609162320).
+#
+# Same fixed-path pattern as dotfiles_machine_md_path/
+# dotfiles_machine_json_path (a sibling of generations/ and current, NOT
+# inside a generation) for the same underlying reason: this file must not
+# be tied to any one generation's lifecycle. Unlike those two, though, it
+# holds no human-edited content of its own — it is entirely DERIVED,
+# regenerated by codex/deploy.sh and by `persona --regen` (bin/persona) —
+# but it still cannot live inside a generation, because a generation only
+# ever holds what create_generation cp -a's from the source tree, and this
+# file is never in the source tree to begin with (there is nothing tracked
+# here — the whole point is that it's built, not authored). Nested one
+# level (codex/AGENTS.md, not directly under the prefix) to keep it
+# visually distinct, in a directory listing, from the human-edited machine
+# files it sits beside — and because, unlike those, it is a build
+# artifact: uninstall.sh removes it when codex is in scope (see its
+# comment), the same "generated files are removable, machine files are
+# protected" split ADR DOC-2609162327 §6 draws.
+dotfiles_codex_agents_md_path() {
+  printf '%s' "$(dotfiles_prefix)/codex/AGENTS.md"
+}
+
+# generate_codex_agents_md <base_claude_md> <machine_md> <output>
+# Writes <base_claude_md>'s content to <output>, with the line that reads
+# exactly "@~/.claude/CLAUDE.machine.md" replaced by <machine_md>'s own
+# content verbatim. If <machine_md> does not exist or is empty, that line
+# is simply dropped — which, combined with the sentence immediately above
+# it in the base file ("空であればパーソナライズの指定は無し"), already
+# reads correctly as "no personalization" without this function needing a
+# special case for it. Creates <output>'s parent directory if missing.
+#
+# Only Claude Code resolves an `@path` import; Codex would otherwise read
+# that literal line as inert text (ADR DOC-2609162327 §2.3/§3.1 explain
+# why this concatenation step is Codex-only rather than applied to all
+# three agents). Shared by codex/deploy.sh and `persona`/`persona --regen`
+# (bin/persona) so the two never redefine this logic differently (design4,
+# plan DOC-2609162320: "生成ロジックは codex/deploy.sh と二重管理しない").
+generate_codex_agents_md() {
+  _gcam_base="$1"
+  _gcam_machine="$2"
+  _gcam_out="$3"
+
+  mkdir -p "$(dirname "$_gcam_out")" || return 1
+
+  awk -v machine_file="$_gcam_machine" '
+    $0 == "@~/.claude/CLAUDE.machine.md" {
+      while ((getline line < machine_file) > 0) print line
+      close(machine_file)
+      next
+    }
+    { print }
+  ' "$_gcam_base" >"$_gcam_out"
 }
 
 # dotfiles_keep_generations

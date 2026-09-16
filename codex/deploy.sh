@@ -34,16 +34,42 @@ if [ ! -d "$CODEX_HOME_DIR" ]; then
   exit 0
 fi
 
-# --- Symlink AGENTS.md to the same source claude/CLAUDE.md uses ---
-# There is deliberately no codex/AGENTS.md content file in this directory.
-# The personal instructions in claude/CLAUDE.md (tone settings, umbrella-
-# handoff trigger condition) are agent-agnostic text — Codex's own
-# ~/.codex/AGENTS.md was already, by hand, an exact copy of that same
-# content before this tool existed (ADR DOC-2609072334). Symlinking both
-# ~/.claude/CLAUDE.md and ~/.codex/AGENTS.md to one repo file is what keeps
-# that duplication from drifting, without moving claude/CLAUDE.md out of
-# claude/ (see the ADR's rejected-alternatives section for why not).
-symlink_backup "$DOTFILES_DEPLOY_SRC/claude/CLAUDE.md" "$CODEX_HOME_DIR/AGENTS.md" || FAIL=1
+# --- Generate the concatenated AGENTS.md at a fixed path outside any
+# generation (design4, plan DOC-2609162320 / ADR DOC-2609162327 §6) ---
+#
+# Codex has no @include-equivalent that reads IN ADDITION to its own
+# AGENTS.md: an AGENTS.override.md, if present, REPLACES the corresponding
+# AGENTS.md rather than adding to it (confirmed against OpenAI's own docs
+# — see the ADR). So unlike Claude Code (an `@` import, resolved live) and
+# OpenCode (an `instructions` path, resolved live), Codex can only get
+# machine-local personality personalization (CLAUDE.machine.md) by reading
+# a real file whose content already has it baked in. That file
+# (dotfiles_codex_agents_md_path(), shared/helpers.sh) lives at a fixed
+# path — a sibling of generations/ and current, NOT inside a generation —
+# for the same reason CLAUDE.machine.md/settings.machine.json do: it must
+# not be tied to any one generation's lifecycle. Regenerating it is cheap
+# (generate_codex_agents_md() just re-reads both source files), so this
+# runs on every deploy rather than only when something looks stale.
+GENERATED_AGENTS_MD="$(dotfiles_codex_agents_md_path)"
+BASE_CLAUDE_MD="$DOTFILES_DEPLOY_SRC/claude/CLAUDE.md"
+MACHINE_MD_PATH="$(dotfiles_machine_md_path)"
+
+if [ "${DRY_RUN:-0}" -eq 1 ]; then
+  log_info "[DRY-RUN] Would generate: $GENERATED_AGENTS_MD (claude/CLAUDE.md + $MACHINE_MD_PATH)"
+else
+  if generate_codex_agents_md "$BASE_CLAUDE_MD" "$MACHINE_MD_PATH" "$GENERATED_AGENTS_MD"; then
+    log_ok "Generated: $GENERATED_AGENTS_MD"
+  else
+    log_error "Failed to generate: $GENERATED_AGENTS_MD"
+    FAIL=1
+  fi
+fi
+
+# --- Symlink AGENTS.md to the generated fixed-path file ---
+# Not claude/CLAUDE.md directly any more (that was this deploy script's
+# behavior before design4): AGENTS.md now needs the personalization baked
+# in, which only the generated file above has.
+symlink_backup "$GENERATED_AGENTS_MD" "$CODEX_HOME_DIR/AGENTS.md" || FAIL=1
 
 if [ "$FAIL" -ne 0 ]; then
   log_error "codex deployment completed with errors."
@@ -51,3 +77,6 @@ if [ "$FAIL" -ne 0 ]; then
 fi
 
 log_ok "codex deployment complete."
+log_info "Tip: to change this machine's personality personalization for Codex, run 'persona'"
+log_info "     (edits CLAUDE.machine.md, then regenerates AGENTS.md) or 'persona --regen'"
+log_info "     (regenerates only). No redeploy needed either way."

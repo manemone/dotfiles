@@ -6,9 +6,15 @@ Claude Code の設定ファイル群。`~/.claude/` にデプロイして使う�
 
 | File | Purpose | Deploy Method |
 |---|---|---|
-| `CLAUDE.md` | Claude Code の個人指示（プロジェクト横断で適用されるグローバル指示） | symlink |
+| `CLAUDE.md` | Claude Code の個人指示（プロジェクト横断で適用されるグローバル指示）。人格のパーソナライズ（口調など）は`CLAUDE.machine.md`への import のみを持ち、実体を含まない | symlink |
 | `settings.json` | Claude Code の汎用設定（モデル、権限ポリシー、テーマ等）。マシン固有設定は**含まない** | 生成（マージ） |
 | `settings.machine.json.example` | マシン固有設定のテンプレート・参照用サンプル。**配布されない**（手でコピーする用） | （手動コピー） |
+
+`~/.claude/CLAUDE.machine.md`（マシン固有の人格のパーソナライズの実体）もこのリポジトリの中身では
+**ない**。実体は `${XDG_DATA_HOME:-$HOME/.local/share}/dotfiles/CLAUDE.machine.md` という、
+`settings.machine.json` と同じ階層にある**世代を経由しない固定パス**にあり、
+`~/.claude/CLAUDE.machine.md` はそこへの symlink として `CLAUDE.md` の隣に張られる（§3.1・§4.9参照）。
+`settings.machine.json` と違い、こちらには移行元となる旧パスは無い（新規に導入した実体のため）。
 
 `~/.claude/settings.machine.json`（マシン固有設定の実体）はこのリポジトリの中身では**ない**。
 実体は `${XDG_DATA_HOME:-$HOME/.local/share}/dotfiles/settings.machine.json`
@@ -51,6 +57,8 @@ ls -la ~/.claude/settings.json     # 実ファイル（deploy.sh が生成）
 The deploy script:
 - Creates `~/.claude/` directory with mode `700`（認証情報を置く可能性があるため）
 - Symlinks `CLAUDE.md` → `~/.claude/CLAUDE.md`
+- Symlinks `CLAUDE.machine.md` → `~/.claude/CLAUDE.machine.md`（固定パスの実体。無ければ
+  空ファイルを作ってから symlink する。§3.1・§4.9参照）
 - Symlinks `settings.machine.json` → `~/.claude/settings.machine.json`（固定パスの実体。無ければ
   空の `{}` を作ってから symlink する。§4参照）
 - Generates `~/.claude/settings.json` as a real file（※symlink ではない）。入力は3つ:
@@ -78,9 +86,27 @@ Codex・OpenCode にも同じ実体が配られるため、トップレベルの
 Claude Code がセッション開始時に読み込むグローバルな個人指示（project-level の CLAUDE.md より優先度は低い）。
 
 現在の設定:
-- 脳筋後輩キャラクターでの応答スタイル指定（語尾・一人称・二人称）
+- 人格のパーソナライズ（口調・一人称/二人称・キャラクター付けなど）は直書きされていない。
+  `@~/.claude/CLAUDE.machine.md`（マシンローカルな固定パス実体への import）を指すだけで、
+  空であればパーソナライズの指定は無し（通常どおりの人格・口調で応答する）がデフォルト
+  （ADR [DOC-2609162327](../docs/adr/DOC-2609162327_claude-md-machine-local-tone.md)）
 - 傘ブランチへの引き継ぎ判断（複数PR規模だと判断したら `umbrella-handoff` スキルへの
   引き継ぎを人間に提案する）
+
+**人格のパーソナライズは `deploy` 不要、`~/.claude/CLAUDE.machine.md` を直接編集するだけで
+即座に反映される。** `~/.claude/CLAUDE.machine.md` は固定パス
+（`${XDG_DATA_HOME:-$HOME/.local/share}/dotfiles/CLAUDE.machine.md`）への symlink であり
+（§4参照）、世代を経由しないため、単体の `claude/deploy.sh` はおろか `deploy-all.sh` の
+再実行すら要らない。**現行の「脳筋後輩」文言をこのマシンへ移行したい場合**は、次を実行する:
+
+```bash
+cat >~/.claude/CLAUDE.machine.md <<'EOF'
+脳筋後輩っぽく対応してください。語尾はッス、いじってくるような感じでラフに喋る。一人称は俺。二人称は先輩。
+EOF
+```
+
+初回 deploy 時は固定パスに実体が無いため空ファイルが自動生成される（`--dry-run` では生成
+されない）。空のままならパーソナライズの指定なし（デフォルト）で応答する。
 
 **このファイルは Claude Code 専用ではない。** [`codex/deploy.sh`](../codex/README.md) と
 [`opencode/deploy.sh`](../opencode/README.md) も同じファイルを symlink しており、
@@ -503,6 +529,26 @@ cd ~/.dotfiles && ./deploy-all.sh --only claude
 vim ~/.dotfiles/claude/CLAUDE.md   # 即座に ~/.claude/CLAUDE.md に反映される
 ```
 
+**人格のパーソナライズ（`CLAUDE.machine.md`）はこの§4.8とは別の経路で編集する。** `CLAUDE.md`
+本体は「傘ブランチへの引き継ぎ判断」のようなリポジトリ側の恒久的な指示を扱い、
+パーソナライズは§4.9 の固定パス実体を直接編集する（deploy 不要）。両者を混同しないこと。
+
+### 4.9 CLAUDE.machine.md（人格のパーソナライズ）の編集
+
+`~/.claude/CLAUDE.machine.md` は `settings.machine.json` と同じ**世代を経由しない固定パス**
+（`${XDG_DATA_HOME:-$HOME/.local/share}/dotfiles/CLAUDE.machine.md`）への symlink である
+（ADR [DOC-2609162327](../docs/adr/DOC-2609162327_claude-md-machine-local-tone.md)）。
+`CLAUDE.md` 本体・`settings.json` のベース設定と違い、**世代を経由せず固定パスから直接
+読まれるため、deploy を挟まず直接編集するだけで次のセッションから反映される**:
+
+```bash
+vim ~/.claude/CLAUDE.machine.md
+```
+
+空であればパーソナライズの指定は無し（通常どおりの人格・口調で応答する）がデフォルト。
+`claude/CLAUDE.md` のベース文言（`@~/.claude/CLAUDE.machine.md`）は「定義元を指す」
+import であり、`CLAUDE.machine.md` の内容をベース側へ連結・上書きすることはない。
+
 ## 5. Troubleshooting
 
 ### `~/.claude/settings.json` の変更を反映したい
@@ -587,6 +633,25 @@ ls -la ~/.claude/CLAUDE.md
 # 修復
 ./deploy-all.sh --only claude
 ```
+
+### `CLAUDE.machine.md` を編集しても人格のパーソナライズが変わらない
+
+```bash
+readlink ~/.claude/CLAUDE.machine.md   # 固定パスを指しているか確認
+cat ~/.claude/CLAUDE.machine.md        # 編集内容が実体に届いているか確認
+```
+
+**Claude Code を再起動すること。** `CLAUDE.md`（グローバル指示）はセッション開始時に
+読み込まれるため、編集後に新しいセッションを開始しないと反映されない。
+
+`@~/.claude/CLAUDE.machine.md` という import 記法自体が実際に解決されるかどうかは、
+本変更を取り込んだ時点では実機で確認できていない（ADR
+[DOC-2609162327](../docs/adr/DOC-2609162327_claude-md-machine-local-tone.md) §4「未検証事項」
+参照）。単に `~/.claude/CLAUDE.md` の内容を見ても import が解決されたかは分からないため、
+Claude Code のセッション内で `/memory` を実行し、`CLAUDE.machine.md` が読み込まれた
+メモリファイルとして列挙されているかを確認する。再起動してもパーソナライズが一切変わらず、
+`/memory` にも `CLAUDE.machine.md` が現れない場合は、解決されていないとみなし、
+ADR に追記のうえ設計（import 記法）を見直すこと。
 
 ## 6. 移行手順 — この変更（allow 保全）を取り込んだ後、次の deploy 前に人間が行うこと
 

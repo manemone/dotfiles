@@ -78,33 +78,46 @@
 | `zsh/` | Zsh 設定（Antidote でプラグイン管理） |
 | `nvim/` | NeoVim 設定（lazy.nvim でプラグイン管理） |
 | `tmux/` | tmux 設定 |
-| `bin/` | スタンドアロンの CLI ツール（`ocw`, `claude-ds`, `ocw-meter`）。`bin/tests/` は `ocw-meter` 等の Python テスト、`bin/prices/` は費用計算用の価格表 |
+| `bin/` | スタンドアロンの CLI ツール（`ocw`, `claude-ds`, `ocw-meter`, `persona`）。`bin/tests/` は `ocw-meter` 等の Python テスト、`bin/prices/` は費用計算用の価格表 |
 | `claude/` | Claude Code 向け配布物（`CLAUDE.md` / `settings.json`） |
 | `skills/` | AI コーディングエージェント向けのスキル。Claude Code だけでなく Codex・OpenCode にも同じ実体を配る（ADR DOC-2608272128） |
-| `codex/` | Codex CLI のグローバル指示（`~/.codex/AGENTS.md`）を `claude/CLAUDE.md` から symlink で配る（ADR DOC-2609072334） |
-| `opencode/` | OpenCode のグローバル指示（`~/.config/opencode/AGENTS.md`）を `claude/CLAUDE.md` から symlink で配る（ADR DOC-2609072334） |
+| `codex/` | Codex CLI のグローバル指示（`~/.codex/AGENTS.md`）を、`claude/CLAUDE.md` + 人格のパーソナライズ（`CLAUDE.machine.md`）を連結生成した実ファイルから symlink で配る（基本構造は ADR DOC-2609072334、連結生成の理由は ADR DOC-2609162327 §6） |
+| `opencode/` | OpenCode のグローバル指示（`~/.config/opencode/AGENTS.md`）を `claude/CLAUDE.md` から symlink で配る（ADR DOC-2609072334）。加えて `opencode.json` で `instructions` を配り、マシンローカルな人格のパーソナライズを OpenCode にも効かせる（ADR DOC-2609162327 §5） |
 | `shared/` | 全 deploy スクリプトが共有するヘルパー（`helpers.sh`） |
 | `docs/` | このリポジトリ自体の設計文書・ADR・計画書・運用リファレンス。`design/`（現役の規約）・`adr/`（確定した技術決定の記録）・`planning/`（傘ブランチ計画書）・`reference/`（運用中に繰り返し引く事実）の4フォルダに分かれる。詳細は [docs/README.md](docs/README.md) を参照 |
 | `tools/` | このリポジトリ自体の開発を支援するツール（`doc-id` など）。`bin/` と異なり `$HOME` へは配布しない |
 | `templates/` | 他リポジトリへ配布する copier テンプレート（`repo-baseline` など）。`$HOME` へは配布せず、dotfiles 本体にも依存しない自己完結ディレクトリ |
 
 各ツールディレクトリは「設定ファイル本体 + `deploy.sh` + `README.md`」という共通構造を持つ。
-例外は `codex/` と `opencode/` で、この2つは設定ファイル本体を持たず、`deploy.sh` が
-`claude/CLAUDE.md` を symlink で指す（内容がエージェント非依存の個人指示のため。理由は
-ADR DOC-2609072334 参照）。
+例外は `codex/` で、設定ファイル本体を持たず、`deploy.sh` が `claude/CLAUDE.md` + 人格の
+パーソナライズ（`CLAUDE.machine.md`）を連結生成した実ファイル（世代を経由しない固定パス。
+`shared/helpers.sh` の `dotfiles_codex_agents_md_path()` が一次情報源）を symlink で
+指す（内容がエージェント非依存の個人指示であることの基本構造は ADR DOC-2609072334、
+Codex だけ連結生成が要る理由〈Codex には追加読み込み手段が無い〉は ADR DOC-2609162327 §6
+参照）。`opencode/` も同じ理由で `AGENTS.md`（`claude/CLAUDE.md` の symlink。ただし
+Codex と異なり生成を挟まない直接 symlink）を持つが、
+`opencode.json`（トラッキング対象のこのツール自身の設定ファイル本体）も持つため、
+この例外には完全には当てはまらない。`opencode.json` の役割は「3つの領域」節と
+[opencode/README.md](opencode/README.md) を参照。
 
 ## 3つの領域（混同しないこと）
 
 | 対象 | 正体 | 誰が読むか |
 |---|---|---|
 | `claude/CLAUDE.md`, `claude/settings.json` | **配布される成果物。** `claude/deploy.sh` がユーザーの `~/.claude/` 配下へ配置する（`CLAUDE.md` は symlink、`settings.json` は生成。詳細は「デプロイの仕組み」参照） | このリポジトリを使う人間のマシンの Claude Code |
+| `opencode/opencode.json` | **配布される成果物。** `opencode/deploy.sh` がユーザーの `~/.config/opencode/` 配下へ symlink する。`instructions` に `~/.claude/CLAUDE.machine.md` を列挙し、マシンローカルな人格のパーソナライズを OpenCode にも効かせる（ADR DOC-2609162327 §5） | このリポジトリを使う人間のマシンの OpenCode |
 | `skills/` | **配布される成果物。** `skills/deploy.sh` が各 AI エージェントのスキルディレクトリへスキルごとに symlink する | このリポジトリを使う人間のマシンの Claude Code / Codex / OpenCode |
 | ルート `AGENTS.md` / `CLAUDE.md`（このファイル） | **このリポジトリを開発するためのルール** | このリポジトリで作業する AI |
 | `.claude/settings.json` | リポジトリで作業する AI 向けの permissions を置く場所 | このリポジトリで作業する Claude Code |
 
-**`claude/CLAUDE.md`（配布物。個人の口調設定などが入っている。ルート `CLAUDE.md` とは別物）は、
-指示が無い限り編集しない。** `codex/deploy.sh` と `opencode/deploy.sh` もこのファイルを
-symlink 元にしている（ADR DOC-2609072334）ため、編集の影響は3エージェントへ及ぶことに注意する。
+**`claude/CLAUDE.md`（配布物。ルート `CLAUDE.md` とは別物）は、指示が無い限り編集しない。**
+人格のパーソナライズ（口調など）は直書きされておらず、マシンローカルな固定パス実体
+`CLAUDE.machine.md` への import（`@~/.claude/CLAUDE.machine.md`）のみを持つ（ADR
+DOC-2609162327）。`codex/deploy.sh` と `opencode/deploy.sh` もこのファイルを symlink 元に
+している（ADR DOC-2609072334）ため、編集の影響は3エージェントへ及ぶことに注意する。
+`opencode/opencode.json` はこの import 行とは別経路で、`instructions` から直接
+`~/.claude/CLAUDE.machine.md` を指す（`@` import は Claude Code だけが解釈する記法で
+OpenCode には効かないため。詳細は ADR DOC-2609162327 §5 / [opencode/README.md](opencode/README.md)）。
 
 ## AI 支援ツールの設定
 
@@ -164,9 +177,16 @@ symlink 元にしている（ADR DOC-2609072334）ため、編集の影響は3�
   保持世代一覧・未取り込みの状態ファイル書き戻し・`$HOME` 側リンクの健全性（リンク切れ検出）を表示する
 - `--rollback [世代ID]`: `current` を1つ前（または指定した）世代へ付け替える。`$HOME` 側の
   symlink は張り直さない（`current` の付け替えだけで全リンクの向き先が変わるのが世代方式の要）。
-  切り替え前に、離れる世代に未取り込みの状態ファイル書き戻しがあれば警告する（ブロックはしない）
+  切り替え前に、離れる世代に未取り込みの状態ファイル書き戻しがあれば警告する（ブロックはしない）。
+  **例外: `~/.codex/AGENTS.md`。** symlink ではあるが `current` 経由ではなく、世代を経由しない
+  固定パスの生成物（`dotfiles_codex_agents_md_path()`。ADR DOC-2609162327 §6.2）を指すため、
+  rollback しても内容は追随しない。`persona --regen`（または対象世代からの `codex/deploy.sh`
+  再実行）で再生成するまで、rollback 前の `claude/CLAUDE.md` + `CLAUDE.machine.md` の内容の
+  ままになる
 - `--dev`: `current` を作業ツリーそのものへ向ける（世代は作らない。編集が即座に `$HOME` へ
-  反映される）。dev モード中は GC を行わない
+  反映される）。dev モード中は GC を行わない。**`~/.codex/AGENTS.md` は上記と同じ理由で
+  追随しない**（dev モードに入っても、`persona --regen` 等を再実行するまで生成物の内容は
+  変わらない）
 - `--adopt-state`: `current` が指す世代の状態ファイル（後述）をソースツリーへコピーバックする。
   世代を作らず `current` も `$HOME` symlink も一切触らない。コピーバックのみで終了するので、
   `git diff` で確認・コミットしたうえで改めて通常の deploy を実行する
@@ -222,6 +242,16 @@ machine 設定（`settings.machine.json`）の実体は `${XDG_DATA_HOME:-$HOME/
 （ワークツリーごとに在ったり無かったりする非追跡ファイルを世代経由にすると、machine.json を
 持たないワークツリーから deploy した瞬間に空扱いされ、人間の設定が消えてしまう）。
 
+**同じ固定パスパターンが `CLAUDE.md` の人格のパーソナライズにも適用されている**（ADR
+DOC-2609162327）。`claude/CLAUDE.md` 自体は今までどおり symlink のままで settings.json の
+ような生成物ではないが、その中身が指す人格のパーソナライズ（口調など）の実体
+`CLAUDE.machine.md` は
+`${XDG_DATA_HOME:-$HOME/.local/share}/dotfiles/CLAUDE.machine.md`（`settings.machine.json` と
+同じ階層。`shared/helpers.sh` の `dotfiles_machine_md_path()` が一次情報源）という世代を
+経由しない固定パスに置かれる。`~/.claude/CLAUDE.machine.md` はこの固定パスへの symlink で
+あり、人間はそちらを直接編集してよい。`settings.machine.json` と異なり移行元となる旧パスは
+無い（新規に導入した実体のため、`claude/deploy.sh` に移行ロジックは無い）。
+
 ### uninstall.sh の後片付け
 
 `uninstall.sh` は `$HOME` 側の symlink・生成ファイルを撤去したあと、配布実体
@@ -231,18 +261,19 @@ machine 設定（`settings.machine.json`）の実体は `${XDG_DATA_HOME:-$HOME/
 `generations/` `.tmp/` と `current` 自体は通常どおり片付けられる。保護されるのは
 **`current` が指す作業ツリーの実体だけ**であり、そちらには一切触れない。
 
-`<prefix>` 直下の `settings.machine.json`（前節）も同様に保護対象であり、
-`uninstall.sh` は `~/.claude/settings.machine.json` という symlink だけを撤去し、
-固定パスの実体には触れない。したがって machine 設定を作成済みのマシンでは、
-uninstall 後も `<prefix>` 直下に `settings.machine.json` だけが残り続け、
-末尾の `rmdir <prefix>`（空のときだけ実行）は恒久的に no-op になる。
-**これは意図した挙動である**（人間のマシン設定が uninstall を生き延びる）。
+`<prefix>` 直下の `settings.machine.json` と `CLAUDE.machine.md`（前節）も同様に
+保護対象であり、`uninstall.sh` は `~/.claude/settings.machine.json` /
+`~/.claude/CLAUDE.machine.md` という symlink だけを撤去し、固定パスの実体には
+触れない。したがって machine 設定を作成済みのマシンでは、uninstall 後も
+`<prefix>` 直下にこの2ファイルが残り続け、末尾の `rmdir <prefix>`（空のときだけ
+実行）は恒久的に no-op になる。**これは意図した挙動である**（人間のマシン設定・
+人格のパーソナライズが uninstall を生き延びる）。
 
 ## クロスプラットフォーム制約
 
 - `shared/helpers.sh` は POSIX sh。bashism を書かない。
 - `deploy-all.sh` `uninstall.sh` `*/deploy.sh` も `#!/bin/sh`。
-- `bin/ocw` `bin/claude-ds` は bash（`#!/usr/bin/env bash`）。
+- `bin/ocw` `bin/claude-ds` `bin/persona` は bash（`#!/usr/bin/env bash`）。
 - プラットフォーム分岐は `is_macos` / `is_linux` / `is_wsl` / `get_brew_prefix` を使い、
   直接 `uname` を叩かない。
 - macOS の BSD 版コマンドと GNU 版の差異（`sed -i`、`date`、`readlink -f` など）に注意する。
