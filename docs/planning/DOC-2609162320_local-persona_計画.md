@@ -24,16 +24,16 @@ symlink である以上、デプロイ先で口調をいじる＝リポジトリ
 
 | 孫 | ブランチ | 内容 | 状況 |
 |---|---|---|---|
-| 1 | `local-persona-01-claude-machine-md` | Claude Code 向けの土台（固定パス実体 `CLAUDE.machine.md`・`@` import・ベースのデフォルト文言・deploy/uninstall/status・新規 ADR） | ⬜ 待機中 |
+| 1 | `local-persona-01-claude-machine-md` | Claude Code 向けの土台（固定パス実体 `CLAUDE.machine.md`・`@` import・ベースのデフォルト文言・deploy/uninstall/status・新規 ADR） | 🔄 実装中 |
 | 2 | `local-persona-02-opencode` | OpenCode 対応（`opencode.json` の新規配布。未解決論点1・2の検証と決着） | ⬜ 待機中 |
 | 3 | `local-persona-03-codex` | Codex 対応（ベース + machine の連結生成と `bin/` の再生成コマンド。未解決論点3・4の決着） | ⬜ 待機中 |
 
 ## ワークスペースラベル
 
-- 傘: `dotfiles :: 口調のローカル設定`
-- 孫1: `dotfiles :: 口調のローカル設定 孫1 ClaudeCode土台`
-- 孫2: `dotfiles :: 口調のローカル設定 孫2 OpenCode対応`
-- 孫3: `dotfiles :: 口調のローカル設定 孫3 Codex再生成コマンド`
+- 傘: `dotfiles :: 口調のローカル化`（`umbrella-handoff` が付けた既存ラベル。司令官は改名しない）
+- 孫1: `dotfiles :: 口調のローカル化 孫1 ClaudeCode土台`
+- 孫2: `dotfiles :: 口調のローカル化 孫2 OpenCode対応`
+- 孫3: `dotfiles :: 口調のローカル化 孫3 Codex再生成コマンド`
 
 ## 依存関係と実行順序
 
