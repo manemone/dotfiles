@@ -2923,7 +2923,7 @@ scenario_rollback() {
     return
   fi
   log "=== シナリオ24: --rollback ==="
-  local sbx copy_dir prefix out rc gen1_content gen2_content gen1_target gen2_target gen1_name gen2_name marker skill_name
+  local sbx copy_dir prefix out rc gen1_content gen2_content gen1_target gen2_target gen1_name gen2_name marker skill_name codex_marker gen2_codex_content
 
   new_sandbox
   sbx="$SANDBOX_DIR"
@@ -2931,6 +2931,10 @@ scenario_rollback() {
   CREATED_DIRS+=("$copy_dir")
   copy_repo_snapshot "$copy_dir"
   prefix="$(dotfiles_prefix_for "$sbx")"
+
+  if has_tool codex; then
+    mkdir -p "$sbx/.codex"
+  fi
 
   # $TOOLS を deploy する（既定は bin,claude）。claude が対象に含まれるときは
   # 2回目のdeployでskillを1つ追加し、rollbackで巻き戻ったあとにそのskillの
@@ -2948,6 +2952,16 @@ scenario_rollback() {
 
   marker="# smoke-test rollback marker $$"
   printf '%s\n' "$marker" >>"$copy_dir/bin/ocw"
+
+  if has_tool codex; then
+    # レビュー指摘（PR #100）: ~/.codex/AGENTS.md は世代を経由しない固定パスの
+    # 生成物を指すため、--rollback は current を切り替えるだけでは追随しない
+    # （ADR DOC-2609162327 §6.2 の既知のトレードオフ）。gen2側でclaude/CLAUDE.md
+    # にマーカーを追記し、gen1へrollbackしても生成物がgen2のマーカーを持った
+    # ままであること（＝更新されないこと）を後段で確認する。
+    codex_marker="# smoke-test codex marker $$"
+    printf '%s\n' "$codex_marker" >>"$copy_dir/claude/CLAUDE.md"
+  fi
 
   if has_tool skills; then
     skill_name="added-later"
@@ -2971,6 +2985,15 @@ scenario_rollback() {
     assert_symlink "$sbx/.claude/skills/$skill_name" "$prefix/current/skills/$skill_name"
   fi
 
+  if has_tool codex; then
+    gen2_codex_content="$(cat "$prefix/codex/AGENTS.md" 2>/dev/null)"
+    if printf '%s' "$gen2_codex_content" | grep -qF "$codex_marker"; then
+      pass "2回目のdeployでCodex向け生成物にもソースツリーの編集内容が反映されている（rollback検証の前提）"
+    else
+      fail "2回目のdeployでCodex向け生成物にもソースツリーの編集内容が反映されている（rollback検証の前提）"
+    fi
+  fi
+
   if printf '%s' "$gen2_content" | grep -qF "$marker"; then
     pass "2回目のdeployでソースツリーの編集内容が反映されている（rollback検証の前提）"
   else
@@ -2992,6 +3015,22 @@ scenario_rollback() {
     pass "--rollback <世代ID>で指定した世代へ切り替わる"
   else
     fail "--rollback <世代ID>で指定した世代へ切り替わる"
+  fi
+
+  if has_tool codex; then
+    # レビュー指摘（PR #100）の回帰テスト: rollbackはcurrentを切り替えるだけなので、
+    # 世代の外にある固定パスのCodex生成物は追随せず、gen2の内容(codex_marker)を
+    # 持ったままになる（ADR DOC-2609162327 §6.2 の既知のトレードオフ）。
+    if [ "$(cat "$prefix/codex/AGENTS.md" 2>/dev/null)" = "$gen2_codex_content" ]; then
+      pass "--rollback してもCodex向け生成物は追随しない（既知のトレードオフの回帰）"
+    else
+      fail "--rollback してもCodex向け生成物は追随しない（既知のトレードオフの回帰）"
+    fi
+    if printf '%s' "$out" | grep -qF "AGENTS.md is a symlink, but to a generated file"; then
+      pass "--rollback がCodex生成物は追随しない旨を案内する"
+    else
+      fail "--rollback がCodex生成物は追随しない旨を案内する"
+    fi
   fi
 
   out="$(run_deploy_from "$copy_dir/deploy-all.sh" "$sbx" --rollback "$gen2_name" 2>&1)"

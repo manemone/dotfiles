@@ -482,6 +482,19 @@ cmd_rollback() {
   log_info "Note: ~/.claude/settings.json is a generated file, not a symlink — rollback"
   log_info "does not revert it. Re-run claude/deploy.sh from the target generation if"
   log_info "its content also needs to go back."
+  # ~/.codex/AGENTS.md IS a symlink, but not one that resolves through
+  # current — it points at dotfiles_codex_agents_md_path(), a fixed path
+  # outside any generation (design4, ADR DOC-2609162327 §6.2). Rollback
+  # only swaps current, so this generated file keeps whatever
+  # claude/CLAUDE.md + CLAUDE.machine.md content it was last built from,
+  # even after $HOME's other symlinks (via current) have already moved to
+  # the target generation. Same underlying gap as settings.json above, but
+  # for a symlink rather than a generated real file, so it needs its own
+  # note here (a reader who only sees the settings.json note might assume
+  # every OTHER symlink is fine).
+  log_info "Note: ~/.codex/AGENTS.md is a symlink, but to a generated file outside any"
+  log_info "generation — rollback does not regenerate it. Run 'persona --regen' (or"
+  log_info "re-run codex/deploy.sh) from the target generation if it also needs to go back."
   return 0
 }
 
@@ -531,6 +544,17 @@ cmd_dev() {
     log_ok "Dev mode is active. Generation GC is skipped while current points outside generations/."
   fi
   log_info "To return to generation mode, run: $SCRIPT_DIR/deploy-all.sh"
+  # Same gap as cmd_rollback's note above, for the same reason: entering
+  # dev mode only swaps current, and ~/.codex/AGENTS.md points at a fixed
+  # path outside any generation (dotfiles_codex_agents_md_path(), ADR
+  # DOC-2609162327 §6.2), not through current. Editing claude/CLAUDE.md in
+  # this working tree now takes effect immediately for Claude Code /
+  # OpenCode (they read through current or CLAUDE.machine.md live), but
+  # Codex keeps whatever content codex/deploy.sh (or 'persona --regen')
+  # last baked in until one of those is run again.
+  log_info "Note: ~/.codex/AGENTS.md is a symlink, but to a generated file outside any"
+  log_info "generation — entering dev mode does not regenerate it. Run 'persona --regen'"
+  log_info "(or re-run codex/deploy.sh) if it also needs to pick up this working tree."
   return 0
 }
 

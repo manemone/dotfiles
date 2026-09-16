@@ -177,9 +177,16 @@ OpenCode には効かないため。詳細は ADR DOC-2609162327 §5 / [opencode
   保持世代一覧・未取り込みの状態ファイル書き戻し・`$HOME` 側リンクの健全性（リンク切れ検出）を表示する
 - `--rollback [世代ID]`: `current` を1つ前（または指定した）世代へ付け替える。`$HOME` 側の
   symlink は張り直さない（`current` の付け替えだけで全リンクの向き先が変わるのが世代方式の要）。
-  切り替え前に、離れる世代に未取り込みの状態ファイル書き戻しがあれば警告する（ブロックはしない）
+  切り替え前に、離れる世代に未取り込みの状態ファイル書き戻しがあれば警告する（ブロックはしない）。
+  **例外: `~/.codex/AGENTS.md`。** symlink ではあるが `current` 経由ではなく、世代を経由しない
+  固定パスの生成物（`dotfiles_codex_agents_md_path()`。ADR DOC-2609162327 §6.2）を指すため、
+  rollback しても内容は追随しない。`persona --regen`（または対象世代からの `codex/deploy.sh`
+  再実行）で再生成するまで、rollback 前の `claude/CLAUDE.md` + `CLAUDE.machine.md` の内容の
+  ままになる
 - `--dev`: `current` を作業ツリーそのものへ向ける（世代は作らない。編集が即座に `$HOME` へ
-  反映される）。dev モード中は GC を行わない
+  反映される）。dev モード中は GC を行わない。**`~/.codex/AGENTS.md` は上記と同じ理由で
+  追随しない**（dev モードに入っても、`persona --regen` 等を再実行するまで生成物の内容は
+  変わらない）
 - `--adopt-state`: `current` が指す世代の状態ファイル（後述）をソースツリーへコピーバックする。
   世代を作らず `current` も `$HOME` symlink も一切触らない。コピーバックのみで終了するので、
   `git diff` で確認・コミットしたうえで改めて通常の deploy を実行する

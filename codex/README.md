@@ -68,3 +68,10 @@ Codex にとって意味を持たないため、生成時にその行を `CLAUDE
   live に読むため即座に反映され、Codex は `persona` 自身が再生成する）
 - 生成物は世代の外（`${XDG_DATA_HOME:-$HOME/.local/share}/dotfiles/codex/AGENTS.md`）に
   置かれる。dev モード中も含め、どの世代がデプロイされているかに関わらず同じ生成物を指す
+
+> **⚠️ `--rollback` / `--dev` は生成物を自動で追随させない**: 生成物は世代の外の固定パスに
+> あるため、`current` を切り替えるだけの操作（`deploy-all.sh --rollback` / `--dev`）では
+> 再生成されない。ロールバック・devモード切り替え後に `claude/CLAUDE.md` +
+> `CLAUDE.machine.md` の内容を Codex にも反映したい場合は、`persona --regen`
+> （または対象世代からの `codex/deploy.sh` 再実行）を明示的に実行すること。`--only` で
+> `codex` を含めずに deploy した場合も同様に、生成物は前回の内容のまま更新されない。

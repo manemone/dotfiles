@@ -422,6 +422,20 @@ override.md へ切り替える設計変更は行わない。
   `~/.codex/AGENTS.md` 自体は変わらず、その symlink の**指す先**だけが
   `claude/CLAUDE.md` 直接から生成物へ変わった）
 
+**既知のトレードオフ（レビューで判明）: `--rollback` / `--dev` / `codex` を含まない
+`--only` は生成物を自動で追随させない。** 生成物は世代の外の固定パスにあるため、
+`current` の付け替えだけで済む `--rollback` / `--dev` はこのファイルに一切触れない。
+`--rollback` 直後・dev モードへ切り替えた直後は、Claude Code / OpenCode 側は
+`CLAUDE.machine.md`（およびロールバック先/dev対象ツリーの `claude/CLAUDE.md`）を
+即座に反映するのに対し、Codex だけは `persona --regen`（または対象世代からの
+`codex/deploy.sh` 再実行）を明示的に実行するまで、ロールバック/切り替え前の内容の
+ままになる。`--only` で `codex` を除外した通常デプロイも同様（そもそも
+`codex/deploy.sh` が呼ばれないため）。この非対称性は受容し、`deploy-all.sh`
+（`cmd_rollback` / `cmd_dev`）が settings.json 向けの既存の案内
+（`~/.claude/settings.json is a generated file...`）と同じ形で、
+`~/.codex/AGENTS.md` 向けの案内も出すようにした。併せてルート `AGENTS.md` の
+`--rollback` / `--dev` の説明、`codex/README.md` にも明記した。
+
 ### 6.3 未解決論点3: 再生成コマンド
 
 名前は `persona`（`bin/persona`）。既存メンバー（`ocw` / `claude-ds` / `ocw-meter`）と
