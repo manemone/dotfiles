@@ -38,7 +38,7 @@ symlink である以上、デプロイ先でパーソナライズをいじる＝
 
 | 孫 | ブランチ | 内容 | 状況 |
 |---|---|---|---|
-| 1 | `local-persona-01-claude-machine-md` | Claude Code 向けの土台（固定パス実体 `CLAUDE.machine.md`・`@` import・ベースのデフォルト文言・deploy/uninstall/status・新規 ADR） | 🔄 実装中 |
+| 1 | `local-persona-01-claude-machine-md` | Claude Code 向けの土台（固定パス実体 `CLAUDE.machine.md`・`@` import・ベースのデフォルト文言・deploy/uninstall/status・新規 ADR） | ✅ PR #96 マージ済 |
 | 2 | `local-persona-02-opencode` | OpenCode 対応（`opencode.json` の新規配布。未解決論点1・2の検証と決着） | ⬜ 待機中 |
 | 3 | `local-persona-03-codex` | Codex 対応（ベース + machine の連結生成と `bin/` の再生成コマンド。未解決論点3・4の決着） | ⬜ 待機中 |
 
@@ -368,7 +368,11 @@ symlink である以上、デプロイ先でパーソナライズをいじる＝
 
 1. 孫1〜3 の PR がすべて傘ブランチへマージ済み
 2. `pre-commit run --all-files` / `tests/deploy_smoke.sh` / `python3 -m unittest discover -s bin/tests -v` が通る
-3. 傘→`master` の PR に、**人間が deploy 後に行う移行手順**（現行のパーソナライズ文言を
+3. 傘→`master` の PR に、**`@~/.claude/CLAUDE.machine.md` の import が実機の Claude Code で
+   解決されるかは未検証**である旨と、人間が deploy 後に確かめる手順が明記されている
+   （孫1 はサンドボックスに認証情報が無く確認できなかった。ADR DOC-2609162327 §4。
+   解決されなかった場合の代替記法の検討は傘の外の追随PRで扱う）
+4. 傘→`master` の PR に、**人間が deploy 後に行う移行手順**（現行のパーソナライズ文言を
    `~/.claude/CLAUDE.machine.md` へ書く、Codex 向けの再生成コマンドを叩く）が明記されている
 
 ---
