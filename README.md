@@ -147,7 +147,7 @@ for details. `bin/` changes should additionally be verified with
 │   ├── deploy.sh              # bin deployment script
 │   └── README.md
 ├── claude/
-│   ├── CLAUDE.md              # Claude Code global personal instructions
+│   ├── CLAUDE.md              # Claude Code global personal instructions (personalization imports CLAUDE.machine.md by path)
 │   ├── settings.json          # Claude Code base settings (no machine-specific config)
 │   ├── settings.machine.json.example  # Template for machine-specific overrides
 │   ├── deploy.sh              # claude deployment script
@@ -199,11 +199,14 @@ override with `DOTFILES_KEEP_GENERATIONS`) so a broken deploy can be undone with
 effect on `$HOME` unless you're in dev mode (see below) — `$HOME` reads from the
 generation snapshot, not the live working tree.
 
-The one exception is `~/.claude/settings.machine.json`: it links straight to a
-fixed path directly under the canonical prefix (a sibling of `generations/` and
-`current`, not inside any generation), because it holds git-untracked,
-machine-specific Claude Code settings that must survive regardless of which
-generation is current or which worktree last deployed. See
+The same exception applies to `~/.claude/settings.machine.json` and
+`~/.claude/CLAUDE.machine.md`: both link straight to a fixed path directly
+under the canonical prefix (a sibling of `generations/` and `current`, not
+inside any generation), because they hold git-untracked, machine-specific
+Claude Code settings (permissions/hooks and personality personalization —
+tone, pronouns, character, etc. — respectively) that must survive regardless
+of which generation is current or which worktree last deployed. Editing
+either fixed-path file takes effect without a redeploy. See
 [claude/README.md](claude/README.md) §4.
 
 See
@@ -286,10 +289,10 @@ directory, and the `current` symlink). If `current` is in dev mode (pointing at 
 working tree), `generations/` / `.tmp/` / `current` are still cleaned up as usual;
 the working tree `current` points at is protected and never touched. The canonical
 prefix itself is only removed once empty, and it stays non-empty on any machine
-that has created `settings.machine.json` (see [claude/README.md](claude/README.md)
-§4): that file is machine-specific, not a distribution artifact, so uninstall
-deliberately leaves it — and the prefix it lives in — in place rather than deleting
-it.
+that has created `settings.machine.json` or `CLAUDE.machine.md` (see
+[claude/README.md](claude/README.md) §4): those files are machine-specific, not
+distribution artifacts, so uninstall deliberately leaves them — and the prefix
+they live in — in place rather than deleting them.
 See each tool's deploy script for the full list of files it creates.
 
 ## Next Steps

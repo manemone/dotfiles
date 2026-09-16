@@ -222,6 +222,16 @@ machine 設定（`settings.machine.json`）の実体は `${XDG_DATA_HOME:-$HOME/
 （ワークツリーごとに在ったり無かったりする非追跡ファイルを世代経由にすると、machine.json を
 持たないワークツリーから deploy した瞬間に空扱いされ、人間の設定が消えてしまう）。
 
+**同じ固定パスパターンが `CLAUDE.md` の人格のパーソナライズにも適用されている**（ADR
+DOC-2609162327）。`claude/CLAUDE.md` 自体は今までどおり symlink のままで settings.json の
+ような生成物ではないが、その中身が指す人格のパーソナライズ（口調など）の実体
+`CLAUDE.machine.md` は
+`${XDG_DATA_HOME:-$HOME/.local/share}/dotfiles/CLAUDE.machine.md`（`settings.machine.json` と
+同じ階層。`shared/helpers.sh` の `dotfiles_machine_md_path()` が一次情報源）という世代を
+経由しない固定パスに置かれる。`~/.claude/CLAUDE.machine.md` はこの固定パスへの symlink で
+あり、人間はそちらを直接編集してよい。`settings.machine.json` と異なり移行元となる旧パスは
+無い（新規に導入した実体のため、`claude/deploy.sh` に移行ロジックは無い）。
+
 ### uninstall.sh の後片付け
 
 `uninstall.sh` は `$HOME` 側の symlink・生成ファイルを撤去したあと、配布実体

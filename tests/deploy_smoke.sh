@@ -1249,6 +1249,89 @@ scenario_claude_machine_json_fixed_path() {
   fi
 }
 
+# ── シナリオ10d: CLAUDE.machine.md の固定パス化（孫1・設計1）────────────
+# settings.machine.json（シナリオ10c）と同じ「世代を経由しない固定パス」
+# パターンだが、こちらには移行元（旧・ソースツリー相対パス）が無い
+# （計画書 DOC-2609162320 設計1）。回帰の核心は settings.machine.json と
+# 同じ: 固定パスに実体が無ければ空ファイルが作られる（--dry-run では
+# 作られない）ことと、CLAUDE.machine.md を持たないソースツリーから
+# deploy しても、固定パスの既存内容（人間の人格のパーソナライズ設定）が失われないこと。
+
+scenario_claude_machine_md_fixed_path() {
+  if ! has_tool claude; then
+    return
+  fi
+  log "=== シナリオ10d: CLAUDE.machine.md の固定パス化(孫1) ==="
+  local sbx prefix fixed_path out rc copy_dir
+
+  # --- (1) 初回deploy: 固定パスに何も無ければ空ファイルが作られる ---
+  new_sandbox
+  sbx="$SANDBOX_DIR"
+  prefix="$(dotfiles_prefix_for "$sbx")"
+  fixed_path="$prefix/CLAUDE.machine.md"
+
+  out="$(run_deploy "$sbx" --dry-run --only claude 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "CLAUDE.machine.md無し状態でのdeploy-all.sh --dry-run --only claudeが失敗 (exit=$rc)"
+    log "$out"
+  else
+    assert_not_exists "$fixed_path"
+  fi
+
+  out="$(run_deploy "$sbx" --force --only claude 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "CLAUDE.machine.md無し状態でのdeploy-all.sh --force --only claudeが失敗 (exit=$rc)"
+    log "$out"
+    return
+  fi
+  if [ "$(cat "$fixed_path" 2>/dev/null)" = "" ]; then
+    pass "固定パスにパーソナライズ設定が無ければ空ファイルが作られる"
+  else
+    fail "固定パスにパーソナライズ設定が無ければ空ファイルが作られる(内容: $(cat "$fixed_path" 2>/dev/null))"
+  fi
+  assert_symlink "$sbx/.claude/CLAUDE.machine.md" "$fixed_path"
+
+  # --- (2) CLAUDE.machine.md を持たないソースツリーから再deployしても、
+  #     固定パスの既存内容(人間が編集したと見立てた内容)は失われない。
+  #     案A(世代経由の状態ファイル方式)を却下した理由そのものの回帰。 ---
+  printf '脳筋後輩っぽく対応してください。\n' >"$fixed_path"
+
+  copy_dir="$(mktemp -d)"
+  CREATED_DIRS+=("$copy_dir")
+  copy_repo_snapshot "$copy_dir"
+  # このコピーは claude/CLAUDE.machine.md を持たない（そもそもこの
+  # ファイルはどのソースツリーにも存在し得ない — 固定パス専用の実体
+  # であって配布物ではないため。傘や孫のワークツリーを模している）。
+
+  wait_for_next_second
+  out="$(run_deploy_from "$copy_dir/deploy-all.sh" "$sbx" --force --only claude 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "CLAUDE.machine.mdを持たないソースツリーからのdeployが失敗 (exit=$rc)"
+    log "$out"
+  else
+    if grep -q "脳筋後輩" "$fixed_path" 2>/dev/null; then
+      pass "CLAUDE.machine.mdを持たないソースツリーからdeployしても固定パスの既存内容が失われない"
+    else
+      fail "CLAUDE.machine.mdを持たないソースツリーからdeployしても固定パスの既存内容が失われない"
+    fi
+  fi
+  assert_symlink "$sbx/.claude/CLAUDE.machine.md" "$fixed_path"
+
+  # --- (3) 固定パス(symlinkの向き先)への書き込みがdeployをまたいで残る
+  #     こと（編集即反映の裏付け。symlink経由の書き込みは固定パスへ
+  #     そのまま届くため、実際には(2)と同じ経路だが、$HOME側のsymlink
+  #     経由で書いたことを明示的に確認する）。 ---
+  printf 'マシンローカルに上書きした口調\n' >"$sbx/.claude/CLAUDE.machine.md"
+  if [ "$(cat "$fixed_path" 2>/dev/null)" = "マシンローカルに上書きした口調" ]; then
+    pass "\$HOME側のsymlink経由の書き込みが固定パスの実体へ届く"
+  else
+    fail "\$HOME側のsymlink経由の書き込みが固定パスの実体へ届く"
+  fi
+}
+
 # ── シナリオ11: 旧方式(直リンク)skill symlinkの移行 + stale掃除 ──────────
 
 scenario_skill_migration() {
@@ -1621,6 +1704,11 @@ scenario_distribution_artifact_cleanup() {
   if [ "$with_claude" -eq 1 ]; then
     assert_exists "$prefix/settings.machine.json"
     assert_symlink "$sbx/.claude/settings.machine.json" "$prefix/settings.machine.json"
+    # CLAUDE.machine.md（固定パスの実体。dotfiles_machine_md_path、
+    # shared/helpers.sh）も settings.machine.json と同じ保護を受けること
+    # （孫1、計画書 DOC-2609162320 設計1）。
+    assert_exists "$prefix/CLAUDE.machine.md"
+    assert_symlink "$sbx/.claude/CLAUDE.machine.md" "$prefix/CLAUDE.machine.md"
   fi
 
   out="$(run_uninstall "$sbx" --force --only "$deploy_tools" 2>&1)"
@@ -1644,6 +1732,10 @@ scenario_distribution_artifact_cleanup() {
     assert_not_exists "$sbx/.claude/settings.machine.json"
     assert_exists "$prefix"
     assert_exists "$prefix/settings.machine.json"
+    # CLAUDE.machine.md も同じ理由（人間のマシン設定であり配布物ではない）
+    # で symlink だけが撤去され実体は残る。
+    assert_not_exists "$sbx/.claude/CLAUDE.machine.md"
+    assert_exists "$prefix/CLAUDE.machine.md"
   else
     # generations/ と current だけでなく、prefix自体(.tmp/を含む)も片付く
     # ことを確認する。create_generation はビルド用scratchを
@@ -2106,6 +2198,11 @@ scenario_cleanup_removes_orphaned_scratch_without_generation() {
   # 回帰検知。設計6、計画書 DOC-2609121700）。
   printf '{"dummy-machine-setting":true}\n' >"$prefix/settings.machine.json"
 
+  # CLAUDE.machine.md（固定パスの実体。dotfiles_machine_md_path）も同じ
+  # 理由（世代/currentのライフサイクルと無関係にprefix直下へ置かれる
+  # マシン設定）で生き残るべきことを確認する。
+  printf 'クラッシュ後も生き残るべき口調設定\n' >"$prefix/CLAUDE.machine.md"
+
   out="$(run_uninstall "$sbx" --force 2>&1)"
   rc=$?
   if [ "$rc" -ne 0 ]; then
@@ -2121,6 +2218,12 @@ scenario_cleanup_removes_orphaned_scratch_without_generation() {
     pass "settings.machine.json の内容が uninstall で書き換わっていない"
   else
     fail "settings.machine.json の内容が uninstall で書き換わっていない"
+  fi
+  assert_exists "$prefix/CLAUDE.machine.md"
+  if [ "$(cat "$prefix/CLAUDE.machine.md" 2>/dev/null)" = "クラッシュ後も生き残るべき口調設定" ]; then
+    pass "CLAUDE.machine.md の内容が uninstall で書き換わっていない"
+  else
+    fail "CLAUDE.machine.md の内容が uninstall で書き換わっていない"
   fi
 }
 
@@ -2182,6 +2285,11 @@ scenario_status() {
       pass "--status がmachine.jsonの固定パスと存在を報告する"
     else
       fail "--status がmachine.jsonの固定パスと存在を報告する"
+    fi
+    if printf '%s' "$out" | grep -qF "Machine personalization (CLAUDE.machine.md): $prefix/CLAUDE.machine.md (exists)"; then
+      pass "--status がCLAUDE.machine.mdの固定パスと存在を報告する"
+    else
+      fail "--status がCLAUDE.machine.mdの固定パスと存在を報告する"
     fi
   fi
 
@@ -2919,6 +3027,8 @@ log
 scenario_claude_allow_preservation
 log
 scenario_claude_machine_json_fixed_path
+log
+scenario_claude_machine_md_fixed_path
 log
 scenario_skill_migration
 log

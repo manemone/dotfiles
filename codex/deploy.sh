@@ -43,6 +43,15 @@ fi
 # ~/.claude/CLAUDE.md and ~/.codex/AGENTS.md to one repo file is what keeps
 # that duplication from drifting, without moving claude/CLAUDE.md out of
 # claude/ (see the ADR's rejected-alternatives section for why not).
+#
+# The personality-personalization section itself is no longer literal text:
+# it is now an `@~/.claude/CLAUDE.machine.md` import that only Claude Code
+# resolves (ADR DOC-2609162327). Until a future change here concatenates
+# CLAUDE.machine.md's content into what this symlink serves, Codex reads that
+# import line as inert text and gets no personalization at all (default = no
+# personalization specified) — a known, accepted gap for this grandchild's
+# scope; the concatenating generation this comment anticipates is a later
+# grandchild's job (plan doc DOC-2609162320's Codex grandchild).
 symlink_backup "$DOTFILES_DEPLOY_SRC/claude/CLAUDE.md" "$CODEX_HOME_DIR/AGENTS.md" || FAIL=1
 
 if [ "$FAIL" -ne 0 ]; then
