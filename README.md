@@ -199,15 +199,19 @@ override with `DOTFILES_KEEP_GENERATIONS`) so a broken deploy can be undone with
 effect on `$HOME` unless you're in dev mode (see below) — `$HOME` reads from the
 generation snapshot, not the live working tree.
 
-The same exception applies to `~/.claude/settings.machine.json` and
-`~/.claude/CLAUDE.machine.md`: both link straight to a fixed path directly
+There are two exceptions: `~/.claude/settings.machine.json` and
+`~/.claude/CLAUDE.machine.md` both link straight to a fixed path directly
 under the canonical prefix (a sibling of `generations/` and `current`, not
 inside any generation), because they hold git-untracked, machine-specific
 Claude Code settings (permissions/hooks and personality personalization —
 tone, pronouns, character, etc. — respectively) that must survive regardless
-of which generation is current or which worktree last deployed. Editing
-either fixed-path file takes effect without a redeploy. See
-[claude/README.md](claude/README.md) §4.
+of which generation is current or which worktree last deployed.
+
+Editing `CLAUDE.machine.md` takes effect immediately — Claude Code's `@`
+import reads it directly through the symlink, no redeploy needed. Editing
+`settings.machine.json` still requires a redeploy: `claude/deploy.sh` merges
+it into a generated `~/.claude/settings.json`, so the fixed-path file alone
+isn't what Claude Code reads. See [claude/README.md](claude/README.md) §4.
 
 See
 [docs/adr/DOC-2608040229_deploy-distribution-method.md](docs/adr/DOC-2608040229_deploy-distribution-method.md)

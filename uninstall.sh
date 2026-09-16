@@ -479,13 +479,14 @@ elif [ -L "$DOTFILES_CURRENT_LINK" ] || [ -d "$DOTFILES_GENERATIONS_DIR" ] || [ 
     fi
   fi
 
-  # settings.machine.json (the fixed-path entity — dotfiles_machine_json_path,
-  # shared/helpers.sh) lives directly under $DOTFILES_PREFIX, a sibling of
-  # generations/ and current, and is deliberately NOT removed by this script
-  # (it is the human's own machine settings, not a distribution artifact —
-  # see AGENTS.md's "claude の例外"). So once that file exists, rmdir below
-  # permanently no-ops (2>/dev/null swallows its "directory not empty"
-  # failure) — that is the intended behavior, not a bug.
+  # settings.machine.json and CLAUDE.machine.md (the fixed-path entities —
+  # dotfiles_machine_json_path / dotfiles_machine_md_path, shared/helpers.sh)
+  # live directly under $DOTFILES_PREFIX, a sibling of generations/ and
+  # current, and are deliberately NOT removed by this script (they are the
+  # human's own machine settings / personality personalization, not
+  # distribution artifacts — see AGENTS.md's "claude の例外"). So once either
+  # file exists, rmdir below permanently no-ops (2>/dev/null swallows its
+  # "directory not empty" failure) — that is the intended behavior, not a bug.
   if [ "${DRY_RUN:-0}" -eq 1 ]; then
     printf '[DRY-RUN] rmdir %s (only if empty)\n' "$DOTFILES_PREFIX"
   elif [ -d "$DOTFILES_PREFIX" ] && rmdir "$DOTFILES_PREFIX" 2>/dev/null; then

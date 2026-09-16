@@ -102,9 +102,11 @@ ADR DOC-2609072334 参照）。
 | ルート `AGENTS.md` / `CLAUDE.md`（このファイル） | **このリポジトリを開発するためのルール** | このリポジトリで作業する AI |
 | `.claude/settings.json` | リポジトリで作業する AI 向けの permissions を置く場所 | このリポジトリで作業する Claude Code |
 
-**`claude/CLAUDE.md`（配布物。個人の口調設定などが入っている。ルート `CLAUDE.md` とは別物）は、
-指示が無い限り編集しない。** `codex/deploy.sh` と `opencode/deploy.sh` もこのファイルを
-symlink 元にしている（ADR DOC-2609072334）ため、編集の影響は3エージェントへ及ぶことに注意する。
+**`claude/CLAUDE.md`（配布物。ルート `CLAUDE.md` とは別物）は、指示が無い限り編集しない。**
+人格のパーソナライズ（口調など）は直書きされておらず、マシンローカルな固定パス実体
+`CLAUDE.machine.md` への import（`@~/.claude/CLAUDE.machine.md`）のみを持つ（ADR
+DOC-2609162327）。`codex/deploy.sh` と `opencode/deploy.sh` もこのファイルを symlink 元に
+している（ADR DOC-2609072334）ため、編集の影響は3エージェントへ及ぶことに注意する。
 
 ## AI 支援ツールの設定
 
@@ -241,12 +243,13 @@ DOC-2609162327）。`claude/CLAUDE.md` 自体は今までどおり symlink の�
 `generations/` `.tmp/` と `current` 自体は通常どおり片付けられる。保護されるのは
 **`current` が指す作業ツリーの実体だけ**であり、そちらには一切触れない。
 
-`<prefix>` 直下の `settings.machine.json`（前節）も同様に保護対象であり、
-`uninstall.sh` は `~/.claude/settings.machine.json` という symlink だけを撤去し、
-固定パスの実体には触れない。したがって machine 設定を作成済みのマシンでは、
-uninstall 後も `<prefix>` 直下に `settings.machine.json` だけが残り続け、
-末尾の `rmdir <prefix>`（空のときだけ実行）は恒久的に no-op になる。
-**これは意図した挙動である**（人間のマシン設定が uninstall を生き延びる）。
+`<prefix>` 直下の `settings.machine.json` と `CLAUDE.machine.md`（前節）も同様に
+保護対象であり、`uninstall.sh` は `~/.claude/settings.machine.json` /
+`~/.claude/CLAUDE.machine.md` という symlink だけを撤去し、固定パスの実体には
+触れない。したがって machine 設定を作成済みのマシンでは、uninstall 後も
+`<prefix>` 直下にこの2ファイルが残り続け、末尾の `rmdir <prefix>`（空のときだけ
+実行）は恒久的に no-op になる。**これは意図した挙動である**（人間のマシン設定・
+人格のパーソナライズが uninstall を生き延びる）。
 
 ## クロスプラットフォーム制約
 

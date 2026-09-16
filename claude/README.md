@@ -647,9 +647,11 @@ cat ~/.claude/CLAUDE.machine.md        # 編集内容が実体に届いている
 `@~/.claude/CLAUDE.machine.md` という import 記法自体が実際に解決されるかどうかは、
 本変更を取り込んだ時点では実機で確認できていない（ADR
 [DOC-2609162327](../docs/adr/DOC-2609162327_claude-md-machine-local-tone.md) §4「未検証事項」
-参照）。再起動してもパーソナライズが一切変わらない場合は、`~/.claude/CLAUDE.md` の内容
-（`@~/.claude/CLAUDE.md` の import 行がそのまま出力に混ざっていないか等）を確認し、
-解決されていないようであれば ADR に追記のうえ設計を見直すこと。
+参照）。単に `~/.claude/CLAUDE.md` の内容を見ても import が解決されたかは分からないため、
+Claude Code のセッション内で `/memory` を実行し、`CLAUDE.machine.md` が読み込まれた
+メモリファイルとして列挙されているかを確認する。再起動してもパーソナライズが一切変わらず、
+`/memory` にも `CLAUDE.machine.md` が現れない場合は、解決されていないとみなし、
+ADR に追記のうえ設計（import 記法）を見直すこと。
 
 ## 6. 移行手順 — この変更（allow 保全）を取り込んだ後、次の deploy 前に人間が行うこと
 
