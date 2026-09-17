@@ -9,7 +9,7 @@ Easily deployable, cross-platform dotfiles managed with [mise](https://mise.jdx.
 | **Zsh** | Shell | [Antidote](https://github.com/mattmc3/antidote) |
 | **NeoVim** | Editor | [lazy.nvim](https://github.com/folke/lazy.nvim) |
 | **tmux** | Terminal multiplexer | — (built-in) |
-| **bin** | Custom CLI tools (ocw, claude-ds, ocw-meter) | — (standalone scripts) |
+| **bin** | Custom CLI tools (ocw, claude-ds, ocw-meter, dfup) | — (standalone scripts) |
 | **claude** | Claude Code config | — (built-in) |
 | **skills** | AI agent skills, shared across Claude Code / Codex / OpenCode | — (built-in) |
 | **codex** | Codex CLI global instructions (symlinked from `claude/CLAUDE.md`) | — (built-in) |
@@ -142,6 +142,8 @@ for details. `bin/` changes should additionally be verified with
 │   ├── ocw                    # Git worktree manager with Herdr integration
 │   ├── claude-ds              # Claude Code via DeepSeek API wrapper
 │   ├── ocw-meter              # LLM cost / Claude quota observability (report auto-ingests; prune-diagnostics writes)
+│   ├── dfup                   # Upload ~/dfxfer/<host>/out/ to <host>:~/uploads/ (one-way rsync, run locally)
+│   ├── dfxfer-lib.sh          # Shared plumbing for dfup (sourced by path, not symlinked into ~/bin)
 │   ├── tests/                 # Python unit tests for ocw-meter etc. (bin/tests/lint.sh + unittest suite)
 │   ├── prices/                # Price tables used for cost calculation
 │   ├── deploy.sh              # bin deployment script
@@ -296,7 +298,7 @@ See each tool's deploy script for the full list of files it creates.
 
 See each tool's README for detailed configuration and troubleshooting:
 
-- [bin/README.md](bin/README.md) — CLI tools (ocw worktree manager, claude-ds DeepSeek wrapper, ocw-meter observability)
+- [bin/README.md](bin/README.md) — CLI tools (ocw worktree manager, claude-ds DeepSeek wrapper, ocw-meter observability, dfup file handoff)
 - [claude/README.md](claude/README.md) — Claude Code config, machine-specific customization
 - [skills/README.md](skills/README.md) — AI agent skills and how they reach Claude Code, Codex and OpenCode
 - [codex/README.md](codex/README.md) — Codex CLI global instructions (symlinked from claude/CLAUDE.md)

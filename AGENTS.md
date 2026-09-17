@@ -78,7 +78,7 @@
 | `zsh/` | Zsh 設定（Antidote でプラグイン管理） |
 | `nvim/` | NeoVim 設定（lazy.nvim でプラグイン管理） |
 | `tmux/` | tmux 設定 |
-| `bin/` | スタンドアロンの CLI ツール（`ocw`, `claude-ds`, `ocw-meter`）。`bin/tests/` は `ocw-meter` 等の Python テスト、`bin/prices/` は費用計算用の価格表 |
+| `bin/` | スタンドアロンの CLI ツール（`ocw`, `claude-ds`, `ocw-meter`, `dfup`）。`bin/tests/` は `ocw-meter` 等の Python テスト、`bin/prices/` は費用計算用の価格表 |
 | `claude/` | Claude Code 向け配布物（`CLAUDE.md` / `settings.json`） |
 | `skills/` | AI コーディングエージェント向けのスキル。Claude Code だけでなく Codex・OpenCode にも同じ実体を配る（ADR DOC-2608272128） |
 | `codex/` | Codex CLI のグローバル指示（`~/.codex/AGENTS.md`）を `claude/CLAUDE.md` から symlink で配る（ADR DOC-2609072334） |
