@@ -37,6 +37,10 @@ fi
 symlink_backup "$DOTFILES_DEPLOY_SRC/bin/ocw" "$BIN_DIR/ocw" || FAIL=1
 symlink_backup "$DOTFILES_DEPLOY_SRC/bin/claude-ds" "$BIN_DIR/claude-ds" || FAIL=1
 symlink_backup "$DOTFILES_DEPLOY_SRC/bin/ocw-meter" "$BIN_DIR/ocw-meter" || FAIL=1
+# dfxfer-lib.sh is deliberately absent here: dfup sources it by path out of
+# the same generation, so putting it on PATH would only invite someone to
+# run a file that has no shebang.
+symlink_backup "$DOTFILES_DEPLOY_SRC/bin/dfup" "$BIN_DIR/dfup" || FAIL=1
 
 if [ "$FAIL" -ne 0 ]; then
   log_error "bin deployment completed with errors."

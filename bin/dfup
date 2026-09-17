@@ -1,0 +1,66 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# dfup — send everything in ~/dfxfer/<host>/out/ to <host>:~/uploads/.
+#
+# Run from the *local* machine, with no arguments. Any arguments given are
+# passed straight through to rsync, so `dfup -n` is a dry run.
+#
+# Configuration (export these from ~/.zshrc.local):
+#   DFXFER_HOSTS       space-separated ssh Host aliases
+#   DFXFER_HOST        the default one
+#   DFXFER_DIR         local base directory     (default: ~/dfxfer)
+#   DFXFER_REMOTE_DIR  remote handoff directory (default: uploads)
+#   DFXFER_RSYNC       force a specific rsync binary
+#
+# See bin/README.md §3.4 and docs/planning/DOC-2609172237_file-handoff_計画.md.
+
+# ── Locate dfxfer-lib.sh ──────────────────────────────────────────────
+#
+# ~/bin/dfup is a symlink into the deployed generation, so $0's directory is
+# ~/bin, not the directory holding the library. Walk the symlink chain by
+# hand: `readlink -f` would do it in one line on Linux but does not exist on
+# macOS (AGENTS.md "クロスプラットフォーム制約" names it specifically).
+#
+# This bootstrap is duplicated in bin/dfdown because it cannot live in the
+# library — it is what finds the library.
+_dfup_self="${BASH_SOURCE[0]}"
+while [ -L "$_dfup_self" ]; do
+  _dfup_dir=$(cd -P "$(dirname "$_dfup_self")" && pwd)
+  _dfup_self=$(readlink "$_dfup_self")
+  case "$_dfup_self" in
+    /*) ;;
+    *) _dfup_self="$_dfup_dir/$_dfup_self" ;;
+  esac
+done
+_dfup_dir=$(cd -P "$(dirname "$_dfup_self")" && pwd)
+
+# shellcheck source=SCRIPTDIR/dfxfer-lib.sh
+. "$_dfup_dir/dfxfer-lib.sh"
+
+# ── Transfer ──────────────────────────────────────────────────────────
+
+host=$(dfxfer_host)
+local_dir=$(dfxfer_local_dir "$host" out)
+remote_dir=$(dfxfer_remote_dir)
+
+dfxfer_build_opts
+
+if dfxfer_is_empty_dir "$local_dir"; then
+  log_info "Nothing to send: $local_dir is empty."
+  log_info "Put files there and run dfup again."
+  exit 0
+fi
+
+log_info "dfup: $local_dir/ -> $host:$remote_dir/"
+
+# Trailing slash on the source: copy the *contents* of out/, not the
+# directory itself. Only fixed directory paths reach the command line;
+# individual filenames travel inside the rsync protocol, which is why none
+# of this needs --secluded-args / --protect-args (計画書 1.6) — options
+# macOS's bundled rsync does not have anyway.
+exec "$DFXFER_RSYNC_CMD" \
+  "${DFXFER_OPTS[@]}" \
+  ${1+"$@"} \
+  "$local_dir/" \
+  "$host:$remote_dir/"

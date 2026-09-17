@@ -151,6 +151,25 @@ EOF
 source ~/.zshrc
 ```
 
+One concrete user of this file is `dfup` (see [bin/README.md](../bin/README.md) §3.4),
+which copies files from this machine to a shared server. Its destination differs per
+machine, which is exactly what `~/.zshrc.local` is for:
+
+```bash
+cat >> ~/.zshrc.local <<'EOF'
+# File handoff (bin/dfup). Names are ~/.ssh/config Host aliases.
+export DFXFER_HOSTS="toybox work-box"  # every destination this machine knows
+export DFXFER_HOST="toybox"            # the default one
+# export DFXFER_DIR="$HOME/dfxfer"     # local base directory (this is the default)
+EOF
+
+source ~/.zshrc
+```
+
+**`export` is not optional here.** `dfup` is a separate process, not a shell function —
+a plain `DFXFER_HOST=toybox` would stay inside zsh and the command would report that no
+destination is configured.
+
 Because it is sourced last, it can override any variable, alias, or PATH entry
 set earlier. Anything that should apply to *every* machine belongs in
 `zsh/.zshrc` instead, guarded by an existence check.

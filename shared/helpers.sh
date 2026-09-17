@@ -227,7 +227,8 @@ links_for_tool() {
       printf '%s\n' \
         "$HOME/bin/ocw" \
         "$HOME/bin/claude-ds" \
-        "$HOME/bin/ocw-meter"
+        "$HOME/bin/ocw-meter" \
+        "$HOME/bin/dfup"
       ;;
     claude)
       printf '%s\n' \
