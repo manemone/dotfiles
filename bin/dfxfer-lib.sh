@@ -63,30 +63,52 @@ dfxfer_die() {
 # ~/.zshrc.local, and never again.
 dfxfer_host() {
   local configured="${DFXFER_HOST:-}"
+  local listed="${DFXFER_HOSTS:-}"
   local candidate
-  # DFXFER_HOSTS is a space-separated list, so it has to be split — but
-  # through `read -a` rather than an unquoted expansion, which would also
-  # glob (a host alias is unlikely to contain * or ?, but silently expanding
-  # one against the cwd is not a failure mode worth leaving open).
-  local hosts=()
-  if [ -n "${DFXFER_HOSTS:-}" ]; then
-    read -r -a hosts <<<"${DFXFER_HOSTS}"
-  fi
+  local count=0
+  local first=""
+  local matched=0
+  local names=""
+  local restore_glob=1
+
+  # DFXFER_HOSTS is a space-separated list, so it has to be split. Globbing
+  # is switched off around the split so that an alias containing * or ?
+  # cannot expand against the current directory (a host alias is unlikely to
+  # contain one, but silently sending to a cwd-derived name is not a failure
+  # mode worth leaving open).
+  #
+  # A bash array would read better than this counter, but this file runs
+  # under `set -u` on macOS's stock /bin/bash, which is 3.2: there, merely
+  # expanding a *zero-element* array — including "${arr[@]}" — raises
+  # "unbound variable". Zero destinations is not an exotic case here, it is
+  # what every unconfigured machine looks like, so the command would die
+  # before it could print the setup instructions below. bin/ocw's
+  # resolve_removal_target() carries the same workaround for the same
+  # reason (see its comment, and PR #49).
+  case "$-" in *f*) restore_glob=0 ;; esac
+  set -f
+  for candidate in $listed; do
+    count=$((count + 1))
+    if [ -z "$first" ]; then
+      first="$candidate"
+      names="$candidate"
+    else
+      names="$names $candidate"
+    fi
+    if [ "$candidate" = "$configured" ]; then
+      matched=1
+    fi
+  done
+  [ "$restore_glob" -eq 0 ] || set +f
 
   if [ -n "$configured" ]; then
     # Rule 5: cross-check against the list, but only when a list exists.
     # Running with just DFXFER_HOST and no DFXFER_HOSTS is a supported
     # single-destination setup, not a misconfiguration.
-    if [ "${#hosts[@]}" -gt 0 ]; then
-      for candidate in "${hosts[@]}"; do
-        if [ "$candidate" = "$configured" ]; then
-          printf '%s\n' "$configured"
-          return 0
-        fi
-      done
+    if [ "$count" -gt 0 ] && [ "$matched" -eq 0 ]; then
       dfxfer_die \
         "DFXFER_HOST='$configured' is not listed in DFXFER_HOSTS." \
-        "Known destinations: ${hosts[*]}" \
+        "Known destinations: $names" \
         "Fix one or the other in ~/.zshrc.local (remember 'export')."
     fi
     printf '%s\n' "$configured"
@@ -94,12 +116,12 @@ dfxfer_host() {
   fi
 
   # Rule 2: an unambiguous list needs no DFXFER_HOST.
-  if [ "${#hosts[@]}" -eq 1 ]; then
-    printf '%s\n' "${hosts[0]}"
+  if [ "$count" -eq 1 ]; then
+    printf '%s\n' "$first"
     return 0
   fi
 
-  if [ "${#hosts[@]}" -eq 0 ]; then
+  if [ "$count" -eq 0 ]; then
     dfxfer_die \
       "No destination configured." \
       "Add this to ~/.zshrc.local (it is sourced by zsh, so 'export' is required" \
@@ -113,10 +135,10 @@ dfxfer_host() {
 
   dfxfer_die \
     "DFXFER_HOSTS lists more than one destination, and no default is set." \
-    "Known destinations: ${hosts[*]}" \
+    "Known destinations: $names" \
     "Name the default in ~/.zshrc.local (export is required):" \
     "" \
-    "  export DFXFER_HOST=\"${hosts[0]}\""
+    "  export DFXFER_HOST=\"$first\""
 }
 
 # ── rsync discovery ───────────────────────────────────────────────────
@@ -178,6 +200,10 @@ dfxfer_resolve_rsync() {
   if [ -n "$brew_prefix" ]; then
     candidates+=("$brew_prefix/bin/rsync")
   fi
+  # Unconditional, and load-bearing: it is what keeps `candidates` non-empty
+  # at the expansion below. An empty array there would raise "unbound
+  # variable" on macOS's bash 3.2 under `set -u` — the same trap that
+  # dfxfer_host() above is written around.
   candidates+=(/opt/homebrew/bin/rsync /usr/local/bin/rsync)
 
   for candidate in "${candidates[@]}"; do

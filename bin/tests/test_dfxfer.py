@@ -128,6 +128,7 @@ class DestinationResolutionTest(DfxferTestBase):
         self._seed_file("toybox")
         cases = {
             "no config at all": {},
+            "whitespace-only list": {"DFXFER_HOSTS": "   "},
             "ambiguous list": {"DFXFER_HOSTS": "toybox work-box"},
             "default not in list": {
                 "DFXFER_HOSTS": "toybox work-box",
