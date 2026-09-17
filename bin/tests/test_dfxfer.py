@@ -11,6 +11,12 @@ ssh も実転送も伴わない。`DFXFER_RSYNC` に「引数を記録するだ�
 - Linux ローカルで --iconv が付くと、NFC のファイル名が壊れる
 - --delete / --remove-source-files が紛れ込むと、原本や宛先の既存ファイルが
   消える。しかも消えたことは転送ログを読み返さないと分からない
+- dfdown の「Nothing came down」判定が受信先ディレクトリの現在の中身を見ていると、
+  一度でも何か落ちてきた後は永遠に正しく判定できなくなる。しかも壊れ方が静かで、
+  次に本当に何も来なかった回に気づけない
+- rsync --stats の転送件数が1000件を超えると桁区切りのカンマが入り、素朴な数字抽出が
+  複数行にマッチして `-eq` 比較がクラッシュする。転送自体は成功しているのに
+  エラーメッセージが出て利用者を混乱させる
 """
 
 import os
@@ -22,15 +28,25 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DFUP = REPO_ROOT / "bin" / "dfup"
+DFDOWN = REPO_ROOT / "bin" / "dfdown"
 
 # 引数を1行1つで ARGS_LOG へ追記するだけのスタブ。--version だけは本物の
-# rsync と同じ1行目を返す（dfxfer-lib.sh がメジャー番号を読むため）。
+# rsync と同じ1行目を返す（dfxfer-lib.sh がメジャー番号を読むため）。--stats が
+# 引数にあれば、実物の `rsync --stats` が出す "Number of regular files
+# transferred: N" 相当の1行を標準出力へ返す（dfdown がこの行を見て「今回の
+# 転送で何か来たか」を判定するため）。件数は環境変数 RSYNC_STUB_TRANSFERRED
+# で差し込む（既定 0 = 何も転送しなかった体）。
 RSYNC_STUB = """#!/bin/sh
 if [ "$1" = "--version" ]; then
   printf 'rsync  version %s  protocol version 31\\n'
   exit 0
 fi
 for a in "$@"; do printf '%%s\\n' "$a"; done >>"$ARGS_LOG"
+case " $* " in
+  *" --stats "*)
+    printf 'Number of regular files transferred: %%s\\n' "${RSYNC_STUB_TRANSFERRED:-0}"
+    ;;
+esac
 """
 
 # macOS 判定は shared/helpers.sh の `uname -s` を通る。PATH の先頭に置いた
@@ -286,6 +302,124 @@ class DfupInvocationTest(DfxferTestBase):
         self.assertTrue(out_dir.is_dir())
         self.assertIn(str(out_dir), proc.stdout)
         self.assertEqual(self._logged_args(), [])
+
+
+class DfdownInvocationTest(DfxferTestBase):
+    """dfdown 固有の差分だけを見る。宛先解決・rsync 探索・--iconv 判定は
+    dfup 側で authoritative にテスト済みなので、ここでは再テストしない
+    （計画書「検証方針」）。"""
+
+    def test_pulls_remote_uploads_downward_without_destructive_flags(self):
+        proc = self._run(DFDOWN, env={"DFXFER_HOSTS": "toybox"})
+        args = self._logged_args()
+
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+
+        # 向き: dfup とは逆に、リモートが src・ローカルの in/ が dst。取り違えると
+        # ローカルの中身でリモートを上書きしに行く、静かに起きて戻せない事故になる。
+        self.assertEqual(
+            args[-2:],
+            ["toybox:uploads/", f"{self.base_dir}/toybox/in/"],
+        )
+
+        # 消す方向のフラグが1つも無いこと。混入するとリモートの原本、または
+        # ローカルの既存ファイルが消え、被害が戻らない（計画書 5.4 / 1.7）。
+        for flag in ("--delete", "--remove-source-files"):
+            self.assertNotIn(flag, args)
+        self.assertFalse([a for a in args if a.startswith("--delete")])
+
+    def test_creates_local_receive_dir_when_missing(self):
+        """初回実行で mkdir を人間にさせない（計画書 1.2）。"""
+        in_dir = self.base_dir / "toybox" / "in"
+        self.assertFalse(in_dir.exists())
+
+        proc = self._run(DFDOWN, env={"DFXFER_HOSTS": "toybox"})
+
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertTrue(in_dir.is_dir())
+
+    def test_reports_when_nothing_came_down(self):
+        """スタブは実際にファイルを落とさないので、in/ は空のまま残る —
+        「動いたのか分からない」状態にならないよう一言出す（孫1の
+        「Nothing to send」と対になる文言）。"""
+        proc = self._run(DFDOWN, env={"DFXFER_HOSTS": "toybox"})
+
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("Nothing came down", proc.stdout)
+
+    def test_nothing_came_down_is_based_on_this_runs_transfer_count_not_dir_emptiness(
+        self,
+    ):
+        """regression: 以前は受信先ディレクトリが「今すでに空かどうか」を見ていた。
+        一度でも何か落ちてきていれば in/ はその後ずっと非空のままなので、次に
+        リモートが本当に空だった回でも「Nothing came down」が出なくなり、
+        利用者は今回何も来なかったことに気づけなかった。判定基準は
+        必ず「今回の転送で何件動いたか」（rsync --stats の出力）でなければならない。"""
+        in_dir = self.base_dir / "toybox" / "in"
+        in_dir.mkdir(parents=True)
+        (in_dir / "leftover-from-a-previous-pull.txt").write_text(
+            "hello\n", encoding="utf-8"
+        )
+
+        # 今回は何も転送しなかった体（RSYNC_STUB_TRANSFERRED 未設定 = 0件）。
+        # in/ 自体は非空だが、それでも「Nothing came down」が出ること。
+        proc = self._run(DFDOWN, env={"DFXFER_HOSTS": "toybox"})
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("Nothing came down", proc.stdout)
+
+        # 今回は1件転送した体。in/ が非空なのは変わらないが、今回何か来たので
+        # 「Nothing came down」は出ないこと。
+        proc = self._run(
+            DFDOWN,
+            env={"DFXFER_HOSTS": "toybox", "RSYNC_STUB_TRANSFERRED": "1"},
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertNotIn("Nothing came down", proc.stdout)
+
+    def test_thousands_separator_in_transfer_count_does_not_crash(self):
+        """regression: DFXFER_OPTS の -h (human-readable) により、rsync --stats は
+        1000件以上の転送を "1,200" のようにカンマ区切りで出す。素朴に
+        `grep -oE '[0-9]+'` で数字だけ拾うと "1" と "200" の2行にマッチし、
+        後続の `-eq 0` 比較が「integer expression expected」で失敗する
+        （転送自体は成功しているのに、利用者はこのエラーを見て不安になる）。"""
+        proc = self._run(
+            DFDOWN,
+            env={"DFXFER_HOSTS": "toybox", "RSYNC_STUB_TRANSFERRED": "1,200"},
+        )
+
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(proc.stderr, "")
+        self.assertNotIn("Nothing came down", proc.stdout)
+
+    def test_extra_arguments_pass_through_to_rsync(self):
+        proc = self._run(DFDOWN, "-n", env={"DFXFER_HOSTS": "toybox"})
+        args = self._logged_args()
+
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("-n", args)
+        # 透過引数はパスより前。rsync は src/dst を末尾に取る。
+        self.assertLess(args.index("-n"), len(args) - 2)
+
+    def test_remote_dir_is_overridable(self):
+        proc = self._run(
+            DFDOWN,
+            env={"DFXFER_HOSTS": "toybox", "DFXFER_REMOTE_DIR": "inbox"},
+        )
+
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("toybox:inbox/", self._logged_args())
+
+    def test_shares_destination_resolution_with_dfup(self):
+        """代表1本だけ: 宛先が決まらないときに dfdown も止まること
+        （宛先決定の5規則そのものは DestinationResolutionTest が dfup 経由で
+        authoritative にテスト済み。共通の bin/dfxfer-lib.sh を通っている
+        ことの確認に留める）。"""
+        proc = self._run(DFDOWN)
+
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertEqual(self._logged_args(), [])
+        self.assertIn("DFXFER_HOST", proc.stderr)
+        self.assertIn("export", proc.stderr)
 
 
 if __name__ == "__main__":

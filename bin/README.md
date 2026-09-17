@@ -10,6 +10,7 @@
 | `claude-ds` | Claude Code を DeepSeek API 経由で実行するラッパー |
 | `ocw-meter` | LLM費用・Claude利用枠の観測基盤。既存ログを事後に集計する。`event` / `bind-pr` / `snapshot-quota` はfail-open、`report` / `ingest` / `validate` / `prune-diagnostics` はfail-loud（`report` は自動でingestを実行し、`prune-diagnostics --apply` は診断ファイルを削除する） |
 | `dfup` | ローカルマシン → 共有サーバのファイルアップロード。`~/dfxfer/<宛先>/out/` に置いたものを、引数なし1コマンドでリモートの `~/uploads/` へ送る |
+| `dfdown` | 共有サーバ → ローカルマシンのファイルダウンロード。リモートの `~/uploads/` の中身を、引数なし1コマンドで `~/dfxfer/<宛先>/in/` へ落とす |
 
 ## 1. Requirements
 
@@ -21,16 +22,16 @@
 | **DeepSeek API key** | `claude-ds` の認証 | `~/.config/deepseek/api_key` に保存 |
 | **VS Code** `code` CLI (optional) | `ocw` のデフォルトモードで worktree を開く | `code` コマンドを PATH に通す（macOS: Cmd+Shift+P → "Shell Command: Install 'code' command in PATH"） |
 | **Herdr** (optional) | `ocw --herdr` のマルチペイン管理 | Herdr プロジェクトのインストール手順に従う（スタティックリンクされたバイナリとして配布） |
-| **rsync** | `dfup` のファイル転送 | macOS: 同梱（2.6.9 / openrsync）。Linux: `apt install rsync` |
-| **ssh** | `dfup` の転送経路。宛先は `~/.ssh/config` の `Host` エイリアスで指定する | Built-in on most systems |
+| **rsync** | `dfup` / `dfdown` のファイル転送 | macOS: 同梱（2.6.9 / openrsync）。Linux: `apt install rsync` |
+| **ssh** | `dfup` / `dfdown` の転送経路。宛先は `~/.ssh/config` の `Host` エイリアスで指定する | Built-in on most systems |
 | **rsync 3.x** (日本語ファイル名を扱うなら必須) | `--iconv` によるファイル名の正規化 | macOS: `brew install rsync` |
 
-> **日本語（非 ASCII）のファイル名を送るなら、macOS では `brew install rsync` を強く推奨します。**
+> **日本語（非 ASCII）のファイル名を送受信するなら、macOS では `brew install rsync` を強く推奨します。**
 > macOS が同梱する rsync は 2.6.9、新しめの macOS では openrsync で、どちらも **3.0 で入った
 > `--iconv` を持ちません**。`--iconv` 無しで転送すると、macOS 側の NFD（濁点・半濁点が
 > 別の符号位置に分かれた形）がそのまま Linux 側へ渡り、**見た目は同じなのに別名のファイル**
-> として保存されます。`dfup` はこれを検出しても**エラーにはせず**、警告を1行出して素の転送を
-> 続けます（ASCII のファイル名しか扱わないなら、そのままで実害はありません）。
+> として保存されます。`dfup` / `dfdown` はこれを検出しても**エラーにはせず**、警告を1行出して
+> 素の転送を続けます（ASCII のファイル名しか扱わないなら、そのままで実害はありません）。
 
 ## 2. Quick Start
 
@@ -51,6 +52,7 @@ exec $SHELL -l
 which ocw
 which claude-ds
 which dfup
+which dfdown
 ```
 
 すでに一度 `deploy-all.sh` を実行済みで配布実体（`current`）が存在するなら、
@@ -60,8 +62,8 @@ which dfup
 
 The deploy script:
 - Creates `~/bin/` directory if missing
-- Symlinks `ocw`, `claude-ds`, `ocw-meter`, and `dfup` into `~/bin/`
-  （`dfxfer-lib.sh` は `dfup` が実体のパスから source する共有ライブラリなので、`~/bin` へは symlink しません）
+- Symlinks `ocw`, `claude-ds`, `ocw-meter`, `dfup`, and `dfdown` into `~/bin/`
+  （`dfxfer-lib.sh` は `dfup` / `dfdown` が実体のパスから source する共有ライブラリなので、`~/bin` へは symlink しません）
 
 ## 3. What's Included
 
@@ -612,6 +614,49 @@ dfup -n          # rsync の dry-run
 自動同期を見送った判断）は計画書
 [DOC-2609172237](../docs/planning/DOC-2609172237_file-handoff_計画.md) を参照。
 
+### 3.5 dfdown — 共有サーバ → ローカルマシンのファイルダウンロード
+
+共有サーバ上で動く Claude Code が `~/uploads/` に置いた成果物を、手元のマシンへ
+持ち帰るためのコマンド。**ローカルマシン側から、引数なしで叩く。**（`dfup` と同じく、
+どちらの方向のコマンドもローカルマシン側で実行する。）
+
+```bash
+# 落とす
+dfdown
+
+# 2. 落ちてきたものを確認する（ディレクトリは初回実行時に自動で作られる）
+ls ~/dfxfer/toybox/in/
+```
+
+リモートの `~/uploads/` の**中身**が、`~/dfxfer/<宛先>/in/` へ rsync される。
+
+| リモート | → | ローカル |
+|---|---|---|
+| `<宛先>:$DFXFER_REMOTE_DIR/` | `dfdown` | `$DFXFER_DIR/<宛先>/in/` |
+
+**転送後もリモートの原本は残る**（コピーであって移動ではない。`dfup` と同じ方針 — 計画書 5.4）。
+rsync の差分転送なので、同じディレクトリを何度落としても2回目以降は差分だけが飛ぶ。
+
+#### 設定
+
+宛先の決定規則・環境変数（`DFXFER_HOSTS` / `DFXFER_HOST` / `DFXFER_DIR` /
+`DFXFER_REMOTE_DIR` / `DFXFER_RSYNC`）は `dfup` と**完全に共通**（`bin/dfxfer-lib.sh` を
+両方が同じロジックで source している）。設定方法・宛先ごとにディレクトリを分ける理由・
+`~/.ssh/config` の `Host` エイリアスであることは、上記「3.4 dfup」の「設定」節を参照。
+
+#### rsync に追加の引数を渡す
+
+`dfdown` に渡した引数はそのまま rsync へ透過する。何が落ちてくるのかを先に確かめたいときは:
+
+```bash
+dfdown -n          # rsync の dry-run
+```
+
+#### 消さないこと
+
+`dfdown` は `--delete` も `--remove-source-files` も使わない。**リモートの原本も、
+ローカルに既にあるファイルも、このコマンドが消すことはない。** 片道のコピーに徹している。
+
 ## 4. Customization
 
 ### ocw のコマンド差し替え
@@ -719,6 +764,12 @@ brew install rsync
 
 送信元ディレクトリが空です。メッセージに出ているパス（既定は `~/dfxfer/<宛先>/out/`）に
 ファイルを置いてから、もう一度実行してください。
+
+### `dfdown` が「Nothing came down」と言う
+
+今回の実行で新しく降りてきたファイルが0件でした（リモートの `~/uploads/` が空だったか、
+前回までにすべて取得済みで差分が無かったかのどちらかです）。共有サーバ側で新しいファイルを
+置いてから、もう一度実行してください。
 
 ### `report` の `meter.error diagnostics` に見慣れない件数が並んでいる（過去のテスト汚染）
 

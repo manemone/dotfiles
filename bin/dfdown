@@ -1,0 +1,80 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# dfdown — pull everything in <host>:~/uploads/ down to ~/dfxfer/<host>/in/.
+#
+# Run from the *local* machine, with no arguments. Any arguments given are
+# passed straight through to rsync, so `dfdown -n` is a dry run.
+#
+# Configuration (export these from ~/.zshrc.local):
+#   DFXFER_HOSTS       space-separated ssh Host aliases
+#   DFXFER_HOST        the default one
+#   DFXFER_DIR         local base directory     (default: ~/dfxfer)
+#   DFXFER_REMOTE_DIR  remote handoff directory (default: uploads)
+#   DFXFER_RSYNC       force a specific rsync binary
+#
+# See bin/README.md §3.5 and docs/planning/DOC-2609172237_file-handoff_計画.md.
+
+# ── Locate dfxfer-lib.sh ──────────────────────────────────────────────
+#
+# ~/bin/dfdown is a symlink into the deployed generation, so $0's directory is
+# ~/bin, not the directory holding the library. Walk the symlink chain by
+# hand: `readlink -f` would do it in one line on Linux but does not exist on
+# macOS (AGENTS.md "クロスプラットフォーム制約" names it specifically).
+#
+# This bootstrap is duplicated from bin/dfup because it cannot live in the
+# library — it is what finds the library.
+_dfdown_self="${BASH_SOURCE[0]}"
+while [ -L "$_dfdown_self" ]; do
+  _dfdown_dir=$(cd -P "$(dirname "$_dfdown_self")" && pwd)
+  _dfdown_self=$(readlink "$_dfdown_self")
+  case "$_dfdown_self" in
+    /*) ;;
+    *) _dfdown_self="$_dfdown_dir/$_dfdown_self" ;;
+  esac
+done
+_dfdown_dir=$(cd -P "$(dirname "$_dfdown_self")" && pwd)
+
+# shellcheck source=SCRIPTDIR/dfxfer-lib.sh
+. "$_dfdown_dir/dfxfer-lib.sh"
+
+# ── Transfer ──────────────────────────────────────────────────────────
+
+host=$(dfxfer_host)
+local_dir=$(dfxfer_local_dir "$host" in)
+remote_dir=$(dfxfer_remote_dir)
+
+dfxfer_build_opts
+
+log_info "dfdown: $host:$remote_dir/ -> $local_dir/"
+
+# Trailing slash on the source: copy the *contents* of the remote handoff
+# directory, not the directory itself. Only fixed directory paths reach the
+# command line; individual filenames travel inside the rsync protocol, which
+# is why none of this needs --secluded-args / --protect-args (計画書 1.6) —
+# options macOS's bundled rsync does not have anyway.
+#
+# --stats is captured (via `tee`, so the human still sees live -P progress)
+# so "Nothing came down" can be based on *this run's* transfer count rather
+# than "is the receive dir empty right now" — the latter stays wrong forever
+# once a single file has ever landed in it, silently misreporting every
+# later empty pull as if something had come down.
+_dfdown_stats=$(mktemp) || dfxfer_die "Failed to create a temporary file for rsync stats."
+trap 'rm -f "$_dfdown_stats"' EXIT
+
+"$DFXFER_RSYNC_CMD" \
+  "${DFXFER_OPTS[@]}" \
+  --stats \
+  ${1+"$@"} \
+  "$host:$remote_dir/" \
+  "$local_dir/" | tee "$_dfdown_stats"
+
+# DFXFER_OPTS carries -h (human-readable), so rsync renders large counts with
+# thousands separators (e.g. "1,200") — strip them before the numeric test,
+# or a count that big turns into two grep matches ("1" and "200") and crashes
+# the `-eq` below with "integer expression expected" on an otherwise-successful
+# transfer.
+_dfdown_transferred=$(grep -m1 '^Number of regular files transferred:' "$_dfdown_stats" | grep -oE '[0-9,]+' | tr -d ',' || true)
+if [ "${_dfdown_transferred:-0}" -eq 0 ]; then
+  log_info "Nothing came down: no new files from $host:$remote_dir/."
+fi

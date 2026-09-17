@@ -19,7 +19,7 @@ list_shell_scripts() {
   find "$repo_root" \
     \( -path "$repo_root/.git" -o -path "$repo_root/*/.git" \) -prune -o \
     -type f \( -name '*.sh' -o -name 'ocw' -o -name 'claude-ds' \
-    -o -name 'ocw-meter' -o -name 'dfup' \) -print0
+    -o -name 'ocw-meter' -o -name 'dfup' -o -name 'dfdown' \) -print0
 }
 
 echo "== bash -n =="

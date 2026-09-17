@@ -228,7 +228,8 @@ links_for_tool() {
         "$HOME/bin/ocw" \
         "$HOME/bin/claude-ds" \
         "$HOME/bin/ocw-meter" \
-        "$HOME/bin/dfup"
+        "$HOME/bin/dfup" \
+        "$HOME/bin/dfdown"
       ;;
     claude)
       printf '%s\n' \
