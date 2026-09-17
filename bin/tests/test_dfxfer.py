@@ -22,6 +22,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DFUP = REPO_ROOT / "bin" / "dfup"
+DFDOWN = REPO_ROOT / "bin" / "dfdown"
 
 # 引数を1行1つで ARGS_LOG へ追記するだけのスタブ。--version だけは本物の
 # rsync と同じ1行目を返す（dfxfer-lib.sh がメジャー番号を読むため）。
@@ -286,6 +287,80 @@ class DfupInvocationTest(DfxferTestBase):
         self.assertTrue(out_dir.is_dir())
         self.assertIn(str(out_dir), proc.stdout)
         self.assertEqual(self._logged_args(), [])
+
+
+class DfdownInvocationTest(DfxferTestBase):
+    """dfdown 固有の差分だけを見る。宛先解決・rsync 探索・--iconv 判定は
+    dfup 側で authoritative にテスト済みなので、ここでは再テストしない
+    （計画書「検証方針」）。"""
+
+    def test_pulls_remote_uploads_downward_without_destructive_flags(self):
+        proc = self._run(DFDOWN, env={"DFXFER_HOSTS": "toybox"})
+        args = self._logged_args()
+
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+
+        # 向き: dfup とは逆に、リモートが src・ローカルの in/ が dst。取り違えると
+        # ローカルの中身でリモートを上書きしに行く、静かに起きて戻せない事故になる。
+        self.assertEqual(
+            args[-2:],
+            ["toybox:uploads/", f"{self.base_dir}/toybox/in/"],
+        )
+
+        # 消す方向のフラグが1つも無いこと。混入するとリモートの原本、または
+        # ローカルの既存ファイルが消え、被害が戻らない（計画書 5.4 / 1.7）。
+        for flag in ("--delete", "--remove-source-files"):
+            self.assertNotIn(flag, args)
+        self.assertFalse([a for a in args if a.startswith("--delete")])
+
+    def test_creates_local_receive_dir_when_missing(self):
+        """初回実行で mkdir を人間にさせない（計画書 1.2）。"""
+        in_dir = self.base_dir / "toybox" / "in"
+        self.assertFalse(in_dir.exists())
+
+        proc = self._run(DFDOWN, env={"DFXFER_HOSTS": "toybox"})
+
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertTrue(in_dir.is_dir())
+
+    def test_reports_when_nothing_came_down(self):
+        """スタブは実際にファイルを落とさないので、in/ は空のまま残る —
+        「動いたのか分からない」状態にならないよう一言出す（孫1の
+        「Nothing to send」と対になる文言）。"""
+        proc = self._run(DFDOWN, env={"DFXFER_HOSTS": "toybox"})
+
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("Nothing came down", proc.stdout)
+
+    def test_extra_arguments_pass_through_to_rsync(self):
+        proc = self._run(DFDOWN, "-n", env={"DFXFER_HOSTS": "toybox"})
+        args = self._logged_args()
+
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("-n", args)
+        # 透過引数はパスより前。rsync は src/dst を末尾に取る。
+        self.assertLess(args.index("-n"), len(args) - 2)
+
+    def test_remote_dir_is_overridable(self):
+        proc = self._run(
+            DFDOWN,
+            env={"DFXFER_HOSTS": "toybox", "DFXFER_REMOTE_DIR": "inbox"},
+        )
+
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("toybox:inbox/", self._logged_args())
+
+    def test_shares_destination_resolution_with_dfup(self):
+        """代表1本だけ: 宛先が決まらないときに dfdown も止まること
+        （宛先決定の5規則そのものは DestinationResolutionTest が dfup 経由で
+        authoritative にテスト済み。共通の bin/dfxfer-lib.sh を通っている
+        ことの確認に留める）。"""
+        proc = self._run(DFDOWN)
+
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertEqual(self._logged_args(), [])
+        self.assertIn("DFXFER_HOST", proc.stderr)
+        self.assertIn("export", proc.stderr)
 
 
 if __name__ == "__main__":
