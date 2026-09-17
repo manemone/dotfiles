@@ -44,13 +44,13 @@ host=$(dfxfer_host)
 local_dir=$(dfxfer_local_dir "$host" out)
 remote_dir=$(dfxfer_remote_dir)
 
-dfxfer_build_opts
-
 if dfxfer_is_empty_dir "$local_dir"; then
   log_info "Nothing to send: $local_dir is empty."
   log_info "Put files there and run dfup again."
   exit 0
 fi
+
+dfxfer_build_opts
 
 log_info "dfup: $local_dir/ -> $host:$remote_dir/"
 

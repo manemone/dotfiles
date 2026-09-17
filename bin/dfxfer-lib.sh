@@ -126,8 +126,12 @@ dfxfer_host() {
 # does not identify itself as "rsync version N.M". openrsync (what recent
 # macOS ships in place of rsync) reports only a protocol version and so comes
 # back empty, which is the correct answer: it is not rsync 3.x either.
+# The `|| true` is not cosmetic: callers run under `set -euo pipefail`, where a
+# probe of something that turns out not to be runnable would otherwise abort the
+# whole command through the assignment that captures this output — with no
+# message, because the failing command never got to say anything.
 dfxfer_rsync_major() {
-  "$1" --version 2>/dev/null | awk 'NR == 1 {
+  { "$1" --version 2>/dev/null || true; } | awk 'NR == 1 {
     for (i = 1; i < NF; i++) {
       if ($i == "version" && $(i + 1) ~ /^[0-9]+\./) {
         split($(i + 1), parts, ".")
@@ -153,6 +157,14 @@ dfxfer_resolve_rsync() {
   local candidate
 
   if [ -n "$explicit" ]; then
+    # A typo here would otherwise surface much later, as a bare exec failure
+    # from a command the human never typed. They set this once in
+    # ~/.zshrc.local and then forget it exists, so name it in the message.
+    if ! command -v "$explicit" >/dev/null 2>&1; then
+      dfxfer_die \
+        "DFXFER_RSYNC is set to '$explicit', which is not an executable command." \
+        "Fix it in ~/.zshrc.local, or unset it to let dfup find rsync by itself."
+    fi
     DFXFER_RSYNC_CMD="$explicit"
     DFXFER_RSYNC_MAJOR=$(dfxfer_rsync_major "$explicit")
     return 0

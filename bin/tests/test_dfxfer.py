@@ -146,6 +146,29 @@ class DestinationResolutionTest(DfxferTestBase):
                 self.assertIn("export", proc.stderr)
 
 
+class RsyncResolutionTest(DfxferTestBase):
+    """使う rsync を決めるところ。"""
+
+    def test_mistyped_rsync_override_fails_loudly(self):
+        """regression: DFXFER_RSYNC のタイポで、何のメッセージも出さないまま
+        終了していた（`set -o pipefail` 下でバージョン確認のパイプラインが
+        失敗し、それを受ける代入ごと落ちるため）。~/.zshrc.local に一度
+        書いたきり忘れる設定なので、黙って落ちると原因に辿り着けない。"""
+        self._seed_file("toybox")
+        proc = self._run(
+            DFUP,
+            env={
+                "DFXFER_HOSTS": "toybox",
+                "DFXFER_RSYNC": str(self.tmp / "does-not-exist"),
+            },
+        )
+
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("DFXFER_RSYNC", proc.stderr)
+        self.assertIn("does-not-exist", proc.stderr)
+        self.assertEqual(self._logged_args(), [])
+
+
 class IconvTest(DfxferTestBase):
     """計画書 1.5。--iconv は「macOS かつ rsync 3.x」のときだけ付く。"""
 
