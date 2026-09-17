@@ -24,12 +24,12 @@
 
 | 孫 | ブランチ | 内容 | 状況 |
 |---|---|---|---|
-| 1 | `file-handoff-01-dfup` | 共通基盤（`bin/dfxfer-lib.sh`）＋上りコマンド `dfup`。配布登録・lint登録・README・テスト一式 | ⬜ 待機中 |
+| 1 | `file-handoff-01-dfup` | 共通基盤（`bin/dfxfer-lib.sh`）＋上りコマンド `dfup`。配布登録・lint登録・README・テスト一式 | 🔄 実装中 |
 | 2 | `file-handoff-02-dfdown` | 下りコマンド `dfdown`。孫1の共通基盤に乗せる。ホストごとの受信ディレクトリ | ⬜ 待機中 |
 
 ## ワークスペースラベル
 
-- 傘: `dotfiles :: ファイル受け渡し`
+- 傘: `dotfiles :: ファイル受け渡しコマンド`（既に人間が手付け済み。上書きしない）
 - 孫1: `dotfiles :: ファイル受け渡し 孫1 上り(dfup)`
 - 孫2: `dotfiles :: ファイル受け渡し 孫2 下り(dfdown)`
 
