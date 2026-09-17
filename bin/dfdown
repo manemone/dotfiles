@@ -53,12 +53,23 @@ log_info "dfdown: $host:$remote_dir/ -> $local_dir/"
 # command line; individual filenames travel inside the rsync protocol, which
 # is why none of this needs --secluded-args / --protect-args (計画書 1.6) —
 # options macOS's bundled rsync does not have anyway.
+#
+# --stats is captured (via `tee`, so the human still sees live -P progress)
+# so "Nothing came down" can be based on *this run's* transfer count rather
+# than "is the receive dir empty right now" — the latter stays wrong forever
+# once a single file has ever landed in it, silently misreporting every
+# later empty pull as if something had come down.
+_dfdown_stats=$(mktemp) || dfxfer_die "Failed to create a temporary file for rsync stats."
+trap 'rm -f "$_dfdown_stats"' EXIT
+
 "$DFXFER_RSYNC_CMD" \
   "${DFXFER_OPTS[@]}" \
+  --stats \
   ${1+"$@"} \
   "$host:$remote_dir/" \
-  "$local_dir/"
+  "$local_dir/" | tee "$_dfdown_stats"
 
-if dfxfer_is_empty_dir "$local_dir"; then
-  log_info "Nothing came down: $host:$remote_dir/ was empty."
+_dfdown_transferred=$(grep -m1 '^Number of regular files transferred:' "$_dfdown_stats" | grep -oE '[0-9]+' || true)
+if [ "${_dfdown_transferred:-0}" -eq 0 ]; then
+  log_info "Nothing came down: no new files from $host:$remote_dir/."
 fi

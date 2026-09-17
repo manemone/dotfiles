@@ -11,6 +11,9 @@ ssh も実転送も伴わない。`DFXFER_RSYNC` に「引数を記録するだ�
 - Linux ローカルで --iconv が付くと、NFC のファイル名が壊れる
 - --delete / --remove-source-files が紛れ込むと、原本や宛先の既存ファイルが
   消える。しかも消えたことは転送ログを読み返さないと分からない
+- dfdown の「Nothing came down」判定が受信先ディレクトリの現在の中身を見ていると、
+  一度でも何か落ちてきた後は永遠に正しく判定できなくなる。しかも壊れ方が静かで、
+  次に本当に何も来なかった回に気づけない
 """
 
 import os
@@ -25,13 +28,22 @@ DFUP = REPO_ROOT / "bin" / "dfup"
 DFDOWN = REPO_ROOT / "bin" / "dfdown"
 
 # 引数を1行1つで ARGS_LOG へ追記するだけのスタブ。--version だけは本物の
-# rsync と同じ1行目を返す（dfxfer-lib.sh がメジャー番号を読むため）。
+# rsync と同じ1行目を返す（dfxfer-lib.sh がメジャー番号を読むため）。--stats が
+# 引数にあれば、実物の `rsync --stats` が出す "Number of regular files
+# transferred: N" 相当の1行を標準出力へ返す（dfdown がこの行を見て「今回の
+# 転送で何か来たか」を判定するため）。件数は環境変数 RSYNC_STUB_TRANSFERRED
+# で差し込む（既定 0 = 何も転送しなかった体）。
 RSYNC_STUB = """#!/bin/sh
 if [ "$1" = "--version" ]; then
   printf 'rsync  version %s  protocol version 31\\n'
   exit 0
 fi
 for a in "$@"; do printf '%%s\\n' "$a"; done >>"$ARGS_LOG"
+case " $* " in
+  *" --stats "*)
+    printf 'Number of regular files transferred: %%s\\n' "${RSYNC_STUB_TRANSFERRED:-0}"
+    ;;
+esac
 """
 
 # macOS 判定は shared/helpers.sh の `uname -s` を通る。PATH の先頭に置いた
@@ -331,6 +343,35 @@ class DfdownInvocationTest(DfxferTestBase):
 
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertIn("Nothing came down", proc.stdout)
+
+    def test_nothing_came_down_is_based_on_this_runs_transfer_count_not_dir_emptiness(
+        self,
+    ):
+        """regression: 以前は受信先ディレクトリが「今すでに空かどうか」を見ていた。
+        一度でも何か落ちてきていれば in/ はその後ずっと非空のままなので、次に
+        リモートが本当に空だった回でも「Nothing came down」が出なくなり、
+        利用者は今回何も来なかったことに気づけなかった。判定基準は
+        必ず「今回の転送で何件動いたか」（rsync --stats の出力）でなければならない。"""
+        in_dir = self.base_dir / "toybox" / "in"
+        in_dir.mkdir(parents=True)
+        (in_dir / "leftover-from-a-previous-pull.txt").write_text(
+            "hello\n", encoding="utf-8"
+        )
+
+        # 今回は何も転送しなかった体（RSYNC_STUB_TRANSFERRED 未設定 = 0件）。
+        # in/ 自体は非空だが、それでも「Nothing came down」が出ること。
+        proc = self._run(DFDOWN, env={"DFXFER_HOSTS": "toybox"})
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("Nothing came down", proc.stdout)
+
+        # 今回は1件転送した体。in/ が非空なのは変わらないが、今回何か来たので
+        # 「Nothing came down」は出ないこと。
+        proc = self._run(
+            DFDOWN,
+            env={"DFXFER_HOSTS": "toybox", "RSYNC_STUB_TRANSFERRED": "1"},
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertNotIn("Nothing came down", proc.stdout)
 
     def test_extra_arguments_pass_through_to_rsync(self):
         proc = self._run(DFDOWN, "-n", env={"DFXFER_HOSTS": "toybox"})
