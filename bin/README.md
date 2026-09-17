@@ -9,6 +9,7 @@
 | `ocw` | Git worktree 作成・管理。Herdr 連携で commander/implementer/reviewer の三面体制を自動セットアップ（`--no-commander` で commander を省いた2面体制にできる） |
 | `claude-ds` | Claude Code を DeepSeek API 経由で実行するラッパー |
 | `ocw-meter` | LLM費用・Claude利用枠の観測基盤。既存ログを事後に集計する。`event` / `bind-pr` / `snapshot-quota` はfail-open、`report` / `ingest` / `validate` / `prune-diagnostics` はfail-loud（`report` は自動でingestを実行し、`prune-diagnostics --apply` は診断ファイルを削除する） |
+| `persona` | このマシンでの人格のパーソナライズ（口調など。`CLAUDE.machine.md`）を編集し、Codex 向け生成物（`AGENTS.md`）を再生成する単一の入口 |
 | `dfup` | ローカルマシン → 共有サーバのファイルアップロード。`~/dfxfer/<宛先>/out/` に置いたものを、引数なし1コマンドでリモートの `~/uploads/` へ送る |
 | `dfdown` | 共有サーバ → ローカルマシンのファイルダウンロード。リモートの `~/uploads/` の中身を、引数なし1コマンドで `~/dfxfer/<宛先>/in/` へ落とす |
 
@@ -22,6 +23,7 @@
 | **DeepSeek API key** | `claude-ds` の認証 | `~/.config/deepseek/api_key` に保存 |
 | **VS Code** `code` CLI (optional) | `ocw` のデフォルトモードで worktree を開く | `code` コマンドを PATH に通す（macOS: Cmd+Shift+P → "Shell Command: Install 'code' command in PATH"） |
 | **Herdr** (optional) | `ocw --herdr` のマルチペイン管理 | Herdr プロジェクトのインストール手順に従う（スタティックリンクされたバイナリとして配布） |
+| **`$EDITOR`** | `persona`（編集モード。`--regen` のみなら不要） | 通常のシェル環境変数として設定。引数付きでもよい（例: `export EDITOR=vim`、`export EDITOR="code --wait"`） |
 | **rsync** | `dfup` / `dfdown` のファイル転送 | macOS: 同梱（2.6.9 / openrsync）。Linux: `apt install rsync` |
 | **ssh** | `dfup` / `dfdown` の転送経路。宛先は `~/.ssh/config` の `Host` エイリアスで指定する | Built-in on most systems |
 | **rsync 3.x** (日本語ファイル名を扱うなら必須) | `--iconv` によるファイル名の正規化 | macOS: `brew install rsync` |
@@ -62,7 +64,7 @@ which dfdown
 
 The deploy script:
 - Creates `~/bin/` directory if missing
-- Symlinks `ocw`, `claude-ds`, `ocw-meter`, `dfup`, and `dfdown` into `~/bin/`
+- Symlinks `ocw`, `claude-ds`, `ocw-meter`, `persona`, `dfup`, and `dfdown` into `~/bin/`
   （`dfxfer-lib.sh` は `dfup` / `dfdown` が実体のパスから source する共有ライブラリなので、`~/bin` へは symlink しません）
 
 ## 3. What's Included
@@ -525,7 +527,35 @@ GitHub token形式（`ghp_...` 等 / `github_pat_...`）に一致する値、キ
   `docs/reference/DOC-2608021229-b_...`§2の計測手順に反映済み）。`--model`/`--role`/
   `--pr`はこの制約の影響を受けない（`run_id`ではなく`model`/`role`/`pr_number`を直接見るため）
 
-### 3.4 dfup — ローカル → 共有サーバのファイルアップロード
+### 3.4 persona — 人格のパーソナライズを変える単一の入口
+
+このマシンでの人格のパーソナライズ（口調・一人称/二人称・キャラクター付けなど）の実体は
+`~/.claude/CLAUDE.machine.md`（実体は世代を経由しない固定パス。詳細は
+[claude/README.md](../claude/README.md)）。Claude Code / OpenCode はこのファイルを live に
+読むため、編集するだけで即座に反映される。**Codex だけは別ファイルを追加で読み込む手段が
+無い**ため（`AGENTS.override.md` は存在しても置き換えであって追加読み込みではないことを
+確認済み — [ADR DOC-2609162327](../docs/adr/DOC-2609162327_claude-md-machine-local-tone.md)
+§6）、`claude/CLAUDE.md` + `CLAUDE.machine.md` を連結生成した実ファイルを別途持っており、
+これを再生成しない限り Codex には反映されない。`persona` はこの再生成も含めて、3エージェント
+共通で「パーソナライズを変えるときの入口」を1つにするコマンド。
+
+```bash
+# $EDITOR で CLAUDE.machine.md を開き、閉じたら Codex 向け生成物を自動で再生成する
+persona
+
+# 編集せず、Codex 向け生成物だけを再生成する
+# （CLAUDE.machine.md を別の手段で書き換えた後など）
+persona --regen
+```
+
+- Codex がこのマシンに未導入（`${CODEX_HOME:-$HOME/.codex}` が存在しない）の場合、再生成は
+  スキップされる（何もしないログを出して正常終了する — `codex/deploy.sh` と同じ判断基準）
+- 生成ロジックは `codex/deploy.sh` と共有しており（`shared/helpers.sh` の
+  `generate_codex_agents_md()`）、二重管理していない
+- **redeploy は不要。** どちらのモードも `~/.claude/CLAUDE.machine.md` の実体
+  （固定パス）と、Codex 向け生成物の実体（同じく固定パス）を直接書き換える
+
+### 3.5 dfup — ローカル → 共有サーバのファイルアップロード
 
 手元のマシンにあるファイル（議事録・データ等）を、共有サーバ上で動く Claude Code から
 触れる場所へ運ぶためのコマンド。**ローカルマシン側から、引数なしで叩く。**
@@ -614,7 +644,7 @@ dfup -n          # rsync の dry-run
 自動同期を見送った判断）は計画書
 [DOC-2609172237](../docs/planning/DOC-2609172237_file-handoff_計画.md) を参照。
 
-### 3.5 dfdown — 共有サーバ → ローカルマシンのファイルダウンロード
+### 3.6 dfdown — 共有サーバ → ローカルマシンのファイルダウンロード
 
 共有サーバ上で動く Claude Code が `~/uploads/` に置いた成果物を、手元のマシンへ
 持ち帰るためのコマンド。**ローカルマシン側から、引数なしで叩く。**（`dfup` と同じく、
@@ -642,7 +672,7 @@ rsync の差分転送なので、同じディレクトリを何度落として�
 宛先の決定規則・環境変数（`DFXFER_HOSTS` / `DFXFER_HOST` / `DFXFER_DIR` /
 `DFXFER_REMOTE_DIR` / `DFXFER_RSYNC`）は `dfup` と**完全に共通**（`bin/dfxfer-lib.sh` を
 両方が同じロジックで source している）。設定方法・宛先ごとにディレクトリを分ける理由・
-`~/.ssh/config` の `Host` エイリアスであることは、上記「3.4 dfup」の「設定」節を参照。
+`~/.ssh/config` の `Host` エイリアスであることは、上記「3.5 dfup」の「設定」節を参照。
 
 #### rsync に追加の引数を渡す
 

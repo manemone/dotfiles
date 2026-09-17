@@ -106,3 +106,27 @@ ${XDG_CONFIG_HOME:-~/.config}/opencode/AGENTS.md → <current>/claude/CLAUDE.md 
   という前提（複数ファイルの合成をサポートしない）で設計した。将来どちらかが
   複数ファイルの合成をサポートするようになっても、既存の symlink 配布方式が壊れることはない
   （単に選択肢が増えるだけ）
+
+## 5. 前提の変化（ADR DOC-2609162327）
+
+`claude/CLAUDE.md` の冒頭の人格のパーソナライズ設定は、当初は直書きの固定文言（口調など）
+だった。ADR [DOC-2609162327](DOC-2609162327_claude-md-machine-local-tone.md) で、その部分を
+マシンローカルな固定パス実体（`CLAUDE.machine.md`）へ切り出し、ベースの
+`claude/CLAUDE.md` は「定義元を指す」`@~/.claude/CLAUDE.machine.md` import
+だけを持つ形に変わった。
+
+**本 ADR（DOC-2609072334）の「ソースファイルは1つだけ・3リンク」という決定は、
+Claude Code と OpenCode については引き続き有効である。** 両エージェントが symlink する
+対象は変わらず `$DOTFILES_DEPLOY_SRC/claude/CLAUDE.md` のままで、その中身のうち
+パーソナライズ節だけが「定義元を指す」文言に変わった。
+
+**一方、Codex だけは本 ADR の前提が崩れている。** `@` import は Claude Code だけが
+解釈する記法で Codex には効かないため、ADR
+[DOC-2609162327](DOC-2609162327_claude-md-machine-local-tone.md) §6 の決定により、
+`codex/deploy.sh` は `claude/CLAUDE.md` への直接 symlink をやめ、`claude/CLAUDE.md` +
+`CLAUDE.machine.md` を連結生成した実ファイル（`<prefix>/codex/AGENTS.md`。世代を
+経由しない固定パス）への symlink に変わった。したがって現在の構成は「1ソース・3リンク」
+ではなく、**「1ソース・2リンク（Claude Code / OpenCode） + Codex 向け生成物1本」**
+である。この生成物は常に再生成可能な build artifact であり、`CLAUDE.machine.md` の
+実体とは異なり `uninstall.sh` の撤去対象になる（保護されない）。詳細は ADR
+DOC-2609162327 §6 を参照。

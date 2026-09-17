@@ -42,6 +42,7 @@ symlink_backup "$DOTFILES_DEPLOY_SRC/bin/ocw-meter" "$BIN_DIR/ocw-meter" || FAIL
 # to run a file that has no shebang.
 symlink_backup "$DOTFILES_DEPLOY_SRC/bin/dfup" "$BIN_DIR/dfup" || FAIL=1
 symlink_backup "$DOTFILES_DEPLOY_SRC/bin/dfdown" "$BIN_DIR/dfdown" || FAIL=1
+symlink_backup "$DOTFILES_DEPLOY_SRC/bin/persona" "$BIN_DIR/persona" || FAIL=1
 
 if [ "$FAIL" -ne 0 ]; then
   log_error "bin deployment completed with errors."

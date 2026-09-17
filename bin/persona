@@ -1,0 +1,100 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# persona — single entry point for editing this machine's personality
+# personalization (tone, pronouns, character, etc. — design4, plan
+# DOC-2609162320 / ADR DOC-2609162327).
+#
+# Claude Code and OpenCode read CLAUDE.machine.md live (an `@` import and
+# an `instructions` path, respectively), so editing it is enough for those
+# two. Codex has neither mechanism — it can only read a real, pre-rendered
+# AGENTS.md with the personalization content already baked in (see
+# codex/deploy.sh and generate_codex_agents_md() in shared/helpers.sh for
+# why: Codex's AGENTS.override.md REPLACES rather than adds to AGENTS.md).
+# `persona` is the one command that closes that gap for Codex without
+# requiring a redeploy: it edits CLAUDE.machine.md, then regenerates
+# Codex's AGENTS.md from it. `persona --regen` does the regeneration step
+# alone (e.g. after editing CLAUDE.machine.md by some other means).
+
+# Resolve this script's real location, even when invoked through the
+# ~/bin/persona symlink deploy.sh creates. `readlink -f` is GNU-only and
+# unavailable on macOS, so this walks the symlink chain one hop at a time
+# instead (same pattern as bin/ocw-meter's own OCW_METER_SCRIPT_DIR —
+# see its comment for why `dirname` on an unresolved symlink is wrong
+# here).
+_persona_src="${BASH_SOURCE[0]}"
+while [ -L "$_persona_src" ]; do
+  _persona_link_dir="$(CDPATH='' cd -- "$(dirname "$_persona_src")" && pwd)"
+  _persona_src="$(readlink "$_persona_src")"
+  case "$_persona_src" in
+    /*) ;;
+    *) _persona_src="$_persona_link_dir/$_persona_src" ;;
+  esac
+done
+PERSONA_SCRIPT_DIR="$(CDPATH='' cd -- "$(dirname "$_persona_src")" && pwd)"
+unset _persona_src _persona_link_dir
+
+# shellcheck source=SCRIPTDIR/../shared/helpers.sh
+. "$PERSONA_SCRIPT_DIR/../shared/helpers.sh"
+
+usage() {
+  cat <<'USAGE'
+usage:
+  persona            $EDITOR で CLAUDE.machine.md を編集し、閉じたら Codex 向け
+                      の AGENTS.md を再生成する
+  persona --regen     編集せず、Codex 向けの AGENTS.md だけを再生成する
+  persona --help      このヘルプを表示する
+
+CLAUDE.machine.md はこのマシンでの人格のパーソナライズ（口調・一人称/二人称・
+キャラクター付けなど）を書く場所（Claude Code / OpenCode はここを編集した瞬間に
+反映される。Codex だけ再生成が要る — 上記参照）。
+USAGE
+}
+
+regen_codex() {
+  local codex_home generated
+  codex_home="$(skill_agent_home codex)"
+  if [ ! -d "$codex_home" ]; then
+    log_info "Codex is not installed on this machine ($codex_home does not exist) — skipping regeneration."
+    return 0
+  fi
+
+  resolve_deploy_src
+  generated="$(dotfiles_codex_agents_md_path)"
+  if generate_codex_agents_md "$DOTFILES_DEPLOY_SRC/claude/CLAUDE.md" "$MACHINE_MD" "$generated"; then
+    log_ok "Regenerated: $generated"
+  else
+    log_error "Failed to regenerate: $generated"
+    return 1
+  fi
+}
+
+MODE="edit"
+case "${1:-}" in
+  --regen) MODE="regen" ;;
+  --help | -h)
+    usage
+    exit 0
+    ;;
+  "") ;;
+  *)
+    echo "Unknown option: $1" >&2
+    usage >&2
+    exit 1
+    ;;
+esac
+
+MACHINE_MD="$(dotfiles_machine_md_path)"
+mkdir -p "$(dirname "$MACHINE_MD")"
+[ -f "$MACHINE_MD" ] || : >"$MACHINE_MD"
+
+if [ "$MODE" = "edit" ]; then
+  : "${EDITOR:?EDITOR environment variable is not set. Set it, e.g. export EDITOR=vim}"
+  # $EDITOR may itself carry arguments (e.g. `code --wait`, `emacsclient -t`),
+  # so it must go through shell word-splitting rather than being invoked as a
+  # single command name. $MACHINE_MD is passed as "$1" to stay quoted and
+  # avoid re-splitting/injection through the path.
+  sh -c "$EDITOR \"\$1\"" persona-editor "$MACHINE_MD"
+fi
+
+regen_codex

@@ -333,6 +333,33 @@ for _tool in $TOOLS; do
     done
   fi
   IFS="$_OLDIFS"
+
+  # --- codex: remove the generated, concatenated AGENTS.md fixed-path
+  # artifact (dotfiles_codex_agents_md_path(), shared/helpers.sh) when
+  # codex is in scope for this uninstall run. Unlike CLAUDE.machine.md /
+  # settings.machine.json (protected — see the distribution artifact
+  # cleanup section below), this file holds no human-edited content: it is
+  # entirely DERIVED (codex/deploy.sh, `persona --regen`), so it is a
+  # build artifact to remove, not machine data to preserve (design4, plan
+  # DOC-2609162320 / ADR DOC-2609162327 §6). Only removed when codex is
+  # actually in $TOOLS — an `--only claude` run must not reach into
+  # codex's territory. Guarded on -d so a machine that never regenerated
+  # it (e.g. codex was in scope but ~/.codex didn't exist, so
+  # codex/deploy.sh's early-return skipped generation entirely) doesn't
+  # print a misleading "Removed" for a directory that was never there.
+  if [ "$_tool" = "codex" ]; then
+    _codex_generated_dir="$(dirname "$(dotfiles_codex_agents_md_path)")"
+    if [ -d "$_codex_generated_dir" ]; then
+      if [ "${DRY_RUN:-0}" -eq 1 ]; then
+        printf '[DRY-RUN] rm -rf %s\n' "$_codex_generated_dir"
+      elif _dotfiles_safe_rmdir "$_codex_generated_dir" "$DOTFILES_PREFIX"; then
+        log_ok "Removed generated Codex AGENTS.md: $_codex_generated_dir"
+      else
+        log_error "Failed to remove generated Codex AGENTS.md directory: $_codex_generated_dir"
+        OVERALL_OK=1
+      fi
+    fi
+  fi
 done
 
 # ── Distribution artifact cleanup (generations/ + current) ─────────────
@@ -479,13 +506,14 @@ elif [ -L "$DOTFILES_CURRENT_LINK" ] || [ -d "$DOTFILES_GENERATIONS_DIR" ] || [ 
     fi
   fi
 
-  # settings.machine.json (the fixed-path entity — dotfiles_machine_json_path,
-  # shared/helpers.sh) lives directly under $DOTFILES_PREFIX, a sibling of
-  # generations/ and current, and is deliberately NOT removed by this script
-  # (it is the human's own machine settings, not a distribution artifact —
-  # see AGENTS.md's "claude の例外"). So once that file exists, rmdir below
-  # permanently no-ops (2>/dev/null swallows its "directory not empty"
-  # failure) — that is the intended behavior, not a bug.
+  # settings.machine.json and CLAUDE.machine.md (the fixed-path entities —
+  # dotfiles_machine_json_path / dotfiles_machine_md_path, shared/helpers.sh)
+  # live directly under $DOTFILES_PREFIX, a sibling of generations/ and
+  # current, and are deliberately NOT removed by this script (they are the
+  # human's own machine settings / personality personalization, not
+  # distribution artifacts — see AGENTS.md's "claude の例外"). So once either
+  # file exists, rmdir below permanently no-ops (2>/dev/null swallows its
+  # "directory not empty" failure) — that is the intended behavior, not a bug.
   if [ "${DRY_RUN:-0}" -eq 1 ]; then
     printf '[DRY-RUN] rmdir %s (only if empty)\n' "$DOTFILES_PREFIX"
   elif [ -d "$DOTFILES_PREFIX" ] && rmdir "$DOTFILES_PREFIX" 2>/dev/null; then

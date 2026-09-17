@@ -352,15 +352,20 @@ scenario_backup_symlink_idempotent_uninstall() {
   fi
 
   if has_tool codex; then
-    # codex/opencode は claude/CLAUDE.md を単一ソースとして symlink する
-    # （ADR DOC-2609072334）。ソースが claude/CLAUDE.md であって codex/ 配下
-    # の何かではないことを、symlink 先のパスで確認する。
-    assert_symlink "$sbx/.codex/AGENTS.md" "$prefix/current/claude/CLAUDE.md"
+    # 孫3（設計4・ADR DOC-2609162327 §6）: claude/CLAUDE.md への直接symlink
+    # ではなく、claude/CLAUDE.md + CLAUDE.machine.md を連結生成した実ファイル
+    # （世代を経由しない固定パス）を symlink する。symlink 先のパスで確認する。
+    assert_symlink "$sbx/.codex/AGENTS.md" "$prefix/codex/AGENTS.md"
     assert_exists "$sbx/.codex/AGENTS.md.backup"
     if [ "$(cat "$sbx/.codex/AGENTS.md.backup" 2>/dev/null)" = "dummy-codex-agents-md" ]; then
       pass "既存の ~/.codex/AGENTS.md が退避先に保存されている"
     else
       fail "既存の ~/.codex/AGENTS.md が退避先に保存されている"
+    fi
+    if grep -q '傘ブランチへの引き継ぎ判断' "$prefix/codex/AGENTS.md" 2>/dev/null; then
+      pass "生成物に claude/CLAUDE.md の内容が含まれている"
+    else
+      fail "生成物に claude/CLAUDE.md の内容が含まれている"
     fi
   fi
 
@@ -372,6 +377,10 @@ scenario_backup_symlink_idempotent_uninstall() {
     else
       fail "既存の ~/.config/opencode/AGENTS.md が退避先に保存されている"
     fi
+    # opencode.json（孫2・設計3、ADR DOC-2609162327 §5）。links_for_tool() の
+    # opencode arm への追加漏れがあると、このsymlinkが張られないまま
+    # 静かにスキップされる（AGENTS.md「実装時の注意」と同種の regression）。
+    assert_symlink "$sbx/.config/opencode/opencode.json" "$prefix/current/opencode/opencode.json"
   fi
 
   if has_tool skills; then
@@ -455,6 +464,10 @@ EOF
     else
       fail "uninstall で ~/.codex/AGENTS.md が元のファイルに復元された"
     fi
+    # 生成物（世代を経由しない固定パス）は build artifact なので、
+    # CLAUDE.machine.md/settings.machine.jsonとは違いuninstallの撤去対象
+    # （ADR DOC-2609162327 §6.4）。
+    assert_not_exists "$prefix/codex/AGENTS.md"
   fi
   if has_tool opencode; then
     if [ -f "$sbx/.config/opencode/AGENTS.md" ] && [ ! -L "$sbx/.config/opencode/AGENTS.md" ] && [ "$(cat "$sbx/.config/opencode/AGENTS.md")" = "dummy-opencode-agents-md" ]; then
@@ -462,6 +475,9 @@ EOF
     else
       fail "uninstall で ~/.config/opencode/AGENTS.md が元のファイルに復元された"
     fi
+    # opencode.json は元々ダミーファイルを置いていない新規symlinkなので、
+    # git-guard.sh と同じく「撤去されたこと」自体を確認する。
+    assert_not_exists "$sbx/.config/opencode/opencode.json"
   fi
   if has_tool skills; then
     if [ -n "$existing_skill" ]; then
@@ -1249,6 +1265,567 @@ scenario_claude_machine_json_fixed_path() {
   fi
 }
 
+# ── シナリオ10d: CLAUDE.machine.md の固定パス化（孫1・設計1）────────────
+# settings.machine.json（シナリオ10c）と同じ「世代を経由しない固定パス」
+# パターンだが、こちらには移行元（旧・ソースツリー相対パス）が無い
+# （計画書 DOC-2609162320 設計1）。回帰の核心は settings.machine.json と
+# 同じ: 固定パスに実体が無ければ空ファイルが作られる（--dry-run では
+# 作られない）ことと、CLAUDE.machine.md を持たないソースツリーから
+# deploy しても、固定パスの既存内容（人間の人格のパーソナライズ設定）が失われないこと。
+
+scenario_claude_machine_md_fixed_path() {
+  if ! has_tool claude; then
+    return
+  fi
+  log "=== シナリオ10d: CLAUDE.machine.md の固定パス化(孫1) ==="
+  local sbx prefix fixed_path out rc copy_dir
+
+  # --- (1) 初回deploy: 固定パスに何も無ければ空ファイルが作られる ---
+  new_sandbox
+  sbx="$SANDBOX_DIR"
+  prefix="$(dotfiles_prefix_for "$sbx")"
+  fixed_path="$prefix/CLAUDE.machine.md"
+
+  out="$(run_deploy "$sbx" --dry-run --only claude 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "CLAUDE.machine.md無し状態でのdeploy-all.sh --dry-run --only claudeが失敗 (exit=$rc)"
+    log "$out"
+  else
+    assert_not_exists "$fixed_path"
+  fi
+
+  out="$(run_deploy "$sbx" --force --only claude 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "CLAUDE.machine.md無し状態でのdeploy-all.sh --force --only claudeが失敗 (exit=$rc)"
+    log "$out"
+    return
+  fi
+  if [ "$(cat "$fixed_path" 2>/dev/null)" = "" ]; then
+    pass "固定パスにパーソナライズ設定が無ければ空ファイルが作られる"
+  else
+    fail "固定パスにパーソナライズ設定が無ければ空ファイルが作られる(内容: $(cat "$fixed_path" 2>/dev/null))"
+  fi
+  assert_symlink "$sbx/.claude/CLAUDE.machine.md" "$fixed_path"
+
+  # --- (2) CLAUDE.machine.md を持たないソースツリーから再deployしても、
+  #     固定パスの既存内容(人間が編集したと見立てた内容)は失われない。
+  #     案A(世代経由の状態ファイル方式)を却下した理由そのものの回帰。 ---
+  printf '脳筋後輩っぽく対応してください。\n' >"$fixed_path"
+
+  copy_dir="$(mktemp -d)"
+  CREATED_DIRS+=("$copy_dir")
+  copy_repo_snapshot "$copy_dir"
+  # このコピーは claude/CLAUDE.machine.md を持たない（そもそもこの
+  # ファイルはどのソースツリーにも存在し得ない — 固定パス専用の実体
+  # であって配布物ではないため。傘や孫のワークツリーを模している）。
+
+  wait_for_next_second
+  out="$(run_deploy_from "$copy_dir/deploy-all.sh" "$sbx" --force --only claude 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "CLAUDE.machine.mdを持たないソースツリーからのdeployが失敗 (exit=$rc)"
+    log "$out"
+  else
+    if grep -q "脳筋後輩" "$fixed_path" 2>/dev/null; then
+      pass "CLAUDE.machine.mdを持たないソースツリーからdeployしても固定パスの既存内容が失われない"
+    else
+      fail "CLAUDE.machine.mdを持たないソースツリーからdeployしても固定パスの既存内容が失われない"
+    fi
+  fi
+  assert_symlink "$sbx/.claude/CLAUDE.machine.md" "$fixed_path"
+
+  # --- (3) 固定パス(symlinkの向き先)への書き込みがdeployをまたいで残る
+  #     こと（編集即反映の裏付け。symlink経由の書き込みは固定パスへ
+  #     そのまま届くため、実際には(2)と同じ経路だが、$HOME側のsymlink
+  #     経由で書いたことを明示的に確認する）。 ---
+  printf 'マシンローカルに上書きした口調\n' >"$sbx/.claude/CLAUDE.machine.md"
+  if [ "$(cat "$fixed_path" 2>/dev/null)" = "マシンローカルに上書きした口調" ]; then
+    pass "\$HOME側のsymlink経由の書き込みが固定パスの実体へ届く"
+  else
+    fail "\$HOME側のsymlink経由の書き込みが固定パスの実体へ届く"
+  fi
+}
+
+# ── シナリオ10e: opencode.json の instructions 経由での CLAUDE.machine.md 反映
+#     （孫2・設計3、ADR DOC-2609162327 §5）─────────────────────────────────
+# 案1（opencode.json 自身のディレクトリからの相対パス）は成立せず、
+# `~/.claude/CLAUDE.machine.md`（$XDG_CONFIG_HOME に依存しないClaude Code側の
+# 固定パスsymlink）を直接指す案2を採った、という決着そのものの回帰を守る:
+# (1) claude も一緒にデプロイした場合、固定パスへの書き込みが
+#     ~/.claude/CLAUDE.machine.md 経由で即座に読める(編集即反映)こと。
+# (2) --only opencode のように claude を一度もデプロイしていない場合でも
+#     opencode 自体のdeployは失敗せず、単に~/.claude/CLAUDE.machine.mdが
+#     存在しないまま(グレースフルな劣化)になること。
+# (3) uninstall --only opencode は opencode 側のsymlinkだけを撤去し、
+#     固定パスの実体(CLAUDE.machine.md)には触れないこと。
+
+scenario_opencode_machine_md_instructions() {
+  if ! has_tool opencode; then
+    return
+  fi
+  log "=== シナリオ10e: opencode.jsonのinstructions経由でのCLAUDE.machine.md反映(孫2) ==="
+  local sbx prefix out rc fixed_path expected_jsonc
+
+  # --- (1) claude も対象に含めてデプロイ: 編集即反映の確認 ---
+  new_sandbox
+  sbx="$SANDBOX_DIR"
+  prefix="$(dotfiles_prefix_for "$sbx")"
+  fixed_path="$prefix/CLAUDE.machine.md"
+  mkdir -p "$sbx/.config/opencode"
+
+  if has_tool claude; then
+    out="$(run_deploy "$sbx" --dry-run --only opencode,claude 2>&1)"
+    rc=$?
+    if [ "$rc" -ne 0 ]; then
+      fail "opencode,claude の deploy-all.sh --dry-run が失敗 (exit=$rc)"
+      log "$out"
+    else
+      assert_not_exists "$sbx/.config/opencode/opencode.json"
+      assert_not_exists "$fixed_path"
+    fi
+
+    out="$(run_deploy "$sbx" --force --only opencode,claude 2>&1)"
+    rc=$?
+    if [ "$rc" -ne 0 ]; then
+      fail "opencode,claude の deploy-all.sh --force が失敗 (exit=$rc)"
+      log "$out"
+      return
+    fi
+    assert_symlink "$sbx/.config/opencode/opencode.json" "$prefix/current/opencode/opencode.json"
+    if grep -qF '.claude/CLAUDE.machine.md' "$sbx/.config/opencode/opencode.json" 2>/dev/null; then
+      pass "opencode.json の instructions が ~/.claude/CLAUDE.machine.md を指している"
+    else
+      fail "opencode.json の instructions が ~/.claude/CLAUDE.machine.md を指している"
+    fi
+
+    printf 'OpenCodeからも読めるべき人格のパーソナライズ\n' >"$fixed_path"
+    # OpenCode 自身の instructions 解決(~/ 展開 → glob) は再現せず、
+    # opencode.json が指す先を辿った実体が固定パスと一致することだけを
+    # 確認する(instruction.ts の glob ロジック自体はADRで読んだソースを
+    # 根拠とし、ここでは配布側の配線だけを検証する)。
+    if [ "$(cat "$sbx/.claude/CLAUDE.machine.md" 2>/dev/null)" = "OpenCodeからも読めるべき人格のパーソナライズ" ]; then
+      pass "固定パスへの書き込みが ~/.claude/CLAUDE.machine.md(opencode.jsonの参照先)経由で即座に読める"
+    else
+      fail "固定パスへの書き込みが ~/.claude/CLAUDE.machine.md(opencode.jsonの参照先)経由で即座に読める"
+    fi
+
+    # --- (3) uninstall --only opencode: opencode側のsymlinkだけ撤去され、
+    #     claudeのCLAUDE.machine.mdやその固定パス実体には触れない ---
+    out="$(run_uninstall "$sbx" --force --only opencode 2>&1)"
+    rc=$?
+    if [ "$rc" -ne 0 ]; then
+      fail "uninstall.sh --force --only opencode が失敗 (exit=$rc)"
+      log "$out"
+    else
+      pass "uninstall.sh --force --only opencode が成功"
+    fi
+    assert_not_exists "$sbx/.config/opencode/opencode.json"
+    assert_symlink "$sbx/.claude/CLAUDE.machine.md" "$fixed_path"
+    if [ "$(cat "$fixed_path" 2>/dev/null)" = "OpenCodeからも読めるべき人格のパーソナライズ" ]; then
+      pass "uninstall --only opencode の後も固定パスの実体(人格のパーソナライズ)が消えない"
+    else
+      fail "uninstall --only opencode の後も固定パスの実体(人格のパーソナライズ)が消えない"
+    fi
+  fi
+
+  # --- (2) claude を一度もデプロイしないマシンでの劣化確認 ---
+  new_sandbox
+  sbx="$SANDBOX_DIR"
+  prefix="$(dotfiles_prefix_for "$sbx")"
+  mkdir -p "$sbx/.config/opencode"
+
+  out="$(run_deploy "$sbx" --force --only opencode 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "claude抜きでの deploy-all.sh --force --only opencode が失敗 (exit=$rc)"
+    log "$out"
+    return
+  fi
+  pass "claudeを一度もデプロイしていなくても opencode 単体のdeployは成功する"
+  assert_symlink "$sbx/.config/opencode/opencode.json" "$prefix/current/opencode/opencode.json"
+  # claudeを一度もデプロイしていないので ~/.claude 自体が無く、
+  # opencode.json が参照する ~/.claude/CLAUDE.machine.md も存在しない
+  # (エラーにはならず「パーソナライズ指定なし」に自然劣化する — ADR
+  # DOC-2609162327 §5.2 のトレードオフそのものの回帰)。
+  assert_not_exists "$sbx/.claude/CLAUDE.machine.md"
+
+  out="$(run_uninstall "$sbx" --force --only opencode 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "claude抜きでの uninstall.sh --force --only opencode が失敗 (exit=$rc)"
+    log "$out"
+  else
+    pass "claude抜きでの uninstall.sh --force --only opencode が成功"
+  fi
+  assert_not_exists "$sbx/.config/opencode/opencode.json"
+
+  # --- (4) 3ファイル(opencode.jsonc/opencode.json/config.json)とも無いマシン:
+  #     OpenCode自身の設定UI書き込み(updateGlobal())が配布物のsymlinkへ
+  #     向かわないよう、symlinkを張る前にマシンローカルなopencode.jsoncを
+  #     実ファイルとして作る（レビュー指摘・ADR DOC-2609162327 §5.3.1。
+  #     初版はstate_files_for_tool()に乗せて『検知して--adopt-stateで
+  #     取り込む』設計にしたが、取り込み先がマシン固有設定・認証情報を
+  #     含みうる全マシン共有の配布物になるため撤回し、書き戻し自体を
+  #     防ぐ設計にした）---
+  new_sandbox
+  sbx="$SANDBOX_DIR"
+  mkdir -p "$sbx/.config/opencode"
+
+  out="$(run_deploy "$sbx" --dry-run --only opencode 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "3ファイルとも無い状態でのdeploy-all.sh --dry-run --only opencodeが失敗 (exit=$rc)"
+    log "$out"
+  else
+    assert_not_exists "$sbx/.config/opencode/opencode.jsonc"
+  fi
+
+  out="$(run_deploy "$sbx" --force --only opencode 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "3ファイルとも無い状態でのdeploy-all.sh --force --only opencodeが失敗 (exit=$rc)"
+    log "$out"
+    return
+  fi
+  if [ -f "$sbx/.config/opencode/opencode.jsonc" ] && [ ! -L "$sbx/.config/opencode/opencode.jsonc" ]; then
+    pass "opencode.jsoncが実ファイル(symlinkでない)として作られる"
+  else
+    fail "opencode.jsoncが実ファイル(symlinkでない)として作られる"
+  fi
+  # ヒアドキュメントの区切り文字を引用符で囲むことで $schema をシェル展開の
+  # 対象外にする(printf引数の単一引用符リテラルよりshellcheck SC2016を
+  # 誘発しない)。opencode/deploy.shが実際に書き込む中身と同じ構成。
+  expected_jsonc="$(
+    cat <<'JSONC_EOF'
+{"$schema": "https://opencode.ai/config.json"}
+JSONC_EOF
+  )"
+  if [ "$(cat "$sbx/.config/opencode/opencode.jsonc" 2>/dev/null)" = "$expected_jsonc" ]; then
+    pass "opencode.jsoncの中身がschemaのみ(instructionsを含まない)"
+  else
+    fail "opencode.jsoncの中身がschemaのみ(instructionsを含まない): $(cat "$sbx/.config/opencode/opencode.jsonc" 2>/dev/null)"
+  fi
+  # instructionsキーが無いため5.3.2の警告は出ない。「Created ... opencode.jsonc」
+  # という成功ログ自体もファイル名を含むため、grepは警告メッセージ特有の
+  # 文言で絞る(単なるファイル名一致だと上のCreatedログに誤ヒットする)。
+  if printf '%s' "$out" | grep -qF "declares its own"; then
+    fail "instructionsの無いopencode.jsoncでは警告が出ない(deployが作った直後のschema-onlyな状態)"
+  else
+    pass "instructionsの無いopencode.jsoncでは警告が出ない(deployが作った直後のschema-onlyな状態)"
+  fi
+
+  # opencode.jsoncがstate file扱いされていないこと(state_files_for_tool()に
+  # opencode armが無いこと)の回帰確認: 世代側のopencode.jsonを書き換えて
+  # 再deployしても、状態ファイル書き戻しとして検知されない(検知されるなら
+  # 「Plugin/state lockfile changed since last deploy」で停止するはず)。
+  # このサンドボックスにはTTYが無いため、--forceを付けない限り
+  # deploy-all.shは(検知の有無によらず)最終的に「stdin is not a
+  # terminal」で失敗する(exit=1は両ケースで共通なので判定に使えない)。
+  # シナリオ27(nvim/lazy-lock.json)と同じ書き換え方。
+  wait_for_next_second
+  printf '{"tampered": true}\n' >"$(current_target_for "$sbx")/opencode/opencode.json"
+  out="$(run_deploy "$sbx" --only opencode </dev/null 2>&1)"
+  if printf '%s' "$out" | grep -qF "Plugin/state lockfile changed"; then
+    fail "opencode.jsonの世代側改変は状態ファイル書き戻しとして検知されない(state_files_for_tool()にopencode armが無い)"
+    log "$out"
+  else
+    pass "opencode.jsonの世代側改変は状態ファイル書き戻しとして検知されない(state_files_for_tool()にopencode armが無い)"
+  fi
+
+  # --- (4') 既存の実ファイルopencode.jsonだけがある(opencode.jsoncは無い)
+  #     状態でのdeploy: それでもopencode.jsoncが実ファイルとして作られる
+  #     こと（レビュー再指摘。ADR DOC-2609162327 §5.3.1第2版の回帰確認。
+  #     「3ファイルとも無い場合だけ作る」という条件では、既存の
+  #     opencode.jsonがsymlink_backupで退避された後に候補がsymlinkだけに
+  #     なり、この確認が取りこぼされていた）---
+  new_sandbox
+  sbx="$SANDBOX_DIR"
+  mkdir -p "$sbx/.config/opencode"
+  printf '{"provider": {"custom": {"baseURL": "https://example.com"}}}\n' >"$sbx/.config/opencode/opencode.json"
+
+  out="$(run_deploy "$sbx" --force --only opencode 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "既存の実ファイルopencode.jsonだけがある状態でのdeployが失敗 (exit=$rc)"
+    log "$out"
+  else
+    if [ -f "$sbx/.config/opencode/opencode.jsonc" ] && [ ! -L "$sbx/.config/opencode/opencode.jsonc" ]; then
+      pass "既存の実ファイルopencode.jsonだけがある状態でもopencode.jsoncが実ファイルとして作られる"
+    else
+      fail "既存の実ファイルopencode.jsonだけがある状態でもopencode.jsoncが実ファイルとして作られる"
+    fi
+    # opencode.json(既存の実ファイル)自体はsymlink_backupで退避されて
+    # symlinkに置き換わる(既存の挙動どおり)。
+    assert_symlink "$sbx/.config/opencode/opencode.json" "$(dotfiles_prefix_for "$sbx")/current/opencode/opencode.json"
+    assert_exists "$sbx/.config/opencode/opencode.json.backup"
+  fi
+
+  # --- (5) 既存opencode.jsonc(instructionsなし)がある場合: 上書きされず、
+  #     警告も出ない ---
+  new_sandbox
+  sbx="$SANDBOX_DIR"
+  mkdir -p "$sbx/.config/opencode"
+  printf '{"provider": {"custom": {"baseURL": "https://example.com"}}}\n' >"$sbx/.config/opencode/opencode.jsonc"
+
+  out="$(run_deploy "$sbx" --force --only opencode 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "instructionsの無い既存opencode.jsoncがある状態でのdeployが失敗 (exit=$rc)"
+    log "$out"
+  else
+    if [ "$(cat "$sbx/.config/opencode/opencode.jsonc" 2>/dev/null)" = '{"provider": {"custom": {"baseURL": "https://example.com"}}}' ]; then
+      pass "instructionsの無い既存opencode.jsoncはdeployで上書きされない"
+    else
+      fail "instructionsの無い既存opencode.jsoncはdeployで上書きされない"
+    fi
+    if printf '%s' "$out" | grep -qF "opencode.jsonc"; then
+      fail "instructionsの無い既存opencode.jsoncでは警告が出ない"
+    else
+      pass "instructionsの無い既存opencode.jsoncでは警告が出ない"
+    fi
+  fi
+
+  # --- (6) 既存opencode.jsonc(instructionsあり)が併存する場合: 上書きされず、
+  #     instructionsがjsonc側で黙って上書きされる旨の警告が出る
+  #     （レビュー指摘・ADR DOC-2609162327 §5.3.2）---
+  new_sandbox
+  sbx="$SANDBOX_DIR"
+  mkdir -p "$sbx/.config/opencode"
+  printf '{"instructions": ["独自のルール.md"]}\n' >"$sbx/.config/opencode/opencode.jsonc"
+
+  out="$(run_deploy "$sbx" --force --only opencode 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "opencode.jsonc併存下でのdeploy-all.sh --force --only opencodeが失敗 (exit=$rc)"
+    log "$out"
+  else
+    if printf '%s' "$out" | grep -qF "opencode.jsonc"; then
+      pass "instructionsのあるopencode.jsonc併存時にdeployが警告を出す"
+    else
+      fail "instructionsのあるopencode.jsonc併存時にdeployが警告を出す"
+    fi
+  fi
+  # jsonc自体は既存の実ファイルなのでsymlink_backupの対象ではない
+  # (opencode.jsonという別名にだけ配る)。deployで書き換わっていないことも
+  # 確認する。
+  if [ "$(cat "$sbx/.config/opencode/opencode.jsonc" 2>/dev/null)" = '{"instructions": ["独自のルール.md"]}' ]; then
+    pass "instructionsのあるopencode.jsonc自体はdeployで書き換わらない"
+  else
+    fail "instructionsのあるopencode.jsonc自体はdeployで書き換わらない"
+  fi
+}
+
+# ── シナリオ10f: Codex 向け連結生成物の固定パス化（孫3・設計4、ADR
+#     DOC-2609162327 §6）─────────────────────────────────────────────────
+# Codex には @include 相当の追加読み込み手段が無い（AGENTS.override.md は
+# 存在しても置き換えであって追加読み込みではないことを確認済み — ADR §6.1）
+# ため、claude/CLAUDE.md + CLAUDE.machine.md を連結生成した実ファイルを
+# 世代を経由しない固定パスに置く、という決着そのものの回帰を守る:
+# (1) 生成物が claude/CLAUDE.md の内容と CLAUDE.machine.md の内容を両方含み、
+#     CLAUDE.machine.md を書き換えて再deployすると反映されること。
+# (2) 生成物が世代ディレクトリ・current 配下ではなく、prefix 直下の固定
+#     パスに置かれること（dev モードでソースツリーを汚さないための核心）。
+# (3) --dry-run では生成物が作られないこと。
+# (4) CLAUDE.machine.md が空/存在しなくても生成が壊れないこと。
+# (5) uninstall で生成物は撤去されるが、CLAUDE.machine.md の実体は消えないこと。
+
+scenario_codex_generated_agents_md() {
+  if ! has_tool codex; then
+    return
+  fi
+  log "=== シナリオ10f: Codex向け連結生成物の固定パス化(孫3) ==="
+  local sbx prefix out rc generated fixed_machine_md
+
+  new_sandbox
+  sbx="$SANDBOX_DIR"
+  prefix="$(dotfiles_prefix_for "$sbx")"
+  generated="$prefix/codex/AGENTS.md"
+  fixed_machine_md="$prefix/CLAUDE.machine.md"
+  mkdir -p "$sbx/.codex"
+
+  # --- (3) --dry-run では生成しない ---
+  out="$(run_deploy "$sbx" --dry-run --only codex 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "codex単体のdeploy-all.sh --dry-runが失敗 (exit=$rc)"
+    log "$out"
+  else
+    assert_not_exists "$generated"
+  fi
+
+  # --- (4) CLAUDE.machine.md が存在しない状態でも生成が壊れない ---
+  out="$(run_deploy "$sbx" --force --only codex 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "CLAUDE.machine.md無し状態でのdeploy-all.sh --force --only codexが失敗 (exit=$rc)"
+    log "$out"
+    return
+  fi
+  assert_exists "$generated"
+  if grep -q '傘ブランチへの引き継ぎ判断' "$generated" 2>/dev/null; then
+    pass "CLAUDE.machine.md無しでも生成物にclaude/CLAUDE.mdの内容が含まれる"
+  else
+    fail "CLAUDE.machine.md無しでも生成物にclaude/CLAUDE.mdの内容が含まれる"
+  fi
+  assert_symlink "$sbx/.codex/AGENTS.md" "$generated"
+
+  # --- (2) 生成物が世代/currentの外、prefix直下の固定パスにあること ---
+  case "$generated" in
+    "$prefix/generations/"* | "$prefix/current/"*)
+      fail "生成物が世代/current配下ではなく固定パスに置かれている (実際: $generated)"
+      ;;
+    "$prefix/"*)
+      pass "生成物が世代/current配下ではなく固定パスに置かれている"
+      ;;
+    *)
+      fail "生成物が世代/current配下ではなく固定パスに置かれている (実際: $generated)"
+      ;;
+  esac
+
+  # --- (1) CLAUDE.machine.md を書き換えて再deployすると反映される ---
+  printf '脳筋後輩っぽく対応してください。\n' >"$fixed_machine_md"
+  wait_for_next_second
+  out="$(run_deploy "$sbx" --force --only codex 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "CLAUDE.machine.md書き換え後のdeploy-all.sh --force --only codexが失敗 (exit=$rc)"
+    log "$out"
+  else
+    if grep -q '脳筋後輩っぽく対応してください' "$generated" 2>/dev/null; then
+      pass "CLAUDE.machine.mdの書き換えが再deployで生成物へ反映される"
+    else
+      fail "CLAUDE.machine.mdの書き換えが再deployで生成物へ反映される"
+    fi
+    if grep -q '傘ブランチへの引き継ぎ判断' "$generated" 2>/dev/null; then
+      pass "再生成後も生成物にclaude/CLAUDE.mdの内容が含まれる"
+    else
+      fail "再生成後も生成物にclaude/CLAUDE.mdの内容が含まれる"
+    fi
+  fi
+
+  # --- (5) uninstall: 生成物は撤去されるが、CLAUDE.machine.mdの実体は残る ---
+  out="$(run_uninstall "$sbx" --force --only codex 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "uninstall.sh --force --only codexが失敗 (exit=$rc)"
+    log "$out"
+    return
+  fi
+  assert_not_exists "$sbx/.codex/AGENTS.md"
+  assert_not_exists "$generated"
+  if [ "$(cat "$fixed_machine_md" 2>/dev/null)" = "脳筋後輩っぽく対応してください。" ]; then
+    pass "uninstall --only codex の後もCLAUDE.machine.mdの実体は消えない"
+  else
+    fail "uninstall --only codex の後もCLAUDE.machine.mdの実体は消えない"
+  fi
+}
+
+# ── シナリオ10g: persona CLI（bin/persona。孫3・設計4の未解決論点3）────────
+# 連結生成ロジック自体（generate_codex_agents_md）の回帰はシナリオ10fが
+# codex/deploy.sh 経由で守っている。ここで確認するのは persona 固有の配線:
+# (1) --regen は $EDITOR を起動しない。
+# (2) デフォルト（引数無し）は $EDITOR を起動してCLAUDE.machine.mdを編集させ、
+#     閉じたら自動でCodex向け生成物を再生成する。
+# (3) Codexがこのマシンに未導入なら、再生成をスキップして正常終了する
+#     （codex/deploy.sh と同じ判断基準）。
+
+scenario_persona_cli() {
+  if ! has_tool bin || ! has_tool codex; then
+    return
+  fi
+  log "=== シナリオ10g: persona CLI(bin/persona) ==="
+  local sbx prefix out rc generated editor_marker editor_script
+
+  new_sandbox
+  sbx="$SANDBOX_DIR"
+  prefix="$(dotfiles_prefix_for "$sbx")"
+  generated="$prefix/codex/AGENTS.md"
+  mkdir -p "$sbx/.codex"
+
+  # persona は resolve_deploy_src 経由で current を要求するため、先に
+  # 通常のdeployを1回通しておく（codex単体で十分）。
+  out="$(run_deploy "$sbx" --force --only codex 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "persona検証の前提となるdeploy-all.sh --force --only codexが失敗 (exit=$rc)"
+    log "$out"
+    return
+  fi
+
+  editor_marker="$sbx/editor-invoked"
+  editor_script="$sbx/fake-editor.sh"
+  cat >"$editor_script" <<'EOF'
+#!/bin/sh
+# 呼び出し元が $EDITOR="fake-editor.sh --flag" のように引数付きで渡す
+# ケース（例: 実際の `code --wait`）も想定し、末尾の引数だけを編集対象パスとして扱う。
+while [ "$#" -gt 1 ]; do
+  shift
+done
+touch "$EDITOR_MARKER"
+printf '偽エディタで書いた人格のパーソナライズ\n' >"$1"
+EOF
+  chmod +x "$editor_script"
+
+  # --- (1) --regen は $EDITOR を起動しない ---
+  rm -f "$editor_marker"
+  sandbox_env "$sbx"
+  out="$(env "${SANDBOX_ENV[@]}" EDITOR="$editor_script" EDITOR_MARKER="$editor_marker" "$REPO_ROOT/bin/persona" --regen 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "persona --regen が失敗 (exit=$rc)"
+    log "$out"
+  else
+    pass "persona --regen が成功"
+  fi
+  assert_not_exists "$editor_marker"
+  assert_exists "$generated"
+
+  # --- (2) デフォルト（引数無し）は $EDITOR を起動し、閉じたら再生成する ---
+  # $EDITOR に引数付き（`code --wait` 等を模した `fake-editor.sh --flag`）を
+  # 設定しても起動できることも同時に確認する。
+  rm -f "$editor_marker"
+  sandbox_env "$sbx"
+  out="$(env "${SANDBOX_ENV[@]}" EDITOR="$editor_script --flag" EDITOR_MARKER="$editor_marker" "$REPO_ROOT/bin/persona" 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "persona(デフォルト)が失敗 (exit=$rc)"
+    log "$out"
+  else
+    pass "persona(デフォルト)が成功"
+  fi
+  assert_exists "$editor_marker"
+  if [ "$(cat "$prefix/CLAUDE.machine.md" 2>/dev/null)" = "偽エディタで書いた人格のパーソナライズ" ]; then
+    pass "persona(デフォルト)が\$EDITORでCLAUDE.machine.mdを編集させた"
+  else
+    fail "persona(デフォルト)が\$EDITORでCLAUDE.machine.mdを編集させた"
+  fi
+  if grep -q '偽エディタで書いた人格のパーソナライズ' "$generated" 2>/dev/null; then
+    pass "persona(デフォルト)が編集後に自動でCodex向け生成物を再生成した"
+  else
+    fail "persona(デフォルト)が編集後に自動でCodex向け生成物を再生成した"
+  fi
+
+  # --- (3) Codex未導入マシンでは再生成をスキップし、正常終了する ---
+  rm -rf "$sbx/.codex"
+  rm -f "$editor_marker"
+  sandbox_env "$sbx"
+  out="$(env "${SANDBOX_ENV[@]}" EDITOR="$editor_script" EDITOR_MARKER="$editor_marker" "$REPO_ROOT/bin/persona" --regen 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "Codex未導入マシンでのpersona --regenが失敗 (exit=$rc)"
+    log "$out"
+  else
+    pass "Codex未導入マシンでのpersona --regenは正常終了する"
+  fi
+  if printf '%s' "$out" | grep -q "skipping regeneration"; then
+    pass "Codex未導入マシンでは再生成をスキップする旨が報告される"
+  else
+    fail "Codex未導入マシンでは再生成をスキップする旨が報告される"
+  fi
+}
+
 # ── シナリオ11: 旧方式(直リンク)skill symlinkの移行 + stale掃除 ──────────
 
 scenario_skill_migration() {
@@ -1405,7 +1982,7 @@ scenario_agent_instructions_not_installed_skip() {
     return
   fi
 
-  assert_symlink "$sbx/.codex/AGENTS.md" "$prefix/current/claude/CLAUDE.md"
+  assert_symlink "$sbx/.codex/AGENTS.md" "$prefix/codex/AGENTS.md"
   # ホームが無いエージェントには何も作らない。opencode ディレクトリごと
   # 生えていないことまで確認する（親を勝手に掘っていない証拠）。
   assert_not_exists "$sbx/.config/opencode"
@@ -1443,6 +2020,7 @@ scenario_agent_instructions_not_installed_skip() {
     return
   fi
   assert_not_exists "$sbx/.codex/AGENTS.md"
+  assert_not_exists "$prefix/codex/AGENTS.md"
 }
 
 # ── シナリオ12: デプロイ済み状態でのdry-runが作業ツリーへのリンクを提案しない ──
@@ -1621,6 +2199,11 @@ scenario_distribution_artifact_cleanup() {
   if [ "$with_claude" -eq 1 ]; then
     assert_exists "$prefix/settings.machine.json"
     assert_symlink "$sbx/.claude/settings.machine.json" "$prefix/settings.machine.json"
+    # CLAUDE.machine.md（固定パスの実体。dotfiles_machine_md_path、
+    # shared/helpers.sh）も settings.machine.json と同じ保護を受けること
+    # （孫1、計画書 DOC-2609162320 設計1）。
+    assert_exists "$prefix/CLAUDE.machine.md"
+    assert_symlink "$sbx/.claude/CLAUDE.machine.md" "$prefix/CLAUDE.machine.md"
   fi
 
   out="$(run_uninstall "$sbx" --force --only "$deploy_tools" 2>&1)"
@@ -1644,6 +2227,10 @@ scenario_distribution_artifact_cleanup() {
     assert_not_exists "$sbx/.claude/settings.machine.json"
     assert_exists "$prefix"
     assert_exists "$prefix/settings.machine.json"
+    # CLAUDE.machine.md も同じ理由（人間のマシン設定であり配布物ではない）
+    # で symlink だけが撤去され実体は残る。
+    assert_not_exists "$sbx/.claude/CLAUDE.machine.md"
+    assert_exists "$prefix/CLAUDE.machine.md"
   else
     # generations/ と current だけでなく、prefix自体(.tmp/を含む)も片付く
     # ことを確認する。create_generation はビルド用scratchを
@@ -2106,6 +2693,11 @@ scenario_cleanup_removes_orphaned_scratch_without_generation() {
   # 回帰検知。設計6、計画書 DOC-2609121700）。
   printf '{"dummy-machine-setting":true}\n' >"$prefix/settings.machine.json"
 
+  # CLAUDE.machine.md（固定パスの実体。dotfiles_machine_md_path）も同じ
+  # 理由（世代/currentのライフサイクルと無関係にprefix直下へ置かれる
+  # マシン設定）で生き残るべきことを確認する。
+  printf 'クラッシュ後も生き残るべき口調設定\n' >"$prefix/CLAUDE.machine.md"
+
   out="$(run_uninstall "$sbx" --force 2>&1)"
   rc=$?
   if [ "$rc" -ne 0 ]; then
@@ -2121,6 +2713,12 @@ scenario_cleanup_removes_orphaned_scratch_without_generation() {
     pass "settings.machine.json の内容が uninstall で書き換わっていない"
   else
     fail "settings.machine.json の内容が uninstall で書き換わっていない"
+  fi
+  assert_exists "$prefix/CLAUDE.machine.md"
+  if [ "$(cat "$prefix/CLAUDE.machine.md" 2>/dev/null)" = "クラッシュ後も生き残るべき口調設定" ]; then
+    pass "CLAUDE.machine.md の内容が uninstall で書き換わっていない"
+  else
+    fail "CLAUDE.machine.md の内容が uninstall で書き換わっていない"
   fi
 }
 
@@ -2182,6 +2780,23 @@ scenario_status() {
       pass "--status がmachine.jsonの固定パスと存在を報告する"
     else
       fail "--status がmachine.jsonの固定パスと存在を報告する"
+    fi
+    if printf '%s' "$out" | grep -qF "Machine personalization (CLAUDE.machine.md): $prefix/CLAUDE.machine.md (exists)"; then
+      pass "--status がCLAUDE.machine.mdの固定パスと存在を報告する"
+    else
+      fail "--status がCLAUDE.machine.mdの固定パスと存在を報告する"
+    fi
+  fi
+
+  if has_tool codex; then
+    # このシナリオのサンドボックスは $sbx/.codex を作っていないため、codex/
+    # deploy.sh は早期returnし生成物は作られていない（"not created yet"側の
+    # 文言になる）。孫3・ADR DOC-2609162327 §6.4 の --status 追随そのものの
+    # 回帰（生成物ありのケースはシナリオ10fで確認済み）。
+    if printf '%s' "$out" | grep -qF "Codex generated AGENTS.md: $prefix/codex/AGENTS.md (not created yet"; then
+      pass "--status がCodex生成物の固定パスと状態を報告する"
+    else
+      fail "--status がCodex生成物の固定パスと状態を報告する"
     fi
   fi
 
@@ -2315,7 +2930,7 @@ scenario_rollback() {
     return
   fi
   log "=== シナリオ24: --rollback ==="
-  local sbx copy_dir prefix out rc gen1_content gen2_content gen1_target gen2_target gen1_name gen2_name marker skill_name
+  local sbx copy_dir prefix out rc gen1_content gen2_content gen1_target gen2_target gen1_name gen2_name marker skill_name codex_marker gen2_codex_content
 
   new_sandbox
   sbx="$SANDBOX_DIR"
@@ -2323,6 +2938,10 @@ scenario_rollback() {
   CREATED_DIRS+=("$copy_dir")
   copy_repo_snapshot "$copy_dir"
   prefix="$(dotfiles_prefix_for "$sbx")"
+
+  if has_tool codex; then
+    mkdir -p "$sbx/.codex"
+  fi
 
   # $TOOLS を deploy する（既定は bin,claude）。claude が対象に含まれるときは
   # 2回目のdeployでskillを1つ追加し、rollbackで巻き戻ったあとにそのskillの
@@ -2340,6 +2959,16 @@ scenario_rollback() {
 
   marker="# smoke-test rollback marker $$"
   printf '%s\n' "$marker" >>"$copy_dir/bin/ocw"
+
+  if has_tool codex; then
+    # レビュー指摘（PR #100）: ~/.codex/AGENTS.md は世代を経由しない固定パスの
+    # 生成物を指すため、--rollback は current を切り替えるだけでは追随しない
+    # （ADR DOC-2609162327 §6.2 の既知のトレードオフ）。gen2側でclaude/CLAUDE.md
+    # にマーカーを追記し、gen1へrollbackしても生成物がgen2のマーカーを持った
+    # ままであること（＝更新されないこと）を後段で確認する。
+    codex_marker="# smoke-test codex marker $$"
+    printf '%s\n' "$codex_marker" >>"$copy_dir/claude/CLAUDE.md"
+  fi
 
   if has_tool skills; then
     skill_name="added-later"
@@ -2363,6 +2992,15 @@ scenario_rollback() {
     assert_symlink "$sbx/.claude/skills/$skill_name" "$prefix/current/skills/$skill_name"
   fi
 
+  if has_tool codex; then
+    gen2_codex_content="$(cat "$prefix/codex/AGENTS.md" 2>/dev/null)"
+    if printf '%s' "$gen2_codex_content" | grep -qF "$codex_marker"; then
+      pass "2回目のdeployでCodex向け生成物にもソースツリーの編集内容が反映されている（rollback検証の前提）"
+    else
+      fail "2回目のdeployでCodex向け生成物にもソースツリーの編集内容が反映されている（rollback検証の前提）"
+    fi
+  fi
+
   if printf '%s' "$gen2_content" | grep -qF "$marker"; then
     pass "2回目のdeployでソースツリーの編集内容が反映されている（rollback検証の前提）"
   else
@@ -2384,6 +3022,22 @@ scenario_rollback() {
     pass "--rollback <世代ID>で指定した世代へ切り替わる"
   else
     fail "--rollback <世代ID>で指定した世代へ切り替わる"
+  fi
+
+  if has_tool codex; then
+    # レビュー指摘（PR #100）の回帰テスト: rollbackはcurrentを切り替えるだけなので、
+    # 世代の外にある固定パスのCodex生成物は追随せず、gen2の内容(codex_marker)を
+    # 持ったままになる（ADR DOC-2609162327 §6.2 の既知のトレードオフ）。
+    if [ "$(cat "$prefix/codex/AGENTS.md" 2>/dev/null)" = "$gen2_codex_content" ]; then
+      pass "--rollback してもCodex向け生成物は追随しない（既知のトレードオフの回帰）"
+    else
+      fail "--rollback してもCodex向け生成物は追随しない（既知のトレードオフの回帰）"
+    fi
+    if printf '%s' "$out" | grep -qF "AGENTS.md is a symlink, but to a generated file"; then
+      pass "--rollback がCodex生成物は追随しない旨を案内する"
+    else
+      fail "--rollback がCodex生成物は追随しない旨を案内する"
+    fi
   fi
 
   out="$(run_deploy_from "$copy_dir/deploy-all.sh" "$sbx" --rollback "$gen2_name" 2>&1)"
@@ -2919,6 +3573,14 @@ log
 scenario_claude_allow_preservation
 log
 scenario_claude_machine_json_fixed_path
+log
+scenario_claude_machine_md_fixed_path
+log
+scenario_opencode_machine_md_instructions
+log
+scenario_codex_generated_agents_md
+log
+scenario_persona_cli
 log
 scenario_skill_migration
 log
