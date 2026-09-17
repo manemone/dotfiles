@@ -32,21 +32,45 @@ DFDOWN = REPO_ROOT / "bin" / "dfdown"
 
 # 引数を1行1つで ARGS_LOG へ追記するだけのスタブ。--version だけは本物の
 # rsync と同じ1行目を返す（dfxfer-lib.sh がメジャー番号を読むため）。--stats が
-# 引数にあれば、実物の `rsync --stats` が出す "Number of regular files
-# transferred: N" 相当の1行を標準出力へ返す（dfdown がこの行を見て「今回の
-# 転送で何か来たか」を判定するため）。件数は環境変数 RSYNC_STUB_TRANSFERRED
-# で差し込む（既定 0 = 何も転送しなかった体）。
+# 引数にあれば、実物の `rsync --stats` が出す転送件数の1行を標準出力へ返す
+# （dfdown がこの行を見て「今回の転送で何か来たか」を判定するため）。件数は
+# 環境変数 RSYNC_STUB_TRANSFERRED で差し込む（既定 0 = 何も転送しなかった体）。
+#
+# 件数行の文言は**名乗ったバージョンに合わせて変える**（%%(label)s に
+# _stats_label() が差し込む）。rsync 3.1.0 でこの行は "Number of regular files
+# transferred:" へ書き換えられており、2.6.9 / 3.0.x は "Number of files
+# transferred:" を出す。スタブが常に新しい文言を返していると、古い rsync を
+# 名乗らせたテストが「実物には出せない出力」を前提に緑になってしまう。
 RSYNC_STUB = """#!/bin/sh
 if [ "$1" = "--version" ]; then
-  printf 'rsync  version %s  protocol version 31\\n'
+  printf 'rsync  version %(version)s  protocol version 31\\n'
   exit 0
 fi
 for a in "$@"; do printf '%%s\\n' "$a"; done >>"$ARGS_LOG"
 case " $* " in
   *" --stats "*)
-    printf 'Number of regular files transferred: %%s\\n' "${RSYNC_STUB_TRANSFERRED:-0}"
+    printf '%(label)s %%s\\n' "${RSYNC_STUB_TRANSFERRED:-0}"
     ;;
 esac
+"""
+
+# 新しめの macOS が rsync の代わりに同梱する openrsync の模造。プロトコル
+# バージョンしか名乗らない（= dfxfer_rsync_major() が空を返す）ことと、
+# 知らないオプションを渡されたら転送せずエラー終了することの2点だけを再現する。
+OPENRSYNC_STUB = """#!/bin/sh
+if [ "$1" = "--version" ]; then
+  printf 'openrsync: protocol version 29\\n'
+  exit 0
+fi
+for a in "$@"; do
+  case "$a" in
+    --stats)
+      printf 'openrsync: unknown option --stats\\n' >&2
+      exit 1
+      ;;
+  esac
+done
+for a in "$@"; do printf '%s\\n' "$a"; done >>"$ARGS_LOG"
 """
 
 # macOS 判定は shared/helpers.sh の `uname -s` を通る。PATH の先頭に置いた
@@ -78,9 +102,22 @@ class DfxferTestBase(unittest.TestCase):
         path.chmod(0o755)
         return path
 
+    @staticmethod
+    def _stats_label(version):
+        """そのバージョンの実物が --stats で出す件数行の文言を返す。
+        rsync 3.1.0 での書き換え（NEWS for rsync 3.1.0, OUTPUT CHANGES）が境界。"""
+        try:
+            major, minor = (int(part) for part in version.split(".")[:2])
+        except ValueError:
+            return "Number of files transferred:"
+        if (major, minor) >= (3, 1):
+            return "Number of regular files transferred:"
+        return "Number of files transferred:"
+
     def _rsync_stub(self, version="3.2.7"):
         return self._write_exec(
-            self.tmp / f"rsync-{version}", RSYNC_STUB % version
+            self.tmp / f"rsync-{version}",
+            RSYNC_STUB % {"version": version, "label": self._stats_label(version)},
         )
 
     def _seed_file(self, host, leaf="out", name="memo.txt"):
@@ -377,8 +414,9 @@ class DfdownInvocationTest(DfxferTestBase):
         self.assertNotIn("Nothing came down", proc.stdout)
 
     def test_thousands_separator_in_transfer_count_does_not_crash(self):
-        """regression: DFXFER_OPTS の -h (human-readable) により、rsync --stats は
-        1000件以上の転送を "1,200" のようにカンマ区切りで出す。素朴に
+        """regression: rsync は 3.1.0 以降、--stats の件数を既定で "1,200" のように
+        3桁区切りで出す（-h の有無とは無関係。NEWS for rsync 3.1.0 の
+        "Output numbers in 3-digit groups by default"）。素朴に
         `grep -oE '[0-9]+'` で数字だけ拾うと "1" と "200" の2行にマッチし、
         後続の `-eq 0` 比較が「integer expression expected」で失敗する
         （転送自体は成功しているのに、利用者はこのエラーを見て不安になる）。"""
@@ -390,6 +428,50 @@ class DfdownInvocationTest(DfxferTestBase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(proc.stderr, "")
         self.assertNotIn("Nothing came down", proc.stdout)
+
+    def test_transfer_count_is_read_from_pre_3_1_stats_wording(self):
+        """regression: 件数行の文言を rsync 3.1.0 以降のもの（"Number of regular
+        files transferred:"）だけで拾っていたため、2.6.9 / 3.0.x — README が
+        「ASCII のファイル名しか扱わないならそのままで実害はありません」と明記して
+        許容している構成 — では**何件落ちてきても毎回**「Nothing came down」に
+        なっていた。利用者は Troubleshooting の「リモートが空だったか差分が
+        無かったか」を読み、実際には in/ に落ちている成果物を探しに行かない。
+
+        既存テストで捕まらなかったのは、スタブが名乗ったバージョンに関係なく
+        常に新しい文言を返していたため（実物の 2.6.9 が出せない出力を前提に
+        緑になっていた）。"""
+        proc = self._run(
+            DFDOWN,
+            env={"DFXFER_HOSTS": "toybox", "RSYNC_STUB_TRANSFERRED": "3"},
+            rsync_version="2.6.9",
+        )
+
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertNotIn("Nothing came down", proc.stdout)
+
+    def test_openrsync_is_not_handed_stats_and_still_transfers(self):
+        """regression: --stats を無条件に渡していたため、それを知らない
+        openrsync（新しめの macOS が rsync の代わりに同梱する）では転送に入る前に
+        エラー終了し、`set -e` で dfdown が丸ごと落ちていた。件数が読めないことは
+        サマリー1行の問題でしかないのに、コマンド自体が使えなくなる。
+
+        件数が読めない側では「Nothing came down」と断定せず、受信先を案内する。"""
+        stub = self._write_exec(self.tmp / "openrsync", OPENRSYNC_STUB)
+        proc = self._run(
+            DFDOWN,
+            env={"DFXFER_HOSTS": "toybox", "DFXFER_RSYNC": str(stub)},
+        )
+        args = self._logged_args()
+
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertNotIn("--stats", args)
+        # 転送そのものは通常どおり組み立てられていること。
+        self.assertEqual(
+            args[-2:],
+            ["toybox:uploads/", f"{self.base_dir}/toybox/in/"],
+        )
+        self.assertNotIn("Nothing came down", proc.stdout)
+        self.assertIn(str(self.base_dir / "toybox" / "in"), proc.stdout)
 
     def test_extra_arguments_pass_through_to_rsync(self):
         proc = self._run(DFDOWN, "-n", env={"DFXFER_HOSTS": "toybox"})

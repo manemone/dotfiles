@@ -152,7 +152,7 @@ source ~/.zshrc
 ```
 
 One concrete user of this file is the `dfup` / `dfdown` pair (see
-[bin/README.md](../bin/README.md) §3.4 / §3.5), which copy files between this machine and
+[bin/README.md](../bin/README.md) §3.5 / §3.6), which copy files between this machine and
 a shared server. Their destination differs per machine, which is exactly what
 `~/.zshrc.local` is for:
 
