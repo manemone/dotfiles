@@ -14,6 +14,9 @@ ssh も実転送も伴わない。`DFXFER_RSYNC` に「引数を記録するだ�
 - dfdown の「Nothing came down」判定が受信先ディレクトリの現在の中身を見ていると、
   一度でも何か落ちてきた後は永遠に正しく判定できなくなる。しかも壊れ方が静かで、
   次に本当に何も来なかった回に気づけない
+- rsync --stats の転送件数が1000件を超えると桁区切りのカンマが入り、素朴な数字抽出が
+  複数行にマッチして `-eq` 比較がクラッシュする。転送自体は成功しているのに
+  エラーメッセージが出て利用者を混乱させる
 """
 
 import os
@@ -371,6 +374,21 @@ class DfdownInvocationTest(DfxferTestBase):
             env={"DFXFER_HOSTS": "toybox", "RSYNC_STUB_TRANSFERRED": "1"},
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertNotIn("Nothing came down", proc.stdout)
+
+    def test_thousands_separator_in_transfer_count_does_not_crash(self):
+        """regression: DFXFER_OPTS の -h (human-readable) により、rsync --stats は
+        1000件以上の転送を "1,200" のようにカンマ区切りで出す。素朴に
+        `grep -oE '[0-9]+'` で数字だけ拾うと "1" と "200" の2行にマッチし、
+        後続の `-eq 0` 比較が「integer expression expected」で失敗する
+        （転送自体は成功しているのに、利用者はこのエラーを見て不安になる）。"""
+        proc = self._run(
+            DFDOWN,
+            env={"DFXFER_HOSTS": "toybox", "RSYNC_STUB_TRANSFERRED": "1,200"},
+        )
+
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(proc.stderr, "")
         self.assertNotIn("Nothing came down", proc.stdout)
 
     def test_extra_arguments_pass_through_to_rsync(self):

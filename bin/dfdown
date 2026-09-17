@@ -69,7 +69,12 @@ trap 'rm -f "$_dfdown_stats"' EXIT
   "$host:$remote_dir/" \
   "$local_dir/" | tee "$_dfdown_stats"
 
-_dfdown_transferred=$(grep -m1 '^Number of regular files transferred:' "$_dfdown_stats" | grep -oE '[0-9]+' || true)
+# DFXFER_OPTS carries -h (human-readable), so rsync renders large counts with
+# thousands separators (e.g. "1,200") — strip them before the numeric test,
+# or a count that big turns into two grep matches ("1" and "200") and crashes
+# the `-eq` below with "integer expression expected" on an otherwise-successful
+# transfer.
+_dfdown_transferred=$(grep -m1 '^Number of regular files transferred:' "$_dfdown_stats" | grep -oE '[0-9,]+' | tr -d ',' || true)
 if [ "${_dfdown_transferred:-0}" -eq 0 ]; then
   log_info "Nothing came down: no new files from $host:$remote_dir/."
 fi
