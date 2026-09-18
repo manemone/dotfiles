@@ -477,11 +477,13 @@ class DfdownInvocationTest(DfxferTestBase):
         proc = self._run(DFDOWN, env={"DFXFER_HOSTS": "toybox"})
 
         self.assertEqual(proc.returncode, 0, proc.stderr)
-        # host / sh: the script itself travels over stdin (a heredoc), not
-        # as a trailing argv element — see dfxfer_ensure_remote_dir's
-        # comment on why a trailing argv element does not survive ssh's own
-        # argument flattening.
-        self.assertEqual(self._logged_ssh_args(), ["toybox", "sh"])
+        # host / sh / -s / -- / <dir>: the script itself travels over stdin
+        # (a quoted heredoc), and <dir> is bound to $1 there via `-s --`,
+        # rather than being interpolated into the script text — see
+        # dfxfer_ensure_remote_dir's comment on why.
+        self.assertEqual(
+            self._logged_ssh_args(), ["toybox", "sh", "-s", "--", "downloads"]
+        )
         self.assertTrue((self.remote_home / "downloads").is_dir())
         # 新規作成した回だけ、人間が気づけるよう一言出す（regression:
         # タイポで空ディレクトリが黙って生成される事故対策 — 後述の
@@ -540,7 +542,9 @@ class DfdownInvocationTest(DfxferTestBase):
 
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertNotIn("Dry run", proc.stdout)
-        self.assertEqual(self._logged_ssh_args(), ["toybox", "sh"])
+        self.assertEqual(
+            self._logged_ssh_args(), ["toybox", "sh", "-s", "--", "downloads"]
+        )
 
     def test_remote_mkdir_failure_aborts_before_any_transfer(self):
         """ssh 経由の mkdir が失敗したら、rsync を一切起動せずに止まる

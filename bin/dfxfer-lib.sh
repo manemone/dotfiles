@@ -360,25 +360,25 @@ dfxfer_ensure_remote_dir() {
   # ssh(1): additional command-line arguments after <host> are "appended to
   # the command, separated by spaces" before the *remote* shell parses that
   # flattened string — argv boundaries do not survive the trip. Passing
-  # $dir as a trailing argv element (an earlier version of this function
-  # did `sh -c '...' _ "$dir"`) therefore does not arrive as a separate
-  # token: it becomes part of the one string the remote re-parses, and
-  # unless that happens to still be valid shell syntax, the remote fails
-  # with a syntax error instead of running anything.
+  # $dir as a trailing argv element naively (an earlier version of this
+  # function did `sh -c '...' _ "$dir"`) therefore does not arrive as a
+  # separate token: it becomes part of the one string the remote
+  # re-parses, and unless that happens to still be valid shell syntax, the
+  # remote fails with a syntax error instead of running anything.
   #
-  # Sending the script over stdin instead sidesteps this: the remote
-  # command line is just "sh" (nothing for ssh to flatten), and $dir is
-  # substituted here, locally, by this heredoc (its terminator is
-  # deliberately unquoted) before the already-resolved text is sent — so
-  # the remote receives a literal value baked into valid syntax, not
-  # something it has to parse out of a reassembled command line.
+  # `sh -s -- "$dir"` avoids that trap without needing $dir inside the
+  # script text at all: after space-joining and reparsing, the remote still
+  # sees the simple, always-valid `sh -s -- <dir>` (three literal words
+  # plus one value with no embedded shell syntax), `-s` makes it read the
+  # script from stdin, and `--` binds <dir> to $1 there. Because nothing
+  # here depends on local (pre-remote) expansion, the heredoc terminator is
+  # quoted — the remote resolves $1 as its own positional parameter.
   result=$(
-    # shellcheck disable=SC2087 # deliberately client-side: $dir must resolve here, before the remote gets it
-    ssh "$host" sh <<REMOTE_SCRIPT
-if [ -d "$dir" ]; then
+    ssh "$host" sh -s -- "$dir" <<'REMOTE_SCRIPT'
+if [ -d "$1" ]; then
   printf existing
 else
-  mkdir -p -- "$dir" && printf created
+  mkdir -p -- "$1" && printf created
 fi
 REMOTE_SCRIPT
   ) || dfxfer_die "Failed to create $host:$dir/ over ssh. Check connectivity and permissions."
