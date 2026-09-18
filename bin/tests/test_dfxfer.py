@@ -133,7 +133,8 @@ class DfxferTestBase(unittest.TestCase):
             "DFXFER_HOST",
             "DFXFER_HOSTS",
             "DFXFER_DIR",
-            "DFXFER_REMOTE_DIR",
+            "DFXFER_REMOTE_UP_DIR",
+            "DFXFER_REMOTE_DOWN_DIR",
             "DFXFER_RSYNC",
         ):
             run_env.pop(key, None)
@@ -321,7 +322,7 @@ class DfupInvocationTest(DfxferTestBase):
         self._seed_file("toybox")
         proc = self._run(
             DFUP,
-            env={"DFXFER_HOSTS": "toybox", "DFXFER_REMOTE_DIR": "inbox"},
+            env={"DFXFER_HOSTS": "toybox", "DFXFER_REMOTE_UP_DIR": "inbox"},
         )
 
         self.assertEqual(proc.returncode, 0, proc.stderr)
@@ -346,7 +347,7 @@ class DfdownInvocationTest(DfxferTestBase):
     dfup 側で authoritative にテスト済みなので、ここでは再テストしない
     （計画書「検証方針」）。"""
 
-    def test_pulls_remote_uploads_downward_without_destructive_flags(self):
+    def test_pulls_remote_downloads_downward_without_destructive_flags(self):
         proc = self._run(DFDOWN, env={"DFXFER_HOSTS": "toybox"})
         args = self._logged_args()
 
@@ -356,7 +357,7 @@ class DfdownInvocationTest(DfxferTestBase):
         # ローカルの中身でリモートを上書きしに行く、静かに起きて戻せない事故になる。
         self.assertEqual(
             args[-2:],
-            ["toybox:uploads/", f"{self.base_dir}/toybox/in/"],
+            ["toybox:downloads/", f"{self.base_dir}/toybox/in/"],
         )
 
         # 消す方向のフラグが1つも無いこと。混入するとリモートの原本、または
@@ -468,7 +469,7 @@ class DfdownInvocationTest(DfxferTestBase):
         # 転送そのものは通常どおり組み立てられていること。
         self.assertEqual(
             args[-2:],
-            ["toybox:uploads/", f"{self.base_dir}/toybox/in/"],
+            ["toybox:downloads/", f"{self.base_dir}/toybox/in/"],
         )
         self.assertNotIn("Nothing came down", proc.stdout)
         self.assertIn(str(self.base_dir / "toybox" / "in"), proc.stdout)
@@ -485,7 +486,7 @@ class DfdownInvocationTest(DfxferTestBase):
     def test_remote_dir_is_overridable(self):
         proc = self._run(
             DFDOWN,
-            env={"DFXFER_HOSTS": "toybox", "DFXFER_REMOTE_DIR": "inbox"},
+            env={"DFXFER_HOSTS": "toybox", "DFXFER_REMOTE_DOWN_DIR": "inbox"},
         )
 
         self.assertEqual(proc.returncode, 0, proc.stderr)

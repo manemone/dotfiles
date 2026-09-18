@@ -280,10 +280,17 @@ dfxfer_local_dir() {
   printf '%s\n' "$dir"
 }
 
-# dfxfer_remote_dir
-# Print the handoff directory on the remote, relative to its home.
+# dfxfer_remote_dir <up|down>
+# Print the handoff directory on the remote, relative to its home. up and
+# down use separate directories: sharing one would mean a file dfup just sent
+# reappears as "newly arrived" the next time dfdown runs against the same
+# directory.
 dfxfer_remote_dir() {
-  printf '%s\n' "${DFXFER_REMOTE_DIR:-uploads}"
+  case "$1" in
+    up) printf '%s\n' "${DFXFER_REMOTE_UP_DIR:-uploads}" ;;
+    down) printf '%s\n' "${DFXFER_REMOTE_DOWN_DIR:-downloads}" ;;
+    *) dfxfer_die "dfxfer_remote_dir: invalid argument '$1' (expected up or down)" ;;
+  esac
 }
 
 # dfxfer_is_empty_dir <dir>
