@@ -319,7 +319,19 @@ dfxfer_has_dry_run_flag() {
     case "$arg" in
       --dry-run) return 0 ;;
       --*) ;;
-      -*n*) return 0 ;;
+      -*)
+        # Only a token made up entirely of dashes and letters can be a
+        # bundle of short options (-an, -vn, ...). Anything else starting
+        # with "-" is a value, not an option — most notably an rsync filter
+        # rule passed via -f/--include/--exclude, which conventionally
+        # starts with "- " for an exclude and can contain an "n" anywhere
+        # in the pattern (e.g. "-f '- *.png'"). Matching those as dry-run
+        # would skip the remote mkdir during an ordinary transfer.
+        case "$arg" in
+          *[!a-zA-Z-]*) ;;
+          *n*) return 0 ;;
+        esac
+        ;;
     esac
   done
   return 1
@@ -345,12 +357,31 @@ dfxfer_ensure_remote_dir() {
   local dir="$2"
   local result
 
-  # $dir travels as its own argv element (the "$1" the remote sh -c script
-  # reads), not interpolated into the script text itself, so there is
-  # nothing here for the remote shell to word-split or glob-expand even
-  # though dir never goes through any quoting on the wire.
-  result=$(ssh "$host" sh -c 'if [ -d "$1" ]; then printf existing; else mkdir -p -- "$1" && printf created; fi' _ "$dir") ||
-    dfxfer_die "Failed to create $host:$dir/ over ssh. Check connectivity and permissions."
+  # ssh(1): additional command-line arguments after <host> are "appended to
+  # the command, separated by spaces" before the *remote* shell parses that
+  # flattened string — argv boundaries do not survive the trip. Passing
+  # $dir as a trailing argv element (an earlier version of this function
+  # did `sh -c '...' _ "$dir"`) therefore does not arrive as a separate
+  # token: it becomes part of the one string the remote re-parses, and
+  # unless that happens to still be valid shell syntax, the remote fails
+  # with a syntax error instead of running anything.
+  #
+  # Sending the script over stdin instead sidesteps this: the remote
+  # command line is just "sh" (nothing for ssh to flatten), and $dir is
+  # substituted here, locally, by this heredoc (its terminator is
+  # deliberately unquoted) before the already-resolved text is sent — so
+  # the remote receives a literal value baked into valid syntax, not
+  # something it has to parse out of a reassembled command line.
+  result=$(
+    # shellcheck disable=SC2087 # deliberately client-side: $dir must resolve here, before the remote gets it
+    ssh "$host" sh <<REMOTE_SCRIPT
+if [ -d "$dir" ]; then
+  printf existing
+else
+  mkdir -p -- "$dir" && printf created
+fi
+REMOTE_SCRIPT
+  ) || dfxfer_die "Failed to create $host:$dir/ over ssh. Check connectivity and permissions."
 
   if [ "$result" = "created" ]; then
     log_info "$host:$dir/ did not exist yet — created it. Check DFXFER_REMOTE_UP_DIR / DFXFER_REMOTE_DOWN_DIR for a typo if that is unexpected."

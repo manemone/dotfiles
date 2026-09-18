@@ -92,18 +92,28 @@ fi
 # dfdown asks the remote to create its receive directory over ssh before
 # pulling (dfxfer_ensure_remote_dir), and that function's own existing-vs-
 # created distinction depends on what it finds in the remote's home. This
-# stub never touches the network: it logs the host, then each remaining
-# argv element on its own line, to SSH_ARGS_LOG (dfxfer_ensure_remote_dir
-# sends `sh -c '<script>' _ <dir>`, so that is host / sh / -c / <script> /
-# _ / <dir> — six lines). It then actually execs those remaining arguments
-# with SSH_STUB_REMOTE_HOME as cwd — a plain local directory standing in for
-# "the remote's home" — so `[ -d ... ]` / `mkdir -p` behave exactly as they
-# would for real, and tests can pre-seed that directory to get the
-# "already exists" branch. SSH_STUB_EXIT_CODE (default 0) short-circuits
-# before running anything, simulating an unreachable host. Kept in its own
-# directory (not fake_bin) so it can sit on PATH unconditionally without
-# also activating UNAME_STUB for tests that are not exercising the macOS
-# branch.
+# stub never touches the network, but it must still behave like the real
+# ssh(1) in one specific way: "the arguments will be appended to the
+# command, separated by spaces" before the *remote* login shell parses that
+# flattened string — argv boundaries after <host> do not survive the trip.
+# An earlier version of this stub instead preserved argv boundaries with
+# `exec "$@"`, which let a command that only worked by accident under
+# preserved boundaries (`sh -c '<script>' _ <dir>`, syntactically broken
+# once space-joined and reparsed) pass every test while failing against
+# real ssh. Joining with `"$*"` and handing that one string to `sh -c`
+# below is what makes this stub catch that class of bug again.
+#
+# It logs the host, then each remaining argv element on its own line, to
+# SSH_ARGS_LOG before joining — so tests can still assert on the exact
+# argv dfxfer_ensure_remote_dir passed, independent of the join/reparse
+# step. It runs the joined command with SSH_STUB_REMOTE_HOME as cwd — a
+# plain local directory standing in for "the remote's home" — so
+# `[ -d ... ]` / `mkdir -p` behave exactly as they would for real, and
+# tests can pre-seed that directory to get the "already exists" branch.
+# SSH_STUB_EXIT_CODE (default 0) short-circuits before running anything,
+# simulating an unreachable host. Kept in its own directory (not fake_bin)
+# so it can sit on PATH unconditionally without also activating UNAME_STUB
+# for tests that are not exercising the macOS branch.
 SSH_STUB = """#!/bin/sh
 host="$1"
 shift
@@ -111,7 +121,8 @@ printf '%s\\n' "$host" >>"$SSH_ARGS_LOG"
 for a in "$@"; do printf '%s\\n' "$a"; done >>"$SSH_ARGS_LOG"
 [ "${SSH_STUB_EXIT_CODE:-0}" = "0" ] || exit "$SSH_STUB_EXIT_CODE"
 cd "$SSH_STUB_REMOTE_HOME" || exit 1
-exec "$@"
+joined="$*"
+exec sh -c "$joined"
 """
 
 
@@ -466,15 +477,11 @@ class DfdownInvocationTest(DfxferTestBase):
         proc = self._run(DFDOWN, env={"DFXFER_HOSTS": "toybox"})
 
         self.assertEqual(proc.returncode, 0, proc.stderr)
-        ssh_args = self._logged_ssh_args()
-        # host / sh / -c / <script> / _ / <dir>: dir travels as its own
-        # trailing argv element, not baked into the script text (see
-        # dfxfer_ensure_remote_dir's comment on why).
-        self.assertEqual(
-            [ssh_args[0], ssh_args[1], ssh_args[2], ssh_args[4], ssh_args[5]],
-            ["toybox", "sh", "-c", "_", "downloads"],
-        )
-        self.assertIn("mkdir -p", ssh_args[3])
+        # host / sh: the script itself travels over stdin (a heredoc), not
+        # as a trailing argv element — see dfxfer_ensure_remote_dir's
+        # comment on why a trailing argv element does not survive ssh's own
+        # argument flattening.
+        self.assertEqual(self._logged_ssh_args(), ["toybox", "sh"])
         self.assertTrue((self.remote_home / "downloads").is_dir())
         # 新規作成した回だけ、人間が気づけるよう一言出す（regression:
         # タイポで空ディレクトリが黙って生成される事故対策 — 後述の
@@ -516,6 +523,24 @@ class DfdownInvocationTest(DfxferTestBase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(self._logged_ssh_args(), [])
         self.assertFalse((self.remote_home / "downloads").exists())
+
+    def test_rsync_filter_rule_value_is_not_mistaken_for_dry_run(self):
+        """regression: dfxfer_has_dry_run_flag は「'-'で始まり'n'を含む」
+        トークンを全て dry-run 扱いしていた。rsync のフィルタルールの値
+        （`-f '- *.png'` のような除外指定）は慣習的に "- " で始まり、
+        パターン自体に 'n' を含むことも普通にあるため、これも dry-run と
+        誤判定されて通常転送中にリモートの mkdir がスキップされ、
+        このPRが解消したはずの素の rsync エラーが復活してしまう。"""
+        proc = self._run(
+            DFDOWN,
+            "-f",
+            "- *.png",
+            env={"DFXFER_HOSTS": "toybox"},
+        )
+
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertNotIn("Dry run", proc.stdout)
+        self.assertEqual(self._logged_ssh_args(), ["toybox", "sh"])
 
     def test_remote_mkdir_failure_aborts_before_any_transfer(self):
         """ssh 経由の mkdir が失敗したら、rsync を一切起動せずに止まる

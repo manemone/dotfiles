@@ -48,7 +48,7 @@ remote_dir=$(dfxfer_remote_dir down)
 # directory would be a real, non-reversed-by-nothing side effect that "-n
 # changes nothing" does not lead anyone to expect.
 if dfxfer_has_dry_run_flag ${1+"$@"}; then
-  log_info "Dry run: not creating $host:$remote_dir/ (would run: ssh $host mkdir -p -- $remote_dir)."
+  log_info "Dry run: not creating $host:$remote_dir/ (skipping the remote mkdir dfdown normally does first)."
 else
   dfxfer_ensure_remote_dir "$host" "$remote_dir"
 fi
