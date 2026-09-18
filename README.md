@@ -9,7 +9,7 @@ Easily deployable, cross-platform dotfiles managed with [mise](https://mise.jdx.
 | **Zsh** | Shell | [Antidote](https://github.com/mattmc3/antidote) |
 | **NeoVim** | Editor | [lazy.nvim](https://github.com/folke/lazy.nvim) |
 | **tmux** | Terminal multiplexer | — (built-in) |
-| **bin** | Custom CLI tools (ocw, claude-ds, ocw-meter, persona) | — (standalone scripts) |
+| **bin** | Custom CLI tools (ocw, claude-ds, ocw-meter, persona, dfup, dfdown) | — (standalone scripts) |
 | **claude** | Claude Code config | — (built-in) |
 | **skills** | AI agent skills, shared across Claude Code / Codex / OpenCode | — (built-in) |
 | **codex** | Codex CLI global instructions (`AGENTS.md` symlinked from a generated concatenation of `claude/CLAUDE.md` + machine-local personalization) | — (built-in) |
@@ -143,6 +143,9 @@ for details. `bin/` changes should additionally be verified with
 │   ├── claude-ds              # Claude Code via DeepSeek API wrapper
 │   ├── ocw-meter              # LLM cost / Claude quota observability (report auto-ingests; prune-diagnostics writes)
 │   ├── persona                # Edit CLAUDE.machine.md + regenerate Codex's AGENTS.md (single entry point)
+│   ├── dfup                   # Upload ~/dfxfer/<host>/out/ to <host>:~/uploads/ (one-way rsync, run locally)
+│   ├── dfdown                 # Download <host>:~/uploads/ to ~/dfxfer/<host>/in/ (one-way rsync, run locally)
+│   ├── dfxfer-lib.sh          # Shared plumbing for dfup / dfdown (sourced by path, not symlinked into ~/bin)
 │   ├── tests/                 # Python unit tests for ocw-meter etc. (bin/tests/lint.sh + unittest suite)
 │   ├── prices/                # Price tables used for cost calculation
 │   ├── deploy.sh              # bin deployment script
@@ -318,7 +321,7 @@ See each tool's deploy script for the full list of files it creates.
 
 See each tool's README for detailed configuration and troubleshooting:
 
-- [bin/README.md](bin/README.md) — CLI tools (ocw worktree manager, claude-ds DeepSeek wrapper, ocw-meter observability, persona personalization editor)
+- [bin/README.md](bin/README.md) — CLI tools (ocw worktree manager, claude-ds DeepSeek wrapper, ocw-meter observability, persona personalization editor, dfup/dfdown file handoff)
 - [claude/README.md](claude/README.md) — Claude Code config, machine-specific customization
 - [skills/README.md](skills/README.md) — AI agent skills and how they reach Claude Code, Codex and OpenCode
 - [codex/README.md](codex/README.md) — Codex CLI global instructions (generated concatenation of claude/CLAUDE.md + machine-local personalization)

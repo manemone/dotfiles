@@ -10,6 +10,8 @@
 | `claude-ds` | Claude Code を DeepSeek API 経由で実行するラッパー |
 | `ocw-meter` | LLM費用・Claude利用枠の観測基盤。既存ログを事後に集計する。`event` / `bind-pr` / `snapshot-quota` はfail-open、`report` / `ingest` / `validate` / `prune-diagnostics` はfail-loud（`report` は自動でingestを実行し、`prune-diagnostics --apply` は診断ファイルを削除する） |
 | `persona` | このマシンでの人格のパーソナライズ（口調など。`CLAUDE.machine.md`）を編集し、Codex 向け生成物（`AGENTS.md`）を再生成する単一の入口 |
+| `dfup` | ローカルマシン → 共有サーバのファイルアップロード。`~/dfxfer/<宛先>/out/` に置いたものを、引数なし1コマンドでリモートの `~/uploads/` へ送る |
+| `dfdown` | 共有サーバ → ローカルマシンのファイルダウンロード。リモートの `~/uploads/` の中身を、引数なし1コマンドで `~/dfxfer/<宛先>/in/` へ落とす |
 
 ## 1. Requirements
 
@@ -22,6 +24,16 @@
 | **VS Code** `code` CLI (optional) | `ocw` のデフォルトモードで worktree を開く | `code` コマンドを PATH に通す（macOS: Cmd+Shift+P → "Shell Command: Install 'code' command in PATH"） |
 | **Herdr** (optional) | `ocw --herdr` のマルチペイン管理 | Herdr プロジェクトのインストール手順に従う（スタティックリンクされたバイナリとして配布） |
 | **`$EDITOR`** | `persona`（編集モード。`--regen` のみなら不要） | 通常のシェル環境変数として設定。引数付きでもよい（例: `export EDITOR=vim`、`export EDITOR="code --wait"`） |
+| **rsync** | `dfup` / `dfdown` のファイル転送 | macOS: 同梱（2.6.9 / openrsync）。Linux: `apt install rsync` |
+| **ssh** | `dfup` / `dfdown` の転送経路。宛先は `~/.ssh/config` の `Host` エイリアスで指定する | Built-in on most systems |
+| **rsync 3.x** (日本語ファイル名を扱うなら必須) | `--iconv` によるファイル名の正規化 | macOS: `brew install rsync` |
+
+> **日本語（非 ASCII）のファイル名を送受信するなら、macOS では `brew install rsync` を強く推奨します。**
+> macOS が同梱する rsync は 2.6.9、新しめの macOS では openrsync で、どちらも **3.0 で入った
+> `--iconv` を持ちません**。`--iconv` 無しで転送すると、macOS 側の NFD（濁点・半濁点が
+> 別の符号位置に分かれた形）がそのまま Linux 側へ渡り、**見た目は同じなのに別名のファイル**
+> として保存されます。`dfup` / `dfdown` はこれを検出しても**エラーにはせず**、警告を1行出して
+> 素の転送を続けます（ASCII のファイル名しか扱わないなら、そのままで実害はありません）。
 
 ## 2. Quick Start
 
@@ -41,6 +53,8 @@ exec $SHELL -l
 # 3. Verify
 which ocw
 which claude-ds
+which dfup
+which dfdown
 ```
 
 すでに一度 `deploy-all.sh` を実行済みで配布実体（`current`）が存在するなら、
@@ -50,7 +64,8 @@ which claude-ds
 
 The deploy script:
 - Creates `~/bin/` directory if missing
-- Symlinks `ocw`, `claude-ds`, and `ocw-meter` into `~/bin/`
+- Symlinks `ocw`, `claude-ds`, `ocw-meter`, `persona`, `dfup`, and `dfdown` into `~/bin/`
+  （`dfxfer-lib.sh` は `dfup` / `dfdown` が実体のパスから source する共有ライブラリなので、`~/bin` へは symlink しません）
 
 ## 3. What's Included
 
@@ -540,6 +555,138 @@ persona --regen
 - **redeploy は不要。** どちらのモードも `~/.claude/CLAUDE.machine.md` の実体
   （固定パス）と、Codex 向け生成物の実体（同じく固定パス）を直接書き換える
 
+### 3.5 dfup — ローカル → 共有サーバのファイルアップロード
+
+手元のマシンにあるファイル（議事録・データ等）を、共有サーバ上で動く Claude Code から
+触れる場所へ運ぶためのコマンド。**ローカルマシン側から、引数なしで叩く。**
+
+```bash
+# 1. 送りたいものを out/ に置く（ディレクトリは初回実行時に自動で作られる）
+cp ~/Downloads/議事録.md ~/dfxfer/toybox/out/
+
+# 2. 送る
+dfup
+```
+
+`~/dfxfer/<宛先>/out/` の**中身**が、リモートの `~/uploads/` へ rsync される。
+
+| ローカル | → | リモート |
+|---|---|---|
+| `$DFXFER_DIR/<宛先>/out/` | `dfup` | `<宛先>:$DFXFER_REMOTE_DIR/` |
+
+**転送後もローカルの原本は残る**（コピーであって移動ではない）。rsync の差分転送なので、
+同じディレクトリを何度送っても2回目以降は差分だけが飛ぶ。
+
+#### 設定
+
+宛先はマシンごとに違うので、git 管理下ではなく `~/.zshrc.local` に置く。
+**`dfup` は zsh とは別プロセスなので `export` が必須**（設定例は
+[zsh/README.md](../zsh/README.md) の「Machine-Local Settings」にもある）:
+
+```bash
+cat >> ~/.zshrc.local <<'EOF'
+export DFXFER_HOSTS="toybox"   # 宛先の一覧（空白区切り）
+export DFXFER_HOST="toybox"    # 既定の宛先
+EOF
+
+source ~/.zshrc
+```
+
+| 環境変数 | 既定値 | 役割 |
+|---|---|---|
+| `DFXFER_HOSTS` | （空） | 宛先名を空白区切りで列挙したリスト |
+| `DFXFER_HOST` | （空） | 引数なしで使う既定の宛先名 |
+| `DFXFER_DIR` | `$HOME/dfxfer` | ローカル側のベースディレクトリ |
+| `DFXFER_REMOTE_DIR` | `uploads` | リモート側の受け渡しディレクトリ（リモートのホームからの相対パス） |
+| `DFXFER_RSYNC` | （空） | 使う rsync を明示指定する（自動探索をスキップする） |
+
+**宛先名は `~/.ssh/config` の `Host` エイリアス**であって、ホスト名ではない。
+`dfup` は ssh の設定を一切代行しないので、先に `ssh <宛先名>` が鍵認証で通ることを
+確認しておくこと。
+
+```
+Host toybox
+  HostName toybox-001.example.com
+  User your-name
+  IdentityFile ~/.ssh/id_ed25519
+```
+
+宛先は次の順で決まる:
+
+1. `DFXFER_HOST` が設定されていればそれ
+2. 未設定で `DFXFER_HOSTS` がちょうど1つならそれ
+3. それ以外（未設定・候補が複数・`DFXFER_HOST` がリストに無い）は**エラーで停止**し、
+   `~/.zshrc.local` に何を書けばよいかを表示する
+
+**`DFXFER_REMOTE_DIR` に空白を含むパスを設定しないこと。** リモート側のパスは
+ssh のコマンドラインを経由するため、空白があると分割される。
+
+#### 宛先ごとにディレクトリを分ける理由
+
+ローカル側は `$DFXFER_DIR/<宛先>/` と、宛先名ごとに切ってある。単一の送信ディレクトリに
+すると、既定の宛先を切り替えた瞬間に、前の宛先向けに置いたままだったファイルが
+新しい宛先へ飛んでしまう。
+
+#### rsync に追加の引数を渡す
+
+`dfup` に渡した引数はそのまま rsync へ透過する。何が飛ぶのかを先に確かめたいときは:
+
+```bash
+dfup -n          # rsync の dry-run
+```
+
+#### 消さないこと
+
+`dfup` は `--delete` も `--remove-source-files` も使わない。**ローカルの原本も、
+リモートに既にあるファイルも、このコマンドが消すことはない。** 片道のコピーに徹している。
+
+設計の経緯（macOS 標準 rsync に `--iconv` が無いこと、宛先ごとにディレクトリを切る判断、
+自動同期を見送った判断）は計画書
+[DOC-2609172237](../docs/planning/DOC-2609172237_file-handoff_計画.md) を参照。
+
+### 3.6 dfdown — 共有サーバ → ローカルマシンのファイルダウンロード
+
+共有サーバ上で動く Claude Code が `~/uploads/` に置いた成果物を、手元のマシンへ
+持ち帰るためのコマンド。**ローカルマシン側から、引数なしで叩く。**（`dfup` と同じく、
+どちらの方向のコマンドもローカルマシン側で実行する。）
+
+```bash
+# 落とす
+dfdown
+
+# 2. 落ちてきたものを確認する（ディレクトリは初回実行時に自動で作られる）
+ls ~/dfxfer/toybox/in/
+```
+
+リモートの `~/uploads/` の**中身**が、`~/dfxfer/<宛先>/in/` へ rsync される。
+
+| リモート | → | ローカル |
+|---|---|---|
+| `<宛先>:$DFXFER_REMOTE_DIR/` | `dfdown` | `$DFXFER_DIR/<宛先>/in/` |
+
+**転送後もリモートの原本は残る**（コピーであって移動ではない。`dfup` と同じ方針 — 計画書 5.4）。
+rsync の差分転送なので、同じディレクトリを何度落としても2回目以降は差分だけが飛ぶ。
+
+#### 設定
+
+宛先の決定規則・環境変数（`DFXFER_HOSTS` / `DFXFER_HOST` / `DFXFER_DIR` /
+`DFXFER_REMOTE_DIR` / `DFXFER_RSYNC`）は `dfup` と**完全に共通**（`bin/dfxfer-lib.sh` を
+両方が同じロジックで source している）。設定方法・宛先ごとにディレクトリを分ける理由・
+`~/.ssh/config` の `Host` エイリアスであることは、上記「3.5 dfup」の「設定」節を参照。
+
+#### rsync に追加の引数を渡す
+
+`dfdown` に渡した引数はそのまま rsync へ透過する。何が落ちてくるのかを先に確かめたいときは:
+
+```bash
+dfdown -n          # rsync の dry-run
+```
+
+#### 消さないこと
+
+`dfdown` は `--delete` も `--remove-source-files` も使わない。**リモートの原本も、
+ローカルに既にあるファイルも、このコマンドが消すことはない。** 片道のコピーに徹している。
+
 ## 4. Customization
 
 ### ocw のコマンド差し替え
@@ -612,6 +759,59 @@ chmod 600 ~/.config/deepseek/api_key
 ```bash
 OCW_NO_VSCODE=1 ocw widget-maker
 ```
+
+### `[ERROR] No destination configured.`
+
+`dfup` の宛先が未設定です。`~/.zshrc.local` に `export` 付きで設定してください
+（`export` を落とすと zsh の中だけの変数になり、別プロセスである `dfup` からは見えません）:
+
+```bash
+cat >> ~/.zshrc.local <<'EOF'
+export DFXFER_HOSTS="toybox"
+export DFXFER_HOST="toybox"
+EOF
+
+source ~/.zshrc
+```
+
+### `[ERROR] DFXFER_HOSTS lists more than one destination, and no default is set.`
+
+候補が複数あるので、`DFXFER_HOST` でどれを既定にするか指名してください。
+エラーメッセージが候補を列挙します。
+
+### `[WARN] rsync at /usr/bin/rsync is not 3.x — transferring without --iconv.`
+
+macOS 同梱の rsync（2.6.9 / openrsync）には `--iconv` がありません。転送自体は続行され、
+ASCII のファイル名なら実害はありません。日本語ファイル名を送るなら 3.x を入れてください:
+
+```bash
+brew install rsync
+```
+
+インストール後は `dfup` が自動で 3.x の方を見つけます（`DFXFER_RSYNC` で明示することもできます）。
+
+### `dfup` が「Nothing to send」と言う
+
+送信元ディレクトリが空です。メッセージに出ているパス（既定は `~/dfxfer/<宛先>/out/`）に
+ファイルを置いてから、もう一度実行してください。
+
+### `dfdown` が「Nothing came down」と言う
+
+今回の実行で新しく降りてきたファイルが0件でした（リモートの `~/uploads/` が空だったか、
+前回までにすべて取得済みで差分が無かったかのどちらかです）。共有サーバ側で新しいファイルを
+置いてから、もう一度実行してください。
+
+### `dfdown` が「Done. This rsync reports no transfer statistics」と言う
+
+転送自体は成功していますが、**使われた rsync が転送件数を報告できない**ため、
+「今回何件降りてきたか」を判定できませんでした。表示された受信先ディレクトリの中身を
+直接確認してください。
+
+これは、バージョンを名乗らない rsync 互換コマンド（新しめの macOS が rsync の代わりに
+同梱している openrsync など）を使ったときに出ます。件数の判定に使う `--stats` は、
+知らないオプションを渡された側が転送前にエラー終了してしまうため、**バージョンを
+確認できたときだけ**渡しています。件数まで出したい場合は `brew install rsync` で
+本物の rsync を入れてください（日本語ファイル名を扱うなら、どのみち必要です）。
 
 ### `report` の `meter.error diagnostics` に見慣れない件数が並んでいる（過去のテスト汚染）
 
