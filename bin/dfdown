@@ -44,7 +44,14 @@ host=$(dfxfer_host)
 local_dir=$(dfxfer_local_dir "$host" in)
 remote_dir=$(dfxfer_remote_dir down)
 
-dfxfer_ensure_remote_dir "$host" "$remote_dir"
+# A dry run must not touch the remote either — creating the receive
+# directory would be a real, non-reversed-by-nothing side effect that "-n
+# changes nothing" does not lead anyone to expect.
+if dfxfer_has_dry_run_flag ${1+"$@"}; then
+  log_info "Dry run: not creating $host:$remote_dir/ (would run: ssh $host mkdir -p -- $remote_dir)."
+else
+  dfxfer_ensure_remote_dir "$host" "$remote_dir"
+fi
 
 dfxfer_build_opts
 

@@ -293,6 +293,9 @@ dfxfer_remote_dir() {
   if [ -n "${DFXFER_REMOTE_DIR:-}" ]; then
     dfxfer_die \
       "DFXFER_REMOTE_DIR is no longer used." \
+      "Remove it from ~/.zshrc.local — as long as it is set, this error keeps" \
+      "firing even after you also export the variable below; it is not a" \
+      "second knob alongside DFXFER_REMOTE_DIR, it replaces it." \
       "Set DFXFER_REMOTE_UP_DIR (for dfup) and/or DFXFER_REMOTE_DOWN_DIR (for dfdown) instead."
   fi
 
@@ -303,19 +306,55 @@ dfxfer_remote_dir() {
   esac
 }
 
+# dfxfer_has_dry_run_flag <rsync-passthrough-args...>
+# True if any of the arguments dfdown/dfup forward to rsync would make it a
+# dry run: --dry-run, a bare -n, or -n bundled into another short option
+# (-an, -vn, ...). Used to keep "-n means nothing is touched" true even for
+# the remote mkdir dfdown does before its own rsync call — a long option
+# other than --dry-run (say --exclude=foo*n*) must not false-positive here,
+# hence the separate --* arm that consumes it before the -*n* check runs.
+dfxfer_has_dry_run_flag() {
+  local arg
+  for arg in "$@"; do
+    case "$arg" in
+      --dry-run) return 0 ;;
+      --*) ;;
+      -*n*) return 0 ;;
+    esac
+  done
+  return 1
+}
+
 # dfxfer_ensure_remote_dir <host> <dir>
-# Create <dir> on <host>'s home over ssh if it does not exist yet. Only
-# dfdown needs this: pushing with rsync creates the destination
-# automatically (what lets dfup use a brand-new DFXFER_REMOTE_UP_DIR without
-# ever mkdir'ing it first), but pulling does not — rsync refuses a source
-# directory that is not there, so the first dfdown against a fresh remote
-# would otherwise die on a bare rsync error instead of just working.
+# Create <dir> on <host>'s home over ssh if it does not exist yet, and say so
+# when it actually had to. Only dfdown needs this: pushing with rsync creates
+# the destination automatically (what lets dfup use a brand-new
+# DFXFER_REMOTE_UP_DIR without ever mkdir'ing it first), but pulling does not
+# — rsync refuses a source directory that is not there, so the first dfdown
+# against a fresh remote would otherwise die on a bare rsync error instead of
+# just working.
+#
+# The existence check has to happen on the remote and be reported back,
+# rather than just running `mkdir -p` and staying quiet: a plain `mkdir -p`
+# is silent either way, which would turn a typo'd DFXFER_REMOTE_DOWN_DIR from
+# a loud rsync "no such file" error (what happened before this function
+# existed) into "conjure an empty directory and report success" — exactly
+# the kind of silent breakage this test suite exists to catch.
 dfxfer_ensure_remote_dir() {
   local host="$1"
   local dir="$2"
+  local result
 
-  ssh "$host" mkdir -p -- "$dir" ||
+  # $dir travels as its own argv element (the "$1" the remote sh -c script
+  # reads), not interpolated into the script text itself, so there is
+  # nothing here for the remote shell to word-split or glob-expand even
+  # though dir never goes through any quoting on the wire.
+  result=$(ssh "$host" sh -c 'if [ -d "$1" ]; then printf existing; else mkdir -p -- "$1" && printf created; fi' _ "$dir") ||
     dfxfer_die "Failed to create $host:$dir/ over ssh. Check connectivity and permissions."
+
+  if [ "$result" = "created" ]; then
+    log_info "$host:$dir/ did not exist yet — created it. Check DFXFER_REMOTE_UP_DIR / DFXFER_REMOTE_DOWN_DIR for a typo if that is unexpected."
+  fi
 }
 
 # dfxfer_is_empty_dir <dir>
