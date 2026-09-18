@@ -44,6 +44,8 @@ host=$(dfxfer_host)
 local_dir=$(dfxfer_local_dir "$host" in)
 remote_dir=$(dfxfer_remote_dir down)
 
+dfxfer_ensure_remote_dir "$host" "$remote_dir"
+
 dfxfer_build_opts
 
 log_info "dfdown: $host:$remote_dir/ -> $local_dir/"

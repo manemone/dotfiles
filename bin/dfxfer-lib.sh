@@ -286,11 +286,36 @@ dfxfer_local_dir() {
 # reappears as "newly arrived" the next time dfdown runs against the same
 # directory.
 dfxfer_remote_dir() {
+  # DFXFER_REMOTE_DIR predates the up/down split and is no longer read by
+  # either direction. Silently falling back to the default here would send
+  # or pull from the wrong place with no error — die instead so a
+  # still-configured ~/.zshrc.local gets fixed instead of ignored.
+  if [ -n "${DFXFER_REMOTE_DIR:-}" ]; then
+    dfxfer_die \
+      "DFXFER_REMOTE_DIR is no longer used." \
+      "Set DFXFER_REMOTE_UP_DIR (for dfup) and/or DFXFER_REMOTE_DOWN_DIR (for dfdown) instead."
+  fi
+
   case "$1" in
     up) printf '%s\n' "${DFXFER_REMOTE_UP_DIR:-uploads}" ;;
     down) printf '%s\n' "${DFXFER_REMOTE_DOWN_DIR:-downloads}" ;;
     *) dfxfer_die "dfxfer_remote_dir: invalid argument '$1' (expected up or down)" ;;
   esac
+}
+
+# dfxfer_ensure_remote_dir <host> <dir>
+# Create <dir> on <host>'s home over ssh if it does not exist yet. Only
+# dfdown needs this: pushing with rsync creates the destination
+# automatically (what lets dfup use a brand-new DFXFER_REMOTE_UP_DIR without
+# ever mkdir'ing it first), but pulling does not — rsync refuses a source
+# directory that is not there, so the first dfdown against a fresh remote
+# would otherwise die on a bare rsync error instead of just working.
+dfxfer_ensure_remote_dir() {
+  local host="$1"
+  local dir="$2"
+
+  ssh "$host" mkdir -p -- "$dir" ||
+    dfxfer_die "Failed to create $host:$dir/ over ssh. Check connectivity and permissions."
 }
 
 # dfxfer_is_empty_dir <dir>
