@@ -26,7 +26,7 @@ repo-baseline で `tools/doc-id` を配った iosci リポジトリで実際に 
 |---|---|---|---|
 | 1 | `doc-id-link-integrity-01-assign-self-ref` | `assign` が採番するファイル自身の中の他文書へのプレースホルダ参照を書き換えないようにする | ✅ PR #108 マージ済 |
 | 2 | `doc-id-link-integrity-02-docs-spec-scan` | `docs/` 配下の `spec` `test` `tests` ディレクトリを参照更新・検証の対象から外さないようにする | ✅ PR #109 マージ済 |
-| 3 | `doc-id-link-integrity-03-verify-path` | `verify` が Markdown インラインリンク以外の書き方のパスも実在確認するようにする | 🔄 実装中 |
+| 3 | `doc-id-link-integrity-03-verify-path` | `verify` が Markdown インラインリンク以外の書き方のパスも実在確認するようにする | ✅ PR #110 マージ済 |
 
 順番に1本ずつ進める（1 → 2 → 3）。1 と 2 は論理的には独立だが、2 と 3 はどちらも
 `scanner.rb` を触るため並行させると競合する。3 は 1 の再発検知にもなるので最後に置く。
