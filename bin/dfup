@@ -50,6 +50,19 @@ if dfxfer_is_empty_dir "$local_dir"; then
   exit 0
 fi
 
+# rsync only creates the *final* path component of its destination, not
+# intermediate ones. That was invisible while the default was a single flat
+# name (uploads), but the nested default (dfxfer/inbox) needs the parent
+# (~/dfxfer) to exist before rsync ever runs, or a fresh destination host
+# fails with a bare "mkdir ... failed: No such file or directory" instead of
+# transferring. A dry run must not touch the remote either, so this mirrors
+# dfdown's dry-run skip exactly.
+if dfxfer_has_dry_run_flag ${1+"$@"}; then
+  log_info "Dry run: not creating $host:$remote_dir/ (skipping the remote mkdir dfup normally does first)."
+else
+  dfxfer_ensure_remote_dir "$host" "$remote_dir"
+fi
+
 dfxfer_build_opts
 
 log_info "dfup: $local_dir/ -> $host:$remote_dir/"

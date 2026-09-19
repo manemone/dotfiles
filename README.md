@@ -143,8 +143,8 @@ for details. `bin/` changes should additionally be verified with
 │   ├── claude-ds              # Claude Code via DeepSeek API wrapper
 │   ├── ocw-meter              # LLM cost / Claude quota observability (report auto-ingests; prune-diagnostics writes)
 │   ├── persona                # Edit CLAUDE.machine.md + regenerate Codex's AGENTS.md (single entry point)
-│   ├── dfup                   # Upload ~/dfxfer/<host>/out/ to <host>:~/uploads/ (one-way rsync, run locally)
-│   ├── dfdown                 # Download <host>:~/uploads/ to ~/dfxfer/<host>/in/ (one-way rsync, run locally)
+│   ├── dfup                   # Upload ~/dfxfer/<host>/out/ to <host>:~/dfxfer/inbox/ (one-way rsync, run locally)
+│   ├── dfdown                 # Download <host>:~/dfxfer/outbox/ to ~/dfxfer/<host>/in/ (one-way rsync, run locally)
 │   ├── dfxfer-lib.sh          # Shared plumbing for dfup / dfdown (sourced by path, not symlinked into ~/bin)
 │   ├── tests/                 # Python unit tests for ocw-meter etc. (bin/tests/lint.sh + unittest suite)
 │   ├── prices/                # Price tables used for cost calculation

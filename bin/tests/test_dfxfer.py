@@ -376,6 +376,37 @@ class DfupInvocationTest(DfxferTestBase):
         # 透過引数はパスより前。rsync は src/dst を末尾に取る。
         self.assertLess(args.index("-n"), len(args) - 2)
 
+    def test_creates_remote_send_dir_over_ssh_before_pushing(self):
+        """regression: rsync が自動的に作る送り先ディレクトリは**最終要素1つだけ**
+        で、中間の階層までは作らない。既定値がネストしたパス（dfxfer/inbox）に
+        なったことで、リモートに `~/dfxfer` 自体がまだ無い宛先への初回 dfup は、
+        rsync の素の「mkdir failed: No such file or directory」で失敗していた
+        （既存のどのテストも fake ssh 経由の rsync スタブへ差し替えているため、
+        rsync が実際に何階層まで作れるかは一切検証されておらず、この欠陥は
+        どのテストにも捕まらなかった）。"""
+        self._seed_file("toybox")
+        self.assertFalse((self.remote_home / "dfxfer" / "inbox").exists())
+
+        proc = self._run(DFUP, env={"DFXFER_HOSTS": "toybox"})
+
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(
+            self._logged_ssh_args(),
+            ["toybox", "sh", "-s", "--", "dfxfer/inbox"],
+        )
+        self.assertTrue((self.remote_home / "dfxfer" / "inbox").is_dir())
+        self.assertIn("did not exist yet", proc.stdout)
+
+    def test_dry_run_does_not_touch_the_remote(self):
+        """regression: `-n` は「何も変更しない」という約束のはずが、dfdown の
+        リモート受け皿作成と同じ理由で、dfup 側の作成もこの約束を破りうる。"""
+        self._seed_file("toybox")
+        proc = self._run(DFUP, "-n", env={"DFXFER_HOSTS": "toybox"})
+
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(self._logged_ssh_args(), [])
+        self.assertFalse((self.remote_home / "dfxfer").exists())
+
     def test_remote_dir_is_overridable(self):
         self._seed_file("toybox")
         proc = self._run(
