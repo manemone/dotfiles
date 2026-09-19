@@ -26,7 +26,9 @@ module DocId
 
     def find_broken_refs
       broken = []
-      # test/ tests/ spec/ を除外（テストフィクスチャに意図的な壊れ参照が含まれるため）
+      # docs/ の外にある test/ tests/ spec/ を除外（テストフィクスチャに意図的な壊れ参照が
+      # 含まれるため）。docs/ 配下は excluded_path? が対象外にする（docs/spec/ 等は仕様書
+      # ディレクトリであり、テストコードではないため）。
       searchable_files.reject { |f| excluded_path? f }.each do |file|
         content = File.read file
         rel = relative_path file
@@ -125,8 +127,13 @@ module DocId
 
     # @repo_root からの相対パスのディレクトリ成分単位で判定する。絶対パス全体に対する
     # 部分一致だと、リポジトリ自体が test/ 等を含むパスに置かれた場合に誤爆する。
+    # docs/ 配下のパスには適用しない: docs/spec/ 等は仕様書ディレクトリであり、
+    # テストコードではないため（docs/ の外にある test/ tests/ spec/ のみ除外する）。
     def excluded_path?(path)
-      relative_path(path).split("/").any? { |seg| EXCLUDED_DIR_NAMES.include? seg }
+      segments = relative_path(path).split("/")
+      return false if segments.first == DOCS_DIR_NAME
+
+      segments.any? { |seg| EXCLUDED_DIR_NAMES.include? seg }
     end
 
     def git_tracked_files

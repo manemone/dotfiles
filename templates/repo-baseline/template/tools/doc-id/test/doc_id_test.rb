@@ -137,6 +137,21 @@ class DocIdVerifyTest < Minitest::Test
     output = capture_stdout { @tool.verify }
     assert_equal 1, output.lines.count { |l| l.start_with? "❌" }
   end
+
+  # docs/spec/ は仕様書ディレクトリであり、テストコードの spec/ とは違う。
+  # 除外対象にすると、iosci のように壊れ参照を verify が見逃す（実バグの regression）。
+  def test_detects_broken_refs_inside_docs_spec_directory
+    FileUtils.mkdir_p File.join(@docs_dir, "spec")
+    File.write File.join(@docs_dir, "spec", "tech.md"), "See #{NONEXISTENT_ID} for details."
+    silence_stdout { assert_equal 1, @tool.verify }
+  end
+
+  # docs/ の外にある test/ tests/ spec/ は従来どおり除外され続ける。
+  def test_still_excludes_test_directories_outside_docs
+    FileUtils.mkdir_p File.join(@repo_root, "spec")
+    File.write File.join(@repo_root, "spec", "fixture.md"), "See #{NONEXISTENT_ID} for details."
+    silence_stdout { assert_equal 0, @tool.verify }
+  end
 end
 
 class DocIdVerifyGitTest < Minitest::Test
@@ -456,6 +471,26 @@ class DocIdAssignTest < Minitest::Test
     silence_stdout { @tool.assign "docs/design/DOC-DOCID_PLACEHOLDER_計画.md" }
 
     assert_includes File.read(fixture), "DOC-DOCID_PLACEHOLDER_計画"
+  end
+
+  # docs/spec/ は仕様書ディレクトリであり、除外対象にしてはならない。除外すると
+  # iosci で実際に起きたとおり、参照更新が漏れる（実バグの regression）。
+  def test_updates_references_inside_docs_spec_directory
+    spec_dir = File.join @docs_dir, "spec"
+    FileUtils.mkdir_p spec_dir
+    fixture = File.join spec_dir, "fixture.md"
+    File.write fixture, "DOC-DOCID_PLACEHOLDER_計画\n"
+    Open3.capture2 git_env, "git", "add", "docs/spec/fixture.md", chdir: @repo_root
+    path = File.join @repo_root, "docs/design/DOC-DOCID_PLACEHOLDER_計画.md"
+    File.write path, "# 計画\n"
+    Open3.capture2 git_env, "git", "add", "docs/design/DOC-DOCID_PLACEHOLDER_計画.md", chdir: @repo_root
+    Open3.capture2 git_env, "git", "commit", "-m", "add files", chdir: @repo_root
+
+    silence_stdout { @tool.assign "docs/design/DOC-DOCID_PLACEHOLDER_計画.md" }
+
+    content = File.read fixture
+    refute_includes content, "DOC-DOCID_PLACEHOLDER_計画"
+    assert_match(/DOC-\d{10}_計画/, content)
   end
 
   def test_assigns_doc_id_matching_git_commit_date

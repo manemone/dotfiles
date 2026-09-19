@@ -6,7 +6,9 @@ require "fileutils"
 module DocId
   # 参照検証の走査対象ディレクトリ名
   DOCS_DIR_NAME = "docs"
-  # テストフィクスチャに意図的な壊れ参照が含まれうるため、参照検証・参照更新の対象から除外するディレクトリ名
+  # テストフィクスチャに意図的な壊れ参照が含まれうるため、参照検証・参照更新の対象から
+  # 除外するディレクトリ名。docs/ 配下のパスには適用しない（docs/spec/ 等は仕様書であり、
+  # テストコードではないため。scanner.rb の excluded_path? 参照）
   EXCLUDED_DIR_NAMES = %w[test tests spec].freeze
   # DOC-ID 参照を書きうる文書・設定・スクリプトの拡張子。.md は必須。実装コード（.rb 等）には
   # DOC-ID 参照を書かない運用とするため対象外（含めると verify/assign の対象になってしまう）。
