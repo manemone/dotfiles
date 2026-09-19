@@ -225,14 +225,14 @@ class DestinationResolutionTest(DfxferTestBase):
         proc = self._run(DFUP, env={"DFXFER_HOSTS": "toybox"})
 
         self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertIn("toybox:uploads/", self._logged_args())
+        self.assertIn("toybox:dfxfer/inbox/", self._logged_args())
 
     def test_explicit_host_wins_and_needs_no_list(self):
         self._seed_file("work-box")
         proc = self._run(DFUP, env={"DFXFER_HOST": "work-box"})
 
         self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertIn("work-box:uploads/", self._logged_args())
+        self.assertIn("work-box:dfxfer/inbox/", self._logged_args())
 
     def test_unresolvable_destinations_abort_with_setup_guidance(self):
         """宛先が決まらない3通り。どれも転送せずに止まり、何を設定すれば
@@ -317,7 +317,7 @@ class IconvTest(DfxferTestBase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertNotIn(self.ICONV, self._logged_args())
         self.assertIn("brew install rsync", proc.stderr)
-        self.assertIn("toybox:uploads/", self._logged_args())
+        self.assertIn("toybox:dfxfer/inbox/", self._logged_args())
 
     def test_linux_with_old_rsync_stays_quiet(self):
         """Linux では --iconv が要らないので、古い rsync でも警告しない。"""
@@ -347,7 +347,7 @@ class DfupInvocationTest(DfxferTestBase):
         # 「ディレクトリの中身」を意味し、out/ 自体を入れ子にしない。
         self.assertEqual(
             args[-2:],
-            [f"{self.base_dir}/toybox/out/", "toybox:uploads/"],
+            [f"{self.base_dir}/toybox/out/", "toybox:dfxfer/inbox/"],
         )
 
         # 消す方向のフラグが1つも無いこと。混入すると原本またはリモートの
@@ -376,20 +376,51 @@ class DfupInvocationTest(DfxferTestBase):
         # 透過引数はパスより前。rsync は src/dst を末尾に取る。
         self.assertLess(args.index("-n"), len(args) - 2)
 
+    def test_creates_remote_send_dir_over_ssh_before_pushing(self):
+        """regression: rsync が自動的に作る送り先ディレクトリは**最終要素1つだけ**
+        で、中間の階層までは作らない。既定値がネストしたパス（dfxfer/inbox）に
+        なったことで、リモートに `~/dfxfer` 自体がまだ無い宛先への初回 dfup は、
+        rsync の素の「mkdir failed: No such file or directory」で失敗していた
+        （既存のどのテストも fake ssh 経由の rsync スタブへ差し替えているため、
+        rsync が実際に何階層まで作れるかは一切検証されておらず、この欠陥は
+        どのテストにも捕まらなかった）。"""
+        self._seed_file("toybox")
+        self.assertFalse((self.remote_home / "dfxfer" / "inbox").exists())
+
+        proc = self._run(DFUP, env={"DFXFER_HOSTS": "toybox"})
+
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(
+            self._logged_ssh_args(),
+            ["toybox", "sh", "-s", "--", "dfxfer/inbox"],
+        )
+        self.assertTrue((self.remote_home / "dfxfer" / "inbox").is_dir())
+        self.assertIn("did not exist yet", proc.stdout)
+
+    def test_dry_run_does_not_touch_the_remote(self):
+        """regression: `-n` は「何も変更しない」という約束のはずが、dfdown の
+        リモート受け皿作成と同じ理由で、dfup 側の作成もこの約束を破りうる。"""
+        self._seed_file("toybox")
+        proc = self._run(DFUP, "-n", env={"DFXFER_HOSTS": "toybox"})
+
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(self._logged_ssh_args(), [])
+        self.assertFalse((self.remote_home / "dfxfer").exists())
+
     def test_remote_dir_is_overridable(self):
         self._seed_file("toybox")
         proc = self._run(
             DFUP,
-            env={"DFXFER_HOSTS": "toybox", "DFXFER_REMOTE_UP_DIR": "inbox"},
+            env={"DFXFER_HOSTS": "toybox", "DFXFER_REMOTE_UP_DIR": "custom-dir"},
         )
 
         self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertIn("toybox:inbox/", self._logged_args())
+        self.assertIn("toybox:custom-dir/", self._logged_args())
 
     def test_legacy_remote_dir_var_is_rejected_with_guidance(self):
         """regression: DFXFER_REMOTE_DIR は up/down 分離前の変数名で、
         今の dfxfer_remote_dir() はどちらの方向でも読まない。黙って既定値
-        （uploads）へフォールバックすると、これを設定したままの
+        （dfxfer/inbox）へフォールバックすると、これを設定したままの
         ~/.zshrc.local からは意図した宛先と違う場所へ静かに送られ続ける
         （利用者は exit 0 の成功表示しか見えない）。設定されていたら
         止めて、新しい変数名を案内する。
@@ -457,7 +488,7 @@ class DfdownInvocationTest(DfxferTestBase):
         # ローカルの中身でリモートを上書きしに行く、静かに起きて戻せない事故になる。
         self.assertEqual(
             args[-2:],
-            ["toybox:downloads/", f"{self.base_dir}/toybox/in/"],
+            ["toybox:dfxfer/outbox/", f"{self.base_dir}/toybox/in/"],
         )
 
         # 消す方向のフラグが1つも無いこと。混入するとリモートの原本、または
@@ -469,10 +500,10 @@ class DfdownInvocationTest(DfxferTestBase):
     def test_creates_remote_receive_dir_over_ssh_before_pulling(self):
         """regression: rsync は push 方向（dfup）では送り先ディレクトリを
         自動的に作るが、pull 方向では送り元ディレクトリが無いと素の
-        rsync エラーで落ちる。`~/downloads/` はこのPRで新設された名前で
+        rsync エラーで落ちる。`~/dfxfer/outbox/` はこのPRで新設された名前で
         リモート上にまだ存在しないため、対策が無いと分離後の最初の
         dfdown が既存のどの宛先に対しても失敗する。"""
-        self.assertFalse((self.remote_home / "downloads").exists())
+        self.assertFalse((self.remote_home / "dfxfer" / "outbox").exists())
 
         proc = self._run(DFDOWN, env={"DFXFER_HOSTS": "toybox"})
 
@@ -482,9 +513,10 @@ class DfdownInvocationTest(DfxferTestBase):
         # rather than being interpolated into the script text — see
         # dfxfer_ensure_remote_dir's comment on why.
         self.assertEqual(
-            self._logged_ssh_args(), ["toybox", "sh", "-s", "--", "downloads"]
+            self._logged_ssh_args(),
+            ["toybox", "sh", "-s", "--", "dfxfer/outbox"],
         )
-        self.assertTrue((self.remote_home / "downloads").is_dir())
+        self.assertTrue((self.remote_home / "dfxfer" / "outbox").is_dir())
         # 新規作成した回だけ、人間が気づけるよう一言出す（regression:
         # タイポで空ディレクトリが黙って生成される事故対策 — 後述の
         # test_typo_in_remote_dir_announces_the_new_directory 参照）。
@@ -493,7 +525,7 @@ class DfdownInvocationTest(DfxferTestBase):
     def test_no_creation_notice_when_remote_dir_already_exists(self):
         """2回目以降の実行では、既に存在するディレクトリを再度
         「作った」と報告しない。"""
-        (self.remote_home / "downloads").mkdir()
+        (self.remote_home / "dfxfer" / "outbox").mkdir(parents=True)
 
         proc = self._run(DFDOWN, env={"DFXFER_HOSTS": "toybox"})
 
@@ -524,7 +556,7 @@ class DfdownInvocationTest(DfxferTestBase):
 
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(self._logged_ssh_args(), [])
-        self.assertFalse((self.remote_home / "downloads").exists())
+        self.assertFalse((self.remote_home / "dfxfer" / "outbox").exists())
 
     def test_rsync_filter_rule_value_is_not_mistaken_for_dry_run(self):
         """regression: dfxfer_has_dry_run_flag は「'-'で始まり'n'を含む」
@@ -543,7 +575,8 @@ class DfdownInvocationTest(DfxferTestBase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertNotIn("Dry run", proc.stdout)
         self.assertEqual(
-            self._logged_ssh_args(), ["toybox", "sh", "-s", "--", "downloads"]
+            self._logged_ssh_args(),
+            ["toybox", "sh", "-s", "--", "dfxfer/outbox"],
         )
 
     def test_remote_mkdir_failure_aborts_before_any_transfer(self):
@@ -556,7 +589,7 @@ class DfdownInvocationTest(DfxferTestBase):
 
         self.assertNotEqual(proc.returncode, 0)
         self.assertEqual(self._logged_args(), [])
-        self.assertIn("toybox:downloads", proc.stderr)
+        self.assertIn("toybox:dfxfer/outbox", proc.stderr)
 
     def test_creates_local_receive_dir_when_missing(self):
         """初回実行で mkdir を人間にさせない（計画書 1.2）。"""
@@ -661,7 +694,7 @@ class DfdownInvocationTest(DfxferTestBase):
         # 転送そのものは通常どおり組み立てられていること。
         self.assertEqual(
             args[-2:],
-            ["toybox:downloads/", f"{self.base_dir}/toybox/in/"],
+            ["toybox:dfxfer/outbox/", f"{self.base_dir}/toybox/in/"],
         )
         self.assertNotIn("Nothing came down", proc.stdout)
         self.assertIn(str(self.base_dir / "toybox" / "in"), proc.stdout)
@@ -678,11 +711,11 @@ class DfdownInvocationTest(DfxferTestBase):
     def test_remote_dir_is_overridable(self):
         proc = self._run(
             DFDOWN,
-            env={"DFXFER_HOSTS": "toybox", "DFXFER_REMOTE_DOWN_DIR": "inbox"},
+            env={"DFXFER_HOSTS": "toybox", "DFXFER_REMOTE_DOWN_DIR": "custom-dir"},
         )
 
         self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertIn("toybox:inbox/", self._logged_args())
+        self.assertIn("toybox:custom-dir/", self._logged_args())
 
     def test_shares_destination_resolution_with_dfup(self):
         """代表1本だけ: 宛先が決まらないときに dfdown も止まること

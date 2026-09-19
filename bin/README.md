@@ -10,8 +10,8 @@
 | `claude-ds` | Claude Code を DeepSeek API 経由で実行するラッパー |
 | `ocw-meter` | LLM費用・Claude利用枠の観測基盤。既存ログを事後に集計する。`event` / `bind-pr` / `snapshot-quota` はfail-open、`report` / `ingest` / `validate` / `prune-diagnostics` はfail-loud（`report` は自動でingestを実行し、`prune-diagnostics --apply` は診断ファイルを削除する） |
 | `persona` | このマシンでの人格のパーソナライズ（口調など。`CLAUDE.machine.md`）を編集し、Codex 向け生成物（`AGENTS.md`）を再生成する単一の入口 |
-| `dfup` | ローカルマシン → 共有サーバのファイルアップロード。`~/dfxfer/<宛先>/out/` に置いたものを、引数なし1コマンドでリモートの `~/uploads/` へ送る |
-| `dfdown` | 共有サーバ → ローカルマシンのファイルダウンロード。リモートの `~/downloads/` の中身を、引数なし1コマンドで `~/dfxfer/<宛先>/in/` へ落とす |
+| `dfup` | ローカルマシン → 共有サーバのファイルアップロード。`~/dfxfer/<宛先>/out/` に置いたものを、引数なし1コマンドでリモートの `~/dfxfer/inbox/` へ送る |
+| `dfdown` | 共有サーバ → ローカルマシンのファイルダウンロード。リモートの `~/dfxfer/outbox/` の中身を、引数なし1コマンドで `~/dfxfer/<宛先>/in/` へ落とす |
 
 ## 1. Requirements
 
@@ -568,7 +568,7 @@ cp ~/Downloads/議事録.md ~/dfxfer/toybox/out/
 dfup
 ```
 
-`~/dfxfer/<宛先>/out/` の**中身**が、リモートの `~/uploads/` へ rsync される。
+`~/dfxfer/<宛先>/out/` の**中身**が、リモートの `~/dfxfer/inbox/` へ rsync される。
 
 | ローカル | → | リモート |
 |---|---|---|
@@ -576,6 +576,13 @@ dfup
 
 **転送後もローカルの原本は残る**（コピーであって移動ではない）。rsync の差分転送なので、
 同じディレクトリを何度送っても2回目以降は差分だけが飛ぶ。
+
+**リモートの `~/dfxfer/inbox/` は初回実行時に自動で作られる**（`dfup` が転送前に ssh 経由で
+`mkdir -p` する）。rsync は転送先の**最後の1階層だけ**を自動的に作るため、`~/dfxfer` 自体が
+まだ無い宛先にそのまま転送すると素の rsync エラーで失敗する。新規に作った場合はその旨を
+1行表示する（`DFXFER_REMOTE_UP_DIR` のタイポで意図しない空ディレクトリができたときに
+気づけるように）。**`dfup -n`（dry-run）はこの作成をスキップする**ため、リモートには
+何も作られない。
 
 #### 設定
 
@@ -597,7 +604,7 @@ source ~/.zshrc
 | `DFXFER_HOSTS` | （空） | 宛先名を空白区切りで列挙したリスト |
 | `DFXFER_HOST` | （空） | 引数なしで使う既定の宛先名 |
 | `DFXFER_DIR` | `$HOME/dfxfer` | ローカル側のベースディレクトリ |
-| `DFXFER_REMOTE_UP_DIR` | `uploads` | リモート側のアップロード受け皿ディレクトリ（リモートのホームからの相対パス） |
+| `DFXFER_REMOTE_UP_DIR` | `dfxfer/inbox` | リモート側のアップロード受け皿ディレクトリ（リモートのホームからの相対パス） |
 | `DFXFER_RSYNC` | （空） | 使う rsync を明示指定する（自動探索をスキップする） |
 
 **宛先名は `~/.ssh/config` の `Host` エイリアス**であって、ホスト名ではない。
@@ -646,7 +653,7 @@ dfup -n          # rsync の dry-run
 
 ### 3.6 dfdown — 共有サーバ → ローカルマシンのファイルダウンロード
 
-共有サーバ上で動く Claude Code が `~/downloads/` に置いた成果物を、手元のマシンへ
+共有サーバ上で動く Claude Code が `~/dfxfer/outbox/` に置いた成果物を、手元のマシンへ
 持ち帰るためのコマンド。**ローカルマシン側から、引数なしで叩く。**（`dfup` と同じく、
 どちらの方向のコマンドもローカルマシン側で実行する。）
 
@@ -658,7 +665,7 @@ dfdown
 ls ~/dfxfer/toybox/in/
 ```
 
-リモートの `~/downloads/` の**中身**が、`~/dfxfer/<宛先>/in/` へ rsync される。
+リモートの `~/dfxfer/outbox/` の**中身**が、`~/dfxfer/<宛先>/in/` へ rsync される。
 
 | リモート | → | ローカル |
 |---|---|---|
@@ -667,15 +674,16 @@ ls ~/dfxfer/toybox/in/
 **転送後もリモートの原本は残る**（コピーであって移動ではない。`dfup` と同じ方針 — 計画書 5.4）。
 rsync の差分転送なので、同じディレクトリを何度落としても2回目以降は差分だけが飛ぶ。
 
-**リモートの `~/downloads/` は初回実行時に自動で作られる**（`dfdown` が転送前に ssh 経由で
-`mkdir -p` する）。rsync は push 方向（`dfup`）では送り先ディレクトリを自動的に作るが、
-pull 方向（`dfdown`）では送り元ディレクトリが無いと素のエラーで失敗するため、手元の
-`~/dfxfer/<宛先>/in/` と同じく人間が事前に用意する必要がない。新規に作った場合はその旨を
-1行表示する（`DFXFER_REMOTE_DOWN_DIR` のタイポで意図しない空ディレクトリができたときに
-気づけるように）。**`dfdown -n`（dry-run）はこの作成をスキップする**ため、リモートには
-何も作られない。
+**リモートの `~/dfxfer/outbox/` は初回実行時に自動で作られる**（`dfdown` が転送前に ssh 経由で
+`mkdir -p` する）。rsync が自動的に作るのは転送先の**最後の1階層だけ**（`~/dfxfer` 自体は
+作らない）で、しかもそれは push 方向（`dfup`）の話であって、pull 方向（`dfdown`）は送り元
+ディレクトリが無いとそもそも素のエラーで失敗する。そのため `dfup` / `dfdown` はどちらも
+転送前に ssh 経由でディレクトリを用意しており（3.5参照）、手元の `~/dfxfer/<宛先>/in/` と
+同じく人間が事前に用意する必要がない。新規に作った場合はその旨を1行表示する
+（`DFXFER_REMOTE_DOWN_DIR` のタイポで意図しない空ディレクトリができたときに気づけるように）。
+**`dfdown -n`（dry-run）はこの作成をスキップする**ため、リモートには何も作られない。
 
-**アップロード用（`~/uploads/`）とダウンロード用（`~/downloads/`）はリモート側で別ディレクトリ
+**アップロード用（`~/dfxfer/inbox/`）とダウンロード用（`~/dfxfer/outbox/`）はリモート側で別ディレクトリ
 に分かれている。** 同じディレクトリを共用すると、`dfup` で送ったファイルがそのままリモートに
 残り、次に `dfdown` を叩いたときに「新着」として送り返されてくる（アップロードした自分のファ
 イルが手元に返ってくるだけの往復になる）ため。
@@ -684,8 +692,8 @@ pull 方向（`dfdown`）では送り元ディレクトリが無いと素のエ�
 
 宛先の決定規則・環境変数（`DFXFER_HOSTS` / `DFXFER_HOST` / `DFXFER_DIR` / `DFXFER_RSYNC`）は
 `dfup` と**完全に共通**（`bin/dfxfer-lib.sh` を両方が同じロジックで source している）。
-リモート側の受け渡しディレクトリだけは `DFXFER_REMOTE_UP_DIR`（`dfup` 用、既定 `uploads`）と
-`DFXFER_REMOTE_DOWN_DIR`（`dfdown` 用、既定 `downloads`）に分かれている。設定方法・
+リモート側の受け渡しディレクトリだけは `DFXFER_REMOTE_UP_DIR`（`dfup` 用、既定 `dfxfer/inbox`）と
+`DFXFER_REMOTE_DOWN_DIR`（`dfdown` 用、既定 `dfxfer/outbox`）に分かれている。設定方法・
 宛先ごとにディレクトリを分ける理由・`~/.ssh/config` の `Host` エイリアスであることは、
 上記「3.5 dfup」の「設定」節を参照。
 
@@ -812,7 +820,7 @@ brew install rsync
 
 ### `dfdown` が「Nothing came down」と言う
 
-今回の実行で新しく降りてきたファイルが0件でした（リモートの `~/downloads/` が空だったか、
+今回の実行で新しく降りてきたファイルが0件でした（リモートの `~/dfxfer/outbox/` が空だったか、
 前回までにすべて取得済みで差分が無かったかのどちらかです）。共有サーバ側で新しいファイルを
 置いてから、もう一度実行してください。
 

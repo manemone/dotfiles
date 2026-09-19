@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# dfup — send everything in ~/dfxfer/<host>/out/ to <host>:~/uploads/.
+# dfup — send everything in ~/dfxfer/<host>/out/ to <host>:~/dfxfer/inbox/.
 #
 # Run from the *local* machine, with no arguments. Any arguments given are
 # passed straight through to rsync, so `dfup -n` is a dry run.
@@ -10,7 +10,7 @@ set -euo pipefail
 #   DFXFER_HOSTS           space-separated ssh Host aliases
 #   DFXFER_HOST            the default one
 #   DFXFER_DIR             local base directory     (default: ~/dfxfer)
-#   DFXFER_REMOTE_UP_DIR   remote upload directory  (default: uploads)
+#   DFXFER_REMOTE_UP_DIR   remote upload directory  (default: dfxfer/inbox)
 #   DFXFER_RSYNC           force a specific rsync binary
 #
 # See bin/README.md §3.5 and docs/planning/DOC-2609172237_file-handoff_計画.md.
@@ -48,6 +48,19 @@ if dfxfer_is_empty_dir "$local_dir"; then
   log_info "Nothing to send: $local_dir is empty."
   log_info "Put files there and run dfup again."
   exit 0
+fi
+
+# rsync only creates the *final* path component of its destination, not
+# intermediate ones. That was invisible while the default was a single flat
+# name (uploads), but the nested default (dfxfer/inbox) needs the parent
+# (~/dfxfer) to exist before rsync ever runs, or a fresh destination host
+# fails with a bare "mkdir ... failed: No such file or directory" instead of
+# transferring. A dry run must not touch the remote either, so this mirrors
+# dfdown's dry-run skip exactly.
+if dfxfer_has_dry_run_flag ${1+"$@"}; then
+  log_info "Dry run: not creating $host:$remote_dir/ (skipping the remote mkdir dfup normally does first)."
+else
+  dfxfer_ensure_remote_dir "$host" "$remote_dir"
 fi
 
 dfxfer_build_opts

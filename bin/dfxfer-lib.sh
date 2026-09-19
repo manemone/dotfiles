@@ -300,8 +300,8 @@ dfxfer_remote_dir() {
   fi
 
   case "$1" in
-    up) printf '%s\n' "${DFXFER_REMOTE_UP_DIR:-uploads}" ;;
-    down) printf '%s\n' "${DFXFER_REMOTE_DOWN_DIR:-downloads}" ;;
+    up) printf '%s\n' "${DFXFER_REMOTE_UP_DIR:-dfxfer/inbox}" ;;
+    down) printf '%s\n' "${DFXFER_REMOTE_DOWN_DIR:-dfxfer/outbox}" ;;
     *) dfxfer_die "dfxfer_remote_dir: invalid argument '$1' (expected up or down)" ;;
   esac
 }
@@ -310,7 +310,7 @@ dfxfer_remote_dir() {
 # True if any of the arguments dfdown/dfup forward to rsync would make it a
 # dry run: --dry-run, a bare -n, or -n bundled into another short option
 # (-an, -vn, ...). Used to keep "-n means nothing is touched" true even for
-# the remote mkdir dfdown does before its own rsync call — a long option
+# the remote mkdir dfup/dfdown do before their own rsync call — a long option
 # other than --dry-run (say --exclude=foo*n*) must not false-positive here,
 # hence the separate --* arm that consumes it before the -*n* check runs.
 dfxfer_has_dry_run_flag() {
@@ -339,12 +339,17 @@ dfxfer_has_dry_run_flag() {
 
 # dfxfer_ensure_remote_dir <host> <dir>
 # Create <dir> on <host>'s home over ssh if it does not exist yet, and say so
-# when it actually had to. Only dfdown needs this: pushing with rsync creates
-# the destination automatically (what lets dfup use a brand-new
-# DFXFER_REMOTE_UP_DIR without ever mkdir'ing it first), but pulling does not
-# — rsync refuses a source directory that is not there, so the first dfdown
-# against a fresh remote would otherwise die on a bare rsync error instead of
-# just working.
+# when it actually had to. Both directions need this since the defaults
+# (DFXFER_REMOTE_UP_DIR / DFXFER_REMOTE_DOWN_DIR) became nested paths
+# (dfxfer/inbox, dfxfer/outbox): rsync only creates the *final* path
+# component of its destination, not intermediate ones, so a push against a
+# host whose ~/dfxfer does not exist yet would fail with a bare
+# "mkdir ... failed: No such file or directory" instead of the mkdir dfup
+# used to get for free when the default was a single flat component
+# (uploads). Pulling has always needed this for a different reason — rsync
+# refuses a source directory that is not there at all, regardless of
+# nesting — so the first dfdown against a fresh remote would otherwise die
+# on a bare rsync error instead of just working.
 #
 # The existence check has to happen on the remote and be reported back,
 # rather than just running `mkdir -p` and staying quiet: a plain `mkdir -p`
