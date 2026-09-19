@@ -163,6 +163,16 @@ class DocIdVerifyTest < Minitest::Test
     silence_stdout { assert_equal 1, @tool.verify }
   end
 
+  # 説明的ファイル名は中黒（・）や全角英数字を含みうる。Unicode の文字・数字
+  # カテゴリだけで判定すると、中黒は句読点カテゴリのため除外され、ID は実在するが
+  # ファイル名が違う参照を黙って見逃す（この検査が塞ぐべき穴1系のバグそのもの）。
+  def test_detects_wrong_filename_containing_nakaguro_in_inline_code
+    File.write File.join(@docs_dir, "design", "DOC-2606281807_技術・運用方針.md"), "# test"
+    File.write File.join(@repo_root, "README.md"),
+               "`docs/design/DOC-2606281807_設計・運用方針.md` を参照。"
+    silence_stdout { assert_equal 1, @tool.verify }
+  end
+
   def test_detects_wrong_filename_in_prose
     File.write File.join(@docs_dir, "design", TEST_FILE), "# test"
     File.write File.join(@repo_root, "README.md"),
