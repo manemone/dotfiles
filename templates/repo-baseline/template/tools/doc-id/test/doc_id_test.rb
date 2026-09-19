@@ -220,6 +220,18 @@ class DocIdVerifyTest < Minitest::Test
                "新規ファイルは `DOC-2606281807_<説明的ファイル名>.md` で作る。"
     silence_stdout { assert_equal 0, @tool.verify }
   end
+
+  # 拡張子なしの DOC-ID_名前 言及（ID の実在だけを見る書き方）の直後に、空白を挟まず
+  # 全角括弧や読点で別の .md 言及が続くと、旧実装ではその境界を越えて1トークンとして
+  # 誤って呑み込み、存在しない合成ファイル名として誤検知していた
+  # （PR #110 レビュー指摘。ブラックリスト方式で除外文字を挙げ漏れるたびに再発するため、
+  # 実装は説明的ファイル名に実際に使われる文字種のアローリストへ変更した）。
+  def test_does_not_merge_id_only_mention_with_following_unrelated_md_file
+    File.write File.join(@docs_dir, "design", TEST_FILE), "# test"
+    File.write File.join(@repo_root, "README.md"),
+               "PR作法（DOC-2606281807_test）とAGENTS.mdを読む。"
+    silence_stdout { assert_equal 0, @tool.verify }
+  end
 end
 
 class DocIdVerifyGitTest < Minitest::Test
