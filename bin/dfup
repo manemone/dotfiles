@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# dfup — send everything in ~/dfxfer/<host>/out/ to <host>:~/uploads/.
+# dfup — send everything in ~/dfxfer/<host>/out/ to <host>:~/dfxfer/inbox/.
 #
 # Run from the *local* machine, with no arguments. Any arguments given are
 # passed straight through to rsync, so `dfup -n` is a dry run.
@@ -10,7 +10,7 @@ set -euo pipefail
 #   DFXFER_HOSTS           space-separated ssh Host aliases
 #   DFXFER_HOST            the default one
 #   DFXFER_DIR             local base directory     (default: ~/dfxfer)
-#   DFXFER_REMOTE_UP_DIR   remote upload directory  (default: uploads)
+#   DFXFER_REMOTE_UP_DIR   remote upload directory  (default: dfxfer/inbox)
 #   DFXFER_RSYNC           force a specific rsync binary
 #
 # See bin/README.md §3.5 and docs/planning/DOC-2609172237_file-handoff_計画.md.

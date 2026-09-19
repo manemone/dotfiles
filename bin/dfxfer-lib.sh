@@ -300,8 +300,8 @@ dfxfer_remote_dir() {
   fi
 
   case "$1" in
-    up) printf '%s\n' "${DFXFER_REMOTE_UP_DIR:-uploads}" ;;
-    down) printf '%s\n' "${DFXFER_REMOTE_DOWN_DIR:-downloads}" ;;
+    up) printf '%s\n' "${DFXFER_REMOTE_UP_DIR:-dfxfer/inbox}" ;;
+    down) printf '%s\n' "${DFXFER_REMOTE_DOWN_DIR:-dfxfer/outbox}" ;;
     *) dfxfer_die "dfxfer_remote_dir: invalid argument '$1' (expected up or down)" ;;
   esac
 }
