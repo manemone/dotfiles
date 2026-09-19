@@ -152,6 +152,54 @@ class DocIdVerifyTest < Minitest::Test
     File.write File.join(@repo_root, "spec", "fixture.md"), "See #{NONEXISTENT_ID} for details."
     silence_stdout { assert_equal 0, @tool.verify }
   end
+
+  # 穴3: ID は実在するが説明的ファイル名が違う DOC-<ID>_<名前>.md を、インライン
+  # コード・地の文・参照スタイルのリンク定義に書くと、旧実装では ID の実在しか見ず
+  # 見逃していた（iosci で verify が 22 件のリンク切れを見逃した実バグ）。
+  def test_detects_wrong_filename_in_inline_code
+    File.write File.join(@docs_dir, "design", TEST_FILE), "# test"
+    File.write File.join(@repo_root, "README.md"),
+               "`docs/design/DOC-2606281807_別名.md` を参照。"
+    silence_stdout { assert_equal 1, @tool.verify }
+  end
+
+  def test_detects_wrong_filename_in_prose
+    File.write File.join(@docs_dir, "design", TEST_FILE), "# test"
+    File.write File.join(@repo_root, "README.md"),
+               "docs/design/DOC-2606281807_別名.md に注意。"
+    silence_stdout { assert_equal 1, @tool.verify }
+  end
+
+  def test_detects_wrong_filename_in_reference_style_link_definition
+    File.write File.join(@docs_dir, "design", TEST_FILE), "# test"
+    File.write File.join(@repo_root, "README.md"),
+               "[test][t]\n\n[t]: docs/design/DOC-2606281807_別名.md\n"
+    silence_stdout { assert_equal 1, @tool.verify }
+  end
+
+  def test_accepts_correct_filename_in_inline_code_and_reference_style_link
+    File.write File.join(@docs_dir, "design", TEST_FILE), "# test"
+    File.write File.join(@repo_root, "README.md"),
+               "`docs/design/#{TEST_FILE}` と地の文 docs/design/#{TEST_FILE} を参照。\n\n" \
+               "[test][t]\n\n[t]: docs/design/#{TEST_FILE}\n"
+    silence_stdout { assert_equal 0, @tool.verify }
+  end
+
+  # .md で終わらない DOC-ID の言及は従来どおり ID の実在だけを見る
+  # （説明的ファイル名の終わりを機械的に切り出せないため）。
+  def test_id_only_mention_without_md_suffix_ignores_filename_mismatch
+    File.write File.join(@docs_dir, "design", TEST_FILE), "# test"
+    File.write File.join(@repo_root, "README.md"), "DOC-2606281807_別名 を参照。"
+    silence_stdout { assert_equal 0, @tool.verify }
+  end
+
+  def test_does_not_double_report_wrong_filename_bare_ref
+    File.write File.join(@docs_dir, "design", TEST_FILE), "# test"
+    File.write File.join(@repo_root, "README.md"),
+               "docs/design/DOC-2606281807_別名.md に注意。"
+    output = capture_stdout { @tool.verify }
+    assert_equal 1, output.lines.count { |l| l.start_with? "❌" }
+  end
 end
 
 class DocIdVerifyGitTest < Minitest::Test

@@ -89,6 +89,16 @@ module DocId
       end
     end
 
+    # `.md` で終わる DOC-<ID>_<説明的ファイル名>.md 形のトークン。インラインコード・
+    # 地の文・参照スタイルのリンク定義（[label]: path）など、インラインリンク
+    # `[text](path)` 以外の書き方で現れるものを拾う。basename の実在確認のみを行い、
+    # パスの解決（相対か、リポジトリルート起点か）はしない。
+    # 説明的ファイル名に `.` `<` `>` は使われない運用のため、この3文字は捕捉対象から
+    # 除く。`...`（省略記法。例: `DOC-XXX-a_..._計画.md`）や `<説明的ファイル名>`
+    # （命名規則そのものを説明する地の文のプレースホルダ）を実在しないファイルとして
+    # 誤検知しないようにするための除外である。
+    NAMED_REF = %r{\b(DOC-\d{6}\d{4}(?:-[a-z])?)_([^\s/\]\)`.<>]+?\.md)(?![a-zA-Z0-9_])}
+
     def check_bare_refs(content, rel, broken)
       each_outside_fence content do |line, num|
         # マークダウンリンク [text](target) は行ごと空白に潰す。target 側は
@@ -98,6 +108,7 @@ module DocId
         # target の両方に同じ ID を書くのが通例（該当12行、text のみは0行）のため、
         # 二重報告を避ける側を優先している。
         scrubbed = line.gsub(/\[[^\]]*\]\([^)]*\)/) { |m| " " * m.length }
+        scrubbed = check_named_refs scrubbed, rel, num, broken
         scrubbed.scan(/\b(DOC-\d{6}\d{4}(?:-[a-z])?)(?=_|\b)/).each do |match|
           id = match[0]
           broken << { file: rel, ref: id, line: num } unless doc_id_exists? id
@@ -105,7 +116,20 @@ module DocId
       end
     end
 
+    # NAMED_REF に一致した箇所を検証し、二重報告を避けるため一致箇所を空白に潰した
+    # 行を返す（続く裸の DOC-ID だけのスキャンが同じ箇所を ID 存在のみで再検査しないため）。
+    def check_named_refs(line, rel, num, broken)
+      line.gsub(NAMED_REF) do |matched|
+        id = ::Regexp.last_match(1)
+        name = ::Regexp.last_match(2)
+        broken << { file: rel, ref: "#{id}_#{name}", line: num } unless named_doc_id_exists? id, name
+        " " * matched.length
+      end
+    end
+
     def doc_id_exists?(id) = !Dir.glob(File.join(@docs_dir, "**", "#{id}_*")).empty?
+
+    def named_doc_id_exists?(id, name) = !Dir.glob(File.join(@docs_dir, "**", "#{id}_#{name}")).empty?
 
     def searchable_files
       git_tracked_files.select { |f| searchable_file? f }
