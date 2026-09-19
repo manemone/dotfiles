@@ -147,10 +147,8 @@ module DocId
     def rename_with_content_replacement(abs_path, doc_id, old_doc_id, clean)
       if old_doc_id
         content = File.read abs_path
-        ref_full, ref_bare = self_ref_forms old_doc_id, clean
-        if content.include?(ref_full) || content.include?(ref_bare)
-          File.write abs_path, replace_self_ref(content, old_doc_id, doc_id, clean)
-        end
+        replaced = replace_self_ref(content, old_doc_id, doc_id, clean)
+        File.write abs_path, replaced if replaced != content
       end
       new_path = File.join File.dirname(abs_path), "#{doc_id}_#{clean}"
       FileUtils.mv abs_path, new_path
@@ -163,12 +161,12 @@ module DocId
         return
       end
 
-      ref_full, ref_bare = self_ref_forms old_id, clean_name
       searchable_files.reject { |f| excluded_path? f }.each do |file|
         content = File.read file
-        next unless content.include?(ref_full) || content.include?(ref_bare)
+        replaced = replace_self_ref(content, old_id, new_id, clean_name)
+        next if replaced == content
 
-        File.write file, replace_self_ref(content, old_id, new_id, clean_name)
+        File.write file, replaced
         puts "  参照更新: #{relative_path file}"
       rescue Errno::ENOENT
         # Skip renamed file's old path.
@@ -180,10 +178,15 @@ module DocId
       ["#{id}_#{clean_name}", "#{id}_#{clean_name.delete_suffix '.md'}"]
     end
 
+    # 自己参照だけを新IDに置換する。`(?!\p{Word})` により、説明的ファイル名が自分の
+    # 名前で始まる別文書への参照（例: 計画.md への参照が計画書.md への参照の接頭辞に
+    # なる）を巻き込まない。単純な部分文字列置換だと、この接頭辞一致でも書き換わって
+    # しまい存在しないファイルを指す参照ができる。
     def replace_self_ref(content, old_id, new_id, clean_name)
       ref_full, ref_bare = self_ref_forms old_id, clean_name
       new_full, new_bare = self_ref_forms new_id, clean_name
-      content.gsub(ref_full, new_full).gsub ref_bare, new_bare
+      content.gsub(/#{Regexp.escape ref_full}(?!\p{Word})/, new_full)
+             .gsub(/#{Regexp.escape ref_bare}(?!\p{Word})/, new_bare)
     end
   end
 end

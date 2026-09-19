@@ -391,6 +391,26 @@ class DocIdAssignTest < Minitest::Test
     assert_match(%r{\.\./tracking/DOC-\d{10}(?:-[a-z])?_未確定事項\.md}, content_a_after)
   end
 
+  def test_assign_does_not_corrupt_placeholder_link_to_document_whose_name_shares_a_prefix
+    readme = File.join @repo_root, "README.md"
+    File.write readme, "[計画書](docs/design/DOC-DOCID_PLACEHOLDER_計画書.md) を参照\n"
+    Open3.capture2 git_env, "git", "add", "README.md", chdir: @repo_root
+    path = File.join @repo_root, "docs/design/DOC-DOCID_PLACEHOLDER_計画.md"
+    File.write path, "# 計画\n[計画書](DOC-DOCID_PLACEHOLDER_計画書.md) を参照\n"
+    Open3.capture2 git_env, "git", "add", "docs/design/DOC-DOCID_PLACEHOLDER_計画.md", chdir: @repo_root
+    Open3.capture2 git_env, "git", "commit", "-m", "add files", chdir: @repo_root
+
+    silence_stdout { @tool.assign "docs/design/DOC-DOCID_PLACEHOLDER_計画.md" }
+
+    renamed = Dir.glob(File.join(@docs_dir, "design", "DOC-*_計画.md")).first
+    content = File.read renamed
+    # 計画書.md はまだ未採番なので、計画.md 自身の中の参照も書き換わらない
+    assert_includes content, "DOC-DOCID_PLACEHOLDER_計画書.md"
+
+    readme_content = File.read readme
+    assert_includes readme_content, "DOC-DOCID_PLACEHOLDER_計画書.md"
+  end
+
   def test_assign_leaves_unrelated_placeholder_mentions_in_self_file_unchanged
     path = File.join @repo_root, "docs/design/DOC-DOCID_PLACEHOLDER_計画.md"
     File.write path,
