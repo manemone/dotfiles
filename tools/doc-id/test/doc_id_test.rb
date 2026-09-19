@@ -396,14 +396,21 @@ class DocIdAssignTest < Minitest::Test
     File.write readme, "[計画書](docs/design/DOC-DOCID_PLACEHOLDER_計画書.md) を参照\n"
     Open3.capture2 git_env, "git", "add", "README.md", chdir: @repo_root
     path = File.join @repo_root, "docs/design/DOC-DOCID_PLACEHOLDER_計画.md"
-    File.write path, "# 計画\n[計画書](DOC-DOCID_PLACEHOLDER_計画書.md) を参照\n"
+    File.write path,
+               "# 計画\nDOC-DOCID_PLACEHOLDER_計画を参照。\n" \
+               "[計画書](DOC-DOCID_PLACEHOLDER_計画書.md) を参照\n"
     Open3.capture2 git_env, "git", "add", "docs/design/DOC-DOCID_PLACEHOLDER_計画.md", chdir: @repo_root
+    sibling = File.join @repo_root, "docs/design/DOC-DOCID_PLACEHOLDER_計画書.md"
+    File.write sibling, "# 計画書\n"
+    Open3.capture2 git_env, "git", "add", "docs/design/DOC-DOCID_PLACEHOLDER_計画書.md", chdir: @repo_root
     Open3.capture2 git_env, "git", "commit", "-m", "add files", chdir: @repo_root
 
     silence_stdout { @tool.assign "docs/design/DOC-DOCID_PLACEHOLDER_計画.md" }
 
     renamed = Dir.glob(File.join(@docs_dir, "design", "DOC-*_計画.md")).first
     content = File.read renamed
+    # 助詞が直接続く省略形の自己参照は置換される
+    assert_match(/DOC-\d{10}_計画を参照。/, content)
     # 計画書.md はまだ未採番なので、計画.md 自身の中の参照も書き換わらない
     assert_includes content, "DOC-DOCID_PLACEHOLDER_計画書.md"
 
