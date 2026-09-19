@@ -152,6 +152,96 @@ class DocIdVerifyTest < Minitest::Test
     File.write File.join(@repo_root, "spec", "fixture.md"), "See #{NONEXISTENT_ID} for details."
     silence_stdout { assert_equal 0, @tool.verify }
   end
+
+  # 穴3: ID は実在するが説明的ファイル名が違う DOC-<ID>_<名前>.md を、インライン
+  # コード・地の文・参照スタイルのリンク定義に書くと、旧実装では ID の実在しか見ず
+  # 見逃していた（iosci で verify が 22 件のリンク切れを見逃した実バグ）。
+  def test_detects_wrong_filename_in_inline_code
+    File.write File.join(@docs_dir, "design", TEST_FILE), "# test"
+    File.write File.join(@repo_root, "README.md"),
+               "`docs/design/DOC-2606281807_別名.md` を参照。"
+    silence_stdout { assert_equal 1, @tool.verify }
+  end
+
+  # 説明的ファイル名は中黒（・）や全角英数字を含みうる。Unicode の文字・数字
+  # カテゴリだけで判定すると、中黒は句読点カテゴリのため除外され、ID は実在するが
+  # ファイル名が違う参照を黙って見逃す（この検査が塞ぐべき穴1系のバグそのもの）。
+  def test_detects_wrong_filename_containing_nakaguro_in_inline_code
+    File.write File.join(@docs_dir, "design", "DOC-2606281807_技術・運用方針.md"), "# test"
+    File.write File.join(@repo_root, "README.md"),
+               "`docs/design/DOC-2606281807_設計・運用方針.md` を参照。"
+    silence_stdout { assert_equal 1, @tool.verify }
+  end
+
+  def test_detects_wrong_filename_in_prose
+    File.write File.join(@docs_dir, "design", TEST_FILE), "# test"
+    File.write File.join(@repo_root, "README.md"),
+               "docs/design/DOC-2606281807_別名.md に注意。"
+    silence_stdout { assert_equal 1, @tool.verify }
+  end
+
+  def test_detects_wrong_filename_in_reference_style_link_definition
+    File.write File.join(@docs_dir, "design", TEST_FILE), "# test"
+    File.write File.join(@repo_root, "README.md"),
+               "[test][t]\n\n[t]: docs/design/DOC-2606281807_別名.md\n"
+    silence_stdout { assert_equal 1, @tool.verify }
+  end
+
+  def test_accepts_correct_filename_in_inline_code_and_reference_style_link
+    File.write File.join(@docs_dir, "design", TEST_FILE), "# test"
+    File.write File.join(@repo_root, "README.md"),
+               "`docs/design/#{TEST_FILE}` と地の文 docs/design/#{TEST_FILE} を参照。\n\n" \
+               "[test][t]\n\n[t]: docs/design/#{TEST_FILE}\n"
+    silence_stdout { assert_equal 0, @tool.verify }
+  end
+
+  # .md で終わらない DOC-ID の言及は従来どおり ID の実在だけを見る
+  # （説明的ファイル名の終わりを機械的に切り出せないため）。
+  def test_id_only_mention_without_md_suffix_ignores_filename_mismatch
+    File.write File.join(@docs_dir, "design", TEST_FILE), "# test"
+    File.write File.join(@repo_root, "README.md"), "DOC-2606281807_別名 を参照。"
+    silence_stdout { assert_equal 0, @tool.verify }
+  end
+
+  def test_does_not_double_report_wrong_filename_bare_ref
+    File.write File.join(@docs_dir, "design", TEST_FILE), "# test"
+    File.write File.join(@repo_root, "README.md"),
+               "docs/design/DOC-2606281807_別名.md に注意。"
+    output = capture_stdout { @tool.verify }
+    assert_equal 1, output.lines.count { |l| l.start_with? "❌" }
+  end
+
+  # 長いファイル名を「...」で省略して言及する地の文（実在確認の対象外の書き方）を、
+  # 実在しないファイルとして誤検知してはならない。ID自体は実在する前提
+  # （実在しない場合は裸のID言及として従来どおり検出される。それとは別の観測）。
+  def test_does_not_flag_ellipsis_abbreviated_mention
+    File.write File.join(@docs_dir, "design", TEST_FILE), "# test"
+    File.write File.join(@repo_root, "README.md"),
+               "詳細は `DOC-2606281807_..._計画.md` 参照（孫3プロンプト §8 準拠）。"
+    silence_stdout { assert_equal 0, @tool.verify }
+  end
+
+  # 命名規則そのものを説明する地の文の `<説明的ファイル名>` のようなプレースホルダを、
+  # 実在しないファイルとして誤検知してはならない。ID自体は実在する前提
+  # （実在しない場合は裸のID言及として従来どおり検出される。それとは別の観測）。
+  def test_does_not_flag_generic_naming_convention_placeholder
+    File.write File.join(@docs_dir, "design", TEST_FILE), "# test"
+    File.write File.join(@repo_root, "README.md"),
+               "新規ファイルは `DOC-2606281807_<説明的ファイル名>.md` で作る。"
+    silence_stdout { assert_equal 0, @tool.verify }
+  end
+
+  # 拡張子なしの DOC-ID_名前 言及（ID の実在だけを見る書き方）の直後に、空白を挟まず
+  # 全角括弧や読点で別の .md 言及が続くと、旧実装ではその境界を越えて1トークンとして
+  # 誤って呑み込み、存在しない合成ファイル名として誤検知していた
+  # （PR #110 レビュー指摘。ブラックリスト方式で除外文字を挙げ漏れるたびに再発するため、
+  # 実装は説明的ファイル名に実際に使われる文字種のアローリストへ変更した）。
+  def test_does_not_merge_id_only_mention_with_following_unrelated_md_file
+    File.write File.join(@docs_dir, "design", TEST_FILE), "# test"
+    File.write File.join(@repo_root, "README.md"),
+               "PR作法（DOC-2606281807_test）とAGENTS.mdを読む。"
+    silence_stdout { assert_equal 0, @tool.verify }
+  end
 end
 
 class DocIdVerifyGitTest < Minitest::Test
