@@ -200,6 +200,26 @@ class DocIdVerifyTest < Minitest::Test
     output = capture_stdout { @tool.verify }
     assert_equal 1, output.lines.count { |l| l.start_with? "❌" }
   end
+
+  # 長いファイル名を「...」で省略して言及する地の文（実在確認の対象外の書き方）を、
+  # 実在しないファイルとして誤検知してはならない。ID自体は実在する前提
+  # （実在しない場合は裸のID言及として従来どおり検出される。それとは別の観測）。
+  def test_does_not_flag_ellipsis_abbreviated_mention
+    File.write File.join(@docs_dir, "design", TEST_FILE), "# test"
+    File.write File.join(@repo_root, "README.md"),
+               "詳細は `DOC-2606281807_..._計画.md` 参照（孫3プロンプト §8 準拠）。"
+    silence_stdout { assert_equal 0, @tool.verify }
+  end
+
+  # 命名規則そのものを説明する地の文の `<説明的ファイル名>` のようなプレースホルダを、
+  # 実在しないファイルとして誤検知してはならない。ID自体は実在する前提
+  # （実在しない場合は裸のID言及として従来どおり検出される。それとは別の観測）。
+  def test_does_not_flag_generic_naming_convention_placeholder
+    File.write File.join(@docs_dir, "design", TEST_FILE), "# test"
+    File.write File.join(@repo_root, "README.md"),
+               "新規ファイルは `DOC-2606281807_<説明的ファイル名>.md` で作る。"
+    silence_stdout { assert_equal 0, @tool.verify }
+  end
 end
 
 class DocIdVerifyGitTest < Minitest::Test
