@@ -355,6 +355,66 @@ class DocIdAssignTest < Minitest::Test
     assert_includes content, "DOC-DOCID_PLACEHOLDER と"
   end
 
+  def test_assigning_one_placeholder_does_not_corrupt_link_to_another_placeholder_document
+    design_dir = File.join @docs_dir, "design"
+    tracking_dir = File.join @docs_dir, "tracking"
+    FileUtils.mkdir_p tracking_dir
+    doc_a = File.join design_dir, "DOC-DOCID_PLACEHOLDER_店舗情報.md"
+    doc_b = File.join tracking_dir, "DOC-DOCID_PLACEHOLDER_未確定事項.md"
+    File.write doc_a, "# 店舗情報\n[未確定事項](../tracking/DOC-DOCID_PLACEHOLDER_未確定事項.md)\n"
+    File.write doc_b, "# 未確定事項\n[店舗情報](../design/DOC-DOCID_PLACEHOLDER_店舗情報.md)\n"
+    Open3.capture2 git_env, "git", "add", "docs/design/DOC-DOCID_PLACEHOLDER_店舗情報.md", chdir: @repo_root
+    Open3.capture2 git_env, "git", "add", "docs/tracking/DOC-DOCID_PLACEHOLDER_未確定事項.md", chdir: @repo_root
+    Open3.capture2 git_env, "git", "commit", "-m", "add A and B", chdir: @repo_root
+
+    silence_stdout { @tool.assign "docs/design/DOC-DOCID_PLACEHOLDER_店舗情報.md" }
+
+    renamed_a = Dir.glob(File.join(design_dir, "DOC-*_店舗情報.md")).first
+    refute_nil renamed_a
+    content_a = File.read renamed_a
+    # 穴1: Bはまだ未採番なので、Bへのプレースホルダ参照は書き換わらず残る
+    assert_includes content_a, "DOC-DOCID_PLACEHOLDER_未確定事項.md"
+
+    content_b = File.read doc_b
+    refute_includes content_b, "DOC-DOCID_PLACEHOLDER_店舗情報"
+    assert_match(%r{\.\./design/DOC-\d{10}_店舗情報\.md}, content_b)
+
+    Open3.capture2 git_env, "git", "add", "-A", chdir: @repo_root
+    Open3.capture2 git_env, "git", "commit", "-m", "assign a", chdir: @repo_root
+
+    silence_stdout { @tool.assign "docs/tracking/DOC-DOCID_PLACEHOLDER_未確定事項.md" }
+
+    renamed_b = Dir.glob(File.join(tracking_dir, "DOC-*_未確定事項.md")).first
+    refute_nil renamed_b
+    content_a_after = File.read renamed_a
+    refute_includes content_a_after, "DOC-DOCID_PLACEHOLDER"
+    assert_match(%r{\.\./tracking/DOC-\d{10}(?:-[a-z])?_未確定事項\.md}, content_a_after)
+  end
+
+  def test_assign_leaves_unrelated_placeholder_mentions_in_self_file_unchanged
+    path = File.join @repo_root, "docs/design/DOC-DOCID_PLACEHOLDER_計画.md"
+    File.write path,
+               "# 計画\n> **DOC-ID**: DOC-DOCID_PLACEHOLDER_計画\n\n" \
+               "`DOC-DOCID_PLACEHOLDER_<説明的ファイル名>.md` という名前で作り、" \
+               "採番前は `DOC-DOCID_PLACEHOLDER` のままにする。\n\n" \
+               "[別文書](../tracking/DOC-DOCID_PLACEHOLDER_未確定事項.md) も参照。\n"
+    Open3.capture2 git_env, "git", "add", "docs/design/DOC-DOCID_PLACEHOLDER_計画.md", chdir: @repo_root
+    Open3.capture2 git_env, "git", "commit", "-m", "add placeholder", chdir: @repo_root
+
+    silence_stdout { @tool.assign "docs/design/DOC-DOCID_PLACEHOLDER_計画.md" }
+
+    renamed = Dir.glob(File.join(@docs_dir, "design", "DOC-*_計画.md")).first
+    content = File.read renamed
+
+    # 自己参照（.md 無し）は新IDに置換される
+    refute_includes content, "DOC-DOCID_PLACEHOLDER_計画"
+    assert_match(/DOC-\d{10}_計画/, content)
+    # 説明的ファイル名を伴わない裸の言及、命名規則の説明、他文書への参照は変わらない
+    assert_includes content, "DOC-DOCID_PLACEHOLDER_<説明的ファイル名>.md"
+    assert_includes content, "`DOC-DOCID_PLACEHOLDER`"
+    assert_includes content, "DOC-DOCID_PLACEHOLDER_未確定事項.md"
+  end
+
   def test_does_not_update_references_inside_excluded_test_directory
     test_dir = File.join @repo_root, "test"
     FileUtils.mkdir_p test_dir

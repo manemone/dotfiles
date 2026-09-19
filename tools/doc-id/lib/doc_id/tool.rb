@@ -140,9 +140,17 @@ module DocId
       basename.start_with? "DOC-DOCID_PLACEHOLDER_"
     end
 
+    # 採番するファイル自身に含まれる、自分自身への参照（<旧ID>_<説明的ファイル名>の
+    # .md 付き・無し）だけを新 ID に置換する。他文書へのプレースホルダ参照や、
+    # 説明的ファイル名を伴わない裸の DOC-ID 言及はここでは対象にせず、そのまま残す
+    # （他文書への参照は、その文書自身が採番されたときに replace_all_doc_id_refs が更新する）。
     def rename_with_content_replacement(abs_path, doc_id, old_doc_id, clean)
-      if old_doc_id && (content = File.read abs_path) && content.include?(old_doc_id)
-        File.write abs_path, content.gsub(/#{Regexp.escape old_doc_id}(?!-[\da-z])/, doc_id)
+      if old_doc_id
+        content = File.read abs_path
+        ref_full, ref_bare = self_ref_forms old_doc_id, clean
+        if content.include?(ref_full) || content.include?(ref_bare)
+          File.write abs_path, replace_self_ref(content, old_doc_id, doc_id, clean)
+        end
       end
       new_path = File.join File.dirname(abs_path), "#{doc_id}_#{clean}"
       FileUtils.mv abs_path, new_path
@@ -155,19 +163,27 @@ module DocId
         return
       end
 
-      ref_full = "#{old_id}_#{clean_name}"
-      ref_bare = "#{old_id}_#{clean_name.delete_suffix '.md'}"
+      ref_full, ref_bare = self_ref_forms old_id, clean_name
       searchable_files.reject { |f| excluded_path? f }.each do |file|
         content = File.read file
         next unless content.include?(ref_full) || content.include?(ref_bare)
 
-        content = content.gsub(ref_full, "#{new_id}_#{clean_name}")
-                         .gsub ref_bare, "#{new_id}_#{clean_name.delete_suffix '.md'}"
-        File.write file, content
+        File.write file, replace_self_ref(content, old_id, new_id, clean_name)
         puts "  参照更新: #{relative_path file}"
       rescue Errno::ENOENT
         # Skip renamed file's old path.
       end
+    end
+
+    # <id>_<説明的ファイル名> の完全形（.md 付き）と省略形（.md 無し）を返す。
+    def self_ref_forms(id, clean_name)
+      ["#{id}_#{clean_name}", "#{id}_#{clean_name.delete_suffix '.md'}"]
+    end
+
+    def replace_self_ref(content, old_id, new_id, clean_name)
+      ref_full, ref_bare = self_ref_forms old_id, clean_name
+      new_full, new_bare = self_ref_forms new_id, clean_name
+      content.gsub(ref_full, new_full).gsub ref_bare, new_bare
     end
   end
 end
