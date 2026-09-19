@@ -280,10 +280,112 @@ dfxfer_local_dir() {
   printf '%s\n' "$dir"
 }
 
-# dfxfer_remote_dir
-# Print the handoff directory on the remote, relative to its home.
+# dfxfer_remote_dir <up|down>
+# Print the handoff directory on the remote, relative to its home. up and
+# down use separate directories: sharing one would mean a file dfup just sent
+# reappears as "newly arrived" the next time dfdown runs against the same
+# directory.
 dfxfer_remote_dir() {
-  printf '%s\n' "${DFXFER_REMOTE_DIR:-uploads}"
+  # DFXFER_REMOTE_DIR predates the up/down split and is no longer read by
+  # either direction. Silently falling back to the default here would send
+  # or pull from the wrong place with no error — die instead so a
+  # still-configured ~/.zshrc.local gets fixed instead of ignored.
+  if [ -n "${DFXFER_REMOTE_DIR:-}" ]; then
+    dfxfer_die \
+      "DFXFER_REMOTE_DIR is no longer used." \
+      "Remove it from ~/.zshrc.local — as long as it is set, this error keeps" \
+      "firing even after you also export the variable below; it is not a" \
+      "second knob alongside DFXFER_REMOTE_DIR, it replaces it." \
+      "Set DFXFER_REMOTE_UP_DIR (for dfup) and/or DFXFER_REMOTE_DOWN_DIR (for dfdown) instead."
+  fi
+
+  case "$1" in
+    up) printf '%s\n' "${DFXFER_REMOTE_UP_DIR:-uploads}" ;;
+    down) printf '%s\n' "${DFXFER_REMOTE_DOWN_DIR:-downloads}" ;;
+    *) dfxfer_die "dfxfer_remote_dir: invalid argument '$1' (expected up or down)" ;;
+  esac
+}
+
+# dfxfer_has_dry_run_flag <rsync-passthrough-args...>
+# True if any of the arguments dfdown/dfup forward to rsync would make it a
+# dry run: --dry-run, a bare -n, or -n bundled into another short option
+# (-an, -vn, ...). Used to keep "-n means nothing is touched" true even for
+# the remote mkdir dfdown does before its own rsync call — a long option
+# other than --dry-run (say --exclude=foo*n*) must not false-positive here,
+# hence the separate --* arm that consumes it before the -*n* check runs.
+dfxfer_has_dry_run_flag() {
+  local arg
+  for arg in "$@"; do
+    case "$arg" in
+      --dry-run) return 0 ;;
+      --*) ;;
+      -*)
+        # Only a token made up entirely of dashes and letters can be a
+        # bundle of short options (-an, -vn, ...). Anything else starting
+        # with "-" is a value, not an option — most notably an rsync filter
+        # rule passed via -f/--include/--exclude, which conventionally
+        # starts with "- " for an exclude and can contain an "n" anywhere
+        # in the pattern (e.g. "-f '- *.png'"). Matching those as dry-run
+        # would skip the remote mkdir during an ordinary transfer.
+        case "$arg" in
+          *[!a-zA-Z-]*) ;;
+          *n*) return 0 ;;
+        esac
+        ;;
+    esac
+  done
+  return 1
+}
+
+# dfxfer_ensure_remote_dir <host> <dir>
+# Create <dir> on <host>'s home over ssh if it does not exist yet, and say so
+# when it actually had to. Only dfdown needs this: pushing with rsync creates
+# the destination automatically (what lets dfup use a brand-new
+# DFXFER_REMOTE_UP_DIR without ever mkdir'ing it first), but pulling does not
+# — rsync refuses a source directory that is not there, so the first dfdown
+# against a fresh remote would otherwise die on a bare rsync error instead of
+# just working.
+#
+# The existence check has to happen on the remote and be reported back,
+# rather than just running `mkdir -p` and staying quiet: a plain `mkdir -p`
+# is silent either way, which would turn a typo'd DFXFER_REMOTE_DOWN_DIR from
+# a loud rsync "no such file" error (what happened before this function
+# existed) into "conjure an empty directory and report success" — exactly
+# the kind of silent breakage this test suite exists to catch.
+dfxfer_ensure_remote_dir() {
+  local host="$1"
+  local dir="$2"
+  local result
+
+  # ssh(1): additional command-line arguments after <host> are "appended to
+  # the command, separated by spaces" before the *remote* shell parses that
+  # flattened string — argv boundaries do not survive the trip. Passing
+  # $dir as a trailing argv element naively (an earlier version of this
+  # function did `sh -c '...' _ "$dir"`) therefore does not arrive as a
+  # separate token: it becomes part of the one string the remote
+  # re-parses, and unless that happens to still be valid shell syntax, the
+  # remote fails with a syntax error instead of running anything.
+  #
+  # `sh -s -- "$dir"` avoids that trap without needing $dir inside the
+  # script text at all: after space-joining and reparsing, the remote still
+  # sees the simple, always-valid `sh -s -- <dir>` (three literal words
+  # plus one value with no embedded shell syntax), `-s` makes it read the
+  # script from stdin, and `--` binds <dir> to $1 there. Because nothing
+  # here depends on local (pre-remote) expansion, the heredoc terminator is
+  # quoted — the remote resolves $1 as its own positional parameter.
+  result=$(
+    ssh "$host" sh -s -- "$dir" <<'REMOTE_SCRIPT'
+if [ -d "$1" ]; then
+  printf existing
+else
+  mkdir -p -- "$1" && printf created
+fi
+REMOTE_SCRIPT
+  ) || dfxfer_die "Failed to create $host:$dir/ over ssh. Check connectivity and permissions."
+
+  if [ "$result" = "created" ]; then
+    log_info "$host:$dir/ did not exist yet — created it. Check DFXFER_REMOTE_UP_DIR / DFXFER_REMOTE_DOWN_DIR for a typo if that is unexpected."
+  fi
 }
 
 # dfxfer_is_empty_dir <dir>

@@ -1,8 +1,9 @@
-"""bin/dfup（および将来の dfdown）が組み立てる rsync 呼び出しの検証。
+"""bin/dfup / bin/dfdown が組み立てる rsync 呼び出しの検証。
 
-ssh も実転送も伴わない。`DFXFER_RSYNC` に「引数を記録するだけのスタブ」を
-差し込むことで、組み立てられたコマンドライン全体を読み取る
-（計画書 DOC-2609172237「テスト方針」）。
+実転送は伴わない。`DFXFER_RSYNC` に「引数を記録するだけのスタブ」を差し込むことで、
+組み立てられたコマンドライン全体を読み取る（計画書 DOC-2609172237「テスト方針」）。
+dfdown が受信先を作るために叩く ssh も同様にスタブへ差し替え、実際のネットワーク
+接続は一切発生しない。
 
 ここで固定している regression は、どれも「静かに壊れて、壊れたことに
 気づけない」類のものに絞ってある:
@@ -17,6 +18,10 @@ ssh も実転送も伴わない。`DFXFER_RSYNC` に「引数を記録するだ�
 - rsync --stats の転送件数が1000件を超えると桁区切りのカンマが入り、素朴な数字抽出が
   複数行にマッチして `-eq` 比較がクラッシュする。転送自体は成功しているのに
   エラーメッセージが出て利用者を混乱させる
+- リモートの受信先ディレクトリが無いまま dfdown が pull すると、rsync は
+  push方向と違って自動でディレクトリを作らないため素のエラーで落ちる
+- 旧 DFXFER_REMOTE_DIR が設定されたままだと、新しい up/down 変数名は読まれず、
+  エラーも警告も無いまま既定値へ静かにフォールバックする
 """
 
 import os
@@ -84,6 +89,42 @@ else
 fi
 """
 
+# dfdown asks the remote to create its receive directory over ssh before
+# pulling (dfxfer_ensure_remote_dir), and that function's own existing-vs-
+# created distinction depends on what it finds in the remote's home. This
+# stub never touches the network, but it must still behave like the real
+# ssh(1) in one specific way: "the arguments will be appended to the
+# command, separated by spaces" before the *remote* login shell parses that
+# flattened string — argv boundaries after <host> do not survive the trip.
+# An earlier version of this stub instead preserved argv boundaries with
+# `exec "$@"`, which let a command that only worked by accident under
+# preserved boundaries (`sh -c '<script>' _ <dir>`, syntactically broken
+# once space-joined and reparsed) pass every test while failing against
+# real ssh. Joining with `"$*"` and handing that one string to `sh -c`
+# below is what makes this stub catch that class of bug again.
+#
+# It logs the host, then each remaining argv element on its own line, to
+# SSH_ARGS_LOG before joining — so tests can still assert on the exact
+# argv dfxfer_ensure_remote_dir passed, independent of the join/reparse
+# step. It runs the joined command with SSH_STUB_REMOTE_HOME as cwd — a
+# plain local directory standing in for "the remote's home" — so
+# `[ -d ... ]` / `mkdir -p` behave exactly as they would for real, and
+# tests can pre-seed that directory to get the "already exists" branch.
+# SSH_STUB_EXIT_CODE (default 0) short-circuits before running anything,
+# simulating an unreachable host. Kept in its own directory (not fake_bin)
+# so it can sit on PATH unconditionally without also activating UNAME_STUB
+# for tests that are not exercising the macOS branch.
+SSH_STUB = """#!/bin/sh
+host="$1"
+shift
+printf '%s\\n' "$host" >>"$SSH_ARGS_LOG"
+for a in "$@"; do printf '%s\\n' "$a"; done >>"$SSH_ARGS_LOG"
+[ "${SSH_STUB_EXIT_CODE:-0}" = "0" ] || exit "$SSH_STUB_EXIT_CODE"
+cd "$SSH_STUB_REMOTE_HOME" || exit 1
+joined="$*"
+exec sh -c "$joined"
+"""
+
 
 class DfxferTestBase(unittest.TestCase):
     def setUp(self):
@@ -91,11 +132,19 @@ class DfxferTestBase(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
 
         self.args_log = self.tmp / "args.log"
+        self.ssh_args_log = self.tmp / "ssh-args.log"
         self.base_dir = self.tmp / "dfxfer"
 
         self.fake_bin = self.tmp / "fakebin"
         self.fake_bin.mkdir()
         self._write_exec(self.fake_bin / "uname", UNAME_STUB)
+
+        self.ssh_bin = self.tmp / "sshbin"
+        self.ssh_bin.mkdir()
+        self._write_exec(self.ssh_bin / "ssh", SSH_STUB)
+
+        self.remote_home = self.tmp / "remote-home"
+        self.remote_home.mkdir()
 
     def _write_exec(self, path, content):
         path.write_text(content, encoding="utf-8")
@@ -134,12 +183,17 @@ class DfxferTestBase(unittest.TestCase):
             "DFXFER_HOSTS",
             "DFXFER_DIR",
             "DFXFER_REMOTE_DIR",
+            "DFXFER_REMOTE_UP_DIR",
+            "DFXFER_REMOTE_DOWN_DIR",
             "DFXFER_RSYNC",
         ):
             run_env.pop(key, None)
         run_env["ARGS_LOG"] = str(self.args_log)
+        run_env["SSH_ARGS_LOG"] = str(self.ssh_args_log)
+        run_env["SSH_STUB_REMOTE_HOME"] = str(self.remote_home)
         run_env["DFXFER_DIR"] = str(self.base_dir)
         run_env["DFXFER_RSYNC"] = str(self._rsync_stub(rsync_version))
+        run_env["PATH"] = f"{self.ssh_bin}:{run_env['PATH']}"
         if macos:
             run_env["PATH"] = f"{self.fake_bin}:{run_env['PATH']}"
         run_env.update(env or {})
@@ -156,6 +210,11 @@ class DfxferTestBase(unittest.TestCase):
         if not self.args_log.exists():
             return []
         return self.args_log.read_text(encoding="utf-8").splitlines()
+
+    def _logged_ssh_args(self):
+        if not self.ssh_args_log.exists():
+            return []
+        return self.ssh_args_log.read_text(encoding="utf-8").splitlines()
 
 
 class DestinationResolutionTest(DfxferTestBase):
@@ -321,11 +380,53 @@ class DfupInvocationTest(DfxferTestBase):
         self._seed_file("toybox")
         proc = self._run(
             DFUP,
-            env={"DFXFER_HOSTS": "toybox", "DFXFER_REMOTE_DIR": "inbox"},
+            env={"DFXFER_HOSTS": "toybox", "DFXFER_REMOTE_UP_DIR": "inbox"},
         )
 
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertIn("toybox:inbox/", self._logged_args())
+
+    def test_legacy_remote_dir_var_is_rejected_with_guidance(self):
+        """regression: DFXFER_REMOTE_DIR は up/down 分離前の変数名で、
+        今の dfxfer_remote_dir() はどちらの方向でも読まない。黙って既定値
+        （uploads）へフォールバックすると、これを設定したままの
+        ~/.zshrc.local からは意図した宛先と違う場所へ静かに送られ続ける
+        （利用者は exit 0 の成功表示しか見えない）。設定されていたら
+        止めて、新しい変数名を案内する。
+
+        regression（ラウンド2）: 最初の案内は「新しい変数を設定しろ」としか
+        言わず、DFXFER_REMOTE_DIR を消せとは言っていなかった。案内どおり
+        新変数を追加しても DFXFER_REMOTE_DIR は残ったままなので、
+        一字一句同じメッセージで再び止まる。「削除しろ」まで言うこと。"""
+        self._seed_file("toybox")
+        proc = self._run(
+            DFUP,
+            env={"DFXFER_HOSTS": "toybox", "DFXFER_REMOTE_DIR": "handoff"},
+        )
+
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertEqual(self._logged_args(), [])
+        self.assertIn("DFXFER_REMOTE_DIR", proc.stderr)
+        self.assertIn("DFXFER_REMOTE_UP_DIR", proc.stderr)
+        self.assertIn("DFXFER_REMOTE_DOWN_DIR", proc.stderr)
+        self.assertIn("Remove it", proc.stderr)
+        self.assertIn("~/.zshrc.local", proc.stderr)
+
+        # 案内どおり新変数だけ追加しても、旧変数が残っている限り同じ
+        # エラーで止まり続けること（「設定しろ」に従うだけでは直らない
+        # のが今回のregressionそのものなので、実際に再現させて確認する）。
+        self.args_log.unlink(missing_ok=True)
+        proc2 = self._run(
+            DFUP,
+            env={
+                "DFXFER_HOSTS": "toybox",
+                "DFXFER_REMOTE_DIR": "handoff",
+                "DFXFER_REMOTE_UP_DIR": "handoff",
+            },
+        )
+        self.assertNotEqual(proc2.returncode, 0)
+        self.assertEqual(self._logged_args(), [])
+        self.assertIn("DFXFER_REMOTE_DIR", proc2.stderr)
 
     def test_creates_local_dirs_and_reports_when_there_is_nothing_to_send(self):
         """初回実行で mkdir を人間にさせない。中身が無いときは黙って
@@ -346,7 +447,7 @@ class DfdownInvocationTest(DfxferTestBase):
     dfup 側で authoritative にテスト済みなので、ここでは再テストしない
     （計画書「検証方針」）。"""
 
-    def test_pulls_remote_uploads_downward_without_destructive_flags(self):
+    def test_pulls_remote_downloads_downward_without_destructive_flags(self):
         proc = self._run(DFDOWN, env={"DFXFER_HOSTS": "toybox"})
         args = self._logged_args()
 
@@ -356,7 +457,7 @@ class DfdownInvocationTest(DfxferTestBase):
         # ローカルの中身でリモートを上書きしに行く、静かに起きて戻せない事故になる。
         self.assertEqual(
             args[-2:],
-            ["toybox:uploads/", f"{self.base_dir}/toybox/in/"],
+            ["toybox:downloads/", f"{self.base_dir}/toybox/in/"],
         )
 
         # 消す方向のフラグが1つも無いこと。混入するとリモートの原本、または
@@ -364,6 +465,98 @@ class DfdownInvocationTest(DfxferTestBase):
         for flag in ("--delete", "--remove-source-files"):
             self.assertNotIn(flag, args)
         self.assertFalse([a for a in args if a.startswith("--delete")])
+
+    def test_creates_remote_receive_dir_over_ssh_before_pulling(self):
+        """regression: rsync は push 方向（dfup）では送り先ディレクトリを
+        自動的に作るが、pull 方向では送り元ディレクトリが無いと素の
+        rsync エラーで落ちる。`~/downloads/` はこのPRで新設された名前で
+        リモート上にまだ存在しないため、対策が無いと分離後の最初の
+        dfdown が既存のどの宛先に対しても失敗する。"""
+        self.assertFalse((self.remote_home / "downloads").exists())
+
+        proc = self._run(DFDOWN, env={"DFXFER_HOSTS": "toybox"})
+
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        # host / sh / -s / -- / <dir>: the script itself travels over stdin
+        # (a quoted heredoc), and <dir> is bound to $1 there via `-s --`,
+        # rather than being interpolated into the script text — see
+        # dfxfer_ensure_remote_dir's comment on why.
+        self.assertEqual(
+            self._logged_ssh_args(), ["toybox", "sh", "-s", "--", "downloads"]
+        )
+        self.assertTrue((self.remote_home / "downloads").is_dir())
+        # 新規作成した回だけ、人間が気づけるよう一言出す（regression:
+        # タイポで空ディレクトリが黙って生成される事故対策 — 後述の
+        # test_typo_in_remote_dir_announces_the_new_directory 参照）。
+        self.assertIn("did not exist yet", proc.stdout)
+
+    def test_no_creation_notice_when_remote_dir_already_exists(self):
+        """2回目以降の実行では、既に存在するディレクトリを再度
+        「作った」と報告しない。"""
+        (self.remote_home / "downloads").mkdir()
+
+        proc = self._run(DFDOWN, env={"DFXFER_HOSTS": "toybox"})
+
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertNotIn("did not exist yet", proc.stdout)
+
+    def test_typo_in_remote_dir_announces_the_new_directory(self):
+        """regression: この機能が入る前は、存在しないディレクトリを指せば
+        rsync が exit 23 で落ちたためタイポは必ず露見した。今は
+        dfxfer_ensure_remote_dir が代わりに空ディレクトリを作ってしまうため、
+        新規作成時の通知が無いと `DFXFER_REMOTE_DOWN_DIR` のタイポが
+        「サーバ側がまだ何も出していないだけ」に見えてしまい、
+        気づけないまま exit 0 になる。"""
+        proc = self._run(
+            DFDOWN,
+            env={"DFXFER_HOSTS": "toybox", "DFXFER_REMOTE_DOWN_DIR": "downlaods"},
+        )
+
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("downlaods", proc.stdout)
+        self.assertIn("did not exist yet", proc.stdout)
+
+    def test_dry_run_does_not_touch_the_remote(self):
+        """regression: `-n` は「何も変更しない」という約束のはずが、
+        リモート受け皿ディレクトリの作成だけは無条件に実行されていた。
+        dry-run では ssh 自体を一切呼ばない。"""
+        proc = self._run(DFDOWN, "-n", env={"DFXFER_HOSTS": "toybox"})
+
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(self._logged_ssh_args(), [])
+        self.assertFalse((self.remote_home / "downloads").exists())
+
+    def test_rsync_filter_rule_value_is_not_mistaken_for_dry_run(self):
+        """regression: dfxfer_has_dry_run_flag は「'-'で始まり'n'を含む」
+        トークンを全て dry-run 扱いしていた。rsync のフィルタルールの値
+        （`-f '- *.png'` のような除外指定）は慣習的に "- " で始まり、
+        パターン自体に 'n' を含むことも普通にあるため、これも dry-run と
+        誤判定されて通常転送中にリモートの mkdir がスキップされ、
+        このPRが解消したはずの素の rsync エラーが復活してしまう。"""
+        proc = self._run(
+            DFDOWN,
+            "-f",
+            "- *.png",
+            env={"DFXFER_HOSTS": "toybox"},
+        )
+
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertNotIn("Dry run", proc.stdout)
+        self.assertEqual(
+            self._logged_ssh_args(), ["toybox", "sh", "-s", "--", "downloads"]
+        )
+
+    def test_remote_mkdir_failure_aborts_before_any_transfer(self):
+        """ssh 経由の mkdir が失敗したら、rsync を一切起動せずに止まる
+        （中途半端に転送を試みて分かりにくいエラーを重ねない）。"""
+        proc = self._run(
+            DFDOWN,
+            env={"DFXFER_HOSTS": "toybox", "SSH_STUB_EXIT_CODE": "1"},
+        )
+
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertEqual(self._logged_args(), [])
+        self.assertIn("toybox:downloads", proc.stderr)
 
     def test_creates_local_receive_dir_when_missing(self):
         """初回実行で mkdir を人間にさせない（計画書 1.2）。"""
@@ -468,7 +661,7 @@ class DfdownInvocationTest(DfxferTestBase):
         # 転送そのものは通常どおり組み立てられていること。
         self.assertEqual(
             args[-2:],
-            ["toybox:uploads/", f"{self.base_dir}/toybox/in/"],
+            ["toybox:downloads/", f"{self.base_dir}/toybox/in/"],
         )
         self.assertNotIn("Nothing came down", proc.stdout)
         self.assertIn(str(self.base_dir / "toybox" / "in"), proc.stdout)
@@ -485,7 +678,7 @@ class DfdownInvocationTest(DfxferTestBase):
     def test_remote_dir_is_overridable(self):
         proc = self._run(
             DFDOWN,
-            env={"DFXFER_HOSTS": "toybox", "DFXFER_REMOTE_DIR": "inbox"},
+            env={"DFXFER_HOSTS": "toybox", "DFXFER_REMOTE_DOWN_DIR": "inbox"},
         )
 
         self.assertEqual(proc.returncode, 0, proc.stderr)
@@ -502,6 +695,20 @@ class DfdownInvocationTest(DfxferTestBase):
         self.assertEqual(self._logged_args(), [])
         self.assertIn("DFXFER_HOST", proc.stderr)
         self.assertIn("export", proc.stderr)
+
+    def test_shares_legacy_remote_dir_rejection_with_dfup(self):
+        """代表1本だけ: 旧 DFXFER_REMOTE_DIR が設定されていると dfdown も
+        止まること（ガード自体は DfupInvocationTest が authoritative に
+        テスト済み。共通の dfxfer_remote_dir() を通っていることの確認に
+        留める）。"""
+        proc = self._run(
+            DFDOWN,
+            env={"DFXFER_HOSTS": "toybox", "DFXFER_REMOTE_DIR": "handoff"},
+        )
+
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertEqual(self._logged_args(), [])
+        self.assertIn("DFXFER_REMOTE_DIR", proc.stderr)
 
 
 if __name__ == "__main__":

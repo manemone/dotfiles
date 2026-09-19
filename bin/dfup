@@ -7,11 +7,11 @@ set -euo pipefail
 # passed straight through to rsync, so `dfup -n` is a dry run.
 #
 # Configuration (export these from ~/.zshrc.local):
-#   DFXFER_HOSTS       space-separated ssh Host aliases
-#   DFXFER_HOST        the default one
-#   DFXFER_DIR         local base directory     (default: ~/dfxfer)
-#   DFXFER_REMOTE_DIR  remote handoff directory (default: uploads)
-#   DFXFER_RSYNC       force a specific rsync binary
+#   DFXFER_HOSTS           space-separated ssh Host aliases
+#   DFXFER_HOST            the default one
+#   DFXFER_DIR             local base directory     (default: ~/dfxfer)
+#   DFXFER_REMOTE_UP_DIR   remote upload directory  (default: uploads)
+#   DFXFER_RSYNC           force a specific rsync binary
 #
 # See bin/README.md §3.5 and docs/planning/DOC-2609172237_file-handoff_計画.md.
 
@@ -42,7 +42,7 @@ _dfup_dir=$(cd -P "$(dirname "$_dfup_self")" && pwd)
 
 host=$(dfxfer_host)
 local_dir=$(dfxfer_local_dir "$host" out)
-remote_dir=$(dfxfer_remote_dir)
+remote_dir=$(dfxfer_remote_dir up)
 
 if dfxfer_is_empty_dir "$local_dir"; then
   log_info "Nothing to send: $local_dir is empty."
