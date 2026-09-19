@@ -137,6 +137,111 @@ class DocIdVerifyTest < Minitest::Test
     output = capture_stdout { @tool.verify }
     assert_equal 1, output.lines.count { |l| l.start_with? "❌" }
   end
+
+  # docs/spec/ は仕様書ディレクトリであり、テストコードの spec/ とは違う。
+  # 除外対象にすると、iosci のように壊れ参照を verify が見逃す（実バグの regression）。
+  def test_detects_broken_refs_inside_docs_spec_directory
+    FileUtils.mkdir_p File.join(@docs_dir, "spec")
+    File.write File.join(@docs_dir, "spec", "tech.md"), "See #{NONEXISTENT_ID} for details."
+    silence_stdout { assert_equal 1, @tool.verify }
+  end
+
+  # docs/ の外にある test/ tests/ spec/ は従来どおり除外され続ける。
+  def test_still_excludes_test_directories_outside_docs
+    FileUtils.mkdir_p File.join(@repo_root, "spec")
+    File.write File.join(@repo_root, "spec", "fixture.md"), "See #{NONEXISTENT_ID} for details."
+    silence_stdout { assert_equal 0, @tool.verify }
+  end
+
+  # 穴3: ID は実在するが説明的ファイル名が違う DOC-<ID>_<名前>.md を、インライン
+  # コード・地の文・参照スタイルのリンク定義に書くと、旧実装では ID の実在しか見ず
+  # 見逃していた（iosci で verify が 22 件のリンク切れを見逃した実バグ）。
+  def test_detects_wrong_filename_in_inline_code
+    File.write File.join(@docs_dir, "design", TEST_FILE), "# test"
+    File.write File.join(@repo_root, "README.md"),
+               "`docs/design/DOC-2606281807_別名.md` を参照。"
+    silence_stdout { assert_equal 1, @tool.verify }
+  end
+
+  # 説明的ファイル名は中黒（・）や全角英数字を含みうる。Unicode の文字・数字
+  # カテゴリだけで判定すると、中黒は句読点カテゴリのため除外され、ID は実在するが
+  # ファイル名が違う参照を黙って見逃す（この検査が塞ぐべき穴1系のバグそのもの）。
+  def test_detects_wrong_filename_containing_nakaguro_in_inline_code
+    File.write File.join(@docs_dir, "design", "DOC-2606281807_技術・運用方針.md"), "# test"
+    File.write File.join(@repo_root, "README.md"),
+               "`docs/design/DOC-2606281807_設計・運用方針.md` を参照。"
+    silence_stdout { assert_equal 1, @tool.verify }
+  end
+
+  def test_detects_wrong_filename_in_prose
+    File.write File.join(@docs_dir, "design", TEST_FILE), "# test"
+    File.write File.join(@repo_root, "README.md"),
+               "docs/design/DOC-2606281807_別名.md に注意。"
+    silence_stdout { assert_equal 1, @tool.verify }
+  end
+
+  def test_detects_wrong_filename_in_reference_style_link_definition
+    File.write File.join(@docs_dir, "design", TEST_FILE), "# test"
+    File.write File.join(@repo_root, "README.md"),
+               "[test][t]\n\n[t]: docs/design/DOC-2606281807_別名.md\n"
+    silence_stdout { assert_equal 1, @tool.verify }
+  end
+
+  def test_accepts_correct_filename_in_inline_code_and_reference_style_link
+    File.write File.join(@docs_dir, "design", TEST_FILE), "# test"
+    File.write File.join(@repo_root, "README.md"),
+               "`docs/design/#{TEST_FILE}` と地の文 docs/design/#{TEST_FILE} を参照。\n\n" \
+               "[test][t]\n\n[t]: docs/design/#{TEST_FILE}\n"
+    silence_stdout { assert_equal 0, @tool.verify }
+  end
+
+  # .md で終わらない DOC-ID の言及は従来どおり ID の実在だけを見る
+  # （説明的ファイル名の終わりを機械的に切り出せないため）。
+  def test_id_only_mention_without_md_suffix_ignores_filename_mismatch
+    File.write File.join(@docs_dir, "design", TEST_FILE), "# test"
+    File.write File.join(@repo_root, "README.md"), "DOC-2606281807_別名 を参照。"
+    silence_stdout { assert_equal 0, @tool.verify }
+  end
+
+  def test_does_not_double_report_wrong_filename_bare_ref
+    File.write File.join(@docs_dir, "design", TEST_FILE), "# test"
+    File.write File.join(@repo_root, "README.md"),
+               "docs/design/DOC-2606281807_別名.md に注意。"
+    output = capture_stdout { @tool.verify }
+    assert_equal 1, output.lines.count { |l| l.start_with? "❌" }
+  end
+
+  # 長いファイル名を「...」で省略して言及する地の文（実在確認の対象外の書き方）を、
+  # 実在しないファイルとして誤検知してはならない。ID自体は実在する前提
+  # （実在しない場合は裸のID言及として従来どおり検出される。それとは別の観測）。
+  def test_does_not_flag_ellipsis_abbreviated_mention
+    File.write File.join(@docs_dir, "design", TEST_FILE), "# test"
+    File.write File.join(@repo_root, "README.md"),
+               "詳細は `DOC-2606281807_..._計画.md` 参照（孫3プロンプト §8 準拠）。"
+    silence_stdout { assert_equal 0, @tool.verify }
+  end
+
+  # 命名規則そのものを説明する地の文の `<説明的ファイル名>` のようなプレースホルダを、
+  # 実在しないファイルとして誤検知してはならない。ID自体は実在する前提
+  # （実在しない場合は裸のID言及として従来どおり検出される。それとは別の観測）。
+  def test_does_not_flag_generic_naming_convention_placeholder
+    File.write File.join(@docs_dir, "design", TEST_FILE), "# test"
+    File.write File.join(@repo_root, "README.md"),
+               "新規ファイルは `DOC-2606281807_<説明的ファイル名>.md` で作る。"
+    silence_stdout { assert_equal 0, @tool.verify }
+  end
+
+  # 拡張子なしの DOC-ID_名前 言及（ID の実在だけを見る書き方）の直後に、空白を挟まず
+  # 全角括弧や読点で別の .md 言及が続くと、旧実装ではその境界を越えて1トークンとして
+  # 誤って呑み込み、存在しない合成ファイル名として誤検知していた
+  # （PR #110 レビュー指摘。ブラックリスト方式で除外文字を挙げ漏れるたびに再発するため、
+  # 実装は説明的ファイル名に実際に使われる文字種のアローリストへ変更した）。
+  def test_does_not_merge_id_only_mention_with_following_unrelated_md_file
+    File.write File.join(@docs_dir, "design", TEST_FILE), "# test"
+    File.write File.join(@repo_root, "README.md"),
+               "PR作法（DOC-2606281807_test）とAGENTS.mdを読む。"
+    silence_stdout { assert_equal 0, @tool.verify }
+  end
 end
 
 class DocIdVerifyGitTest < Minitest::Test
@@ -355,6 +460,93 @@ class DocIdAssignTest < Minitest::Test
     assert_includes content, "DOC-DOCID_PLACEHOLDER と"
   end
 
+  def test_assigning_one_placeholder_does_not_corrupt_link_to_another_placeholder_document
+    design_dir = File.join @docs_dir, "design"
+    tracking_dir = File.join @docs_dir, "tracking"
+    FileUtils.mkdir_p tracking_dir
+    doc_a = File.join design_dir, "DOC-DOCID_PLACEHOLDER_店舗情報.md"
+    doc_b = File.join tracking_dir, "DOC-DOCID_PLACEHOLDER_未確定事項.md"
+    File.write doc_a, "# 店舗情報\n[未確定事項](../tracking/DOC-DOCID_PLACEHOLDER_未確定事項.md)\n"
+    File.write doc_b, "# 未確定事項\n[店舗情報](../design/DOC-DOCID_PLACEHOLDER_店舗情報.md)\n"
+    Open3.capture2 git_env, "git", "add", "docs/design/DOC-DOCID_PLACEHOLDER_店舗情報.md", chdir: @repo_root
+    Open3.capture2 git_env, "git", "add", "docs/tracking/DOC-DOCID_PLACEHOLDER_未確定事項.md", chdir: @repo_root
+    Open3.capture2 git_env, "git", "commit", "-m", "add A and B", chdir: @repo_root
+
+    silence_stdout { @tool.assign "docs/design/DOC-DOCID_PLACEHOLDER_店舗情報.md" }
+
+    renamed_a = Dir.glob(File.join(design_dir, "DOC-*_店舗情報.md")).first
+    refute_nil renamed_a
+    content_a = File.read renamed_a
+    # 穴1: Bはまだ未採番なので、Bへのプレースホルダ参照は書き換わらず残る
+    assert_includes content_a, "DOC-DOCID_PLACEHOLDER_未確定事項.md"
+
+    content_b = File.read doc_b
+    refute_includes content_b, "DOC-DOCID_PLACEHOLDER_店舗情報"
+    assert_match(%r{\.\./design/DOC-\d{10}_店舗情報\.md}, content_b)
+
+    Open3.capture2 git_env, "git", "add", "-A", chdir: @repo_root
+    Open3.capture2 git_env, "git", "commit", "-m", "assign a", chdir: @repo_root
+
+    silence_stdout { @tool.assign "docs/tracking/DOC-DOCID_PLACEHOLDER_未確定事項.md" }
+
+    renamed_b = Dir.glob(File.join(tracking_dir, "DOC-*_未確定事項.md")).first
+    refute_nil renamed_b
+    content_a_after = File.read renamed_a
+    refute_includes content_a_after, "DOC-DOCID_PLACEHOLDER"
+    assert_match(%r{\.\./tracking/DOC-\d{10}(?:-[a-z])?_未確定事項\.md}, content_a_after)
+  end
+
+  def test_assign_does_not_corrupt_placeholder_link_to_document_whose_name_shares_a_prefix
+    readme = File.join @repo_root, "README.md"
+    File.write readme, "[計画書](docs/design/DOC-DOCID_PLACEHOLDER_計画書.md) を参照\n"
+    Open3.capture2 git_env, "git", "add", "README.md", chdir: @repo_root
+    path = File.join @repo_root, "docs/design/DOC-DOCID_PLACEHOLDER_計画.md"
+    File.write path,
+               "# 計画\nDOC-DOCID_PLACEHOLDER_計画を参照。\n" \
+               "[計画書](DOC-DOCID_PLACEHOLDER_計画書.md) を参照\n"
+    Open3.capture2 git_env, "git", "add", "docs/design/DOC-DOCID_PLACEHOLDER_計画.md", chdir: @repo_root
+    sibling = File.join @repo_root, "docs/design/DOC-DOCID_PLACEHOLDER_計画書.md"
+    File.write sibling, "# 計画書\n"
+    Open3.capture2 git_env, "git", "add", "docs/design/DOC-DOCID_PLACEHOLDER_計画書.md", chdir: @repo_root
+    Open3.capture2 git_env, "git", "commit", "-m", "add files", chdir: @repo_root
+
+    silence_stdout { @tool.assign "docs/design/DOC-DOCID_PLACEHOLDER_計画.md" }
+
+    renamed = Dir.glob(File.join(@docs_dir, "design", "DOC-*_計画.md")).first
+    content = File.read renamed
+    # 助詞が直接続く省略形の自己参照は置換される
+    assert_match(/DOC-\d{10}_計画を参照。/, content)
+    # 計画書.md はまだ未採番なので、計画.md 自身の中の参照も書き換わらない
+    assert_includes content, "DOC-DOCID_PLACEHOLDER_計画書.md"
+
+    readme_content = File.read readme
+    assert_includes readme_content, "DOC-DOCID_PLACEHOLDER_計画書.md"
+  end
+
+  def test_assign_leaves_unrelated_placeholder_mentions_in_self_file_unchanged
+    path = File.join @repo_root, "docs/design/DOC-DOCID_PLACEHOLDER_計画.md"
+    File.write path,
+               "# 計画\n> **DOC-ID**: DOC-DOCID_PLACEHOLDER_計画\n\n" \
+               "`DOC-DOCID_PLACEHOLDER_<説明的ファイル名>.md` という名前で作り、" \
+               "採番前は `DOC-DOCID_PLACEHOLDER` のままにする。\n\n" \
+               "[別文書](../tracking/DOC-DOCID_PLACEHOLDER_未確定事項.md) も参照。\n"
+    Open3.capture2 git_env, "git", "add", "docs/design/DOC-DOCID_PLACEHOLDER_計画.md", chdir: @repo_root
+    Open3.capture2 git_env, "git", "commit", "-m", "add placeholder", chdir: @repo_root
+
+    silence_stdout { @tool.assign "docs/design/DOC-DOCID_PLACEHOLDER_計画.md" }
+
+    renamed = Dir.glob(File.join(@docs_dir, "design", "DOC-*_計画.md")).first
+    content = File.read renamed
+
+    # 自己参照（.md 無し）は新IDに置換される
+    refute_includes content, "DOC-DOCID_PLACEHOLDER_計画"
+    assert_match(/DOC-\d{10}_計画/, content)
+    # 説明的ファイル名を伴わない裸の言及、命名規則の説明、他文書への参照は変わらない
+    assert_includes content, "DOC-DOCID_PLACEHOLDER_<説明的ファイル名>.md"
+    assert_includes content, "`DOC-DOCID_PLACEHOLDER`"
+    assert_includes content, "DOC-DOCID_PLACEHOLDER_未確定事項.md"
+  end
+
   def test_does_not_update_references_inside_excluded_test_directory
     test_dir = File.join @repo_root, "test"
     FileUtils.mkdir_p test_dir
@@ -369,6 +561,26 @@ class DocIdAssignTest < Minitest::Test
     silence_stdout { @tool.assign "docs/design/DOC-DOCID_PLACEHOLDER_計画.md" }
 
     assert_includes File.read(fixture), "DOC-DOCID_PLACEHOLDER_計画"
+  end
+
+  # docs/spec/ は仕様書ディレクトリであり、除外対象にしてはならない。除外すると
+  # iosci で実際に起きたとおり、参照更新が漏れる（実バグの regression）。
+  def test_updates_references_inside_docs_spec_directory
+    spec_dir = File.join @docs_dir, "spec"
+    FileUtils.mkdir_p spec_dir
+    fixture = File.join spec_dir, "fixture.md"
+    File.write fixture, "DOC-DOCID_PLACEHOLDER_計画\n"
+    Open3.capture2 git_env, "git", "add", "docs/spec/fixture.md", chdir: @repo_root
+    path = File.join @repo_root, "docs/design/DOC-DOCID_PLACEHOLDER_計画.md"
+    File.write path, "# 計画\n"
+    Open3.capture2 git_env, "git", "add", "docs/design/DOC-DOCID_PLACEHOLDER_計画.md", chdir: @repo_root
+    Open3.capture2 git_env, "git", "commit", "-m", "add files", chdir: @repo_root
+
+    silence_stdout { @tool.assign "docs/design/DOC-DOCID_PLACEHOLDER_計画.md" }
+
+    content = File.read fixture
+    refute_includes content, "DOC-DOCID_PLACEHOLDER_計画"
+    assert_match(/DOC-\d{10}_計画/, content)
   end
 
   def test_assigns_doc_id_matching_git_commit_date

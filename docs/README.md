@@ -84,6 +84,7 @@
 | DOC-2609031400 | [ocw-pane-roles-and-workspace-labels_計画.md](planning/DOC-2609031400_ocw-pane-roles-and-workspace-labels_計画.md) | `ocw -H` のペイン構成切り替えと Herdr ワークスペースラベル日本語化の傘ブランチ計画書（傘 `ai/ocw-pane-roles`）。commander を省いた2ペインモードの追加、`umbrella-orchestrator` の孫 spawn とラベル付けの更新、スキル文書に残る `ai/` 接頭辞前提の除去を2本の孫へ分解したもの |
 | DOC-2609121700 | [autopilot-permissions_計画.md](planning/DOC-2609121700_autopilot-permissions_計画.md) | 傘 autopilot が承認ダイアログで止まる問題を解消する傘ブランチ計画書（傘 `autopilot-permissions`）。「`main`/`master` へのマージは人間、それ以外は AI」という線引きを、許可設定のガードフック・deploy による学習 allow の保全・`AGENTS.md` とテンプレートの文言・配布スキル、無人ペインを止める非 git 操作（`chmod +x` 等）、`settings.machine.json` の発見性の6本の孫へ分解したもの |
 | DOC-2609162320 | [local-persona_計画.md](planning/DOC-2609162320_local-persona_計画.md) | 配布される人格のパーソナライズ設定をデプロイ先でローカルにカスタマイズ可能にする傘ブランチ計画書（傘 `local-persona`）。ADR DOC-2609162327 で確定した固定パス実体・「定義元を指す」ベース文言の方式を、Claude Code向けの土台・OpenCode対応・Codexとパーソナライズ編集コマンドの3本の孫へ分解したもの |
+| DOC-2609200524 | [doc-id-link-integrity_計画.md](planning/DOC-2609200524_doc-id-link-integrity_計画.md) | `tools/doc-id` の参照書き換え・検証の不具合修正の傘ブランチ計画書（傘 `doc-id-link-integrity`）。未採番文書どうしのリンクを `assign` が壊し `verify` が見逃した不具合を、`assign` の自己参照限定・`docs/` 配下の `spec` 等の走査・`verify` のパス実在確認の3本の孫へ分解したもの |
 
 ### reference/ — 運用リファレンス
 

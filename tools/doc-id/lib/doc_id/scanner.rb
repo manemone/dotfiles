@@ -26,7 +26,9 @@ module DocId
 
     def find_broken_refs
       broken = []
-      # test/ tests/ spec/ を除外（テストフィクスチャに意図的な壊れ参照が含まれるため）
+      # docs/ の外にある test/ tests/ spec/ を除外（テストフィクスチャに意図的な壊れ参照が
+      # 含まれるため）。docs/ 配下は excluded_path? が対象外にする（docs/spec/ 等は仕様書
+      # ディレクトリであり、テストコードではないため）。
       searchable_files.reject { |f| excluded_path? f }.each do |file|
         content = File.read file
         rel = relative_path file
@@ -87,6 +89,22 @@ module DocId
       end
     end
 
+    # `.md` で終わる DOC-<ID>_<説明的ファイル名>.md 形のトークン。インラインコード・
+    # 地の文・参照スタイルのリンク定義（[label]: path）など、インラインリンク
+    # `[text](path)` 以外の書き方で現れるものを拾う。basename の実在確認のみを行い、
+    # パスの解決（相対か、リポジトリルート起点か）はしない。
+    # 説明的ファイル名部分は Unicode の「文字（\p{L}）・数字（\p{N}）」カテゴリで判定する
+    # （漢字・ひらがな・カタカナ・全角英数字・半角英数字を包含し、句読点・括弧の類
+    # （全角括弧・鉤括弧・句読点・中黒など、Unicode 上は句読点カテゴリ）は自動的に
+    # 除かれる）。個別の区切り文字をブラックリストで挙げていくと、挙げ漏れた文字の
+    # 分だけ、空白を挟まない地の文で「拡張子なしの DOC-ID 言及」の直後に現れる別の
+    # `.md` 言及まで1トークンとして誤って呑み込んでしまう
+    # （例:「DOC-XXX_名前）とAGENTS.md」）。一方で `\p{L}\p{N}` だけでは、句読点
+    # カテゴリに分類される中黒（`・`）を含む正当な説明的ファイル名（例: `技術・運用方針`）
+    # まで除外してしまい、ID は実在するがファイル名が違う壊れた参照を黙って見逃す
+    # （この検査が塞ぐべき穴1系のバグそのもの）ため、`・` だけは個別に許可リストへ戻す。
+    NAMED_REF = /\b(DOC-\d{6}\d{4}(?:-[a-z])?)_([\p{L}\p{N}・_-]+?\.md)(?![a-zA-Z0-9_])/
+
     def check_bare_refs(content, rel, broken)
       each_outside_fence content do |line, num|
         # マークダウンリンク [text](target) は行ごと空白に潰す。target 側は
@@ -96,6 +114,7 @@ module DocId
         # target の両方に同じ ID を書くのが通例（該当12行、text のみは0行）のため、
         # 二重報告を避ける側を優先している。
         scrubbed = line.gsub(/\[[^\]]*\]\([^)]*\)/) { |m| " " * m.length }
+        scrubbed = check_named_refs scrubbed, rel, num, broken
         scrubbed.scan(/\b(DOC-\d{6}\d{4}(?:-[a-z])?)(?=_|\b)/).each do |match|
           id = match[0]
           broken << { file: rel, ref: id, line: num } unless doc_id_exists? id
@@ -103,7 +122,20 @@ module DocId
       end
     end
 
+    # NAMED_REF に一致した箇所を検証し、二重報告を避けるため一致箇所を空白に潰した
+    # 行を返す（続く裸の DOC-ID だけのスキャンが同じ箇所を ID 存在のみで再検査しないため）。
+    def check_named_refs(line, rel, num, broken)
+      line.gsub(NAMED_REF) do |matched|
+        id = ::Regexp.last_match(1)
+        name = ::Regexp.last_match(2)
+        broken << { file: rel, ref: "#{id}_#{name}", line: num } unless named_doc_id_exists? id, name
+        " " * matched.length
+      end
+    end
+
     def doc_id_exists?(id) = !Dir.glob(File.join(@docs_dir, "**", "#{id}_*")).empty?
+
+    def named_doc_id_exists?(id, name) = !Dir.glob(File.join(@docs_dir, "**", "#{id}_#{name}")).empty?
 
     def searchable_files
       git_tracked_files.select { |f| searchable_file? f }
@@ -125,8 +157,13 @@ module DocId
 
     # @repo_root からの相対パスのディレクトリ成分単位で判定する。絶対パス全体に対する
     # 部分一致だと、リポジトリ自体が test/ 等を含むパスに置かれた場合に誤爆する。
+    # docs/ 配下のパスには適用しない: docs/spec/ 等は仕様書ディレクトリであり、
+    # テストコードではないため（docs/ の外にある test/ tests/ spec/ のみ除外する）。
     def excluded_path?(path)
-      relative_path(path).split("/").any? { |seg| EXCLUDED_DIR_NAMES.include? seg }
+      segments = relative_path(path).split("/")
+      return false if segments.first == DOCS_DIR_NAME
+
+      segments.any? { |seg| EXCLUDED_DIR_NAMES.include? seg }
     end
 
     def git_tracked_files

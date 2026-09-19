@@ -242,7 +242,7 @@ forge にあって**両方に無い**のは次の2点（forge `AGENTS.md`「## �
   対象を列挙する（git リポジトリでない場合のみ glob にフォールバック）。つまり
   **git に追跡されていないファイルのプレースホルダは置換されない**
 - 孫1 が `.claude/pr-review.yml` の `convention_docs` に PR作法 doc のプレースホルダパス
-  （`docs/design/DOC-2609120054_プルリクエストの作法.md`）を書く場合、
+  （`docs/design/DOC-DOCID_PLACEHOLDER_プルリクエストの作法.md`）を書く場合、
   **その `.claude/pr-review.yml` が `.gitignore` で無視されていると、`doc-id assign` 後に
   切れたパスが残り、`doc-id verify` も検出しない**（追跡されていないので走査されない）
 
@@ -399,7 +399,7 @@ forge にあって**両方に無い**のは次の2点（forge `AGENTS.md`「## �
 - `skills/` 配下は Claude Code だけでなく Codex・OpenCode にも同じ実体が配られる
   （ADR DOC-2608272128）。**pr-review-loop は「AI 不問」を明示的な設計方針として持っている**
   （`skills/pr-review-loop/SKILL.md` 10〜14行目）。特定エージェント前提の記述を持ち込まない
-- `docs/` 配下に新規ファイルを追加する場合は `DOC-2609120054_<説明的ファイル名>.md` で
+- `docs/` 配下に新規ファイルを追加する場合は `DOC-DOCID_PLACEHOLDER_<説明的ファイル名>.md` で
   作り `./tools/doc-id/doc-id assign` で採番する。地の文で文書に言及するときは DOC-ID を明示する
 - `templates/repo-baseline/` は「`$HOME` へは配布せず、dotfiles 本体にも依存しない自己完結
   ディレクトリ」である（AGENTS.md ディレクトリ構成表）。**テンプレ側から dotfiles 本体の
@@ -492,9 +492,9 @@ AGENTS.md「コミット前の必須ステップ」から、本傘に関係す�
   **空欄ならキーを出さない。** 空欄のときに「未設定なら自動検出、スキップしたいなら `null`」
   と分かるコメントを残すかは判断してよい
 - `convention_docs`: `use_doc_id=true` のときだけ、生成される PR作法 doc
-  （`docs/design/DOC-2609120054_プルリクエストの作法.md`）を1件
+  （`docs/design/DOC-DOCID_PLACEHOLDER_プルリクエストの作法.md`）を1件
 - `markers`: 3つとも既定値を明示。**生成される PR作法 doc
-  （`templates/repo-baseline/template/docs/design/DOC-2609120054_プルリクエストの作法.md.jinja`
+  （`templates/repo-baseline/template/docs/design/DOC-DOCID_PLACEHOLDER_プルリクエストの作法.md.jinja`
   の「プレフィクスのフォーマット」節）と字面が一致すること**を自分で確かめる
 - `reviewer_cmd`: 質問は足さない。コメントアウトした行で書き方だけ示す
 - ファイル冒頭に「このファイルを読むのは pr-review-loop スキルであり、`.claude/` という名前
@@ -511,7 +511,7 @@ Jinja の空白制御に注意すること。回答の組み合わせによっ�
 
 1. `uvx copier copy templates/repo-baseline <dir> --defaults` で展開する
 2. `git init` → `git add -A` する
-3. `./tools/doc-id/doc-id assign docs/design/DOC-2609120054_プルリクエストの作法.md`
+3. `./tools/doc-id/doc-id assign docs/design/DOC-DOCID_PLACEHOLDER_プルリクエストの作法.md`
 4. `.claude/pr-review.yml` の `convention_docs` が採番後の実在ファイルを指していること、
    `./tools/doc-id/doc-id verify` が通ることを確認する
 
