@@ -21,16 +21,20 @@
       実行してよい（`gh pr merge <PR番号> --squash --delete-branch`）。傘ブランチは
       孫を安全に統合するための隔離された場所であり、そこへのマージまで人間待ちに
       すると傘ブランチ方式が機能しない
-    - 傘ブランチへの上流取り込みは `git fetch origin` +
-      `git merge origin/{{ default_branch }}` で行う（傘ブランチは孫のマージで
-      `{{ default_branch }}` より進んでいるため、ここは `--ff-only` ではなく
-      通常の `merge` を使う）
-    - 孫ブランチを傘ブランチへ追随させるときは `git rebase origin/<傘ブランチ>` +
-      **孫ブランチ限定**の `git push --force-with-lease` で行う
-      （`{{ default_branch }}` への force push は対象外）。孫ブランチは自分の
-      作業コミットを持つのが通常であり、傘ブランチが他の孫のマージで進んでいれば
+    - **上流（`{{ default_branch }}`）の変更の取り込みは rebase で行う。** 傘ブランチへは
+      `git fetch origin` + `git rebase origin/{{ default_branch }}`、そのあと
+      `git push --force-with-lease`（傘のコミットが書き換わるため force push が要る。
+      これは想定どおりの操作であり、毎回の確認は要らない）
+    - **rebase しない例外は、コンフリクトが多すぎて解消の手間が見合わない場合だけ。**
+      そのときに限り `git merge origin/{{ default_branch }}` を使い、なぜ rebase を
+      諦めたかを PR に書く
+    - 孫ブランチを傘ブランチへ追随させるときも同じく rebase で行う
+      （`git rebase origin/<傘ブランチ>` + `git push --force-with-lease`）。孫ブランチは
+      自分の作業コミットを持つのが通常であり、傘ブランチが他の孫のマージで進んでいれば
       孫と傘は必ず分岐するため、`git merge --ff-only` は使わない
-    - 上記の `fetch` + `merge` / `rebase` + `push` は、**`&&` 等で連結せず
+    - **`{{ default_branch }}` への force push は対象外**（人間だけが
+      `{{ default_branch }}` を書き換える）
+    - 上記の `fetch` + `rebase` + `push` は、**`&&` 等で連結せず
       別々のコマンドとして実行する**
   - 傘ブランチ方式を使わない場合、上記の例外は適用されない
   - `git pull` は使わない

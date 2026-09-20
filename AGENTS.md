@@ -15,14 +15,17 @@
     （`gh pr merge <PR番号> --squash --delete-branch`）。傘ブランチは孫を安全に
     統合するための隔離された場所であり、そこへのマージまで人間待ちにすると
     傘ブランチ方式が機能しない
-  - 傘ブランチへの上流取り込みは `git fetch origin` + `git merge origin/master`
-    で行う（傘ブランチは孫のマージで `master` より進んでいるため、ここは
-    `--ff-only` ではなく通常の `merge` を使う）
-  - 孫ブランチを傘ブランチへ追随させるときは `git rebase origin/<傘ブランチ>` +
-    **孫ブランチ限定**の `git push --force-with-lease` で行う（`master` への
-    force push は対象外）。孫ブランチは自分の作業コミットを持つのが通常であり、
-    傘ブランチが他の孫のマージで進んでいれば孫と傘は必ず分岐するため、
-    `git merge --ff-only` は使わない
+  - **上流（`master`）の変更の取り込みは rebase で行う。** 傘ブランチへは
+    `git fetch origin` + `git rebase origin/master`、そのあと
+    `git push --force-with-lease`（傘のコミットが書き換わるため force push が要る。
+    これは想定どおりの操作であり、毎回の確認は要らない）
+  - **rebase しない例外は、コンフリクトが多すぎて解消の手間が見合わない場合だけ。**
+    そのときに限り `git merge origin/master` を使い、なぜ rebase を諦めたかを PR に書く
+  - 孫ブランチを傘ブランチへ追随させるときも同じく rebase で行う
+    （`git rebase origin/<傘ブランチ>` + `git push --force-with-lease`）。孫ブランチは
+    自分の作業コミットを持つのが通常であり、傘ブランチが他の孫のマージで進んでいれば
+    孫と傘は必ず分岐するため、`git merge --ff-only` は使わない
+  - **`master` への force push は対象外**（人間だけが `master` を書き換える）
   - `git pull` は使わない
   - `git reset --hard` / `git clean` / 裸の `git push --force`（lease なし）は、
     ブランチを問わず引き続き人間の承認が要る
