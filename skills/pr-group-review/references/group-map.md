@@ -31,7 +31,9 @@
 ## 2. 作るとき
 
 1. 対象 PR の一覧を確定させる（複数の情報源を突き合わせる。`state-format.md` §3.2）
-2. 各 PR の base を見て stack を組む。base が default branch 以外なら、その base を head に持つ PR を探す
+2. stack を上下の両方向にたどって組む。下へは、base が default branch 以外ならその base を head に持つ
+   PR を探す。上へは、その PR の head ブランチを base にしている PR を探す
+   （`gh pr list -R <owner>/<repo> --base <その PR の headRefName>`）
 3. 各 PR の本文・差分から、依存（何を前提にしているか）と手作業（本文の「マージ後に〜」「事前に〜」）を拾う
 4. マージ・適用・デプロイ・手作業を 1 本の順序に並べる。依存の向きと矛盾しないことを確かめる
 5. リポ間の照合表は `seam-checklist.md` の項目ごとに、契約を 1 行ずつ起こす

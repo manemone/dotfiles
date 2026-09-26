@@ -137,12 +137,15 @@ JSON オブジェクト 1 つ。**未知のキーは無視する**（片方の�
 | `verdict` | 反証の結果。`confirmed` / `plausible` / `refuted` / `duplicate` |
 | `duplicate_of` | `verdict` が `duplicate` のときの元の ID |
 | `status` | `new`（このラウンドで初出）/ `open`（前のラウンドから未解決）/ `resolved` |
-| `thread` | 投稿後の GitHub 上のスレッド（インラインコメントの ID またはレビュー ID） |
+| `thread` | 投稿後の GitHub 上のスレッド。インラインで付けたものはそのコメントの ID、本文だけに書いたものはレビューの ID。**空なら未投稿**（次のラウンドの下書きに新しい指摘として入れてよいのは、これが空のものだけ） |
 | `history` | `[{ "round": 2, "status": "resolved", "note": "fixup コミット abc123 で対応" }]` |
 
 - `refuted` と `duplicate` も**消さずに残す**（次のラウンドで同じ指摘を蒸し返さないため）。
   投稿の下書きに入れるのは `confirmed` と `plausible` だけ
 - `status` の遷移: `new` →（次のラウンドで）`open` か `resolved`。`open` → `resolved`
+- **遷移させるのは投稿済み（`thread` が埋まっている）の指摘だけ。** 未投稿の指摘（前回出さなかった
+  2 段目など）は相手が見ていないので `new` のまま持ち越し、新しい head でまだ当てはまるかを確かめて
+  から投稿する。当てはまらなくなったら `verdict` を `refuted` にする（`resolved` にはしない）
 
 ### 3.7 `requester`（依頼者用のみ）
 
@@ -166,16 +169,23 @@ PR ごとに 1 レビュー。GitHub の「レビューを作成する」API に
     "comments": [
       { "finding_id": "F003", "path": "app/handler.rb", "line": 42, "side": "RIGHT", "body": "…" }
     ],
-    "body_only_finding_ids": ["F001"]
+    "body_only_finding_ids": ["F001"],
+    "replies": [
+      { "finding_id": "F002", "in_reply_to": 123456, "body": "…" }
+    ]
   }
 ]
 ```
 
 - `body_only_finding_ids`: 行に紐づかず、サマリ本文にだけ書いた指摘（リポ間・順序の指摘の多くはこれ）
 - 複数行にかけるときは `start_line` / `start_side` を足してよい
+- `comments` に入れるのは**未投稿の**指摘（`thread` が空）だけ。投稿済みで未解決の指摘は新しい
+  コメントにせず、サマリで列挙する。相手の返信に答える必要があるときだけ `replies` に入れ、
+  `in_reply_to` にそのスレッドの先頭コメントの ID（指摘の `thread`）を書く
 
 ### 4.1 段の分け方
 
+- 段に振り分けるのは未投稿の指摘だけ（投稿済みのものは上のとおりサマリと `replies` で扱う）
 - **1 段目**: `category` が `structure` / `order` / `manual` / `seam` のもの、および `blocking` が
   真のもの。設計・順序の手戻りは大きいため先に返す（Google eng-practices）
 - **2 段目**: それ以外の細かい指摘

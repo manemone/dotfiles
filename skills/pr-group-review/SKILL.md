@@ -77,14 +77,23 @@ PR 3 本が作者の自作文書にだけ載っていたことがある。次の
 - 人間が示したリスト（URL の列挙、チャットの内容）
 - 作者の地図（PR 群のまとめ文書）があればその中の PR
 - 各 PR の本文に書かれた関連 PR のリンク
-- 同じブランチ名・同じ issue / チケット番号で検索して見つかる PR
+- 同じブランチ名・同じ issue / チケット番号・同じ作者で検索して見つかる PR。**ブランチ名は
+  `--head` で探す**（引用符のキーワード検索はタイトル・本文・コメントしか探さず、head ブランチ名には
+  当たらない）
 
   ```sh
-  gh search prs --owner <org> --state open "<ブランチ名やチケット番号>"
+  gh search prs --owner <org> --state open --head "<ブランチ名>"
+  gh search prs --owner <org> --state open "<チケット番号>"
   gh search prs --owner <org> --state open --author <作者> --created ">=<日付>"
   ```
 
-- 積んでいる PR の base（base が default branch 以外なら、その base を head に持つ PR が対象に入る）
+- 積んでいる PR を**上下の両方向に**たどって見つかる PR
+  - 下へ: base が default branch 以外なら、その base を head に持つ PR
+  - 上へ: その PR の head ブランチを base にしている PR
+
+    ```sh
+    gh pr list -R <owner>/<repo> --state open --base "<その PR の headRefName>"
+    ```
 
 情報源ごとに見つかった PR を記録し（`state.json` の `sources`）、**どれかにだけある PR を人間に
 示して**、対象の一覧を確認してもらう。人間が確定させるまで取得に進まない。
@@ -239,8 +248,18 @@ PR が数本なら、1 つのセッションで順に読めば足りる。規模
 
 ### 6.3 下書きを作る（2 段の投稿が既定）
 
-`references/state-format.md` §4 の形式で `drafts/r<ラウンド>-s<段>.json` を作る。下書きに入れるのは
-`verdict` が `confirmed` / `plausible` の指摘だけ。
+`references/state-format.md` §4 の形式で `drafts/r<ラウンド>-s<段>.json` を作る。下書きに新しい
+指摘として入れるのは、**`verdict` が `confirmed` / `plausible` で、まだ投稿していない（`thread` が空の）
+指摘だけ**。投稿済みかどうかは `thread` で判定する。
+
+**投稿済みで未解決（`status: open`）の指摘は、新しいスレッドとして投稿し直さない**（同じ指摘が他人の
+PR に二重に並ぶ）。2 ラウンド目以降は次のように返す。
+
+- レビューサマリの先頭近くに「前回からの未解決」として、ID と要旨とスレッドへのリンクを並べる
+  （blocking のものは blocking の列挙にも入れる）
+- 相手がそのスレッドで返信していて、答える必要があるとき（反論への再説明、質問への回答など）だけ、
+  既存のスレッドへ返信する。返信は下書きの `replies`（`references/state-format.md` §4）に入れ、
+  人間の確認の対象に含める
 
 - **1 段目**: 構造・順序・手作業・継ぎ目の指摘と、blocking の指摘。設計と順序の手戻りは大きいので
   先に返す
@@ -282,8 +301,15 @@ gh api -X POST "repos/<owner>/<repo>/pulls/<N>/reviews" --input payload.json
 `payload.json` は `{ "commit_id": "<head_sha>", "event": "COMMENT", "body": "…", "comments": [ { "path": "…", "line": 42, "side": "RIGHT", "body": "…" } ] }`。
 **`event` は必ず `COMMENT`。** `APPROVE` / `REQUEST_CHANGES` は使わない。
 
-投稿できたらレビューの ID と URL を `rounds[].posted` に、インラインコメントの ID を各指摘の
-`thread` に記録する。
+既存のスレッドへの返信（§6.3）は次で投稿する（これも了承を得た下書きの分だけ）。
+
+```sh
+gh api -X POST "repos/<owner>/<repo>/pulls/<N>/comments/<スレッドの先頭コメントの ID>/replies" -f body="…"
+```
+
+投稿できたらレビューの ID と URL を `rounds[].posted` に記録し、各指摘の `thread` に、インラインで
+付けたものはそのコメントの ID を、本文だけに書いたものはレビューの ID を入れる。**`thread` が埋まって
+いることが「投稿済み」の印になる**（次のラウンドの下書きで選び直さないため）。
 
 **権限の仕組み（auto mode の分類器など）に投稿を止められたら**:
 
@@ -310,8 +336,10 @@ gh api -X POST "repos/<owner>/<repo>/pulls/<N>/reviews" --input payload.json
 
 ## 8. 追いレビュー（再起動時）
 
-1. 状態ディレクトリの `state.json` を読み、前回のラウンドと未投稿の段（2 段目が残っていないか）を
-   確かめる
+1. 状態ディレクトリの `state.json` を読み、前回のラウンドと、**未投稿の指摘**（`verdict` が
+   `confirmed` / `plausible` で `thread` が空のもの。多くは前回投稿しなかった 2 段目）が残っていないかを
+   確かめる。未投稿の指摘は相手が一度も見ていないので、手順 5 の「解決 / 未解決」の判定の対象に
+   **しない**（`status` は `new` のまま）
 2. 各 PR の現在の状態を取る（`gh pr view --json headRefOid,baseRefOid,state`）。マージ・クローズ
    されたものは `prs[].state` を更新し、以降の対象から外す
 3. head が前回の `sha` から動いた PR について、差分を取る
@@ -338,10 +366,15 @@ gh api -X POST "repos/<owner>/<repo>/pulls/<N>/reviews" --input payload.json
    gh api "repos/<owner>/<repo>/issues/<N>/comments" --paginate
    ```
 
-5. 前回までの指摘ごとに「解決 / 未解決」を判定し、今回の差分から「新規」の指摘を拾う
-   （§4 の観点。地図が変わっていれば地図も検証し直す）。`status` を `resolved` / `open` / `new` に
-   し、`history` に根拠を残す
-6. §2.3 のとおり新しい head SHA を記録し、§5〜§7 を同じように行う（投稿の前には人間の確認を取る）
+5. **投稿済みの**指摘（`thread` が埋まっているもの）ごとに「解決 / 未解決」を判定し、`status` を
+   `resolved` / `open` にする。今回の差分から「新規」の指摘を拾い、`status: new` で足す（§4 の観点。
+   地図が変わっていれば地図も検証し直す）。どれも `history` に根拠を残す
+6. 手順 1 で残っていた未投稿の指摘は、新しい head でまだ当てはまるかを確かめる。当てはまるものは
+   今回の新規の指摘と一緒に、今回のラウンドの下書きに入れる（段の分け方は §6.3 のとおり決め直す）。
+   当てはまらなくなったものは `verdict` を `refuted` にし、`history` に「未投稿のまま head の変更で
+   当てはまらなくなった」と残す（投稿していないので `resolved` にはしない）
+7. §2.3 のとおり新しい head SHA を記録し、§5〜§7 を同じように行う（投稿の前には人間の確認を取る。
+   前回からの未解決の指摘の返し方は §6.3）
 
 ## 9. 単体 PR のとき
 
