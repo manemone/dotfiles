@@ -33,7 +33,7 @@ dotfiles に「**レビュワーとして**他人の PR をレビューする」
 
 | 孫 | ブランチ | 内容 | 状況 |
 |---|---|---|---|
-| 1 | `mrpr-01-adr` | ADR。2 スキルの線引き・状態の置き場所・まとめ文書の形式・外部書き込みの扱い・blocking の表示・単体 PR の扱い | 🔄 実装中 |
+| 1 | `mrpr-01-adr` | ADR。2 スキルの線引き・状態の置き場所・まとめ文書の形式・外部書き込みの扱い・blocking の表示・単体 PR の扱い | ✅ PR #113 マージ済 |
 | 2 | `mrpr-02-reviewer-skill` | レビュワー用スキル `pr-group-review`（共通の参照文書: 地図テンプレート・継ぎ目チェックリスト・状態ファイル形式を含む） | ⬜ 待機中 |
 | 3 | `mrpr-03-requester-skill` | 依頼者用スキル `pr-group-request` と、`skills/README.md`・`pr-review-loop`・`umbrella-orchestrator` からの相互参照 | ⬜ 待機中 |
 
