@@ -158,6 +158,7 @@ for details. `bin/` changes should additionally be verified with
 │   └── README.md
 ├── skills/
 │   ├── pr-review-loop/        # PR review cycle automation
+│   ├── pr-group-review/       # Reviewing others' (multi-repo) PR groups as a reviewer; comment-only
 │   ├── umbrella-orchestrator/ # Umbrella-branch grandchild lifecycle
 │   ├── umbrella-handoff/      # Consultation-to-commander handoff automation
 │   ├── repo-baseline/         # Applying the repo-baseline copier template
