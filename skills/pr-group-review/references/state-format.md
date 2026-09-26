@@ -137,7 +137,7 @@ JSON オブジェクト 1 つ。**未知のキーは無視する**（片方の�
 | `verdict` | 反証の結果。`confirmed` / `plausible` / `refuted` / `duplicate` |
 | `duplicate_of` | `verdict` が `duplicate` のときの元の ID |
 | `status` | `new`（このラウンドで初出）/ `open`（前のラウンドから未解決）/ `resolved` |
-| `thread` | 投稿後の GitHub 上のスレッド。インラインで付けたものはそのコメントの ID、本文だけに書いたものはレビューの ID。**空なら未投稿**（次のラウンドの下書きに新しい指摘として入れてよいのは、これが空のものだけ） |
+| `thread` | 投稿後の GitHub 上の置き場所。種類つきで `{ "kind": "review_comment", "id": … }`（インラインで付けたもの。そのコメントの ID）か `{ "kind": "review", "id": … }`（本文だけに書いたもの。レビューの ID）。**2 つの ID は別の番号の体系**で、返信の API（`pulls/<N>/comments/<ID>/replies`）が受け付けるのは `review_comment` の ID だけ。**`null` なら未投稿**（次のラウンドの下書きに新しい指摘として入れてよいのは、これが `null` のものだけ） |
 | `history` | `[{ "round": 2, "status": "resolved", "note": "fixup コミット abc123 で対応" }]` |
 
 - `refuted` と `duplicate` も**消さずに残す**（次のラウンドで同じ指摘を蒸し返さないため）。
@@ -179,9 +179,13 @@ PR ごとに 1 レビュー。GitHub の「レビューを作成する」API に
 
 - `body_only_finding_ids`: 行に紐づかず、サマリ本文にだけ書いた指摘（リポ間・順序の指摘の多くはこれ）
 - 複数行にかけるときは `start_line` / `start_side` を足してよい
-- `comments` に入れるのは**未投稿の**指摘（`thread` が空）だけ。投稿済みで未解決の指摘は新しい
+- `comments` に入れるのは**未投稿の**指摘（`thread` が `null`）だけ。投稿済みで未解決の指摘は新しい
   コメントにせず、サマリで列挙する。相手の返信に答える必要があるときだけ `replies` に入れ、
-  `in_reply_to` にそのスレッドの先頭コメントの ID（指摘の `thread`）を書く
+  `in_reply_to` にそのスレッドの先頭コメントの ID（指摘の `thread.id`）を書く
+- **`replies` に入れてよいのは `thread.kind` が `review_comment` の指摘だけ。** 本文だけに書いた
+  指摘（`thread.kind` が `review`）にはスレッドが無く、レビューの ID を `in_reply_to` に渡すと
+  返信の API が 404 を返す（ID がたまたま別のコメントと一致すれば、無関係なスレッドに付く）。
+  この種の指摘への返事は、今回のラウンドのレビューサマリ（`body`）の「前回からの未解決」の項に書く
 
 ### 4.1 段の分け方
 

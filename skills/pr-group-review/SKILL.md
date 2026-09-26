@@ -249,7 +249,7 @@ PR が数本なら、1 つのセッションで順に読めば足りる。規模
 ### 6.3 下書きを作る（2 段の投稿が既定）
 
 `references/state-format.md` §4 の形式で `drafts/r<ラウンド>-s<段>.json` を作る。下書きに新しい
-指摘として入れるのは、**`verdict` が `confirmed` / `plausible` で、まだ投稿していない（`thread` が空の）
+指摘として入れるのは、**`verdict` が `confirmed` / `plausible` で、まだ投稿していない（`thread` が `null` の）
 指摘だけ**。投稿済みかどうかは `thread` で判定する。
 
 **投稿済みで未解決（`status: open`）の指摘は、新しいスレッドとして投稿し直さない**（同じ指摘が他人の
@@ -259,7 +259,9 @@ PR に二重に並ぶ）。2 ラウンド目以降は次のように返す。
   （blocking のものは blocking の列挙にも入れる）
 - 相手がそのスレッドで返信していて、答える必要があるとき（反論への再説明、質問への回答など）だけ、
   既存のスレッドへ返信する。返信は下書きの `replies`（`references/state-format.md` §4）に入れ、
-  人間の確認の対象に含める
+  人間の確認の対象に含める。**スレッドがあるのはインラインで付けた指摘（`thread.kind` が
+  `review_comment`）だけ。** 本文だけに書いた指摘（`thread.kind` が `review`。順序・手作業・リポ間の
+  指摘の多くはこれ）への返事は `replies` に入れず、今回のレビューサマリの「前回からの未解決」の項に書く
 
 - **1 段目**: 構造・順序・手作業・継ぎ目の指摘と、blocking の指摘。設計と順序の手戻りは大きいので
   先に返す
@@ -307,9 +309,22 @@ gh api -X POST "repos/<owner>/<repo>/pulls/<N>/reviews" --input payload.json
 gh api -X POST "repos/<owner>/<repo>/pulls/<N>/comments/<スレッドの先頭コメントの ID>/replies" -f body="…"
 ```
 
-投稿できたらレビューの ID と URL を `rounds[].posted` に記録し、各指摘の `thread` に、インラインで
-付けたものはそのコメントの ID を、本文だけに書いたものはレビューの ID を入れる。**`thread` が埋まって
-いることが「投稿済み」の印になる**（次のラウンドの下書きで選び直さないため）。
+`<スレッドの先頭コメントの ID>` には、指摘の `thread.kind` が `review_comment` のときの `thread.id`
+だけを入れる（`review` の ID は別の番号の体系で、この API には通らない。§6.3）。
+
+投稿できたらレビューの ID と URL を `rounds[].posted` に記録し、各指摘の `thread` を種類つきで埋める
+（`references/state-format.md` §3.6）。
+
+- 本文だけに書いた指摘: `{ "kind": "review", "id": <レビューの ID> }`
+- インラインで付けた指摘: `{ "kind": "review_comment", "id": <そのコメントの ID> }`。**レビューを
+  作成した API の応答はレビューのオブジェクトだけで、インラインコメントの ID を含まない。** 投稿後に
+  次で取り、`path` / `line` で指摘と対応づける
+
+  ```sh
+  gh api "repos/<owner>/<repo>/pulls/<N>/reviews/<レビューの ID>/comments" --paginate
+  ```
+
+**`thread` が埋まっていることが「投稿済み」の印になる**（次のラウンドの下書きで選び直さないため）。
 
 **権限の仕組み（auto mode の分類器など）に投稿を止められたら**:
 
@@ -337,7 +352,7 @@ gh api -X POST "repos/<owner>/<repo>/pulls/<N>/comments/<スレッドの先頭�
 ## 8. 追いレビュー（再起動時）
 
 1. 状態ディレクトリの `state.json` を読み、前回のラウンドと、**未投稿の指摘**（`verdict` が
-   `confirmed` / `plausible` で `thread` が空のもの。多くは前回投稿しなかった 2 段目）が残っていないかを
+   `confirmed` / `plausible` で `thread` が `null` のもの。多くは前回投稿しなかった 2 段目）が残っていないかを
    確かめる。未投稿の指摘は相手が一度も見ていないので、手順 5 の「解決 / 未解決」の判定の対象に
    **しない**（`status` は `new` のまま）
 2. 各 PR の現在の状態を取る（`gh pr view --json headRefOid,baseRefOid,state`）。マージ・クローズ

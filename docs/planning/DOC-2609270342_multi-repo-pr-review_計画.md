@@ -136,15 +136,9 @@ dotfiles に「**レビュワーとして**他人の PR をレビューする」
   変更とみなされた）、②GitHub への投稿（外部システムへの書き込み）。②は人間が「やってくれ」と
   言ったあと、auto mode を抜けた状態で実行できた。**外部へ書き込む工程は、人間が確認する
   ステップと、権限の扱いをスキルに書いておく必要がある**
-- 今回の成果物（参照用。**セッション固有の場所にあり、消えている可能性がある**。孫2 は
-  存在すれば読んでよいが、無くても作業できるように本計画書に要点を落としてある。
-  社内の PR 内容を含むため、**中身をこのリポジトリへコピーしないこと**）:
-  - レビューの workflow スクリプト:
-    `~/.claude/projects/-Users-kazuki-hamada-work/551af5b1-c89e-44dc-9f68-8c93b9ea1894/workflows/scripts/tanoken-registration-pr-review-wf_b5725982-a76.js`
-  - 文面の workflow スクリプト: 同じディレクトリの `tanoken-review-comment-drafts-wf_e11cb6c7-ab0.js`
-  - 状態ファイル、HTML の生成スクリプト、投稿スクリプト:
-    `/private/tmp/claude-501/-Users-kazuki-hamada-work/551af5b1-c89e-44dc-9f68-8c93b9ea1894/scratchpad/`
-    （`review.json`、`drafts.json`、`gen.py`、`tpl.html`、`post_reviews.py`、`pr-prereq-drafts.md`）
+- 今回の成果物（レビューと文面の workflow スクリプト、状態ファイル、HTML の生成スクリプト、
+  投稿スクリプト）はセッション固有の場所にあり、社内の PR 内容を含むため、このリポジトリには
+  場所も中身も載せない。必要な要点は本計画書に落としてある
 
 ### 4.2 外部のベストプラクティス（2026-09-27 に調べたもの。参考）
 
