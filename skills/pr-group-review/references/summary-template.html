@@ -1,0 +1,261 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PR 群レビュー: {{THEME}}</title>
+<!--
+  PR 群のまとめ HTML の雛形（pr-group-review / pr-group-request 共通）。
+
+  使い方:
+  - このファイルを状態ディレクトリへ summary.html としてコピーし、state.json の内容で埋める。
+  - {{...}} は置き換える値。「repeat: ...」と「/repeat」のコメントで囲んだ行は、項目の数だけ繰り返す。
+  - 雛形に入っている行は表示確認用のダミー。生成時は全部置き換える（ダミーを残さない）。
+  - 外部の CSS / JS / フォント / 画像を読み込まない。1 ファイルで開けることを崩さない。
+  - 使わない節（単体 PR の「グループ」など）は、節ごと消さずに「なし」と書く。
+  - 依頼者用（pr-group-request）で使うときは、「指摘」節を「自己チェックの結果」と読み替え、
+    「投稿の記録」節は消してよい。
+
+  このファイル名は pr-group-request から ../pr-group-review/references/summary-template.html で
+  参照される。リネームしないこと。
+-->
+<style>
+  :root {
+    --bg: #ffffff; --fg: #1f2328; --muted: #59636e; --line: #d1d9e0; --panel: #f6f8fa;
+    --accent: #0969da; --blocker: #cf222e; --major: #bc4c00; --minor: #9a6700; --nit: #59636e;
+    --ok: #1a7f37; --ng: #cf222e; --unk: #9a6700;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0d1117; --fg: #e6edf3; --muted: #9198a1; --line: #3d444d; --panel: #151b23;
+      --accent: #4493f8; --blocker: #ff7b72; --major: #ffa657; --minor: #d29922; --nit: #9198a1;
+      --ok: #3fb950; --ng: #ff7b72; --unk: #d29922;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg);
+    font: 15px/1.6 -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Noto Sans JP", "Segoe UI", sans-serif;
+  }
+  main { max-width: 1100px; margin: 0 auto; padding: 24px 16px 64px; }
+  h1 { font-size: 1.6em; margin: 0 0 4px; }
+  h2 { font-size: 1.2em; margin: 36px 0 12px; padding-bottom: 6px; border-bottom: 1px solid var(--line); }
+  h3 { font-size: 1em; margin: 20px 0 8px; }
+  a { color: var(--accent); }
+  code { font: 0.9em ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--panel); padding: 1px 4px; border-radius: 4px; }
+  .meta { color: var(--muted); margin: 0; }
+  .stats { display: flex; flex-wrap: wrap; gap: 12px; margin: 20px 0 0; padding: 0; list-style: none; }
+  .stats li { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px 14px; min-width: 120px; }
+  .stats b { display: block; font-size: 1.5em; }
+  .stats span { color: var(--muted); font-size: 0.85em; }
+  .callout { border: 2px solid var(--blocker); border-radius: 8px; padding: 12px 16px; margin: 24px 0 0; }
+  .callout h2 { margin: 0 0 8px; border: 0; padding: 0; color: var(--blocker); }
+  .callout ol { margin: 0; padding-left: 1.4em; }
+  .table-wrap { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; font-size: 0.92em; }
+  th, td { border: 1px solid var(--line); padding: 6px 10px; text-align: left; vertical-align: top; }
+  th { background: var(--panel); white-space: nowrap; }
+  .steps { list-style: none; margin: 0; padding: 0; counter-reset: step; }
+  .steps li { position: relative; margin: 0 0 10px; padding: 8px 12px 8px 48px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
+  .steps li::before { counter-increment: step; content: counter(step); position: absolute; left: 12px; top: 8px; width: 24px; height: 24px; border-radius: 50%; background: var(--accent); color: var(--bg); text-align: center; font-weight: bold; font-size: 0.85em; line-height: 24px; }
+  .tag { display: inline-block; font-size: 0.78em; padding: 0 8px; border-radius: 999px; border: 1px solid currentColor; white-space: nowrap; }
+  .sev-blocker { color: var(--blocker); } .sev-major { color: var(--major); } .sev-minor { color: var(--minor); } .sev-nit { color: var(--nit); }
+  .st-match { color: var(--ok); } .st-mismatch { color: var(--ng); } .st-unverified { color: var(--unk); }
+  .finding { border: 1px solid var(--line); border-left: 4px solid var(--line); border-radius: 6px; padding: 10px 14px; margin: 0 0 12px; }
+  .finding.sev-blocker { border-left-color: var(--blocker); } .finding.sev-major { border-left-color: var(--major); }
+  .finding.sev-minor { border-left-color: var(--minor); } .finding.sev-nit { border-left-color: var(--nit); }
+  .finding h3 { margin: 0 0 4px; color: var(--fg); }
+  .finding p { margin: 6px 0 0; color: var(--fg); }
+  .finding .where { color: var(--muted); font-size: 0.85em; }
+  details summary { cursor: pointer; color: var(--muted); }
+  footer { margin-top: 48px; color: var(--muted); font-size: 0.85em; }
+  @media print { .callout { break-inside: avoid; } .finding { break-inside: avoid; } }
+</style>
+</head>
+<body>
+<main>
+
+<header>
+  <h1>PR 群レビュー: {{THEME}}</h1>
+  <p class="meta">ラウンド {{ROUND}} ・ {{DATE}} ・ 役割: {{ROLE_LABEL}} ・ 地図: {{MAP_SOURCE_LABEL}}</p>
+  <ul class="stats">
+    <li><b>{{PR_COUNT}}</b><span>PR（{{REPO_COUNT}} リポ）</span></li>
+    <li><b>{{BLOCKING_COUNT}}</b><span>マージ前に対応が必要</span></li>
+    <li><b>{{MAJOR_COUNT}}</b><span>重大</span></li>
+    <li><b>{{OPEN_COUNT}}</b><span>未解決（前回から）</span></li>
+    <li><b>{{RESOLVED_COUNT}}</b><span>解決済み</span></li>
+  </ul>
+</header>
+
+<!-- blocking が 0 件なら、この節の中身を「マージ前に対応が必要な指摘はありません」の 1 文にする -->
+<section class="callout">
+  <h2>マージ前に対応が必要な指摘</h2>
+  <ol>
+    <!-- repeat: blocking == true の findings（重大度順） -->
+    <li><b>F001</b> <span class="tag sev-major">重大</span> スキーマの適用より先に受信側がデプロイされる順序になっている（example-org/api#12）</li>
+    <li><b>F004</b> <span class="tag sev-major">重大</span> 新しいシークレットの登録が手作業の工程に無い（example-org/infra#30）</li>
+    <!-- /repeat -->
+  </ol>
+</section>
+
+<section>
+  <h2>対象の PR</h2>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>グループ</th><th>PR</th><th>タイトル</th><th>base</th><th>レビューした head</th><th>状態</th></tr></thead>
+    <tbody>
+      <!-- repeat: prs -->
+      <tr><td>G1 受信側</td><td><a href="#">example-org/api#12</a></td><td>イベント受信エンドポイントを追加する</td><td><code>main</code></td><td><code>1a2b3c4</code></td><td>open</td></tr>
+      <tr><td>G1 受信側</td><td><a href="#">example-org/api#13</a></td><td>受信したイベントを保存する</td><td><code>feature/receive</code></td><td><code>5d6e7f8</code></td><td>open</td></tr>
+      <tr><td>G2 基盤</td><td><a href="#">example-org/infra#30</a></td><td>キューとシークレットを作る</td><td><code>main</code></td><td><code>9a0b1c2</code></td><td>open</td></tr>
+      <!-- /repeat -->
+    </tbody>
+  </table>
+  </div>
+</section>
+
+<section>
+  <h2>PR 群の地図</h2>
+
+  <h3>マージと適用の順序</h3>
+  <ol class="steps">
+    <!-- repeat: map.order（種類のタグは merge=マージ / apply=適用 / deploy=デプロイ / manual=手作業） -->
+    <li><span class="tag">適用</span> example-org/infra#30 をマージし、手動で apply する <br><small class="meta">前提: シークレット登録（M1）が済んでいること</small></li>
+    <li><span class="tag">マージ</span> example-org/api#12 <br><small class="meta">キューが存在すること</small></li>
+    <li><span class="tag">マージ</span> example-org/api#13（#12 に積んでいる）</li>
+    <!-- /repeat -->
+  </ol>
+
+  <h3>グループ</h3>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>ID</th><th>名前</th><th>目的</th><th>PR</th></tr></thead>
+    <tbody>
+      <!-- repeat: map.groups -->
+      <tr><td>G1</td><td>受信側</td><td>外部からのイベントを受けて保存する</td><td>api#12, api#13</td></tr>
+      <tr><td>G2</td><td>基盤</td><td>受信に必要なキューとシークレット</td><td>infra#30</td></tr>
+      <!-- /repeat -->
+    </tbody>
+  </table>
+  </div>
+
+  <h3>PR 間の依存と積んでいる PR</h3>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>使う側</th><th>作る側</th><th>種類</th><th>メモ</th></tr></thead>
+    <tbody>
+      <!-- repeat: map.dependencies -->
+      <tr><td>api#12</td><td>infra#30</td><td>data</td><td>キュー名を ENV で受け取る</td></tr>
+      <tr><td>api#13</td><td>api#12</td><td>code</td><td>stack（base が #12 のブランチ）</td></tr>
+      <!-- /repeat -->
+    </tbody>
+  </table>
+  </div>
+
+  <h3>手作業の工程</h3>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>ID</th><th>いつ</th><th>何を</th><th>誰が</th></tr></thead>
+    <tbody>
+      <!-- repeat: map.manual_steps -->
+      <tr><td>M1</td><td>順序 1 の前</td><td>シークレットを登録する</td><td>作者</td></tr>
+      <!-- /repeat -->
+    </tbody>
+  </table>
+  </div>
+
+  <h3>未決の ADR</h3>
+  <ul>
+    <!-- repeat: map.open_adrs（無ければ「なし」の 1 行） -->
+    <li>example-org/docs#3 イベントの保持期間: 影響する PR は api#13</li>
+    <!-- /repeat -->
+  </ul>
+
+  <h3>リポ間の照合表</h3>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>契約</th><th>作る側</th><th>使う側</th><th>状態</th><th>メモ</th></tr></thead>
+    <tbody>
+      <!-- repeat: map.cross_repo_matrix（状態のクラスは st-match / st-mismatch / st-unverified） -->
+      <tr><td>キュー名 ↔ ENV</td><td>infra#30</td><td>api#12</td><td><span class="tag st-match">一致</span></td><td></td></tr>
+      <tr><td>イベント payload</td><td>api#12</td><td>群外: 集計バッチ</td><td><span class="tag st-unverified">未確認</span></td><td>PR 群に入っていない利用者</td></tr>
+      <!-- /repeat -->
+    </tbody>
+  </table>
+  </div>
+
+  <h3>ロールバック</h3>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>対象の段</th><th>戻し方</th><th>戻せるか</th></tr></thead>
+    <tbody>
+      <!-- repeat: map.rollback -->
+      <tr><td>順序 2</td><td>api#12 を revert してデプロイ</td><td>可</td></tr>
+      <!-- /repeat -->
+    </tbody>
+  </table>
+  </div>
+
+  <!-- 作者の地図を検証した場合だけ残す。map.discrepancies が空なら「食い違いはありません」 -->
+  <h3>作者の地図との食い違い</h3>
+  <ul>
+    <!-- repeat: map.discrepancies -->
+    <li>順序: 作者の地図では infra#30 が最後だが、api#12 がキューを前提にしているため先に必要</li>
+    <!-- /repeat -->
+  </ul>
+</section>
+
+<section>
+  <h2>指摘</h2>
+  <!-- verdict が confirmed / plausible のものだけ載せる。重大度順、同じなら PR 順 -->
+  <!-- repeat: findings（class の sev-* は blocker / major / minor / nit） -->
+  <article class="finding sev-major">
+    <h3>F001 スキーマの適用より先に受信側がデプロイされる順序になっている</h3>
+    <div class="where">
+      <span class="tag sev-major">重大</span> <span class="tag">マージ前に対応が必要</span>
+      <span class="tag">順序</span> ・ example-org/api#12 ・ <code>db/migrate/001_create_events.rb</code> ・ 状態: 新規 ・ 1 段目
+    </div>
+    <p>受信エンドポイントはテーブルの存在を前提にしていますが、地図ではマイグレーションの適用がデプロイの後になっています。</p>
+    <p><b>提案:</b> 順序 1 と 2 を入れ替えるか、テーブルが無いときに受信を保留する処理を入れてください。</p>
+  </article>
+  <article class="finding sev-minor">
+    <h3>F007 リトライ回数がハードコードされている</h3>
+    <div class="where">
+      <span class="tag sev-minor">軽微</span> <span class="tag">コード</span> ・ example-org/api#13 ・ <code>app/receiver.rb:42</code> ・ 状態: 未解決 ・ 2 段目
+    </div>
+    <p>設定から読むほうが、環境ごとの調整がしやすくなります。</p>
+  </article>
+  <!-- /repeat -->
+
+  <details>
+    <summary>反証で除外した指摘（{{EXCLUDED_COUNT}} 件）</summary>
+    <ul>
+      <!-- repeat: verdict が refuted / duplicate の findings -->
+      <li>F003（refuted）: 例外が握りつぶされている → 呼び出し元で処理していた</li>
+      <!-- /repeat -->
+    </ul>
+  </details>
+</section>
+
+<section>
+  <h2>投稿の記録</h2>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>ラウンド</th><th>段</th><th>PR</th><th>レビュー</th><th>commit</th></tr></thead>
+    <tbody>
+      <!-- repeat: rounds[].posted と rounds[].skipped（見送りはレビュー欄に理由を書く） -->
+      <tr><td>1</td><td>1</td><td>example-org/api#12</td><td><a href="#">レビュー</a></td><td><code>1a2b3c4</code></td></tr>
+      <tr><td>1</td><td>1</td><td>example-org/infra#30</td><td>見送り: head が動いていた</td><td><code>9a0b1c2</code></td></tr>
+      <!-- /repeat -->
+    </tbody>
+  </table>
+  </div>
+</section>
+
+<footer>
+  状態ディレクトリ: <code>{{STATE_DIR}}</code> ・ 生成: {{GENERATED_AT}}
+</footer>
+
+</main>
+</body>
+</html>
