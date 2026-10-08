@@ -180,9 +180,18 @@ dirname "$(git worktree list --porcelain | sed -n '1s/^worktree //p')"
 ワークツリーができる）:
 
 ```bash
+cd <対象リポのメインワークツリーの絶対パス>
+git fetch origin
 ocw -H --no-commander <ブランチ名> origin/<既定ブランチ>
 ```
 
+- **`git fetch origin` を省かない。** `ocw` は自分では fetch しないので、省くと
+  `origin/<既定ブランチ>` はメインワークツリーで最後に fetch したときのまま使われる。
+  メインワークツリーは人間が普段使う作業場所で、何日も fetch されていないことがある。
+  古い土台から切ると、ブリーフの「再利用できる資産」に書いた最近のマージが実装AIの
+  ワークツリーに無く、実装AIが迷うか同じものを作り直す
+- `git fetch origin` は作業ツリーを触らない（`origin/*` を更新するだけ）ので、人間の
+  メインワークツリーで叩いてよい。**`git checkout` / `git merge` / `git pull` は叩かない**
 - `--no-commander` を付けて2ペイン（implementer / reviewer）にする。1本規模に司令官は
   要らない
 - base-ref（`origin/<既定ブランチ>`）は省略しない。既定ブランチは対象リポで
@@ -200,6 +209,7 @@ reviewer:    w0:p2
 
 **Herdr が使えない環境**（`HERDR_ENV` が立っていない）では、`-H` と
 `--no-commander` を外して（`--no-commander` は `-H` 無しでは `ocw` がエラーで止まる）
+（上と同じく `git fetch origin` を先に叩いてから）
 `ocw <ブランチ名> origin/<既定ブランチ>` でワークツリーだけを作り
 （`git worktree add` を直書きしない。`ocw.worktreeDir` の設定を迂回するため）、人間に
 「新しい会話でこのワークツリーを開き、ブリーフ `<ブリーフの絶対パス>` を読んで
