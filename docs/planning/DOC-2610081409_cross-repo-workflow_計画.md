@@ -53,6 +53,13 @@
   承認が得られたら、この計画書の「背景5」に承認の日付と文言を書き足してから spawn する。
   孫4 は承認を待たずに進めてよい
 
+## 関係するリポ
+
+| 名前 | メインワークツリー | owner/name | 既定ブランチ |
+|---|---|---|---|
+| dotfiles | `/Users/kazuki-hamada/projects/dotfiles/master` | `manemone/dotfiles` | `master` |
+| analysis | `/Users/kazuki-hamada/work/analysis/main` | （private の社内リポ。公開リポのここには書かず、メインワークツリーで `gh repo view --json nameWithOwner -q .nameWithOwner` を叩いた値を使う） | `master` |
+
 ## ワークスペースラベル
 
 - 傘: `dotfiles :: 複数リポ作業の入口`
