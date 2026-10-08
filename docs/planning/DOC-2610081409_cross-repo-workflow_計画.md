@@ -37,7 +37,7 @@
 
 | 孫 | リポ | ブランチ | 内容 | 状況 |
 |---|---|---|---|---|
-| 1 | dotfiles | `xrw-01-adr` | ADR。入口スキルの判断軸と振り分け・司令官の置き場・リポ間の役割分担・複数リポの傘の設計・軽いハンドオフ | ⬜ 待機中 |
+| 1 | dotfiles | `xrw-01-adr` | ADR。入口スキルの判断軸と振り分け・司令官の置き場・リポ間の役割分担・複数リポの傘の設計・軽いハンドオフ | 🔄 実装中 |
 | 2 | dotfiles | `xrw-02-multi-repo-umbrella` | `umbrella-handoff` / `umbrella-orchestrator` の複数リポ対応 | ⬜ 待機中 |
 | 3 | dotfiles | `xrw-03-task-intake` | 入口スキル `task-intake` の新設（軽いハンドオフを含む）と `skills/README.md` | ⬜ 待機中 |
 | 4 | analysis | `xrw-04-analysis-record-ref` | 分析リポ `adhoc-analysis` の `references/` に「他リポのツールで回した実験の記録」を1枚足す（ドッグフーディング。マージは人間） | ⬜ 待機中 |
