@@ -88,6 +88,7 @@
 | DOC-2609162320 | [local-persona_計画.md](planning/DOC-2609162320_local-persona_計画.md) | 配布される人格のパーソナライズ設定をデプロイ先でローカルにカスタマイズ可能にする傘ブランチ計画書（傘 `local-persona`）。ADR DOC-2609162327 で確定した固定パス実体・「定義元を指す」ベース文言の方式を、Claude Code向けの土台・OpenCode対応・Codexとパーソナライズ編集コマンドの3本の孫へ分解したもの |
 | DOC-2609200524 | [doc-id-link-integrity_計画.md](planning/DOC-2609200524_doc-id-link-integrity_計画.md) | `tools/doc-id` の参照書き換え・検証の不具合修正の傘ブランチ計画書（傘 `doc-id-link-integrity`）。未採番文書どうしのリンクを `assign` が壊し `verify` が見逃した不具合を、`assign` の自己参照限定・`docs/` 配下の `spec` 等の走査・`verify` のパス実在確認の3本の孫へ分解したもの |
 | DOC-2609270342 | [multi-repo-pr-review_計画.md](planning/DOC-2609270342_multi-repo-pr-review_計画.md) | 複数リポにまたがる PR 群のレビュー作法の傘ブランチ計画書（傘 `multi-repo-pr-review`）。他人の PR 群をレビュワーとしてレビューする `pr-group-review` と、自分の PR 群のレビューを他人に頼む `pr-group-request` の2スキルを、ADR・レビュワー用スキル（共通の参照文書を含む）・依頼者用スキルと相互参照の3本の孫へ分解したもの |
+| DOC-2610081409 | [cross-repo-workflow_計画.md](planning/DOC-2610081409_cross-repo-workflow_計画.md) | 製品リポと分析リポをまたぐ作業の入口と複数リポ対応の傘ブランチ計画書（傘 `cross-repo-workflow`）。入口スキル `task-intake`（軽いハンドオフを含む）・`umbrella-handoff` / `umbrella-orchestrator` の複数リポ対応・分析リポ側の記録規約・配布物 `claude/CLAUDE.md` の誘導更新を、ADR を含む5本の孫（うち1本は分析リポの孫）へ分解したもの |
 
 ### reference/ — 運用リファレンス
 
