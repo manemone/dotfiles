@@ -41,7 +41,7 @@
 | 2 | dotfiles | `xrw-02-multi-repo-umbrella` | `umbrella-handoff` / `umbrella-orchestrator` の複数リポ対応 | ✅ PR #121 マージ済 |
 | 3 | dotfiles | `xrw-03-task-intake` | 入口スキル `task-intake` の新設（軽いハンドオフを含む）と `skills/README.md` | ✅ PR #122 マージ済 |
 | 4 | analysis | `xrw-04-analysis-record-ref` | 分析リポ `adhoc-analysis` の `references/` に「他リポのツールで回した実験の記録」を1枚足す（ドッグフーディング。マージは人間） | ✅ PR analysis#977 マージ済 |
-| 5 | dotfiles | `xrw-05-claude-md-pointer` | 配布物 `claude/CLAUDE.md`「傘ブランチへの引き継ぎ判断」を入口スキルへの誘導に更新（**人間の承認後に spawn**） | ⬜ 待機中 |
+| 5 | dotfiles | `xrw-05-claude-md-pointer` | 配布物 `claude/CLAUDE.md`「傘ブランチへの引き継ぎ判断」を入口スキルへの誘導に更新（**人間の承認後に spawn**） | 🔄 実装中 |
 
 依存: 孫1 → 孫2 → 孫3 → 孫4 → 孫5 の順に直列で進める。
 
