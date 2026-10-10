@@ -145,10 +145,9 @@ fi
 
 **convention_docs** が未設定の場合、このスキル自体のレビュー規約を唯一の情報源とする。
 
-**reviewer_cmd** が未設定なら、Phase 0 で読み取った `$REVIEWER_AGENT` をそのまま起動
-コマンドとして使う（Herdr が報告する agent 名は `claude` / `codex` / `opencode` のように
-起動コマンドと一致するのが通例）。`$REVIEWER_AGENT` も空なら、Phase 2 Step 2 の
-「起動コマンドの決定」に従う。
+**reviewer_cmd** が未設定なら、Phase 0 で読み取った `$REVIEWER_AGENT` を KIND として
+`herdr agent start` で起動する（Herdr が報告する agent 名は起動の KIND と一致するのが通例）。
+`$REVIEWER_AGENT` も空なら、Phase 2 Step 2 の「起動コマンドの決定」に従う。
 
 以降のフェーズでは、解決した設定値を以下の変数で参照する:
 
@@ -676,7 +675,7 @@ REVIEW_EOF
 
 ### Step 2: レビュワーの状態確認と起動
 
-**依頼を送る前（および `herdr pane run` でレビュワーを起動し直す前）にこの手順を実行すること。`agent_status` が `unknown` なのは「エージェントがいない」場合だけではない（下表）。**
+**依頼を送る前（およびレビュワーを起動し直す前）にこの手順を実行すること。`agent_status` が `unknown` なのは「エージェントがいない」場合だけではない（下表）。**
 
 ```bash
 STATUS=$(herdr pane get "$REVIEWER_PANE" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['result']['pane'].get('agent_status',''))")
@@ -707,9 +706,9 @@ herdr pane read "$REVIEWER_PANE" --source detection --lines 3
   → 起動済み。`herdr pane send-keys "$REVIEWER_PANE" Enter` で確定させ、`idle` または `done`
   になってから Step 3 へ。
 - **シェルプロンプト**（`$` や `❯` で終わる行だけがあり、エージェントの応答が無い）
-  → エージェントは終了している。下記「起動コマンドの決定」に従って起動し直し、
-  同じ節の起動待ち（`agent_status` を最大30秒見る）で起動完了を待つ。起動直後は
-  `herdr agent wait` が使えない（エージェントが検出されるまで `agent_not_found` で失敗する）。
+  → エージェントは終了している。下記「起動コマンドの決定」に従って起動し直す
+  （主経路の `herdr agent start` は入力可能になってから戻る。`pane run` に落ちたときは
+  同じ節の起動待ちが要る）。
 - **エージェントの応答が表示されている**（直近の行がエージェントの出力）→ 実は起動中。
   `herdr pane get` を再実行して状態を再確認。
 
@@ -721,22 +720,71 @@ herdr pane read "$REVIEWER_PANE" --source detection --lines 3
 
 **起動コマンドの決定:**
 
-1. `REVIEWER_CMD`（Phase 0.5 の `reviewer_cmd`）があればそれを使う
-2. 無ければ Phase 0 で読み取った `$REVIEWER_AGENT` をコマンド名として使う
+KIND（`herdr agent start --kind` に渡す種別）と引数を、次の順で決める。KIND の一覧は
+スキルに書き写さず、`herdr agent` の出力の `kinds:` 行を正典として参照する
+（herdr のバージョンで増減する）。
+
+1. `REVIEWER_CMD`（Phase 0.5 の `reviewer_cmd`）があるとき、その**先頭の語**を見る
+   - 先頭の語が `herdr agent` の `kinds:` に載っている → それが KIND。残りの語は引数
+     （`claude --model opus` なら KIND=`claude`、引数=`--model opus`）
+   - 先頭が環境変数の代入（`FOO=bar claude`）やラッパー（`env ...` など）、または
+     `kinds:` に無い語で KIND が決まらない → **推測せず**、下記「`pane run` での起動
+     （フォールバック）」で `REVIEWER_CMD` をそのまま起動する
+2. `REVIEWER_CMD` が無ければ、Phase 0 で読み取った `$REVIEWER_AGENT` を KIND に使う
+   （引数なし）
 3. どちらも空なら**推測して起動しない。** 停止してユーザーに
    「レビュワーペインのエージェントが終了しており、起動コマンドが特定できません。
    `.claude/pr-review.yml` に `reviewer_cmd` を設定するか、ペインで手動で起動してください」
    と伝える。誤ったコマンドを撃つとシェルにゴミが流れ、以降の状態判定が壊れる。
 
+**`herdr agent start` での起動（主経路）:**
+
+`agent start` は、ペインにシェルが前面でプロンプト待ちのとき、エージェントが検出されて入力可能に
+なってから戻る。起動待ちの手順は要らない。NAME は**サーバー全体で一意**
+（`[a-z][a-z0-9_-]{0,31}`、生きているエージェントの間で一意）でなければならないため、
+ペインIDから機械的に作る（`wEB:p3` → `rv-web-p3`。小文字化して `:` を `-` にする）。
+役割の識別に NAME は使わない（ワークスペースごとに reviewer がいて衝突する。役割は
+ペインの `label` で識別する）。
+
+```bash
+NAME="rv-$(printf '%s' "$REVIEWER_PANE" | tr 'A-Z:' 'a-z-')"
+# 引数なし
+herdr agent start "$NAME" --kind "$KIND" --pane "$REVIEWER_PANE"
+# 引数あり（REVIEWER_CMD の先頭の語の残り）
+herdr agent start "$NAME" --kind "$KIND" --pane "$REVIEWER_PANE" -- $ARGS
+```
+
+実測（2026-10-11、herdr 0.9.0、`--kind claude`）: 空のシェルペインで約4秒で戻り、返りの
+`result.agent` に `agent_status: "idle"`・`interactive_ready: true`・`name` が入る
+（`result.argv` は起動された実際のコマンド列）。`-- --model haiku` は
+`argv: ["claude","--model","haiku"]` として渡った。既定のタイムアウト（30秒）で足りたので
+`--timeout` は通常指定しない。戻ったら `agent_status` が `idle` であることだけ確認して
+Step 3 へ進む。
+
+失敗したときは**同じ呼び出しを繰り返さず**、エラーコードで分ける:
+
+- `agent_name_taken`（名前の衝突）→ NAME の末尾に `-2` などを付けて**一度だけ**作り直す
+  （実測: 同じ名前を別ペインに使うと、衝突している側のペインを `candidates` に付けて
+  このコードで即座に失敗する）。それでも失敗したらフォールバックへ
+- `unsupported interactive agent kind: ...`（`kinds:` に無い種別）→ フォールバックへ
+- `agent_not_ready`（起動時に `blocked`。ログイン・承認待ちなど）→ フォールバックには落とさず、
+  `herdr pane read "$REVIEWER_PANE" --source detection --lines 10` で画面を確認して、可能なら
+  回答し、人手が必要ならユーザーに伝える
+- タイムアウト → エージェントは起動中かもしれない。`herdr pane get "$REVIEWER_PANE"` の
+  `agent` / `agent_status` を確認し、検出されていれば成功として扱う
+
+**`pane run` での起動（フォールバック）:**
+
+KIND が決まらない `REVIEWER_CMD`、および上記で `agent start` が使えなかった場合にだけ使う。
+
 ```bash
 herdr pane run "$REVIEWER_PANE" "$REVIEWER_CMD"
 ```
 
-起動待ち:
+`pane run` で起動した場合、エージェントが検出されるまで `herdr agent wait` の target に
+ならない（`agent_not_found` で即失敗する）ので、`agent_status` を短い間隔で見て最大30秒待つ:
 
 ```bash
-# herdr agent wait は「今エージェントがいるペイン」にしか使えない（いないと agent_not_found で
-# 即座に失敗する）ため、起動直後は agent_status を短い間隔で見て、最大30秒待つ
 for _ in $(seq 1 30); do
   STATUS=$(herdr pane get "$REVIEWER_PANE" | python3 -c "import json,sys; print(json.load(sys.stdin)['result']['pane'].get('agent_status',''))")
   case "$STATUS" in idle|done|blocked) break ;; esac
