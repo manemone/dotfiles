@@ -25,7 +25,7 @@
 | 孫 | ブランチ | 内容 | 状況 |
 |---|---|---|---|
 | 1 | `rbd-01-template` | テンプレート: Ruby かを問う質問・Ruby のときだけ生成する `.rubocop.yml`／RSpec の足場／`files:` 付きの lint・test フック／CI の Ruby 準備、ADR | ✅ PR #130 マージ済 |
-| 2 | `rbd-02-doc-id-rubocop` | テンプレート自身の Ruby の道具（`tools/doc-id/`）を孫1の `.rubocop.yml` に通す（dotfiles 側の複製も同期） | ⬜ 待機中 |
+| 2 | `rbd-02-doc-id-rubocop` | テンプレート自身の Ruby の道具（`tools/doc-id/`）を孫1の `.rubocop.yml` に通す（dotfiles 側の複製も同期） | 🔄 実装中 |
 | 3 | `rbd-03-skill` | スキル `repo-baseline` の更新（道具のテストから規約を推測しない・Ruby の既定・§4 の答え方）と、生成される `AGENTS.md` への注記 | ⬜ 待機中 |
 
 依存: 孫1 → 孫2 → 孫3 の順に直列で進める（孫2 は孫1 の `.rubocop.yml` を基準にし、孫3 は孫1 の
