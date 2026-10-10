@@ -31,7 +31,8 @@ REPO_ROOT=$(
   cd "$SCRIPT_DIR/.." || exit 1
   pwd
 )
-TEMPLATE_DIR="$REPO_ROOT/templates/repo-baseline"
+# 入口はリポジトリのルート（copier.yml の _subdirectory が templates/repo-baseline/template を指す）
+TEMPLATE_DIR="$REPO_ROOT"
 
 FAIL=0
 CREATED_DIRS=()
@@ -323,10 +324,12 @@ PYEOF
     fail "$name: .claude/pr-review.yml が生成されている"
   fi
 
-  if [ -f "$sbx/.copier-answers.yml" ]; then
-    pass "$name: .copier-answers.yml が生成されている"
+  # _commit は copier update が撒いた版として使う。入口が git リポジトリのルートに
+  # 無いと記録されず、撒いた先で update しようとして初めて気づく
+  if [ -f "$sbx/.copier-answers.yml" ] && grep -q '^_commit: ' "$sbx/.copier-answers.yml"; then
+    pass "$name: .copier-answers.yml が生成され _commit が記録されている"
   else
-    fail "$name: .copier-answers.yml が生成されている"
+    fail "$name: .copier-answers.yml が生成され _commit が記録されている"
   fi
 
   if [ -f "$sbx/.pre-commit-config.yaml" ]; then

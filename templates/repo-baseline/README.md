@@ -12,7 +12,12 @@ dotfiles リポジトリ内の `docs/planning/DOC-2608020558_repo-baseline_計�
 ## 自己完結
 
 このディレクトリは dotfiles の他の部分（`shared/helpers.sh` 等）に一切依存しません。
-このディレクトリを別リポジトリへそのまま移動するだけで copier テンプレートとして成立します。
+ただし copier の設定ファイル `copier.yml` だけは、`copier update` を使えるようにするため
+dotfiles リポジトリの**ルート**に置いてあります（`_subdirectory` でこのディレクトリの
+`template/` を指す。経緯は
+[ADR DOC-2610110435_copier-root-entry](../../docs/adr/DOC-2610110435_copier-root-entry.md)）。
+このディレクトリを別リポジトリへ切り出すときは、ルートの `copier.yml` もそのリポジトリのルートへ
+移し、`_subdirectory` を `template` に戻してください。
 
 ## 前提
 
@@ -30,8 +35,16 @@ mise/rbenv 等のバージョンマネージャ、Docker、Claude Code である
 
 ```bash
 cd <展開先リポジトリのルート>
-uv tool run copier copy <このリポジトリへのパスまたはURL>/templates/repo-baseline .
+uv tool run copier copy https://github.com/manemone/dotfiles.git .
 ```
+
+元（`_src_path`）はこのリポジトリのルート（git の URL を推奨。他のマシンでも update できる）。
+URL から撒くとリモートの既定ブランチ（`master`）の HEAD が撒かれるので、マージ前の直しを試すときは
+ローカルの絶対パス（必要なら `--vcs-ref`）を使います。**ただし元の作業ツリーに未コミットの変更があると、
+copier は変更を一時コミットして撒き、`_commit` にどこにも存在しないコミットが記録されて、その撒き先は
+`copier update` できなくなります。** 試すときは元の変更をコミットしてから撒き、そうして撒いた先は
+試し用と割り切るか、`_commit` を本物のコミットに直してください。相対パスは update が失敗するので使いません。
+`.copier-answers.yml` の `_commit` / `_src_path` は update が使うので、消したり伏せたりしません。
 
 質問に答えると、選んだ内容に応じて以下が生成されます。
 
@@ -117,19 +130,19 @@ pre-commit run --all-files
 
 ## 使い方: 更新
 
-**現時点では `copier update` は使えません。** `copier update` が3-wayマージを行うには、
-テンプレート側（`_src_path`）自体が git でバージョン管理されたリポジトリのルートである
-必要がありますが、`templates/repo-baseline/` は dotfiles リポジトリ内のサブディレクトリで
-あり、リポジトリのルートではありません。そのため `copier copy` 実行時に生成される
-`.copier-answers.yml` に `_commit`（テンプレート側のバージョン参照）が記録されず、
-`copier update` は `Cannot update because cannot obtain old template references
-from .copier-answers.yml.` で失敗します（実際に検証済みです）。
+撒いた先で `copier update` が使えます（`--trust` は不要）。撒いた版（`_commit`）と今の版の
+テンプレートの差分が、撒いた先の手元の変更との3者マージで取り込まれ、両側が同じ行を変えた
+ところには `<<<<<<< before updating` 〜 `>>>>>>> after updating` の衝突の印が付きます。
+`_skip_if_exists` のファイル（`.rubocop.yml` 等）は update のときも既存のものが残ります。
 
-これは「自己完結」の制約を破っているわけではなく、計画書の「リポジトリ分割は行わず
-『いつでも切り出せる状態』に留める」という判断（現時点では事例が2〜3件しかなく抽象化が
-未成熟なため）の直接の帰結です。`templates/repo-baseline/` が独立リポジトリとして
-切り出された時点で `_src_path` がそのリポジトリのルートになり、`copier update` が
-使えるようになります。それまでの間、上流の更新は差分を確認しながら手動で反映してください。
+```bash
+cd <撒いた先のリポジトリのルート>   # 作業ツリーはきれいにしておく
+uv tool run copier update
+```
+
+タグは打っていないので、版は HEAD（`0.0.0.postN.devM+<sha>`）で扱われます。
+手順の詳細・増えた質問への答え方・既に撒いた（`_commit` の無い）リポジトリの移行は
+`skills/repo-baseline/SKILL.md` と移行の手順書（`docs/reference/DOC-2610110507_repo-baseline旧形からの移行手順.md`）に従ってください。
 
 ## 分業の原則
 
@@ -161,7 +174,7 @@ from .copier-answers.yml.` で失敗します（実際に検証済みです）�
 - `language=ruby` で、文書だけのコミットでは lint・test フックが Skipped になり、`.rb` を含むコミットでは走ること
 - `language=other`（既定）で Ruby の物が何も生成されず、`tools/doc-id/` のテストが `Gemfile` 無しで動くこと
 
-- 空の git リポジトリに `uv tool run copier copy templates/repo-baseline <展開先>` で展開できること
+- 空の git リポジトリに `uv tool run copier copy <このリポジトリのルート> <展開先>` で展開できること
 - 展開直後に `./tools/doc-id/doc-id assign` を実行すると、プレースホルダが実際のタイムスタンプへ
   採番され、`AGENTS.md` / `docs/README.md` / `docs/design/README.md` / `opencode.json` 内の
   参照が自動更新されること
@@ -171,9 +184,11 @@ from .copier-answers.yml.` で失敗します（実際に検証済みです）�
   生成されないこと（`_exclude` による制御）
 - `use_doc_id=false` かつ `lint_cmd` / `test_cmd` が空欄の場合、`.pre-commit-config.yaml` には
   `pre-commit-hooks` 由来の基本フックのみが残り、有効な YAML であること
-- 展開先に `.copier-answers.yml` が生成されること。ただし `_src_path` がリポジトリの
-  サブディレクトリのため `_commit` が記録されず、`copier update` は現時点で使えないこと
-  （「使い方: 更新」参照）
+- 展開先に `.copier-answers.yml` が生成され、`_commit` が記録されること（2026-10-11。
+  ルートの `copier.yml` が入口のため。`tests/template_smoke.sh` が検査する）。
+  テンプレートを変えたあとの `copier update` が `--trust` 無しで通ること
+- 旧形（`_commit` 無し）で撒いたリポジトリは、橋渡しのコミット経由で最初の1回を update できること
+  （「使い方: 更新」。手順は移行の手順書 DOC-2610110507）
 - `tests/template_smoke.sh` の3つの回答パターン（全部盛り・最小構成・既定値のみ）それぞれで、
   生成された `docs/` 配下の全 `.md`（`docs/design/*コーディング方針.md` / `docs/README.md` 等）に
   Jinja の空白制御ミスによる崩れ（二重空行・見出し直前の空行欠落）が無いこと。

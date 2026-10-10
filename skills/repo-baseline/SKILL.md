@@ -41,47 +41,109 @@ Ruby のリポジトリのテストの既定は RSpec である（ADR DOC-261011
 
 ```bash
 cd <対象リポジトリのルート>
-uv tool run copier copy <dotfilesへのパスまたはURL>/templates/repo-baseline .
+uv tool run copier copy https://github.com/manemone/dotfiles.git .
 ```
+
+元（`_src_path`）は dotfiles のリポジトリのルート（ルートの `copier.yml` が入口。ADR
+DOC-2610110435）。**推奨は公開の HTTPS の git URL** で、どのマシンからでも撒ける・update できる。
+ローカルの絶対パスは、そのマシンでしか update できない。URL から撒くとリモートの既定ブランチ
+（`master`）の HEAD が撒かれるので、**マージ前のテンプレートの直しを試すときだけ**ローカルの
+絶対パス（必要なら `--vcs-ref`）を使う。相対パスは update が失敗するので使わない。
+`--trust` は要らない。
+
+ローカルの絶対パスで試すときは、元の作業ツリーの変更を先にコミットする。未コミットの変更があると
+copier は変更を一時クローンの中でコミットして撒き、`_commit` にどこにも存在しないコミットが記録されて、
+撒いた先は update できなくなる。撒いたあと `_commit` が本物のコミットかを確かめ、試し用の撒き先は
+本番に使わない。
 
 copier が対話式に質問してくる。答え方の判断は「4. 質問への答え方」を参照。
 `--defaults` を付けると全質問が既定値になるが、**AI が代わりに答える場合も既定値に
 流されず、対象リポジトリの実態を見て個別に判断すること。**
 
+**`.copier-answers.yml` の `_commit` と `_src_path` を消したり伏せたりしない。** update が使うので、
+伏せると update できなくなる。手で編集もしない（copier が update のたびに書き直す）。
+
+namecheck（個人名等の混入を検出する確認系）を持つリポジトリでは、`_src_path` の git URL にユーザー名が
+入るため namecheck に当たる。**許可リスト（`tools/namecheck/allowlist.txt`）に `.copier-answers.yml` を
+足す**（持ち主が許可済み）。行末の `namecheck:allow-line` では足りない: copier は update のたびに
+`.copier-answers.yml` を書き直し、行末のマーカーが消えるため、ファイル単位の許可しか手が無い。
+namecheck を持たないリポジトリでは何もしない。
+
 ### 既存導入の更新
 
-**現時点では `copier update` は使えない。** `copier update` が3-wayマージを行うには、
-テンプレート側（`_src_path`）自体が git でバージョン管理されたリポジトリのルートである
-必要があるが、`templates/repo-baseline/` は dotfiles リポジトリ内のただのサブディレクトリ
-であり、リポジトリのルートではない。そのため新規導入時に生成される `.copier-answers.yml` に
-`_commit`（テンプレート側のバージョン参照）が記録されず、`copier update` は
-`Cannot update because cannot obtain old template references from .copier-answers.yml.`
-で失敗する（実際に検証済み）。
+`.copier-answers.yml` に `_commit` がある（= ルートの入口から撒いた）リポジトリは、`copier update` で
+テンプレートの直しを取り込める。撒いた版（`_commit`）と今の版のテンプレートの差分が、撒いた先の
+手元の変更との3者マージで取り込まれる。
 
-これは実装の不備ではなく、計画書の「リポジトリ分割は行わず『いつでも切り出せる状態』に
-留める」という判断（現時点では2〜3例しかなく抽象化が未成熟なため）の直接の帰結である。
-`templates/repo-baseline/` が独立リポジトリとして切り出された時点で、`_src_path` が
-そのリポジトリのルートになり `copier update` が使えるようになる。
+```bash
+cd <撒いた先のリポジトリのルート>
+git status                      # 作業ツリーはきれいにしておく（未コミットの変更があると copier が拒否する）
+git switch -c <update 用のブランチ>
+uv tool run copier update --defaults --data <増えた質問>=<答え> ...   # 増えた質問が無ければ --data は不要（見つけ方は下記）
+```
 
-それまでの間、上流の更新を取り込みたい場合は、差分を人間に確認してもらいながら
-手動で反映すること（`.copier-answers.yml` には撒いた時点の回答が残っているので、
-どの質問にどう答えたかは参照できる）。
+- `--trust` は要らない
+- 版はタグではなく HEAD で扱われる（タグは打たない運用。copier が `0.0.0.postN.devM+<sha>` と表示する）。
+  ただし `.copier-answers.yml` の `_commit` は `v20130702_00-N-g<sha>` という `git describe` 形式で
+  記録される（先頭の `v20130702_00` は dotfiles にある 2013 年の古いタグ名で、版としては使われない）。
+  版は `g` 以降の `<sha>` で一意に決まるので、update で進んだかは `<sha>` で見る。`_commit` を手で直さない
+- **マージ前のテンプレートの直しを本番の撒き先に取り込まない。** `--vcs-ref <ブランチ>` やローカルの
+  絶対パスで取り込むと、`_commit` にそのブランチだけにあるコミットが記録される。ブランチは squash
+  マージで消えるため、そのコミットが辿れなくなり、次の update が落ちる。マージ前の直しを試すのは、
+  試し用の複製の撒き先に限る。本番の撒き先は、直しがリモートの既定ブランチ（`master`）に入ってから、
+  `--vcs-ref` 無しで update する。`_src_path` を書き換えない
+- 質問は撒いた先の答えを既定にして聞き直される。**増えた質問（例: `language`・`ruby_version`）は、
+  既定値に流されず、「4. 質問への答え方」に従って実態を見て答える。** たとえば自前で Ruby の設定を持つ
+  リポジトリに `language=ruby` と答えると、テンプレートが生成しようとするファイルと既存のものがぶつかる
+  - 端末の無いシェル（AI の Bash ツール等）では、copier は対話の質問ができず
+    `Interactive session required` で終わる。そこでは `--defaults` を付け、**増えた質問はすべて
+    `--data <名前>=<答え>` で明示する**（`--defaults` 単独で回すと、増えた質問が既定値
+    〈`language` は `other`、`ruby_version` は `3.3`〉になる）。答え済みの質問は撒いた先の答えが引き継がれる
+  - **増えた質問は、update の前に洗い出す。** 撒く元の `copier.yml`（`--vcs-ref` 無しなら
+    リモートの既定ブランチのもの）の質問名と、撒いた先の `.copier-answers.yml` のキーを突き合わせ、
+    answers に無い質問が増えた質問である。`--data` が漏れても copier は何も知らせず、既定値で
+    answers に書く。そのため update のあと `git diff .copier-answers.yml` で足されたキーを確かめ、
+    `--data` で渡していないキーがあれば、作業ツリーを戻して `--data` を足し、回し直す
+  - 端末のある対話の実行なら、`--skip-answered` を付けると答え済みの質問を飛ばし、増えた質問だけが聞かれる
+- `_skip_if_exists` のファイル（`.rubocop.yml`・`.ruby-version`・`.rspec`・`Gemfile`・`Rakefile`・
+  `spec/spec_helper.rb`）は update のときも既存のものが残り、テンプレートの直しは届かない。
+  必要なら差分を人間に見せ、手で取り込むか判断を仰ぐ
 
-**Ruby の既定（RSpec・厳しめの RuboCop。ADR DOC-2610110216）は、既存のリポジトリには
-自動では届かない。** 上のとおり `copier update` が使えないためである。後から取り込みたい
-場合は、人間に確認のうえ、使い捨てのディレクトリに `language=ruby` で撒き直し
-（`git init` してから `copier copy`）、次のものを必要な分だけ持ってくる:
+update が終わったら、結果の差分を **人間に見せてからコミットする**（勝手にコミットしない）。
 
-- `.rubocop.yml`（`TargetRubyVersion` は書かず `.ruby-version` から推定させる形）
-- `.ruby-version`・`Gemfile`・`.rspec`・`Rakefile`・`spec/spec_helper.rb`
-- `.pre-commit-config.yaml` の lint・test フック（無ければフックごと。あれば `files:` を
-  足し、Ruby のファイルと `Gemfile` 等の設定ファイルの変更でだけ走らせる）
-- `AGENTS.md`「コミット前の必須ステップ」の Ruby の段落（`bundle install`、テストは RSpec・
-  lint は RuboCop であること、`tools/doc-id/` の minitest は道具の都合である旨の注記）
-- `.claude/pr-review.yml` の `lint_cmd` / `test_cmd`
-- `ci.yml` の `ruby/setup-ruby`（`pre-commit` の前）
+#### 衝突の解き方
 
-既存のテストを RSpec に替えるかどうかは持ち主が決めることなので、勝手に移行しない。
+3者マージで、撒いた先とテンプレートの両方が同じ行を変えていた箇所には、ファイルの中に衝突の印が残る:
+
+```text
+<<<<<<< before updating
+（撒いた先の手元の内容）
+=======
+（テンプレートの新しい内容）
+>>>>>>> after updating
+```
+
+- `git grep -n -e '<<<<<<< before updating' -e '>>>>>>> after updating'` で全部探す。
+  印が1つも残っていない状態にするまでコミットしない
+- 片方を採るか、両方の意図を残すように手で書く。**撒いた先で意図して変えた内容（リポジトリ固有の
+  規約・コマンド）を黙って捨てない。** どちらを採るか迷う箇所は、両方の内容を人間に見せて決めてもらう
+- `.rej` ファイルが出た場合（`--conflict rej` を指定したとき等）は、中身を見て手で反映し、
+  反映したら `.rej` を消す。コミットに残さない
+- 解いたあとの確かめ: 印と `.rej` が残っていないこと、`pre-commit run --all-files` が通ること、
+  `language=ruby` なら `bundle exec rubocop` と `bundle exec rake spec` が通ること、`.copier-answers.yml` の
+  `git diff .copier-answers.yml` で足されたキーが、すべて自分で決めた答えであること（既定値で
+  黙って埋まったものが無いこと）、`_commit` が新しい版に進んでいること、`_src_path` が伏せられていないこと
+
+#### 既に撒いたリポジトリ（`_commit` が無い・`_src_path` が伏せてある）
+
+ルートの入口ができる前に撒いたリポジトリは、`_commit` が無く、`_src_path` が伏せてあることがある。
+このままでは update できない。**`_commit` に適当なコミットを手で書いても通らない**
+（ルートの `copier.yml` が無い版を書くと、copier がリポジトリ全体をテンプレートとして撒いて落ちる）。
+最初の1回の移行には専用の手順（橋渡しのコミット。ADR DOC-2610110435 §4）が要るので、
+dotfiles の `docs/reference/DOC-2610110507_repo-baseline旧形からの移行手順.md`（移行の手順書
+DOC-2610110507）に従う。手順書には、modeldex・pixidex・sheaf それぞれの撒いた版・`language` の
+答え方・衝突しやすいファイル・移行の時期がある。ただし**移行を始めるかどうか（特に `language` の
+決定と時期）は持ち主が決める**ので、見つけたら自分で始めず、人間に報告して指示を仰ぐ。
 
 ## 3. 既存ファイルとの衝突
 

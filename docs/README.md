@@ -21,6 +21,8 @@
 | なぜ git 操作の許可ポリシーを今の形にしたかを知る | [adr/DOC-2609121719_git-operation-permission-policy.md](adr/DOC-2609121719_git-operation-permission-policy.md) | `main`/`master` へのマージだけを人間に残す線引きと、PreToolUse フックの担保範囲を `gh pr merge` の base 判定1点に絞った決定、却下した案 |
 | なぜ人格のパーソナライズをマシンローカルな固定パスへ切り出したかを知る | [adr/DOC-2609162327_claude-md-machine-local-tone.md](adr/DOC-2609162327_claude-md-machine-local-tone.md) | `CLAUDE.machine.md` の固定パス実体・「定義元を指す」ベース文言・エージェント別の読み込み手段（Claude Code の `@import` / OpenCode の `instructions` / Codex の連結生成）の決定と、却下した案 |
 | なぜ repo-baseline に Ruby の既定（RSpec・厳しめの RuboCop）を持たせたかを知る | [adr/DOC-2610110216_ruby-defaults-in-repo-baseline.md](adr/DOC-2610110216_ruby-defaults-in-repo-baseline.md) | Ruby のときだけ生成する質問の形（`language`）・`.rubocop.yml` を自己完結で持つ理由と写さなかったもの・`TargetRubyVersion` を `.ruby-version` から推定させる決定・lint/test フックの `files:`・既存ファイルを上書きしない扱い・道具のテストを minitest のままにする理由と、却下した案 |
+| repo-baseline で `copier update` を使えるようにした理由と、旧形で撒いたリポジトリの移行（橋渡しのコミット）を知る | [adr/DOC-2610110435_copier-root-entry.md](adr/DOC-2610110435_copier-root-entry.md) | ルートの `copier.yml` + `_subdirectory`・撒く元の推奨・`_src_path` を伏せない理由・タグの扱い・確かめた結果 |
+| 旧形で撒いたリポジトリ（modeldex・pixidex・sheaf）を `copier update` できる形へ移す | [reference/DOC-2610110507_repo-baseline旧形からの移行手順.md](reference/DOC-2610110507_repo-baseline旧形からの移行手順.md) | 橋渡しのコミットの手順・リポジトリごとの撒いた版と `language` の答え方・衝突しやすいファイル・namecheck |
 | なぜ他人の PR 群のレビューと自分の PR 群のレビュー依頼を今のスキル構成にしたかを知る | [adr/DOC-2609270420_multi-repo-pr-review-skills.md](adr/DOC-2609270420_multi-repo-pr-review-skills.md) | `pr-group-review`（レビュワー用）と `pr-group-request`（依頼者用）の線引き・レビュー状態の置き場所・自己完結 HTML のまとめ・COMMENT のみの投稿と権限に止められたときの振る舞いの決定と、却下した案 |
 | なぜ複数リポにまたがる作業の入口と傘の進め方を今の形にしたかを知る | [adr/DOC-2610081412_cross-repo-task-intake.md](adr/DOC-2610081412_cross-repo-task-intake.md) | 入口スキル `task-intake` の判断の3軸と振り分け・司令官の置き場・リポ間の役割分担・軽いハンドオフ・複数リポの傘（他リポの孫は既定ブランチへ PR しマージは人間）の決定と、却下した案 |
 | `ocw-meter` のイベントスキーマを調べる | [reference/DOC-2608021229-c_ocw-meterイベントスキーマ.md](reference/DOC-2608021229-c_ocw-meterイベントスキーマ.md) | 全 event_type・全フィールド・費用計算式の一次情報源 |
@@ -75,6 +77,7 @@
 | DOC-2609270420 | [multi-repo-pr-review-skills.md](adr/DOC-2609270420_multi-repo-pr-review-skills.md) | 複数リポにまたがる PR 群のレビュー作法を2スキルに分ける決定。他人の PR 群をレビュワーとしてレビューする `pr-group-review`（修正・push・本文の書き換え・APPROVE / REQUEST_CHANGES をしない）と、自分の PR 群のレビュー依頼を準備する `pr-group-request` の線引き、`pr-review-loop` と別物にする理由、レビュー状態（仕事の記録）をどのリポにも置かず `PR_GROUP_REVIEW_DIR`（既定 `~/work/reviews`）配下に `git init` する置き場所、単体 PR を「1本だけの PR 群」として扱うこと、自己完結 HTML のまとめ、下書き→人間の確認→COMMENT 投稿（2段投稿・投稿直前の head / hunk 確認・権限に止められたら許可を得て AI が投稿）、blocking の表示と書式を投稿先ルールに委ねること、共通の参照文書の置き場所、手動起動の追いレビューを記録。9リポ18本のレビュー実測（列挙漏れ・重大指摘の大半が順序と手作業）と、artifact・自動追いレビュー・スクリプトを人間に渡す案などの却下理由も記録 |
 | DOC-2610081412 | [cross-repo-task-intake.md](adr/DOC-2610081412_cross-repo-task-intake.md) | 製品リポと分析リポをまたぐ作業の入口と複数リポ対応の傘の決定。ワークフロー本体を dotfiles に置き分析リポには記録規約だけを置くこと、入口スキル `task-intake` の判断の3軸（またがるリポ・規模・司令官の置き場）と振り分け表、司令官を「問いと結論が載るほうのリポ」に置く規則、ツール本体／実行履歴／結論の置き場を分ける役割分担と双方向リンク、PR 1本規模の軽いハンドオフを `task-intake` に含めること、複数リポの傘（傘は司令官のリポにだけ立てる・他リポの孫は既定ブランチから切り既定ブランチへ PR しマージは人間・副傘は例外・進捗テーブルの「リポ」列と後方互換・他リポの孫の検証を司令官がしない理由）、`ocw` をカレントディレクトリ解決のまま変えない根拠、配布物 `claude/CLAUDE.md` の書き換えを人間の承認後にすることを記録。製品のモデル乗り換え評価の例を当てはめた検証と、分析リポに置く案・軽いハンドオフを別スキルや2本立てにする案・常に副傘を立てる案・`ocw -C` 案の却下理由も記録 |
 | DOC-2610110216 | [ruby-defaults-in-repo-baseline.md](adr/DOC-2610110216_ruby-defaults-in-repo-baseline.md) | repo-baseline テンプレートに Ruby のリポジトリ向けの既定（RSpec・厳しめの RuboCop）を持たせた決定。質問 `language`・`.rubocop.yml` の自己完結・`TargetRubyVersion` の推定・フックの `files:`・`_skip_if_exists`・道具のテストを minitest のままにする理由と、却下した案を記録 |
+| DOC-2610110435 | [copier-root-entry.md](adr/DOC-2610110435_copier-root-entry.md) | repo-baseline の `copier.yml` をリポジトリのルートに置き `copier update` を使えるようにした決定。撒く元の推奨・`_src_path` を伏せない・旧形からの移行（橋渡しのコミット）を記録 |
 
 ### planning/ — ロードマップ・計画
 
@@ -95,6 +98,7 @@
 | DOC-2610081409 | [cross-repo-workflow_計画.md](planning/DOC-2610081409_cross-repo-workflow_計画.md) | 製品リポと分析リポをまたぐ作業の入口と複数リポ対応の傘ブランチ計画書（傘 `cross-repo-workflow`）。入口スキル `task-intake`（軽いハンドオフを含む）・`umbrella-handoff` / `umbrella-orchestrator` の複数リポ対応・分析リポ側の記録規約・配布物 `claude/CLAUDE.md` の誘導更新を、ADR を含む5本の孫（うち1本は分析リポの孫）へ分解したもの |
 | DOC-2610110122 | [herdr-09-cli-migration_計画.md](planning/DOC-2610110122_herdr-09-cli-migration_計画.md) | 配布スキルを herdr 0.9.0 の CLI へ追随させる傘ブランチ計画書（傘 `herdr-09-cli-migration`）。消えた `herdr wait agent-status` の `herdr agent wait` への置き換え、AI間送信のフォールバックの `herdr agent prompt` への移行、孫から司令官への完了通知、レビュワー再起動の `herdr agent start` への移行の4本の孫へ分解したもの |
 | DOC-2610110211 | [ruby-defaults_計画.md](planning/DOC-2610110211_ruby-defaults_計画.md) | Ruby のリポジトリの既定（RSpec・厳しめの RuboCop）を repo-baseline テンプレートとスキルに持たせる傘ブランチ計画書（傘 `ruby-defaults`）。Ruby のときだけ生成する `.rubocop.yml`・RSpec の足場・`files:` 付きのフック、テンプレート自身の `tools/doc-id` を RuboCop に通すこと、道具のテストの形から規約を推測しないことを書くスキルの更新の3本の孫へ分解したもの |
+| DOC-2610110426 | [copier-update_計画.md](planning/DOC-2610110426_copier-update_計画.md) | repo-baseline テンプレートで `copier update` を使えるようにする傘ブランチ計画書（傘 `copier-update`）。dotfiles のルートへ `copier.yml` を移して `_subdirectory` でテンプレートの中身を指す入口の移動、スキルの update の手順の書き直し、既に撒いたリポジトリ（modeldex・pixidex・sheaf）の移行の手順書の3本の孫へ分解したもの |
 
 ### reference/ — 運用リファレンス
 
@@ -103,6 +107,7 @@
 | DOC-2608021229-b | [LLM費用観測ベースライン計測手順.md](reference/DOC-2608021229-b_LLM費用観測ベースライン計測手順.md) | `ocw-meter` 導入後、実PR 5〜10本でLLM費用・Claude利用枠のベースラインを計測する手順書（旧ID: `DOC-004`） |
 | DOC-2608021229-c | [ocw-meterイベントスキーマ.md](reference/DOC-2608021229-c_ocw-meterイベントスキーマ.md) | `ocw-meter` が書く全イベント型の恒久リファレンス。共通エンベロープの全フィールド、全 `event_type`、`idempotency_key` の生成規則、費用計算式、`completeness` の判定基準を実データで検証した上でまとめたもの（旧ID: `DOC-005`） |
 | DOC-2608040805 | [配布実体運用ガイド.md](reference/DOC-2608040805_配布実体運用ガイド.md) | 世代ディレクトリ + `current` 配布方式の日常運用手順。canonical prefix のディレクトリ構造・manifest の全フィールド・世代確認・ロールバック・dev モードの出入り・リンク切れ対処・旧方式からの移行手順 |
+| DOC-2610110507 | [repo-baseline旧形からの移行手順.md](reference/DOC-2610110507_repo-baseline旧形からの移行手順.md) | 旧形（`_commit` 無し・`_src_path` 伏せ）で撒いたリポジトリを `copier update` できる形へ移す手順書。橋渡しのコミット経由の共通手順、modeldex・pixidex・sheaf ごとの撒いた版（V）と根拠・`language` の答え方・衝突しやすいファイル・namecheck・移行の時期、複製での模擬の結果、持ち主の判断を仰ぐ点 |
 
 ## 新規ファイル追加時のルール
 
