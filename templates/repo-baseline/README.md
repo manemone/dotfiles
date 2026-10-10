@@ -20,7 +20,9 @@ dotfiles リポジトリ内の `docs/planning/DOC-2608020558_repo-baseline_計�
 - [uv](https://docs.astral.sh/uv/) がインストールされていること
 - 初回セットアップ時のみネットワーク（`copier copy` と `pre-commit install-hooks`）
 
-**要求しないもの**: Ruby 等の特定の言語ランタイム（pre-commit の隔離環境が用意する）、
+`language=ruby` を選んだ場合のみ、展開後に Ruby と bundler（`bundle install`）が必要になります。
+
+**要求しないもの**: Ruby 等の特定の言語ランタイム（`language=ruby` を選ばない限り。pre-commit の隔離環境が用意する）、
 mise/rbenv 等のバージョンマネージャ、Docker、Claude Code であること、GitHub であること
 （CI は `use_ci` で無効化できる）。
 
@@ -36,13 +38,37 @@ uv tool run copier copy <このリポジトリへのパスまたはURL>/template
 | 質問 | 型 | 既定値 | 効果 |
 |---|---|---|---|
 | `default_branch` | 文字列 | `master` | プルリクエストの作法のブランチ構成節に埋め込む |
-| `lint_cmd` | 文字列 | `""` | pre-commit の local フック・AGENTS.md・`.claude/pr-review.yml` に埋め込む lint コマンド。空欄なら生成しない |
-| `test_cmd` | 文字列 | `""` | 同上（test コマンド） |
+| `language` | 選択（`ruby` / `other`） | `other` | `ruby` を選ぶと Ruby の既定（下記）を生成し、`lint_cmd` / `test_cmd` の既定値と CI の Ruby 準備が Ruby 用になる。`other` なら Ruby の物は何も生成しない |
+| `ruby_version` | 文字列 | `3.3` | `language=ruby` のときだけ質問。`.ruby-version` に書く（RuboCop の `TargetRubyVersion` の推定元、CI の `ruby/setup-ruby` の入力） |
+| `lint_cmd` | 文字列 | `""`（`language=ruby` では `bundle exec rubocop`） | pre-commit の local フック・AGENTS.md・`.claude/pr-review.yml` に埋め込む lint コマンド。空欄なら生成しない |
+| `test_cmd` | 文字列 | `""`（`language=ruby` では `bundle exec rake spec`） | 同上（test コマンド） |
 | `use_doc_id` | bool | `true` | DOC-ID 運用一式（`docs/`・`tools/doc-id/`・関連 pre-commit フック）を生成するか |
 | `use_ci` | bool | `true` | `.github/workflows/ci.yml` を生成するか |
 | `has_long_running_commands` | bool | `false` | AGENTS.md にバックグラウンド実行 + ポーリングの規約節を追加するか |
 | `use_adr` | bool | `false` | `docs/README.md` に adr/ フォルダの説明を含めるか（`use_doc_id` が true の場合のみ質問） |
 | `use_reference` | bool | `false` | `docs/README.md` に reference/ フォルダの説明を含めるか（同上） |
+
+### `language=ruby` のときだけ生成されるもの
+
+| ファイル | 内容 |
+|---|---|
+| `.rubocop.yml` | プラグイン（performance・rspec）・`Layout/ClassStructure`・Style の追加などで厳しめにした RuboCop の設定。`NewCops: disable`。`TargetRubyVersion` は書かず `.ruby-version` からの推定に任せる |
+| `.ruby-version` | `ruby_version` の回答 |
+| `Gemfile` | rake・rspec・rubocop・rubocop-performance・rubocop-rspec |
+| `.rspec` / `spec/spec_helper.rb` | RSpec の最小の足場。example 0 件でも `rake spec` は成功する |
+| `Rakefile` | `spec` タスク（`default` も `spec`） |
+
+加えて、Ruby のとき lint・test の pre-commit フックには `files:` が付き（Ruby のファイルと
+`Gemfile` 等の設定ファイルを変更したときだけ走る。文書だけのコミットでは走らない）、
+`ci.yml` には `pre-commit` の前に `ruby/setup-ruby`（`bundler-cache`）の手順が入ります。
+`language=other` で `lint_cmd` / `test_cmd` を答えた場合は、従来どおり `files:` の絞り込みは付きません。
+
+既に `.rubocop.yml` / `.ruby-version` / `.rspec` / `Gemfile` / `Rakefile` / `spec/spec_helper.rb` がある
+リポジトリへ展開しても、これらは**上書きされず**そのまま残ります（`_skip_if_exists`）。
+展開後に既存の内容とテンプレートの既定を突き合わせてください。
+
+`use_doc_id=true` のとき、生成される `AGENTS.md` には、`tools/doc-id/` のテストが minitest なのは
+道具の都合であり、そのリポジトリのテストの規約ではない旨の注記が入ります。
 
 質問の回答に関わらず常に `.claude/pr-review.yml` を生成します。`skills/pr-review-loop/`
 スキルが Phase 0.5 で最優先に読む設定ファイルで、`lint_cmd` / `test_cmd`（空欄なら省略）・
@@ -127,7 +153,13 @@ from .copier-answers.yml.` で失敗します（実際に検証済みです）�
 
 ## 検証結果
 
-以下を実施し、確認しました（実施日: 2026-08-02）。
+以下を実施し、確認しました（実施日: 2026-08-02。`language` 関連の項目は 2026-10-11）。
+
+- `language=ruby` で展開し、`bundle install`・`bundle exec rubocop`・`bundle exec rake spec` が通ること
+  （`use_doc_id=true` でも `tools/doc-id/` を含めて RuboCop の指摘は出ない。経緯は
+  [ADR DOC-2610110216](../../docs/adr/DOC-2610110216_ruby-defaults-in-repo-baseline.md) に記録）
+- `language=ruby` で、文書だけのコミットでは lint・test フックが Skipped になり、`.rb` を含むコミットでは走ること
+- `language=other`（既定）で Ruby の物が何も生成されず、`tools/doc-id/` のテストが `Gemfile` 無しで動くこと
 
 - 空の git リポジトリに `uv tool run copier copy templates/repo-baseline <展開先>` で展開できること
 - 展開直後に `./tools/doc-id/doc-id assign` を実行すると、プレースホルダが実際のタイムスタンプへ

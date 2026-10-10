@@ -11,23 +11,44 @@ default_branch:
   help: 本番ブランチの名前（プルリクエストの作法のブランチ構成節に埋め込みます）
   default: master
 
+# lint_cmd / test_cmd の既定値がこの回答に依存するため、その2つより前に置く。
+language:
+  type: str
+  help: >-
+    このリポジトリの主な言語。ruby を選ぶと、RSpec の足場・厳しめの RuboCop の設定
+    （.rubocop.yml / Gemfile / .rspec / spec/spec_helper.rb / Rakefile / .ruby-version）を
+    生成し、lint_cmd・test_cmd の既定値と CI の Ruby 準備が Ruby 用になります。
+    それ以外なら Ruby の物は何も生成しません
+  choices:
+    - ruby
+    - other
+  default: other
+
+ruby_version:
+  type: str
+  help: >-
+    Ruby のバージョン（.ruby-version に書きます。RuboCop が TargetRubyVersion を
+    これから推定し、CI の ruby/setup-ruby もこれを読みます）
+  default: "3.3"
+  when: "{{ language == 'ruby' }}"
+
 lint_cmd:
   type: str
   help: >-
-    lint を実行するコマンド（例: rubocop, npm run lint）。
+    lint を実行するコマンド（例: bundle exec rubocop, npm run lint）。
     pre-commit の local フック・AGENTS.md・.claude/pr-review.yml に埋め込みます。
-    空欄なら lint フックを生成しません
-  default: ""
+    空欄なら lint フックを生成しません。language=ruby のときの既定値は bundle exec rubocop
+  default: "{% if language == 'ruby' %}bundle exec rubocop{% endif %}"
 
 test_cmd:
   type: str
   help: >-
     test を実行するコマンド（例: bundle exec rspec, npm test）。
     pre-commit の local フック・AGENTS.md・.claude/pr-review.yml に埋め込みます。
-    空欄なら test フックを生成しません。
+    空欄なら test フックを生成しません。language=ruby のときの既定値は bundle exec rake spec。
     実行に数十秒以上かかる場合は、pre-commit の local フックから外して CI 専用にすることを
     検討してください（判断は撒いた後に行います）
-  default: ""
+  default: "{% if language == 'ruby' %}bundle exec rake spec{% endif %}"
 
 use_doc_id:
   type: bool
@@ -78,3 +99,21 @@ _exclude:
   - "{% if not use_ci %}.github{% endif %}"
   - "{% if not use_doc_id %}docs{% endif %}"
   - "{% if not use_doc_id %}tools{% endif %}"
+  # Ruby の既定は language=ruby のときだけ生成する
+  - "{% if language != 'ruby' %}.rubocop.yml{% endif %}"
+  - "{% if language != 'ruby' %}.ruby-version{% endif %}"
+  - "{% if language != 'ruby' %}.rspec{% endif %}"
+  - "{% if language != 'ruby' %}Gemfile{% endif %}"
+  - "{% if language != 'ruby' %}Rakefile{% endif %}"
+  - "{% if language != 'ruby' %}spec{% endif %}"
+
+# 既存の Ruby プロジェクトへ撒くとき、すでにあるファイルを上書きしない（copier の
+# 対話的な上書き確認は AI が非対話で回すと扱いにくく、実物の Gemfile 等を潰す事故になる）。
+# スキップされたファイルは、撒いた後に既存の内容とテンプレートの既定を人が突き合わせる。
+_skip_if_exists:
+  - .rubocop.yml
+  - .ruby-version
+  - .rspec
+  - Gemfile
+  - Rakefile
+  - spec/spec_helper.rb

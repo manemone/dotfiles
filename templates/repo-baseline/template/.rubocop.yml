@@ -1,0 +1,105 @@
+plugins:
+  - rubocop-performance
+  - rubocop-rspec
+
+AllCops:
+  # NewCops は disable: RuboCop やプラグイン更新時に新しい Cop が
+  # 無審査で CI 必須になることを防ぐ。新 Cop は依存更新時に内容を確認し、
+  # 必要なものを個別に有効化する運用とする。
+  NewCops: disable
+  # TargetRubyVersion は書かない。RuboCop が .ruby-version から推定する
+  # （Ruby のバージョンの定義元を .ruby-version に一本化するため）。
+  DisplayCopNames: true
+  DisplayStyleGuide: true
+  ExtraDetails: true
+  SuggestExtensions: false
+  # Exclude は既定（vendor・tmp・node_modules 等）を置き換えてしまうため、
+  # inherit_mode で既定にマージして足す。
+  inherit_mode:
+    merge:
+      - Exclude
+  Exclude:
+    - 'vendor/bundle/**/*'
+    - 'bin/bundle'
+    - 'Gemfile.lock'
+    - '*.gemspec.lock'
+
+Layout/LineLength:
+  Max: 120
+  AllowHeredoc: true
+  AllowURI: true
+  URISchemes: [http, https]
+
+Layout/ClassStructure:
+  Enabled: true
+  Categories:
+    module_inclusion: [include, prepend, extend]
+    constants: [CONSTANT]
+    associations: [attr_accessor, attr_reader, attr_writer]
+    initializer: [initialize]
+  ExpectedOrder:
+    - module_inclusion
+    - constants
+    - associations
+    - initializer
+    - public_methods
+    - protected_methods
+    - private_methods
+    - nested_classes
+
+# Style: 宣言的・関数型・Ruby way の方針を反映
+Style/StringLiterals:          { EnforcedStyle: double_quotes }
+# MVP 段階では RDoc 名寄せ必須としない。方針文書で人間/AI に期待を記述する。
+Style/Documentation:           { Enabled: false }
+Style/RedundantReturn:         { Enabled: true, AllowMultipleReturnValues: false }
+Style/RedundantSelf:           { Enabled: true }
+Style/ConditionalAssignment:   { Enabled: true, EnforcedStyle: assign_inside_condition }
+Style/MethodCallWithArgsParentheses:
+  Enabled: true
+  EnforcedStyle: omit_parentheses
+  AllowedMethods: [print, puts, p, pp, raise, require, require_relative]
+  IgnoreMacros: true
+Style/BlockDelimiters:         { Enabled: true, EnforcedStyle: line_count_based }
+Style/For:                     { Enabled: true, EnforcedStyle: each }
+Style/AndOr:                   { Enabled: true, EnforcedStyle: always }
+Style/Not:                     { Enabled: true }
+Style/TernaryParentheses:      { Enabled: true, EnforcedStyle: require_parentheses_when_complex }
+Style/Semicolon:               { Enabled: true }
+Style/UnlessElse:              { Enabled: true }
+Style/NegatedIf:               { Enabled: true }
+Style/NegatedUnless:           { Enabled: true }
+Style/NegatedWhile:            { Enabled: true }
+Style/Attr:                    { Enabled: true }
+Style/MethodDefParentheses:    { Enabled: true }
+# 関数型変換系: 一時配列/一時変数の蓄積ではなく変換メソッドを使う
+Style/MapIntoArray:            { Enabled: true }
+Style/MapToHash:               { Enabled: true }
+Style/MapToSet:                { Enabled: true }
+Style/HashTransformValues:     { Enabled: true }
+Style/HashTransformKeys:       { Enabled: true }
+# 文字列の逐次結合を避ける (複雑なら Heredoc / ERB)
+Style/StringConcatenation:     { Enabled: true }
+
+RSpec/MultipleExpectations:    { Max: 2 }
+RSpec/ExampleLength:           { Max: 12 }
+
+Metrics/MethodLength:
+  Max: 20
+  CountComments: false
+  CountAsOne: [array, hash, heredoc]
+Metrics/AbcSize:
+  Max: 17
+  CountRepeatedAttributes: false
+  Exclude: ['spec/**/*']
+Metrics/ClassLength:
+  Max: 200
+  CountComments: false
+  CountAsOne: [array, hash, heredoc]
+Metrics/CyclomaticComplexity:  { Max: 7 }
+Metrics/ModuleLength:
+  Max: 200
+  CountComments: false
+  CountAsOne: [array, hash, heredoc]
+Metrics/BlockLength:
+  Exclude: ['spec/**/*_spec.rb', '*.gemspec', 'Gemfile', 'Rakefile']
+Metrics/ParameterLists:        { Max: 6 }
