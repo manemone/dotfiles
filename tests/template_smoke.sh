@@ -150,11 +150,23 @@ assert_ruby_defaults() {
       }
     done
     [ "$missing" -eq 0 ] && pass "$label: Ruby の既定一式が生成されている"
-    if [ "$(grep -c '^        files: ' "$sbx/.pre-commit-config.yaml")" -ge 2 ] &&
+    # lint・test の各フック（空欄でなければ生成される）に files: が付く。doc-id-test の files: は別
+    if [ "$(grep -c '^        files: "' "$sbx/.pre-commit-config.yaml")" -eq "$(grep -Ec 'id: (lint|test)$' "$sbx/.pre-commit-config.yaml")" ] &&
       ! grep -q 'TargetRubyVersion:' "$sbx/.rubocop.yml"; then
       pass "$label: lint・test フックに files: が付き、.rubocop.yml は TargetRubyVersion を固定しない"
     else
       fail "$label: lint・test フックに files: が付き、.rubocop.yml は TargetRubyVersion を固定しない"
+    fi
+    # 生成されないフックを AGENTS.md が「走る」と説明しない（空欄の回答との整合）
+    local hook_claim_ok=1
+    grep -q 'id: lint' "$sbx/.pre-commit-config.yaml" ||
+      ! grep -Eq 'lint(・test)? のフックは Ruby' "$sbx/AGENTS.md" || hook_claim_ok=0
+    grep -q 'id: test' "$sbx/.pre-commit-config.yaml" ||
+      ! grep -Eq '(lint・)?test のフックは Ruby' "$sbx/AGENTS.md" || hook_claim_ok=0
+    if [ "$hook_claim_ok" -eq 1 ]; then
+      pass "$label: AGENTS.md の説明が実際に生成されたフックと食い違わない"
+    else
+      fail "$label: AGENTS.md の説明が実際に生成されたフックと食い違わない"
     fi
     if [ ! -f "$sbx/.github/workflows/ci.yml" ] || grep -q 'ruby/setup-ruby' "$sbx/.github/workflows/ci.yml"; then
       pass "$label: CI に Ruby の準備がある（CI 無しなら対象外）"
@@ -398,6 +410,12 @@ check_combo "Ruby(language=ruby, use_doc_id/use_ci false, lint_cmd のみ上書�
   --data use_doc_id=false \
   --data use_ci=false \
   --data 'lint_cmd=bundle exec rubocop --parallel'
+
+# language=ruby で lint_cmd / test_cmd を空欄にした経路（フックが生成されない）。
+check_combo "Ruby(language=ruby, lint/test 空欄)" "" \
+  --data language=ruby \
+  --data lint_cmd= \
+  --data test_cmd=
 
 log
 if [ "$FAIL" -eq 0 ]; then

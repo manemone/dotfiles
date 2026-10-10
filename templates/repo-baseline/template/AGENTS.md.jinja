@@ -183,7 +183,7 @@ pre-commit install
 ```
 {%- if language == 'ruby' %}
 
-Ruby の依存は `bundle install` で入れる（lint・test フックは `bundle exec` 経由で動く）。
+Ruby の依存は `bundle install` で入れる。
 {%- endif %}
 
 以降はコミット時に `.pre-commit-config.yaml` のフックが自動で走る。
@@ -205,7 +205,15 @@ pre-commit run --all-files
 {%- if language == 'ruby' %}
 
 このリポジトリは Ruby で、テストは RSpec（`spec/`）、lint は RuboCop（`.rubocop.yml`）。
-lint・test のフックは Ruby のファイルと Gemfile 等の設定ファイルを変更したときだけ走る。
+{%- if lint_cmd or test_cmd %}
+{{ 'lint・test' if (lint_cmd and test_cmd) else ('lint' if lint_cmd else 'test') }} のフックは Ruby のファイルと Gemfile 等の設定ファイルを変更したときだけ走る。
+{%- endif %}
+{%- if not lint_cmd %}
+lint のフックは無いので、コミット前に手で `bundle exec rubocop` を実行する。
+{%- endif %}
+{%- if not test_cmd %}
+test のフックは無いので、コミット前に手で `bundle exec rake spec` を実行する。
+{%- endif %}
 {%- endif %}
 {%- if use_doc_id %}
 
