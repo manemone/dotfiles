@@ -79,7 +79,7 @@ namecheck を持たないリポジトリでは何もしない。
 cd <撒いた先のリポジトリのルート>
 git status                      # 作業ツリーはきれいにしておく（未コミットの変更があると copier が拒否する）
 git switch -c <update 用のブランチ>
-uv tool run copier update --defaults --data <増えた質問>=<答え> ...   # 増えた質問が無ければ --data は不要
+uv tool run copier update --defaults --data <増えた質問>=<答え> ...   # 増えた質問が無ければ --data は不要（見つけ方は下記）
 ```
 
 - `--trust` は要らない
@@ -99,6 +99,11 @@ uv tool run copier update --defaults --data <増えた質問>=<答え> ...   # �
     `Interactive session required` で終わる。そこでは `--defaults` を付け、**増えた質問はすべて
     `--data <名前>=<答え>` で明示する**（`--defaults` 単独で回すと、増えた質問が既定値
     〈`language` は `other`、`ruby_version` は `3.3`〉になる）。答え済みの質問は撒いた先の答えが引き継がれる
+  - **増えた質問は、update の前に洗い出す。** 撒く元の `copier.yml`（`--vcs-ref` 無しなら
+    リモートの既定ブランチのもの）の質問名と、撒いた先の `.copier-answers.yml` のキーを突き合わせ、
+    answers に無い質問が増えた質問である。`--data` が漏れても copier は何も知らせず、既定値で
+    answers に書く。そのため update のあと `git diff .copier-answers.yml` で足されたキーを確かめ、
+    `--data` で渡していないキーがあれば、作業ツリーを戻して `--data` を足し、回し直す
   - 端末のある対話の実行なら、`--skip-answered` を付けると答え済みの質問を飛ばし、増えた質問だけが聞かれる
 - `_skip_if_exists` のファイル（`.rubocop.yml`・`.ruby-version`・`.rspec`・`Gemfile`・`Rakefile`・
   `spec/spec_helper.rb`）は update のときも既存のものが残り、テンプレートの直しは届かない。
@@ -126,7 +131,8 @@ update が終わったら、結果の差分を **人間に見せてからコミ�
   反映したら `.rej` を消す。コミットに残さない
 - 解いたあとの確かめ: 印と `.rej` が残っていないこと、`pre-commit run --all-files` が通ること、
   `language=ruby` なら `bundle exec rubocop` と `bundle exec rake spec` が通ること、`.copier-answers.yml` の
-  `_commit` が新しい版に進んでいること、`_src_path` が伏せられていないこと
+  `git diff .copier-answers.yml` で足されたキーが、すべて自分で決めた答えであること（既定値で
+  黙って埋まったものが無いこと）、`_commit` が新しい版に進んでいること、`_src_path` が伏せられていないこと
 
 #### 既に撒いたリポジトリ（`_commit` が無い・`_src_path` が伏せてある）
 
