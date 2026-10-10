@@ -31,7 +31,7 @@ herdr を使う配布スキル（`skills/`）に、herdr 0.9.0 で消えた旧�
 | 1 | `herdr09-01-agent-wait` | `herdr wait agent-status` → `herdr agent wait` の置き換え、done/idle を両方見る回避ループの削除、`agent_status=None` の記述を `unknown` へ直す | ✅ PR #124 マージ済 |
 | 2 | `herdr09-02-agent-prompt` | AI間送信のフォールバックを `herdr pane run` + `send-keys Enter` から `herdr agent prompt` へ移行し、ADR DOC-2609072215 を更新する | ✅ PR #126 マージ済 |
 | 3 | `herdr09-03-done-notify` | 孫が傘へのマージを終えたら、セッション間の送信で司令官へ通知する（巡回は保険として残す） | ✅ PR #127 マージ済 |
-| 4 | `herdr09-04-agent-start` | 終了したレビュワーの再起動を `herdr agent start` へ移行し、自分の workspace の特定を `$HERDR_WORKSPACE_ID` へ置き換える | 🔄 実装中 |
+| 4 | `herdr09-04-agent-start` | 終了したレビュワーの再起動を `herdr agent start` へ移行し、自分の workspace の特定を `$HERDR_WORKSPACE_ID` へ置き換える | ✅ PR #128 マージ済 |
 
 依存: 孫1 → 孫2 → 孫3 → 孫4 の順に**直列**で進める。4本とも `skills/pr-review-loop/SKILL.md` と
 `skills/umbrella-orchestrator/SKILL.md` の近い箇所を触るため、並列にするとコンフリクトする。
@@ -340,6 +340,9 @@ herdr を使う配布スキル（`skills/`）に、herdr 0.9.0 で消えた旧�
   - 通知を受けた司令官がその場で処理するので、`ocw rm` で孫のワークスペースを閉じる前に、
     孫の実装AIが最終報告を書き終えるのを待つ（`herdr agent wait <impl> --timeout ...`）。
     今回は2回とも待ってから閉じた
+- **孫3（PR #127）・孫4（PR #128）**: どちらも通知はマージの約10秒後に届いた（16:59:21Z → 16:59:3x、
+  17:08:23Z → 17:08:3x）。どちらも巡回より先で、二重処理は無い。届いた形は孫2と同じく、
+  `<cross-session-message>` の包みの無い入力だった
 
 ### 1.6 採用しないもの（理由つき）
 
