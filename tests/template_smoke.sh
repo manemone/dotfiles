@@ -133,6 +133,62 @@ assert_agents_md_test_policy() {
   fi
 }
 
+# assert_ruby_defaults <sandbox> <ruby|other> <label>
+# Ruby の既定は language=ruby のときだけ生成される（外部 contract）。ruby なら
+# 一式が揃い lint・test フックに files: が付いて CI に Ruby の準備が入ること、
+# それ以外なら Ruby の物が1つも生成されず CI にも Ruby の準備が入らないことを検証する。
+# Ruby でないリポジトリで tools/doc-id のテストが Gemfile 無しで動くことも合わせて確認する。
+assert_ruby_defaults() {
+  local sbx="$1" lang="$2" label="$3" f
+  local ruby_files=(.rubocop.yml .ruby-version .rspec Gemfile Rakefile spec/spec_helper.rb)
+  if [ "$lang" = ruby ]; then
+    local missing=0
+    for f in "${ruby_files[@]}"; do
+      [ -f "$sbx/$f" ] || {
+        fail "$label: $f が生成されている"
+        missing=1
+      }
+    done
+    [ "$missing" -eq 0 ] && pass "$label: Ruby の既定一式が生成されている"
+    if [ "$(grep -c '^        files: ' "$sbx/.pre-commit-config.yaml")" -ge 2 ] &&
+      ! grep -q 'TargetRubyVersion:' "$sbx/.rubocop.yml"; then
+      pass "$label: lint・test フックに files: が付き、.rubocop.yml は TargetRubyVersion を固定しない"
+    else
+      fail "$label: lint・test フックに files: が付き、.rubocop.yml は TargetRubyVersion を固定しない"
+    fi
+    if [ ! -f "$sbx/.github/workflows/ci.yml" ] || grep -q 'ruby/setup-ruby' "$sbx/.github/workflows/ci.yml"; then
+      pass "$label: CI に Ruby の準備がある（CI 無しなら対象外）"
+    else
+      fail "$label: CI に Ruby の準備がある（CI 無しなら対象外）"
+    fi
+  else
+    local found=0
+    for f in "${ruby_files[@]}" spec; do
+      [ -e "$sbx/$f" ] && {
+        fail "$label: $f が生成されていない"
+        found=1
+      }
+    done
+    [ -f "$sbx/.github/workflows/ci.yml" ] && grep -q 'setup-ruby' "$sbx/.github/workflows/ci.yml" && {
+      fail "$label: CI に Ruby の準備が入っていない"
+      found=1
+    }
+    grep -q '^        files: ' "$sbx/.pre-commit-config.yaml" &&
+      [ "$(grep -c '^        files: ' "$sbx/.pre-commit-config.yaml")" -gt 1 ] && {
+      fail "$label: lint・test フックに files: が付いていない"
+      found=1
+    }
+    [ "$found" -eq 0 ] && pass "$label: Ruby の物が何も生成されていない"
+    if [ -f "$sbx/tools/doc-id/test/doc_id_test.rb" ]; then
+      if (cd "$sbx" && ruby tools/doc-id/test/doc_id_test.rb >/dev/null 2>&1); then
+        pass "$label: tools/doc-id のテストが Gemfile 無しで動く"
+      else
+        fail "$label: tools/doc-id のテストが Gemfile 無しで動く"
+      fi
+    fi
+  fi
+}
+
 # check_combo <name> <comma区切りの生成されないはずのパス、無ければ空文字> --data ...
 # 「生成されないはずのパス」の検査は copier copy が成功した場合のみ行う。
 # 呼び出し順や外側のグローバル変数に依存させず、この関数の中で完結させる
@@ -176,17 +232,29 @@ check_combo() {
   # （`null` にもしない。省略と `null` は意味が違うため）。convention_docs は
   # docs/ が生成されている（≒ use_doc_id=true）場合だけ存在し、参照先が実在すること、
   # markers は3つとも常に既定値であることを検証する。
-  local expected_lint="" expected_test="" arg_i arg
+  local expected_lint="" expected_test="" arg_i arg lang=other lint_given=0 test_given=0
   local args=("$@")
   for ((arg_i = 0; arg_i < ${#args[@]}; arg_i++)); do
     arg="${args[$arg_i]}"
     if [ "$arg" = "--data" ]; then
       case "${args[$arg_i + 1]}" in
-        lint_cmd=*) expected_lint="${args[$arg_i + 1]#lint_cmd=}" ;;
-        test_cmd=*) expected_test="${args[$arg_i + 1]#test_cmd=}" ;;
+        lint_cmd=*)
+          expected_lint="${args[$arg_i + 1]#lint_cmd=}"
+          lint_given=1
+          ;;
+        test_cmd=*)
+          expected_test="${args[$arg_i + 1]#test_cmd=}"
+          test_given=1
+          ;;
+        language=*) lang="${args[$arg_i + 1]#language=}" ;;
       esac
     fi
   done
+  # language=ruby で lint_cmd / test_cmd を答えなかったときは Ruby の既定値になる
+  if [ "$lang" = ruby ]; then
+    [ "$lint_given" -eq 0 ] && expected_lint="bundle exec rubocop"
+    [ "$test_given" -eq 0 ] && expected_test="bundle exec rake spec"
+  fi
   local has_docs=0
   [ -d "$sbx/docs" ] && has_docs=1
 
@@ -273,6 +341,8 @@ PYEOF
     fi
   fi
 
+  assert_ruby_defaults "$sbx" "$lang" "$name"
+
   if [ -f "$sbx/AGENTS.md" ]; then
     assert_markdown_hygiene "$sbx/AGENTS.md" "AGENTS.md"
     assert_agents_md_test_policy "$sbx/AGENTS.md" "AGENTS.md"
@@ -316,6 +386,18 @@ check_combo "最小構成(use_doc_id/use_ci/has_long_running_commands すべて 
 # 発生していた組み合わせ（PR #39 ラウンド2レビュー参照）。全部盛り/最小構成の
 # どちらの combo にも入っていなかったため、再発防止としてここに追加する。
 check_combo "既定値のみ(--defaults そのまま。use_doc_id/use_ci はテンプレ既定値 true、lint/test/adr/reference は既定値のまま)" ""
+
+# language=ruby: lint_cmd / test_cmd を答えない（Ruby の既定値になる）経路。
+# use_doc_id=true のまま tools/doc-id を含めて生成し、CI も生成する。
+check_combo "Ruby(language=ruby, lint/test は Ruby の既定値, use_doc_id/use_ci true)" "" \
+  --data language=ruby
+
+# language=ruby でも use_doc_id/use_ci を切れば docs/ tools/ .github/ は出ず、Ruby の足場だけが残る。
+check_combo "Ruby(language=ruby, use_doc_id/use_ci false, lint_cmd のみ上書き)" "docs,tools,.github" \
+  --data language=ruby \
+  --data use_doc_id=false \
+  --data use_ci=false \
+  --data 'lint_cmd=bundle exec rubocop --parallel'
 
 log
 if [ "$FAIL" -eq 0 ]; then
