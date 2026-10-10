@@ -22,6 +22,7 @@
 | なぜ人格のパーソナライズをマシンローカルな固定パスへ切り出したかを知る | [adr/DOC-2609162327_claude-md-machine-local-tone.md](adr/DOC-2609162327_claude-md-machine-local-tone.md) | `CLAUDE.machine.md` の固定パス実体・「定義元を指す」ベース文言・エージェント別の読み込み手段（Claude Code の `@import` / OpenCode の `instructions` / Codex の連結生成）の決定と、却下した案 |
 | なぜ repo-baseline に Ruby の既定（RSpec・厳しめの RuboCop）を持たせたかを知る | [adr/DOC-2610110216_ruby-defaults-in-repo-baseline.md](adr/DOC-2610110216_ruby-defaults-in-repo-baseline.md) | Ruby のときだけ生成する質問の形（`language`）・`.rubocop.yml` を自己完結で持つ理由と写さなかったもの・`TargetRubyVersion` を `.ruby-version` から推定させる決定・lint/test フックの `files:`・既存ファイルを上書きしない扱い・道具のテストを minitest のままにする理由と、却下した案 |
 | repo-baseline で `copier update` を使えるようにした理由と、旧形で撒いたリポジトリの移行（橋渡しのコミット）を知る | [adr/DOC-2610110435_copier-root-entry.md](adr/DOC-2610110435_copier-root-entry.md) | ルートの `copier.yml` + `_subdirectory`・撒く元の推奨・`_src_path` を伏せない理由・タグの扱い・確かめた結果 |
+| 旧形で撒いたリポジトリ（modeldex・pixidex・sheaf）を `copier update` できる形へ移す | [reference/DOC-2610110507_repo-baseline旧形からの移行手順.md](reference/DOC-2610110507_repo-baseline旧形からの移行手順.md) | 橋渡しのコミットの手順・リポジトリごとの撒いた版と `language` の答え方・衝突しやすいファイル・namecheck |
 | なぜ他人の PR 群のレビューと自分の PR 群のレビュー依頼を今のスキル構成にしたかを知る | [adr/DOC-2609270420_multi-repo-pr-review-skills.md](adr/DOC-2609270420_multi-repo-pr-review-skills.md) | `pr-group-review`（レビュワー用）と `pr-group-request`（依頼者用）の線引き・レビュー状態の置き場所・自己完結 HTML のまとめ・COMMENT のみの投稿と権限に止められたときの振る舞いの決定と、却下した案 |
 | `ocw-meter` のイベントスキーマを調べる | [reference/DOC-2608021229-c_ocw-meterイベントスキーマ.md](reference/DOC-2608021229-c_ocw-meterイベントスキーマ.md) | 全 event_type・全フィールド・費用計算式の一次情報源 |
 | LLM費用のベースラインを測る手順を知る | [reference/DOC-2608021229-b_LLM費用観測ベースライン計測手順.md](reference/DOC-2608021229-b_LLM費用観測ベースライン計測手順.md) | 実PR 5〜10本での計測手順 |
@@ -103,6 +104,7 @@
 | DOC-2608021229-b | [LLM費用観測ベースライン計測手順.md](reference/DOC-2608021229-b_LLM費用観測ベースライン計測手順.md) | `ocw-meter` 導入後、実PR 5〜10本でLLM費用・Claude利用枠のベースラインを計測する手順書（旧ID: `DOC-004`） |
 | DOC-2608021229-c | [ocw-meterイベントスキーマ.md](reference/DOC-2608021229-c_ocw-meterイベントスキーマ.md) | `ocw-meter` が書く全イベント型の恒久リファレンス。共通エンベロープの全フィールド、全 `event_type`、`idempotency_key` の生成規則、費用計算式、`completeness` の判定基準を実データで検証した上でまとめたもの（旧ID: `DOC-005`） |
 | DOC-2608040805 | [配布実体運用ガイド.md](reference/DOC-2608040805_配布実体運用ガイド.md) | 世代ディレクトリ + `current` 配布方式の日常運用手順。canonical prefix のディレクトリ構造・manifest の全フィールド・世代確認・ロールバック・dev モードの出入り・リンク切れ対処・旧方式からの移行手順 |
+| DOC-2610110507 | [repo-baseline旧形からの移行手順.md](reference/DOC-2610110507_repo-baseline旧形からの移行手順.md) | 旧形（`_commit` 無し・`_src_path` 伏せ）で撒いたリポジトリを `copier update` できる形へ移す手順書。橋渡しのコミット経由の共通手順、modeldex・pixidex・sheaf ごとの撒いた版（V）と根拠・`language` の答え方・衝突しやすいファイル・namecheck・移行の時期、複製での模擬の結果、持ち主の判断を仰ぐ点 |
 
 ## 新規ファイル追加時のルール
 
