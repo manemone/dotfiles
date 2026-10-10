@@ -1,3 +1,5 @@
+{#- Ruby のとき lint・test フックを走らせるファイル。文書だけのコミットでは走らせない -#}
+{%- set ruby_files_regex = '(\\.(rb|rake|gemspec)$|^(Gemfile|Gemfile\\.lock|Rakefile|\\.rspec|\\.ruby-version|\\.rubocop[^/]*\\.yml)$)' -%}
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v6.0.0
@@ -40,6 +42,9 @@ repos:
         entry: {{ lint_cmd | tojson }}
         language: system
         pass_filenames: false
+{%- if language == 'ruby' %}
+        files: {{ ruby_files_regex | tojson }}
+{%- endif %}
 {% endif -%}
 {% if test_cmd %}
   - repo: local
@@ -49,4 +54,7 @@ repos:
         entry: {{ test_cmd | tojson }}
         language: system
         pass_filenames: false
+{%- if language == 'ruby' %}
+        files: {{ ruby_files_regex | tojson }}
+{%- endif %}
 {% endif -%}
