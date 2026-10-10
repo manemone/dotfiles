@@ -730,6 +730,10 @@ herdr pane read "$REVIEWER_PANE" --source detection --lines 3
 
 ```bash
 herdr pane run "$REVIEWER_PANE" "$REVIEWER_CMD"
+```
+
+起動待ち:
+
 ```bash
 # herdr agent wait は「今エージェントがいるペイン」にしか使えない（いないと agent_not_found で
 # 即座に失敗する）ため、起動直後は agent_status を短い間隔で見て、最大30秒待つ
