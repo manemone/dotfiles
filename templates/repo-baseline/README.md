@@ -67,6 +67,9 @@ uv tool run copier copy <このリポジトリへのパスまたはURL>/template
 リポジトリへ展開しても、これらは**上書きされず**そのまま残ります（`_skip_if_exists`）。
 展開後に既存の内容とテンプレートの既定を突き合わせてください。
 
+`use_doc_id=true` のとき、生成される `AGENTS.md` には、`tools/doc-id/` のテストが minitest なのは
+道具の都合であり、そのリポジトリのテストの規約ではない旨の注記が入ります。
+
 質問の回答に関わらず常に `.claude/pr-review.yml` を生成します。`skills/pr-review-loop/`
 スキルが Phase 0.5 で最優先に読む設定ファイルで、`lint_cmd` / `test_cmd`（空欄なら省略）・
 `markers`（既定値を明示）・`convention_docs`（`use_doc_id` 選択時のみ、生成される

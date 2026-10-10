@@ -12,6 +12,18 @@ dotfiles の `templates/repo-baseline/` は copier テンプレートで、決�
 分業の原則: **copier が撒けるものは撒く。撒けないもの（判断）は、このスキルを読んだ AI が埋める。**
 どちらの仕事かを混同しないこと。
 
+**持ち主が決めるべき規約を、AI が推測で決めない。** テストの道具や lint の設定は
+持ち主が決める規約である。既存の設定（`Gemfile`・`.rubocop.yml`・CI 等）から読み取れず、
+テンプレートの既定（`language=ruby` のときの RSpec・RuboCop）でも決まらないなら、
+推測で埋めずに人間に確認する。
+
+**道具のテストの形から、プロジェクトの規約を推測しない。** テンプレートが配る
+`tools/doc-id/test/` が minitest なのは、Ruby 以外のリポジトリでも `Gemfile` 無しで
+`ruby tools/doc-id/test/doc_id_test.rb` が動くようにするための**道具の都合**であり、
+撒いた先のリポジトリのテストの規約ではない。過去に、これに合わせて AI が確認なしで
+minitest を選び、持ち主が後から RSpec に直したことがある（modeldex・pixidex）。
+Ruby のリポジトリのテストの既定は RSpec である（ADR DOC-2610110216）。
+
 ## 1. 前提の確認
 
 導入前に以下を確認する。いずれかが欠けている場合は、人間に確認するか対処してから進める。
@@ -55,6 +67,19 @@ copier が対話式に質問してくる。答え方の判断は「4. 質問へ�
 手動で反映すること（`.copier-answers.yml` には撒いた時点の回答が残っているので、
 どの質問にどう答えたかは参照できる）。
 
+**Ruby の既定（RSpec・厳しめの RuboCop。ADR DOC-2610110216）は、既存のリポジトリには
+自動では届かない。** 上のとおり `copier update` が使えないためである。後から取り込みたい
+場合は、人間に確認のうえ、使い捨てのディレクトリに `language=ruby` で撒き直し
+（`git init` してから `copier copy`）、次のものを必要な分だけ持ってくる:
+
+- `.rubocop.yml`（`TargetRubyVersion` は書かず `.ruby-version` から推定させる形）
+- `.ruby-version`・`Gemfile`・`.rspec`・`Rakefile`・`spec/spec_helper.rb`
+- `.pre-commit-config.yaml` の lint・test フックの `files:`（Ruby のファイルと
+  `Gemfile` 等の設定ファイルの変更でだけ走らせる）
+- `ci.yml` の `ruby/setup-ruby`（`pre-commit` の前）
+
+既存のテストを RSpec に替えるかどうかは持ち主が決めることなので、勝手に移行しない。
+
 ## 3. 既存ファイルとの衝突
 
 `copier copy` は、生成先に同名ファイルが既にある場合、上書きするかどうかを1ファイルずつ聞いてくる。
@@ -68,6 +93,13 @@ copier が対話式に質問してくる。答え方の判断は「4. 質問へ�
 - 既に `.claude/pr-review.yml` がある場合: 上書きせず、既存の設定（`lint_cmd` /
   `test_cmd` / `convention_docs` / `markers` / `reviewer_cmd`）を確認したうえで、
   テンプレートが生成する内容との差分だけを手動で足す。既存の設定を上書きで失わないこと
+- `language=ruby` で撒く先に既に `Gemfile`・`.rubocop.yml`・`.ruby-version`・`.rspec`・
+  `Rakefile`・`spec/spec_helper.rb` がある場合: これらは**上書きされずスキップ**される
+  （`_skip_if_exists`）。撒いた後に、既存の内容とテンプレートの既定を突き合わせる:
+  `Gemfile` に rspec・rake・rubocop・`rubocop-performance`・`rubocop-rspec` があるか、
+  `.rubocop.yml` が `.ruby-version` からの推定に任せているか、テストが RSpec か。
+  差があっても勝手に合わせず、差分を人間に提示して判断を仰ぐ（既存のテストが minitest
+  のときに RSpec へ移行するかは持ち主が決める）
 - 判断に迷う場合は上書きせず、人間に差分を提示して判断を仰ぐ
 
 ## 4. 質問への答え方
@@ -75,8 +107,22 @@ copier が対話式に質問してくる。答え方の判断は「4. 質問へ�
 `templates/repo-baseline/README.md` に質問の一覧と既定値がある。対象リポジトリを見て答える。
 
 - `default_branch`: `git symbolic-ref refs/remotes/origin/HEAD` や `git branch` で確認する
-- `lint_cmd` / `test_cmd`: 既存の `package.json` / `Rakefile` / `Makefile` / CI 設定等から
-  実際に使われているコマンドを探して答える。無ければ空欄のままでよい（後で追加できる）
+- `language`: 対象リポジトリの主な言語で答える（`ruby` / `other`。既定は `other`）。
+  Ruby のリポジトリ（`Gemfile` や `*.gemspec` がある等）なら `ruby`。`ruby` にすると
+  RSpec の足場・`.rubocop.yml` が生成され、`lint_cmd` / `test_cmd` の既定値と CI の
+  Ruby 準備が Ruby 用になる。Ruby 以外なら Ruby の物は何も生成されない。
+  既定値に流されず、実態を見て答えること
+- `ruby_version`（`language=ruby` のときだけ）: 既存の `.ruby-version`・`.tool-versions`・
+  `mise.toml`・`Gemfile.lock` 等から探して答える。`.ruby-version` に書かれ、RuboCop の
+  `TargetRubyVersion` の推定元と CI の `ruby/setup-ruby` の入力になる
+- `lint_cmd` / `test_cmd`: `language=ruby` では既定値が `bundle exec rubocop` /
+  `bundle exec rake spec` になる。既存の設定が別のコマンドを使っているなら、それに合わせて
+  答える。それ以外の言語では、既存の `package.json` / `Rakefile` / `Makefile` / CI 設定等から
+  実際に使われているコマンドを探して答える。**テンプレートの道具（`tools/doc-id/test/`）の
+  テストの形から推測して決めない。** 既存の設定から読み取れず、テンプレートの既定でも
+  決まらないなら、推測で埋めず人間に確認する。確認できず空欄のまま進める場合は、
+  「5. 撒いた後に埋めるべきもの」で、実際のコマンドが定まった時点で埋める
+  （基準は、そのリポジトリの既存の設定と持ち主の回答。道具の都合ではない）
 - `use_doc_id`: 迷ったら true。複数人・複数 AI が並行して `docs/` に文書を書く前提があるなら
   特に有効
 - `use_ci`: GitHub を使っていなければ false
@@ -111,6 +157,16 @@ copier が対話式に質問してくる。答え方の判断は「4. 質問へ�
 - [ ] `AGENTS.md` の「コミット前の必須ステップ」: `lint_cmd` / `test_cmd` を空欄のまま
       進めた場合、実際のコマンドが定まった時点で埋める。同じコマンドを
       `.claude/pr-review.yml` の `lint_cmd` / `test_cmd` にも足すこと
+- [ ] `language=other` で `lint_cmd` / `test_cmd` を答えた場合: `.pre-commit-config.yaml`
+      の該当フックに `files:` を足す。テンプレートは言語が分からず絞り込みを機械的に
+      決められないため、生成されるフックは `pass_filenames: false` で常に走る。
+      `lint_cmd` / `test_cmd` が見るファイル（ソースと、結果を左右する設定ファイル）の
+      変更でだけ走る正規表現にしないと、文書だけのコミットでも毎回走って、依存がまだ無い
+      段階では落ち続ける（`language=ruby` のときは生成済み）
+- [ ] `language=ruby` で撒いたとき: `bundle install` を実行し、生成された `Gemfile.lock` を
+      コミットする。そのあと `bundle exec rubocop` と `bundle exec rake spec` が通ることを
+      確かめる（example 0 件でも `rake spec` は成功する）。`use_ci` なら CI の
+      `ruby/setup-ruby`（`bundler-cache`）が `Gemfile.lock` を使う
 - [ ] `AGENTS.md` の「実装時の注意」: 新しいモジュールを足すときに追従すべき箇所があれば
 - [ ] `docs/design/DOC-DOCID_PLACEHOLDER_コーディング方針.md`
       （`use_doc_id` を選んだ場合）: このリポジトリの主要言語のコーディング規約を書き下ろす。
