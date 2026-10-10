@@ -142,7 +142,7 @@ uv tool run copier update
 
 タグは打っていないので、版は HEAD（`0.0.0.postN.devM+<sha>`）で扱われます。
 手順の詳細・増えた質問への答え方・既に撒いた（`_commit` の無い）リポジトリの移行は
-`skills/repo-baseline/SKILL.md` と移行の手順書に従ってください。
+`skills/repo-baseline/SKILL.md` と移行の手順書（`docs/reference/DOC-2610110507_repo-baseline旧形からの移行手順.md`）に従ってください。
 
 ## 分業の原則
 
@@ -188,7 +188,7 @@ uv tool run copier update
   ルートの `copier.yml` が入口のため。`tests/template_smoke.sh` が検査する）。
   テンプレートを変えたあとの `copier update` が `--trust` 無しで通ること
 - 旧形（`_commit` 無し）で撒いたリポジトリは、橋渡しのコミット経由で最初の1回を update できること
-  （「使い方: 更新」。手順は移行の手順書）
+  （「使い方: 更新」。手順は移行の手順書 DOC-2610110507）
 - `tests/template_smoke.sh` の3つの回答パターン（全部盛り・最小構成・既定値のみ）それぞれで、
   生成された `docs/` 配下の全 `.md`（`docs/design/*コーディング方針.md` / `docs/README.md` 等）に
   Jinja の空白制御ミスによる崩れ（二重空行・見出し直前の空行欠落）が無いこと。
