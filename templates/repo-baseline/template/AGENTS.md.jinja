@@ -205,6 +205,9 @@ pre-commit run --all-files
 {%- if language == 'ruby' %}
 
 このリポジトリは Ruby で、テストは RSpec（`spec/`）、lint は RuboCop（`.rubocop.yml`）。
+{%- if use_doc_id %}
+`tools/doc-id/` のテストが minitest なのは、Ruby 以外のリポジトリでも `Gemfile` 無しで動かすための道具の都合であり、このリポジトリのテストの規約ではない。
+{%- endif %}
 {%- if lint_cmd or test_cmd %}
 {{ 'lint・test' if (lint_cmd and test_cmd) else ('lint' if lint_cmd else 'test') }} のフックは Ruby のファイルと Gemfile 等の設定ファイルを変更したときだけ走る。
 {%- endif %}
@@ -214,6 +217,10 @@ lint のフックは無いので、コミット前に手で `bundle exec rubocop
 {%- if not test_cmd %}
 test のフックは無いので、コミット前に手で `bundle exec rake spec` を実行する。
 {%- endif %}
+{%- endif %}
+{%- if use_doc_id and language != 'ruby' %}
+
+`tools/doc-id/` のテストが minitest なのは、`Gemfile` 無しで動かすための道具の都合であり、このリポジトリのテストの規約ではない。テストの道具は、道具のテストの形から推測せず、このリポジトリの既存の設定か持ち主の指示で決めること。
 {%- endif %}
 {%- if use_doc_id %}
 

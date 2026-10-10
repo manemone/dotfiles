@@ -141,3 +141,19 @@ regression は「将来 `tools/doc-id/` を直した人が RuboCop の違反を�
 撒いた先のリポジトリの `pre-commit`（`bundle exec rubocop` フック。`files:` に `.rb` を含む）が
 その場で捕まえるので、テンプレート側に二重のゲートは要らない。dotfiles 本体は Ruby の
 リポジトリではないため、この確認は手動（本節の結果と PR 説明）で行った。
+
+## 6. 孫3: スキルと生成される `AGENTS.md` への注記
+
+根本原因（背景）は「道具のテストの形からプロジェクトの規約を推測した」ことなので、撒いた先の
+AI が読む 2 箇所に、推測しない旨を書いた。
+
+- スキル `repo-baseline`: 冒頭の原則に「持ち主が決めるべき規約を推測で決めない（読み取れず
+  既定でも決まらないなら人間に確認する）」「`tools/doc-id/test/` が minitest なのは道具の都合」を
+  追記。§2（既存導入の更新）に、Ruby の既定が既存のリポジトリへ自動では届かないことと手動で
+  持ってくるファイルの一覧、§3 に既存の `Gemfile` 等があるときの突き合わせ、§4 に `language` /
+  `ruby_version` / `lint_cmd` / `test_cmd` の答え方、§5 に `language=other` で `lint_cmd` /
+  `test_cmd` を答えたときの `files:` の追記と Ruby のときの `bundle install` +
+  `Gemfile.lock` のコミットを追加
+- 生成される `AGENTS.md`（`use_doc_id` のとき）: `tools/doc-id/` のテストが minitest なのは
+  道具の都合でありリポジトリのテストの規約ではない、と 1〜2 文書く。Ruby のときは既存の
+  「テストは RSpec」の一文のすぐ後に置く
