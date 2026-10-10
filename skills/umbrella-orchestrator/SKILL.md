@@ -996,14 +996,11 @@ finalize のフローを止める理由にならない。
 # implementer の状態を見る
 herdr pane get <implementer-id>  # agent_status: idle/working/blocked/done
 
-# 完了を待つ（--status は1つしか取れないため、短く区切ってdone/idle両方を見る。
+# 完了を待つ（--until を省略すると idle / done / blocked のどれかで成立する。
 # 端末クライアントが繋がっていないヘッドレス実行では globally active tab のペインは
-# 完了時に直接 idle になりうるため、done 単独で120000msフル待機すると空転する）
-for _ in $(seq 1 6); do
-  herdr wait agent-status <implementer-id> --status done --timeout 20000 && break
-  STATUS=$(herdr pane get <implementer-id> | python3 -c "import json,sys; print(json.load(sys.stdin)['result']['pane'].get('agent_status',''))")
-  case "$STATUS" in idle|blocked) break ;; esac
-done
+# 完了時に直接 idle になりうるため、done と idle の両方を1行で拾える）。
+# 対象がすでに idle / done なら即座に戻るので、送信直後は working を観測してから呼ぶ
+herdr agent wait <implementer-id> --timeout 120000
 
 # PR 番号を検出（出力から抽出）
 herdr pane read <implementer-id> --source recent-unwrapped --lines 40
@@ -1026,14 +1023,15 @@ herdr 自身の公式ドキュメント（`herdr` skill）によれば、`idle` 
 無人監視する場面では、そのペインを誰も見に行かないため `done` のまま張り付く
 （herdr の不具合ではなく仕様どおりの挙動）。
 
-実装AIが reviewer の完了を待つとき `herdr wait agent-status <reviewer> --status idle`
-を使うことがあり、この待機は**（そのペインをフォーカスしない限り）成立せずタイムアウトまで
+実装AIが reviewer の完了を待つとき `herdr agent wait <reviewer> --until idle`
+のように `idle` だけを待つことがあり、この待機は**（そのペインをフォーカスしない限り）成立せずタイムアウトまで
 空回りする**。孫1で1回発生した（約10分ロス。§3.2 実測表と同じ事例）。
 
-**注記**: `pr-review-loop` スキル（`skills/pr-review-loop/SKILL.md` Phase 3a）も
-同じ仕組みに基づき、`idle` ではなく `done` を待つ形に修正済み（本PRで対応）。
+**注記**: `pr-review-loop` スキル（`skills/pr-review-loop/SKILL.md` Phase 3a）は
+`--until` を付けない `herdr agent wait <reviewer> --timeout <MS>` で `idle` / `done` /
+`blocked` のどれでも拾う形になっており、この空回りは起きない。
 
-**待ち方は1種類ではない。** 孫3では `herdr wait` を使わず
+**待ち方は1種類ではない。** 孫3では `herdr agent wait` を使わず
 「バックグラウンドで再度待機中です。通知を待ちます」と称して**バックグラウンドシェルを
 走らせたまま止まる**形が3回出た。このとき pane の `agent_status` は
 `working` ではなく **`done`** になる。つまり
@@ -1056,7 +1054,7 @@ herdr 自身の公式ドキュメント（`herdr` skill）によれば、`idle` 
 herdr pane read <implementer-id> --source recent-unwrapped --lines 20
 ```
 
-`herdr wait agent-status` が走っている、または「通知を待ちます」と言ったまま
+`herdr agent wait` が走っている、または「通知を待ちます」と言ったまま
 バックグラウンドシェルが残っていることを確認してから、短く送って復帰させる。
 送信は「AI間送信手順（二段構え）」に従う（`SendMessage` が使えるならそちら、
 使えなければ以下のフォールバック）:
