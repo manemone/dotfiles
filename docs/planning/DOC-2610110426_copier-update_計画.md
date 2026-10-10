@@ -31,10 +31,10 @@ update できる形へ移すための手順書**を作る（実際の移行は�
 
 ## ワークスペースラベル
 
-- 傘: `dotfiles :: copier update`
-- 孫1: `dotfiles :: copier update 孫1 ルートの入口`
-- 孫2: `dotfiles :: copier update 孫2 スキル`
-- 孫3: `dotfiles :: copier update 孫3 移行の手順書`
+- 傘: `dotfiles :: copier更新`
+- 孫1: `dotfiles :: copier更新 孫1 ルートの入口`
+- 孫2: `dotfiles :: copier更新 孫2 スキル`
+- 孫3: `dotfiles :: copier更新 孫3 移行の手順書`
 
 ---
 
