@@ -689,7 +689,7 @@ STATUS=$(herdr pane get "$REVIEWER_PANE" | python3 -c "import json,sys; d=json.l
 |--------|------|-------------|
 | `idle` | エージェント起動中、待機状態 | Step 3へ |
 | `done` | 前ラウンドの完了結果が未読のまま。待機状態であることは `idle` と同じ | Step 3へ |
-| `working` | エージェントが処理中 | Phase 3a と同じ `herdr agent wait "$REVIEWER_PANE" --timeout 600000`（`--until` なし）で完了を待ってからStep 3へ。無人の背面ペインは完了しても `done` で止まり自動では `idle` にならないため、`--until idle` だけを待つと10分空転する |
+| `working` | エージェントが処理中 | Phase 3a と同じ `herdr agent wait "$REVIEWER_PANE" --timeout 600000`（`--until` なし）で待ち、**抜けたら `agent_status` を取り直してこの表を引き直す**（`blocked` でも待ちは成立するため、権限確認のダイアログに依頼文を送らないよう、`idle` / `done` を確認してからStep 3へ）。無人の背面ペインは完了しても `done` で止まり自動では `idle` にならないため、`--until idle` だけを待つと10分空転する |
 | `blocked` | 判断待ちで停止 | ペイン出力を読んで可能なら回答。人手が必要ならユーザーに伝える |
 | `unknown` または空 | エージェントのいないペイン（シェルだけのペインなど）は `unknown` を返す。**エージェントがいるが herdr が状態を分類できない場合にも `unknown` が返る**ので、`unknown` だけでは終了とは決められない | 以下の「unknown 時の確認手順」を実行 |
 
@@ -708,7 +708,8 @@ herdr pane read "$REVIEWER_PANE" --source detection --lines 3
   になってから Step 3 へ。
 - **シェルプロンプト**（`$` や `❯` で終わる行だけがあり、エージェントの応答が無い）
   → エージェントは終了している。下記「起動コマンドの決定」に従って起動し直し、
-  `herdr agent wait "$REVIEWER_PANE" --until idle --timeout 30000` で起動完了を待つ。
+  同じ節の起動待ち（`agent_status` を最大30秒見る）で起動完了を待つ。起動直後は
+  `herdr agent wait` が使えない（エージェントが検出されるまで `agent_not_found` で失敗する）。
 - **エージェントの応答が表示されている**（直近の行がエージェントの出力）→ 実は起動中。
   `herdr pane get` を再実行して状態を再確認。
 
@@ -729,8 +730,18 @@ herdr pane read "$REVIEWER_PANE" --source detection --lines 3
 
 ```bash
 herdr pane run "$REVIEWER_PANE" "$REVIEWER_CMD"
-herdr agent wait "$REVIEWER_PANE" --until idle --timeout 30000
+```bash
+# herdr agent wait は「今エージェントがいるペイン」にしか使えない（いないと agent_not_found で
+# 即座に失敗する）ため、起動直後は agent_status を短い間隔で見て、最大30秒待つ
+for _ in $(seq 1 30); do
+  STATUS=$(herdr pane get "$REVIEWER_PANE" | python3 -c "import json,sys; print(json.load(sys.stdin)['result']['pane'].get('agent_status',''))")
+  case "$STATUS" in idle|done|blocked) break ;; esac
+  sleep 1
+done
 ```
+
+抜けたあとの `STATUS` が `idle` / `done` でなければ（`unknown` のまま、または `blocked`）、
+Step 3 へ進まず `herdr pane read "$REVIEWER_PANE" --source detection --lines 10` で画面を確認する。
 
 ### Step 3: 依頼を送信
 
@@ -837,15 +848,17 @@ herdr agent wait "$REVIEWER_PANE" --timeout 600000
 「作業開始を待つ」で `working` を観測してから呼ぶこと。target は「エージェントがいる
 ペイン」でなければならず、エージェントが終了していると使えない）
 
-10分以内に完了（`idle` / `done` / `blocked`）に達しなかった場合の確認:
+待ちが終わったら（成功でもタイムアウトでも）、**毎回**状態を取り直して分岐する。`--until` なしの待ちは
+`blocked` でも成立するため、成功で戻っても完了とは限らない:
 
 ```bash
 STATUS=$(herdr pane get "$REVIEWER_PANE" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['result']['pane'].get('agent_status',''))")
 ```
 
 - `blocked` → 出力を読んで可能なら回答。人手が必要なら停止してユーザーに伝える。
-- `working`（継続中）→ レビューに時間がかかっている。ペイン出力を読む。
-- それ以外（`idle` を含む） → Phase 3bへ。
+- `working`（継続中、タイムアウト）→ レビューに時間がかかっている。ペイン出力を読む。
+- `idle` / `done` → Phase 3bへ。
+- それ以外（`unknown` など） → ペインを目視して確認する。
 
 工程計測:
 
