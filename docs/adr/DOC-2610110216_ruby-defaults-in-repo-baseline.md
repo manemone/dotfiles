@@ -114,3 +114,30 @@ RSpec に替えると Ruby 以外のリポジトリに gem の依存が入る。
   `test/doc_id_test.rb`）の指摘を出す。内訳は Style/MethodCallWithArgsParentheses 12・
   Metrics/AbcSize 6・Lint/AmbiguousBlockAssociation 2・Metrics/MethodLength 2・
   Naming/MethodParameterName 2・Metrics/ClassLength 1。孫2が解消する
+
+## 5. 孫2: `tools/doc-id/` を RuboCop に通した結果
+
+孫1 が測った **25 件**（3 ファイル）を、抑制ディレクティブも除外も足さず、すべてリファクタ・
+自動修正で解消した。残した指摘は無い。`tools/doc-id/` とテンプレート側の複製は同一に保っている。
+
+| 指摘（件数） | 解消の仕方 |
+|---|---|
+| Style/MethodCallWithArgsParentheses（12） | `rubocop -a` の自動修正。結果は読んで確かめた。ただし `git_env.merge(...)` の複数行が行末の `\` 継続に変換された2箇所は読みにくいので、`dated_git_env` ヘルパーに置き換えた |
+| Lint/AmbiguousBlockAssociation（2） | 自動修正（`assert_equal(1, ...count { })` と括る） |
+| Naming/MethodParameterName（2） | `searchable_file?` / `extensionless_shebang_script?` の引数 `f` を `file` に改名 |
+| Metrics/AbcSize（`git_tracked_files`） | git が使えないときの glob フォールバックを `glob_searchable_files` に切り出した。責務が「git の一覧を取る」と「git が無いときの代替を探す」の2つに分かれる箇所で、分割後のほうが読みやすい |
+| Metrics/AbcSize・MethodLength・ClassLength（テスト `DocIdAssignTest`） | 繰り返しの `Open3.capture2 git_env, "git", ...` を `git` / `stage`（書く + add）/ `commit` / `assign_quietly` / `design_docs` ヘルパーに集約した。1つのシナリオが2段階の検証を抱えていたテスト（一方の採番がもう一方への参照を壊さないことと、後から採番したとき残っていた参照が書き換わること）は2本に分けた |
+
+`ruby tools/doc-id/test/doc_id_test.rb` は修正前後とも全件通る（修正後 45 件。上記のテスト分割で
+1 本増え、重複していた検証 2 つを統合したため assertion は 96 → 94）。テストが検証する
+振る舞いは変えていない。
+
+### 5.1 スモーク（`tests/template_smoke.sh`）には入れない
+
+`tools/doc-id/` が RuboCop に通り続けることはスモークで守らない。理由: `bundle install` は
+ネットワークを要し、撒き直しのたびに gem を取得するため `tests/template_smoke.sh`（現状は
+ネットワークを `uvx copier` 以外に使わない）の実行時間と不安定さが見合わない。守りたい
+regression は「将来 `tools/doc-id/` を直した人が RuboCop の違反を持ち込む」ことだが、これは
+撒いた先のリポジトリの `pre-commit`（`bundle exec rubocop` フック。`files:` に `.rb` を含む）が
+その場で捕まえるので、テンプレート側に二重のゲートは要らない。dotfiles 本体は Ruby の
+リポジトリではないため、この確認は手動（本節の結果と PR 説明）で行った。
