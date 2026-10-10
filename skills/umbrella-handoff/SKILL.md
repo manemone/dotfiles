@@ -184,10 +184,10 @@ commander には**絶対パス**で渡す（§6）。**commander が計画書へ
 - 相談AI自身が `SendMessage` を呼べる Claude Code セッションで、かつ commander
   ペインの `agent`（`herdr pane get <commander のペインID>`。値は §5 手順3 の出力の
   `commander:` 行から取る）が `"claude"` であれば `SendMessage`
-- どちらかが満たされなければ、従来どおり `herdr pane run` + `send-keys Enter`
-  （`umbrella-orchestrator/SKILL.md` §3.2 注意点3「herdr pane run の最重要注意点」
-  の各項目 — プロンプト全文を打ち込まない、メタ指示を付けない、Enter が送られない
-  ことがあるので送信後に確認する、同じ本文を再送しない — をそのまま踏む）
+- どちらかが満たされなければ `herdr agent prompt <commander のペインID> "<本文>" --wait --timeout 5000`
+  （返り値の読み方は `umbrella-orchestrator/SKILL.md` §5「フォールバック」。
+  同 §3.2 の送信の注意点 — プロンプト全文を書き込まない、メタ指示を付けない、
+  `timeout` / `stalled` でも同じ本文を再送しない — をそのまま踏む）
 
 **送信内容に必ず含める要素**（`SendMessage` 経路でもこれは変えない。長さの制約が
 消えても、正典を1箇所に保つという理由は消えないため）:
@@ -217,7 +217,8 @@ commander には**絶対パス**で渡す（§6）。**commander が計画書へ
 `umbrella-orchestrator/SKILL.md` §5「AI間送信手順（二段構え）」#4「到達確認」に従う。
 送信直前の commander ペインの `agent_status` を控え、送信後に変化していることを
 確認する。変化していなければ `herdr pane read` で画面を目視するか、フォールバック
-経路へ切り替える。
+経路へ切り替える。フォールバック（`herdr agent prompt`）の `timeout` / `stalled` は
+未達の証明にならないため、同じ本文を再送しない（§5「フォールバック」）。
 
 到達を確認できたら、**相談AIはここで手を引く。** 計画書の内容にも孫分割にも
 以降口を出さない（§2 の線引き）。人間には「傘 `<傘ブランチ名>` の commander へ
