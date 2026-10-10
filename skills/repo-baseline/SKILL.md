@@ -79,18 +79,27 @@ namecheck を持たないリポジトリでは何もしない。
 cd <撒いた先のリポジトリのルート>
 git status                      # 作業ツリーはきれいにしておく（未コミットの変更があると copier が拒否する）
 git switch -c <update 用のブランチ>
-uv tool run copier update
+uv tool run copier update --defaults --data <増えた質問>=<答え> ...   # 増えた質問が無ければ --data は不要
 ```
 
 - `--trust` は要らない
-- 版はタグではなく HEAD で扱われる（タグは打たない運用。copier が `0.0.0.postN.devM+<sha>` と表示する）
-- マージ前のテンプレートの直しを取り込むときは、`--vcs-ref <ブランチ or コミット>` を付ける
-  （`_src_path` を一時的にローカルの絶対パスに書き換える必要があるなら、update 後に URL へ戻す）
+- 版はタグではなく HEAD で扱われる（タグは打たない運用。copier が `0.0.0.postN.devM+<sha>` と表示する）。
+  ただし `.copier-answers.yml` の `_commit` は `v20130702_00-N-g<sha>` という `git describe` 形式で
+  記録される（先頭の `v20130702_00` は dotfiles にある 2013 年の古いタグ名で、版としては使われない）。
+  版は `g` 以降の `<sha>` で一意に決まるので、update で進んだかは `<sha>` で見る。`_commit` を手で直さない
+- **マージ前のテンプレートの直しを本番の撒き先に取り込まない。** `--vcs-ref <ブランチ>` やローカルの
+  絶対パスで取り込むと、`_commit` にそのブランチだけにあるコミットが記録される。ブランチは squash
+  マージで消えるため、そのコミットが辿れなくなり、次の update が落ちる。マージ前の直しを試すのは、
+  試し用の複製の撒き先に限る。本番の撒き先は、直しがリモートの既定ブランチ（`master`）に入ってから、
+  `--vcs-ref` 無しで update する。`_src_path` を書き換えない
 - 質問は撒いた先の答えを既定にして聞き直される。**増えた質問（例: `language`・`ruby_version`）は、
-  `--defaults` や `--skip-answered` で回すと既定値になる。** 既定値に流されず、「4. 質問への答え方」に
-  従って実態を見て答える（`--skip-answered` なら、増えた質問だけが聞かれる）。たとえば自前で
-  Ruby の設定を持つリポジトリに `language=ruby` と答えると、テンプレートが生成しようとするファイルと
-  既存のものがぶつかる
+  既定値に流されず、「4. 質問への答え方」に従って実態を見て答える。** たとえば自前で Ruby の設定を持つ
+  リポジトリに `language=ruby` と答えると、テンプレートが生成しようとするファイルと既存のものがぶつかる
+  - 端末の無いシェル（AI の Bash ツール等）では、copier は対話の質問ができず
+    `Interactive session required` で終わる。そこでは `--defaults` を付け、**増えた質問はすべて
+    `--data <名前>=<答え>` で明示する**（`--defaults` 単独で回すと、増えた質問が既定値
+    〈`language` は `other`、`ruby_version` は `3.3`〉になる）。答え済みの質問は撒いた先の答えが引き継がれる
+  - 端末のある対話の実行なら、`--skip-answered` を付けると答え済みの質問を飛ばし、増えた質問だけが聞かれる
 - `_skip_if_exists` のファイル（`.rubocop.yml`・`.ruby-version`・`.rspec`・`Gemfile`・`Rakefile`・
   `spec/spec_helper.rb`）は update のときも既存のものが残り、テンプレートの直しは届かない。
   必要なら差分を人間に見せ、手で取り込むか判断を仰ぐ
