@@ -156,7 +156,7 @@ from .copier-answers.yml.` で失敗します（実際に検証済みです）�
 以下を実施し、確認しました（実施日: 2026-08-02。`language` 関連の項目は 2026-10-11）。
 
 - `language=ruby` で展開し、`bundle install`・`bundle exec rubocop`・`bundle exec rake spec` が通ること
-  （`use_doc_id=false`。`use_doc_id=true` では `tools/doc-id/` に RuboCop の指摘が出る既知の状態で、
+  （`use_doc_id=true` でも `tools/doc-id/` を含めて RuboCop の指摘は出ない。経緯は
   [ADR DOC-2610110216](../../docs/adr/DOC-2610110216_ruby-defaults-in-repo-baseline.md) に記録）
 - `language=ruby` で、文書だけのコミットでは lint・test フックが Skipped になり、`.rb` を含むコミットでは走ること
 - `language=other`（既定）で Ruby の物が何も生成されず、`tools/doc-id/` のテストが `Gemfile` 無しで動くこと

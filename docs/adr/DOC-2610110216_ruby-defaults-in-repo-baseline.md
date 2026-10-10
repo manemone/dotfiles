@@ -44,7 +44,9 @@ minitest を選び、持ち主に確認されないまま既定になった。Ru
 
 持ち主の別のリポジトリの設定を手本にした（プラグインの performance・rspec、
 `Layout/ClassStructure`、Style の追加〈宣言的・関数型の方針〉、Metrics と RSpec の上限）。
-手本の値と方針のコメント（`NewCops: disable` の理由など）はそのまま写したが、設定ファイルは
+`AllCops.Exclude` は RuboCop の既定の除外（`vendor`・`tmp`・`node_modules` 等）を置き換えて
+しまうため、`inherit_mode: { merge: [Exclude] }` で既定にマージして足す形にした（傘の最終レビューで
+指摘され修正）。手本の値と方針のコメント（`NewCops: disable` の理由など）はそのまま写したが、設定ファイルは
 自己完結にし、手本のファイルを読みに行かせる記述は置かない。
 
 **写さなかったもの**: `tools/**/*` の丸ごと除外（AI が除外を足さない規則に反し、
