@@ -28,7 +28,7 @@ herdr を使う配布スキル（`skills/`）に、herdr 0.9.0 で消えた旧�
 
 | 孫 | ブランチ | 内容 | 状況 |
 |---|---|---|---|
-| 1 | `herdr09-01-agent-wait` | `herdr wait agent-status` → `herdr agent wait` の置き換え、done/idle を両方見る回避ループの削除、`agent_status=None` の記述を `unknown` へ直す | ⬜ 待機中 |
+| 1 | `herdr09-01-agent-wait` | `herdr wait agent-status` → `herdr agent wait` の置き換え、done/idle を両方見る回避ループの削除、`agent_status=None` の記述を `unknown` へ直す | 🔄 実装中 |
 | 2 | `herdr09-02-agent-prompt` | AI間送信のフォールバックを `herdr pane run` + `send-keys Enter` から `herdr agent prompt` へ移行し、ADR DOC-2609072215 を更新する | ⬜ 待機中 |
 | 3 | `herdr09-03-done-notify` | 孫が傘へのマージを終えたら、セッション間の送信で司令官へ通知する（巡回は保険として残す） | ⬜ 待機中 |
 | 4 | `herdr09-04-agent-start` | 終了したレビュワーの再起動を `herdr agent start` へ移行し、自分の workspace の特定を `$HERDR_WORKSPACE_ID` へ置き換える | ⬜ 待機中 |
