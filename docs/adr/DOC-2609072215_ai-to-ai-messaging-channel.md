@@ -2,7 +2,10 @@
 
 ## ステータス
 
-確定（2026-09-07）
+確定（2026-09-07）。改訂（2026-10-11）: herdr 0.9.0 で `herdr agent prompt` が新設されたため、
+フォールバックを `herdr pane run` + `send-keys Enter` から `herdr agent prompt` に置き換えた
+（§6）。§1〜§5 は当時の記録であり、旧フォールバックの記述は 0.9.0 より前の手順としてそのまま
+残す。
 
 ## 1. 背景
 
@@ -55,7 +58,8 @@ Claude Code はさらに `~/.claude/sessions/<pid>.json` に稼働中セッシ�
 ## 2. 決定
 
 AI 間の受け渡しは、**相手が Claude Code だと判別できるときは `SendMessage` を使い、
-そうでなければ `herdr pane run` + `send-keys Enter` へ落ちる二段構え**とする。
+そうでなければ `herdr pane run` + `send-keys Enter` へ落ちる二段構え**とする
+（2026-10-11 改訂: フォールバックは `herdr agent prompt`。§6）。
 
 ### 2.1 これは既存 ADR の方針に対する但し書きである
 
@@ -102,7 +106,7 @@ OpenCode のいずれのペインに対しても同じコードパスで動作�
    フォールバック（herdr pane run + send-keys Enter）に切り替える。
 ```
 
-**フォールバック（従来手順）**: `herdr pane run <pane-id> "<本文>"` → 送信後
+**フォールバック（従来手順。herdr 0.9.0 より前。現行は §6）**: `herdr pane run <pane-id> "<本文>"` → 送信後
 `herdr pane get <pane-id>` で `agent_status` を確認 → `idle` のままなら
 `herdr pane send-keys <pane-id> Enter` → 再確認、を `working` になるまで繰り返す。
 それでも `working` にならない場合は `herdr pane read` で画面を確認する（無人ペインは
@@ -181,3 +185,64 @@ macOS / Linux / WSL2 をクロスプラットフォームで対象とするた�
 （本文長・改行の有無・送信先の `agent_status`）を切り分ける追加実測は行っていない。
 「送信後に必ず `agent_status` を確認する」という手順自体は、失敗時のコストが大きいため
 引き続き必須とする。詳細は `umbrella-orchestrator/SKILL.md` §3.2 の実測併記を参照。
+
+## 6. 改訂（2026-10-11）: フォールバックを `herdr agent prompt` に置き換える
+
+herdr 0.9.0 で `herdr agent prompt <target> <text> [--wait] [--until STATUS]... [--timeout MS]`
+が新設された。herdr 公式スキルの説明では、貼り付けモードを守り、本文と Enter を順序どおり
+1回の送信として送る。相手が `blocked`（承認待ち・質問ダイアログ）なら何も送らず
+`agent_blocked` で拒否する。`--wait` で非 working の相手へ送り、5秒以内に `working` か
+`blocked` が観測されなければ `agent_prompt_stalled` を返す。また
+「A timeout or stalled response does not prove the prompt was never delivered; do not blindly
+submit it again.」と明記している。これは §1 の3つの事故（Enter が飛ばない・長文が途中で
+止まる・再送で2重に積まれる）に、仕様として手当てがある。
+
+### 6.1 決定
+
+**`SendMessage` を優先する二段構えは維持し、フォールバックだけを `herdr agent prompt` に
+置き換える。** 正典はこれまでどおり `skills/umbrella-orchestrator/SKILL.md` §5 の1か所で、
+`pr-review-loop` と `umbrella-handoff` は参照するだけである。`herdr pane run` はシェルで
+コマンドを走らせる用途（例: レビュワーエージェントの再起動）にだけ残り、エージェントへの
+指示の送信には使わない。
+
+### 6.2 実測（herdr 0.9.0、2026-10-11）
+
+送り先は孫2の自ワークスペースの reviewer ペイン（Claude Code）。受け手の動きは
+その Claude Code セッションの記録（transcript）で確かめた。
+
+| ケース | 送ったもの | 結果 |
+|---|---|---|
+| `idle` の相手 | 改行を含む日本語284文字を `agent prompt --wait --timeout 8000` | 終了コード0、`"type":"agent_prompted"`、約3.6秒（相手が応答し終えた時点）で戻った。本文は欠けずに1回だけ受信され、画面に2重に積まれていない。`send-keys Enter` は不要だった |
+| `working` の相手 | 相手が400行を出力している最中に `agent prompt --wait --timeout 3000` | 3秒後に `{"error":{"code":"timeout",...}}`、終了コード1。**それでも本文は相手のターン終了後に1回だけ処理された**（キューに積まれた）。つまり `timeout` は失敗ではない |
+| `done` の相手 | — | **再現できなかった。** reviewer ペインは同じタブで常に可視のためか、応答後は毎回 `done` を経ず `idle` に戻った（`agent wait --until done` は何度もタイムアウト）。未実測として扱い、`idle` と同じ待機状態であるというスキル側の前提は変えない |
+| `agent_prompt_stalled` / `agent_blocked` | — | どちらも再現していない。公式スキルの記述に基づいて手順に書いてある |
+
+副次的な観察: 本文が長いほど `--wait` は長く待つ（相手が動き出したあとも完了まで待ち続ける）。
+実装AIへの指示は何十分も続くため、`--wait` に長い `--timeout` を付けると司令官がブロック
+される。一方、`--timeout` は送信時間を含めて数えられ、動き出しの活動ゲート（最大5秒）は
+送信後に始まる（herdr 公式の記述）。短すぎる `--timeout` では呼び出し側が先に切れ、
+動き出さなかった場合も `agent_prompt_stalled` ではなく `timeout` が返る。今回 `stalled` を
+再現できなかった理由の一つはこの構造と考えられる（未検証）。そこでフォールバックは
+10000ms 程度の `--timeout` で送り、`timeout` のときは返り値だけで判断せず
+`herdr agent get` で `working` を確かめることを正典に書いた。また `--wait` は
+`idle` / `done` だけでなく `blocked` に落ち着いても成功として戻るため、正常終了でも
+返った状態を見る。
+
+### 6.3 `agent prompt` を主経路へ昇格させなかった理由と、再検討の条件
+
+昇格の利点はある。`~/.claude/sessions/` という Claude Code の内部実装に頼る宛先解決
+（§4）をやめられ、どの AI からでも同じ手順になる。それでも今回は見送る。
+
+- `SendMessage` は数多くの傘で実績があり、相手のターミナル入力欄に書き込まないため、
+  人間がそのペインで手入力していても衝突しない。`agent prompt` の実測は §6.2 の数回だけである
+- 実績のある主経路を、実測の少ない経路と入れ替える理由がない
+
+再検討の条件: `agent prompt` の実測が溜まり、`done` ケースや `stalled` / `blocked` も含めて
+事故が起きていないと言えること、または `~/.claude/sessions/` の形式変更で §4 のリスクが
+現実になったとき。
+
+### 6.4 0.9.0 より前の実測の扱い
+
+「8回送って8回とも Enter が飛んだ」「別の傘では2回中2回とも届いた」（§5）は、0.9.0 より前の
+`herdr pane run` についての実測であり、消さずに残す。スキル本文からはこの実測を除き、
+要点とこの ADR への参照だけを残した。

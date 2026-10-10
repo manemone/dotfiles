@@ -10,7 +10,7 @@ Herdrワークスペース内の `reviewer` ペインと連携してPRレビュ�
 **AI 不問。** 司令官（このスキルを読んでいる側）もレビュワーも、特定の AI コーディング
 エージェントを前提としない。Herdr が対応するエージェント（`herdr integration status` で
 一覧できる。Claude Code / Codex / OpenCode など）であれば、`agent_status` による状態
-取得と `herdr pane run` による依頼送信という本スキルの2つの接点はどれも同じように使える。
+取得と `umbrella-orchestrator` §5 の送信手順（`herdr agent prompt` を含む）による依頼送信という本スキルの2つの接点はどれも同じように使える。
 司令官とレビュワーが別のエージェントであってもよい。
 
 本スキルには工程計測用の `ocw-meter` 呼び出しが含まれる。すべて fail-open であり、
@@ -161,7 +161,7 @@ fi
 
 サイクル開始時に1回だけ実行:
 
-**工程計測についての注記（このPhase以降で共通）**: `$ROUND` はシェル変数ではない。本スキルの各コードブロックは独立したBashツール呼び出しとして実行され、シェル変数は呼び出しをまたいで保持されない。`$ROUND` は「エージェントが追跡している現在のレビューサイクル数（1始まり。Phase 7の報告項目にある『レビューサイクル数』と同じ値、安全制約の『6サイクル』のカウントと同じ値）」を指す記法であり、`--round` を実行する際は、この時点のサイクル数をリテラルな整数値として埋めること。`$PR` / `$HEAD_SHA` / `$FINDINGS_COUNT` / `$URL` / `$OCW_RUN_ID` / `$REVIEW_REQUEST`（Phase 2 Step 1 で決めるレビュー指示ファイルの絶対パス）/ `$REVIEWER_PANE` / `$REVIEWER_AGENT` / `$REVIEWER_CMD` も同様に、直前に取得・保持した実際の値をその場でリテラルに埋め込む記法であり、新しいシェル変数を宣言する意味ではない。**特に `$REVIEW_REQUEST` は `herdr pane run` でレビュワーへ渡す文字列の中に入る。** レビュワーのペインは別プロセスでこちらのシェル変数を参照できないため、必ずリテラルな絶対パスとして埋めること。
+**工程計測についての注記（このPhase以降で共通）**: `$ROUND` はシェル変数ではない。本スキルの各コードブロックは独立したBashツール呼び出しとして実行され、シェル変数は呼び出しをまたいで保持されない。`$ROUND` は「エージェントが追跡している現在のレビューサイクル数（1始まり。Phase 7の報告項目にある『レビューサイクル数』と同じ値、安全制約の『6サイクル』のカウントと同じ値）」を指す記法であり、`--round` を実行する際は、この時点のサイクル数をリテラルな整数値として埋めること。`$PR` / `$HEAD_SHA` / `$FINDINGS_COUNT` / `$URL` / `$OCW_RUN_ID` / `$REVIEW_REQUEST`（Phase 2 Step 1 で決めるレビュー指示ファイルの絶対パス）/ `$REVIEWER_PANE` / `$REVIEWER_AGENT` / `$REVIEWER_CMD` も同様に、直前に取得・保持した実際の値をその場でリテラルに埋め込む記法であり、新しいシェル変数を宣言する意味ではない。**特に `$REVIEW_REQUEST` は `herdr agent prompt` などでレビュワーへ渡す文字列の中に入る。** レビュワーのペインは別プロセスでこちらのシェル変数を参照できないため、必ずリテラルな絶対パスとして埋めること。
 
 工程計測（サイクル1周目の開始）:
 
@@ -438,7 +438,7 @@ command -v ocw-meter >/dev/null && ocw-meter event phase.end --phase self_review
 command -v ocw-meter >/dev/null && ocw-meter event phase.start --phase review_request --source pr-review-loop --round "$ROUND" || true
 ```
 
-レビュー指示をファイルに書き出し、短いコマンドでレビュワーに読ませる。**長文を pane run に詰め込むとペースト確認が入って2往復になるため絶対にやらない。**
+レビュー指示をファイルに書き出し、短い依頼文でレビュワーに読ませる。**依頼文に長文を詰め込まない**（0.9.0 より前の `herdr pane run` ではペースト確認が入って2往復になった。経緯はADR DOC-2609072215）。
 
 ### Step 1: レビュー指示ファイルを作成
 
@@ -676,7 +676,7 @@ REVIEW_EOF
 
 ### Step 2: レビュワーの状態確認と起動
 
-**すべての `herdr pane run` の前にこの手順を実行すること。`agent_status` が `unknown` なのは「エージェントがいない」場合だけではない（下表）。**
+**依頼を送る前（および `herdr pane run` でレビュワーを起動し直す前）にこの手順を実行すること。`agent_status` が `unknown` なのは「エージェントがいない」場合だけではない（下表）。**
 
 ```bash
 STATUS=$(herdr pane get "$REVIEWER_PANE" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['result']['pane'].get('agent_status',''))")
@@ -761,8 +761,11 @@ ADR DOC-2609072215 参照）: **自分（この Phase を実行している側�
 フォールバックへ落ちる。
 
 ```bash
-herdr pane run "$REVIEWER_PANE" "以下を読んでPRレビューを実行してください。レビュー指示: $REVIEW_REQUEST"
+herdr agent prompt "$REVIEWER_PANE" "以下を読んでPRレビューを実行してください。レビュー指示: $REVIEW_REQUEST" --wait --timeout 10000
 ```
+
+返り値の読み方（`timeout` / `agent_prompt_stalled` は未達の証明にならず**再送しない**、
+`agent_blocked` は何も送られていない、など）は同節「フォールバック」に従う。
 
 ### Step 4: 配信確認
 
@@ -770,27 +773,12 @@ herdr pane run "$REVIEWER_PANE" "以下を読んでPRレビューを実行して
 `herdr pane get "$REVIEWER_PANE"` で取得しておく）から変化していることを確認する。
 変化していなければ（特に送信前がすでに `done` だった場合、状態だけでは届いたか
 判別できない）`herdr pane read "$REVIEWER_PANE" --source recent-unwrapped --lines 10`
-で画面を目視し、新しい応答が出ていなければフォールバック（`herdr pane run`）に切り替える。
+で画面を目視し、新しい応答が出ていなければフォールバック（`herdr agent prompt`）に切り替える。
 
-**フォールバック（`herdr pane run`）を使った場合**:
-
-**herdr 自身の公式ドキュメント（`herdr` skill）は「`pane run` sends the text and
-Enter together」（テキストとEnterをまとめて送る）としているが、実際にはこの
-実装がプロンプトを打ち込むだけで Enter を送らないことがある。** ドキュメント通りに
-動くと信じて確認を省略しないこと:
-
-```bash
-sleep 2
-herdr pane get "$REVIEWER_PANE"
-```
-
-`agent_status` が `working` になっていれば送信成功。**`working` にならない
-（`idle` または `done` のまま）なら `herdr pane send-keys "$REVIEWER_PANE" Enter`
-を撃って再確認する。** `done` は Step 2 の表が「Step 3へ」に振る待機状態であり、
-Enter が送られず `done` のまま止まっているケースも同じ手当てが要る。同じ本文を
-`herdr pane run` で再送してはいけない（本文自体は届いており、再送するとプロンプト欄に
-2重に積まれる）。それでも届いていなければ `herdr pane read "$REVIEWER_PANE"
---source detection --lines 3` で画面を確認する。
+**フォールバック（`herdr agent prompt`）を使った場合**: 返り値と、必要なら
+`herdr agent get "$REVIEWER_PANE"` / `herdr agent read "$REVIEWER_PANE"` で確認する
+（読み方は `umbrella-orchestrator/SKILL.md` §5「フォールバック」に従う。`send-keys Enter` は
+不要）。**同じ本文を再送しない。**
 
 工程計測:
 
@@ -815,15 +803,9 @@ herdr agent wait "$REVIEWER_PANE" --until working --timeout 30000
 完了待ち（Phase 3a）の前にこの `working` を必ず観測する。`herdr agent wait` は対象がすでに
 `idle` / `done` なら即座に戻るため、送信前の `idle` のまま完了待ちに入ると空振りする。
 
-タイムアウトしたら `herdr pane get "$REVIEWER_PANE"` と `herdr pane read "$REVIEWER_PANE" --source detection --lines 10` で確認。
-本文が届いたまま Enter だけが送られていない状態（Step 4 と同一の症状）なら、
-Step 4 と同じ手段で確定させる:
-
-```bash
-herdr pane send-keys "$REVIEWER_PANE" Enter
-```
-
-その後、再度workingを待つ。
+タイムアウトしたら `herdr pane get "$REVIEWER_PANE"` と `herdr pane read "$REVIEWER_PANE" --source detection --lines 10` で確認する。
+**依頼を再送しない**（Step 4 と同じ。本文は届いている可能性がある）。本文が見えるのに
+動いていなければ、人間に報告する。
 
 ### Phase 3a: 完了を待つ（イベント駆動）
 
@@ -1076,16 +1058,17 @@ command -v ocw-meter >/dev/null && ocw-meter event phase.start --phase rereview_
 どちらかを満たさなければ以下のフォールバック）:
 
 ```bash
-herdr pane run "$REVIEWER_PANE" "PR #$PR 再レビュー依頼。レビュー指示: $REVIEW_REQUEST 全指摘に対応コメント書きました。前回レビュー対象: $HEAD_SHA → 現HEAD: $NEW_HEAD_SHA"
+herdr agent prompt "$REVIEWER_PANE" "PR #$PR 再レビュー依頼。レビュー指示: $REVIEW_REQUEST 全指摘に対応コメント書きました。前回レビュー対象: $HEAD_SHA → 現HEAD: $NEW_HEAD_SHA" --wait --timeout 10000
 ```
 
    フォールバック送信前に、Phase 2 Step 2 と同じ手順でレビュワーの状態を確認する。
-   **ラウンドの合間にエージェントが終了していることがあり**、そのまま `herdr pane run`
-   を撃つとプロンプトがシェルへ流れて依頼が届かない。`idle` / `done` を確認してから送ること。
+   **ラウンドの合間にエージェントが終了していることがあり**、そのまま送るとエージェントが
+   いないペインへの送信になって依頼が届かない（`herdr agent prompt` は
+   エージェントのいないペインには使えない）。`idle` / `done` を確認してから送ること。
 
 5. 配信確認（Phase 2 Step 4と同様。`SendMessage` なら送信直前に控えた `agent_status`
-   から変化したかを確認し、変化していなければ画面を目視、フォールバックなら
-   `agent_status` が `working` にならなければ `herdr pane send-keys "$REVIEWER_PANE" Enter`）。
+   から変化したかを確認し、変化していなければ画面を目視。フォールバックなら
+   返り値の読み方に従い、`timeout` / `stalled` でも再送しない）。
 
 工程計測:
 
