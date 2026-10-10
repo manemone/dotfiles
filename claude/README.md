@@ -90,8 +90,10 @@ Claude Code がセッション開始時に読み込むグローバルな個人�
   `@~/.claude/CLAUDE.machine.md`（マシンローカルな固定パス実体への import）を指すだけで、
   空であればパーソナライズの指定は無し（通常どおりの人格・口調で応答する）がデフォルト
   （ADR [DOC-2609162327](../docs/adr/DOC-2609162327_claude-md-machine-local-tone.md)）
-- 傘ブランチへの引き継ぎ判断（複数PR規模だと判断したら `umbrella-handoff` スキルへの
-  引き継ぎを人間に提案する）
+- 傘ブランチへの引き継ぎ判断（「こういうことをやりたい」が固まったら、入口の
+  `task-intake` スキルでの振り分けを人間に提案する。PR 1本か複数か・どのリポに
+  またがるかの判断は `task-intake` に任せ、複数PR規模なら `umbrella-handoff` スキルへ
+  振り分けられる。人間がその会話で進めると決めた場合は提案しない）
 
 **人格のパーソナライズは `deploy` 不要、`~/.claude/CLAUDE.machine.md` を直接編集するだけで
 即座に反映される。** `~/.claude/CLAUDE.machine.md` は固定パス
