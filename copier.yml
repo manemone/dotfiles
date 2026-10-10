@@ -1,5 +1,10 @@
+# repo-baseline テンプレートの copier 設定。ルートに置いているのは `copier update` のため:
+# copier は、元（_src_path）が git リポジトリのルートにあるときだけ撒いた版（_commit）を
+# 記録し、update の3者マージができる。テンプレートの中身は _subdirectory が指す
+# templates/repo-baseline/template で、リポジトリの他のフォルダは撒かれない
+# （経緯は docs/adr/DOC-DOCID_PLACEHOLDER_copier-root-entry.md）。
 _min_copier_version: "9.0.0"
-_subdirectory: template
+_subdirectory: templates/repo-baseline/template
 
 # ここで生成されるのは骨組みだけです。AGENTS.md の「概要」「ディレクトリ構成」
 # 「コミット前の必須ステップ」のリポジトリ固有部分などは、撒いた後に
