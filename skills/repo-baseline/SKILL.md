@@ -74,8 +74,11 @@ copier が対話式に質問してくる。答え方の判断は「4. 質問へ�
 
 - `.rubocop.yml`（`TargetRubyVersion` は書かず `.ruby-version` から推定させる形）
 - `.ruby-version`・`Gemfile`・`.rspec`・`Rakefile`・`spec/spec_helper.rb`
-- `.pre-commit-config.yaml` の lint・test フックの `files:`（Ruby のファイルと
-  `Gemfile` 等の設定ファイルの変更でだけ走らせる）
+- `.pre-commit-config.yaml` の lint・test フック（無ければフックごと。あれば `files:` を
+  足し、Ruby のファイルと `Gemfile` 等の設定ファイルの変更でだけ走らせる）
+- `AGENTS.md`「コミット前の必須ステップ」の Ruby の段落（`bundle install`、テストは RSpec・
+  lint は RuboCop であること、`tools/doc-id/` の minitest は道具の都合である旨の注記）
+- `.claude/pr-review.yml` の `lint_cmd` / `test_cmd`
 - `ci.yml` の `ruby/setup-ruby`（`pre-commit` の前）
 
 既存のテストを RSpec に替えるかどうかは持ち主が決めることなので、勝手に移行しない。
@@ -100,6 +103,11 @@ copier が対話式に質問してくる。答え方の判断は「4. 質問へ�
   `.rubocop.yml` が `.ruby-version` からの推定に任せているか、テストが RSpec か。
   差があっても勝手に合わせず、差分を人間に提示して判断を仰ぐ（既存のテストが minitest
   のときに RSpec へ移行するかは持ち主が決める）
+- 持ち主が既存のテストの道具・lint の設定を残すと決めた場合（例: minitest のまま）:
+  生成された `AGENTS.md` の Ruby の段落（テスト・lint の道具とコマンド）をその規約に
+  書き換え、使わない生成物（`.rspec`・`spec/spec_helper.rb`。`.rubocop.yml` を採らないなら
+  それも）を消し、`.claude/pr-review.yml` の `lint_cmd` / `test_cmd` と lint・test フックも
+  合わせる。放置すると、生成物の「テストは RSpec」が持ち主の決めた規約を上書きする
 - 判断に迷う場合は上書きせず、人間に差分を提示して判断を仰ぐ
 
 ## 4. 質問への答え方
