@@ -89,7 +89,7 @@
 | `shared/` | 全 deploy スクリプトが共有するヘルパー（`helpers.sh`） |
 | `docs/` | このリポジトリ自体の設計文書・ADR・計画書・運用リファレンス。`design/`（現役の規約）・`adr/`（確定した技術決定の記録）・`planning/`（傘ブランチ計画書）・`reference/`（運用中に繰り返し引く事実）の4フォルダに分かれる。詳細は [docs/README.md](docs/README.md) を参照 |
 | `tools/` | このリポジトリ自体の開発を支援するツール（`doc-id` など）。`bin/` と異なり `$HOME` へは配布しない |
-| `templates/` | 他リポジトリへ配布する copier テンプレート（`repo-baseline` など）。`$HOME` へは配布せず、dotfiles 本体にも依存しない自己完結ディレクトリ |
+| `templates/` | 他リポジトリへ配布する copier テンプレート（`repo-baseline` など）。`$HOME` へは配布せず、dotfiles 本体にも依存しない自己完結ディレクトリ。ただし `repo-baseline` の copier 設定 `copier.yml` だけは `copier update` のためリポジトリのルートにある（ADR DOC-2610110435_copier-root-entry） |
 
 各ツールディレクトリは「設定ファイル本体 + `deploy.sh` + `README.md`」という共通構造を持つ。
 例外は `codex/` で、設定ファイル本体を持たず、`deploy.sh` が `claude/CLAUDE.md` + 人格の
@@ -381,7 +381,7 @@ uninstall を行い、symlink・既存ファイルの退避・冪等性・
 [docs/design/DOC-2608020715-b_テスト方針.md](docs/design/DOC-2608020715-b_テスト方針.md)
 を参照）。
 
-`templates/repo-baseline/` 配下を変更した場合は、加えて以下も実行する。
+`templates/repo-baseline/` 配下、またはルートの `copier.yml` を変更した場合は、加えて以下も実行する。
 
 ```
 tests/template_smoke.sh
@@ -397,7 +397,7 @@ tests/template_smoke.sh
 `convention_docs` が `use_doc_id` に応じて出し分けられ参照先が実在することを検証する
 （`.pre-commit-config.yaml.jinja` / `ci.yml.jinja` は拡張子が `.jinja` のため
 `check-yaml` フックの対象外であり、YAML の壊れもMarkdownの崩れもこのテストでしか
-検出できない）。**`templates/repo-baseline/` 配下のどのファイルを変更した場合も対象**
+検出できない）。**`templates/repo-baseline/` 配下のどのファイル、およびルートの `copier.yml` を変更した場合も対象**
 であり、YAML を含むファイルに限らない。
 
 `bin/` 配下（`ocw` / `ocw-meter` 等）を変更した場合は、加えて以下も実行する。

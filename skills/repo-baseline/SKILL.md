@@ -41,7 +41,7 @@ Ruby のリポジトリのテストの既定は RSpec である（ADR DOC-261011
 
 ```bash
 cd <対象リポジトリのルート>
-uv tool run copier copy <dotfilesへのパスまたはURL>/templates/repo-baseline .
+uv tool run copier copy <dotfilesへのパスまたはURL> .
 ```
 
 copier が対話式に質問してくる。答え方の判断は「4. 質問への答え方」を参照。
