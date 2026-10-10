@@ -119,6 +119,7 @@ for details. `bin/` changes should additionally be verified with
 ├── .claude/
 │   ├── pr-review.yml          # PR review workflow config (lint_cmd / test_cmd)
 │   └── settings.json          # Permissions for AI agents in this repo (not the deployed claude/)
+├── copier.yml                 # copier entry for templates/repo-baseline (at the root so `copier update` works)
 ├── deploy-all.sh              # Unified deployment orchestrator
 ├── uninstall.sh               # Clean removal of known symlinks, restores backups where available
 ├── Brewfile                   # macOS Homebrew packages (zsh, tmux, git, curl)
