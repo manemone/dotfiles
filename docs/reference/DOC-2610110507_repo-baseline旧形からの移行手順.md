@@ -70,12 +70,19 @@ git commit -am "移行のため answers に撒いた版と撒く元を書く"
 
 # 5. update。増えた質問（language 等）は --data で明示する（答えは「4. リポジトリごとの表」）
 uv tool run copier update --defaults --vcs-ref "$REAL" \
-  --data language=<ruby|other> [--data ruby_version=<版>]
+  --data language=<ruby|other> [--data ruby_version=<版>] [--data lint_cmd=<コマンド> --data test_cmd=<コマンド>]
 ```
+
+`lint_cmd`・`test_cmd` は**答え済みの質問なので、`language` を変えても前の答えが引き継がれ**、
+`language=ruby` のときの既定値（`bundle exec rubocop` / `bundle exec rake spec`）は効かない。
+`ruby` を選ぶなら、使うコマンドも持ち主に決めてもらい `--data` で明示する（前の答えのままでよい
+なら渡さない）。空のままだと、`.pre-commit-config.yaml` に lint・test フックが生成されず、
+`.claude/pr-review.yml` にもコマンドが出ない。
 
 ```bash
 # 6. 衝突を解き、確かめる（スキル §2「衝突の解き方」）
-git diff .copier-answers.yml    # _commit が S ではなく本物のコミット（"$REAL" の短縮 SHA を含む）に進んでいること
+git diff .copier-answers.yml    # _commit が S ではなく本物のコミット（"$REAL" の短縮 SHA を含む）に進んでいること。
+                                # language・lint_cmd・test_cmd が、自分で決めた値であること
 
 # 7. _src_path を git の URL に書き換える。以後の update はこの URL から普通に通る
 #    _src_path: https://github.com/manemone/dotfiles.git
@@ -99,6 +106,15 @@ git diff .copier-answers.yml    # _commit が S ではなく本物のコミッ�
 DOC-2610110435 §2.2）。行末の `namecheck:allow-line` では足りない（copier が update のたびに
 ファイルを書き直し、マーカーが消えるため）。足したあと
 `tools/namecheck/namecheck .copier-answers.yml` が通ることを確かめる。
+
+あわせて、撒いた先の許可の方針の記述を直す。modeldex・pixidex の `tools/namecheck/allowlist.txt` の
+冒頭コメントと `tools/namecheck/README.md` の「許可」節は、ファイル単位の許可は最後の手段で、
+載るのは自己参照でヒットする `patterns.txt` だけ、と書いている。そのままだと許可リストの中身と
+食い違い、移行の PR が方針違反と指摘されたり、後でそのリポジトリの AI が記述に従って
+`.copier-answers.yml` を許可リストから外し、次の update で namecheck フックが落ちたりする。
+冒頭コメントと README の「許可」節に、`.copier-answers.yml` も載る例外であること、理由
+（copier が update のたびに書き直すので行単位の許可が残らない）、持ち主の許可（2026-10-11）を
+書き足す。許可リストの1行のコメントにも同じ理由を書く。
 
 ## 4. リポジトリごとの表
 
@@ -145,6 +161,13 @@ V と同じテンプレートの中身を持つので、`master` から撒かれ
 |---|---|---|
 | `other` | 衝突なし。`tools/doc-id/` の修正と `AGENTS.md` の最重要ルールの更新が入るだけ | `AGENTS.md` に衝突1箇所（lint・テストの段落）。ほかは `tools/doc-id/` の修正 |
 | `ruby`（`ruby_version=4.0.5`） | 上に加え、`.ruby-version`・`.rspec`・`spec/spec_helper.rb` が新規生成、`ci.yml` に Ruby の準備が足される。`.pre-commit-config.yaml` に衝突2箇所（lint・test フックの `files:`）。`AGENTS.md` に「テストは RSpec」の段落が足される | `Gemfile`・`.rubocop.yml`・`.rspec`・`.ruby-version`・`Rakefile`・`spec/spec_helper.rb` がすべて新規生成、`ci.yml` に Ruby の準備が足される。`AGENTS.md` に衝突1箇所（lint・テストの段落） |
+
+`language` を変えても、答え済みの `lint_cmd`・`test_cmd` は前の答えのまま残る（模擬で、modeldex の
+`ruby` の update 後も `bundle exec rubocop` / `bundle exec rake test` のままだった）。pixidex は
+`''` のままなので、`ruby` を選ぶだけでは足場（`Gemfile`・RuboCop・RSpec の設定）が生成されても、
+フックと `pr-review.yml` に lint・test が出ない。modeldex は `test_cmd` が minitest のコマンドの
+まま、生成される `AGENTS.md` の「テストは RSpec」と食い違う。**`ruby` を選ぶときは
+`lint_cmd`・`test_cmd` も持ち主が決め、`--data` で渡す。**
 
 **AI は `language` を推測で決めない。** 判断材料は次のとおり。
 
@@ -224,6 +247,7 @@ V 以降のテンプレートの直し（`tools/doc-id/` の修正・`AGENTS.md`
 
 ## 8. 持ち主に判断を仰ぐ点（まとめ）
 
+- modeldex・pixidex が `ruby` を選ぶときの `lint_cmd`・`test_cmd`（前の答えが引き継がれるため、明示して決める）
 - modeldex の `language`（`rspec-rubocop` の傘が終わった時点の実態で決める）
 - pixidex の `language`（足場をテンプレートの既定で持つか）と、その移行の時期
 - 衝突の解き方（リポジトリ固有の規則を残す／テンプレートに寄せる）は、移行のたびに差分を見て人間が決める
