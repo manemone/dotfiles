@@ -10,7 +10,7 @@ Herdrワークスペース内の `reviewer` ペインと連携してPRレビュ�
 **AI 不問。** 司令官（このスキルを読んでいる側）もレビュワーも、特定の AI コーディング
 エージェントを前提としない。Herdr が対応するエージェント（`herdr integration status` で
 一覧できる。Claude Code / Codex / OpenCode など）であれば、`agent_status` による状態
-取得と `herdr pane run` による依頼送信という本スキルの2つの接点はどれも同じように使える。
+取得と `umbrella-orchestrator` §5 の送信手順（`herdr agent prompt` を含む）による依頼送信という本スキルの2つの接点はどれも同じように使える。
 司令官とレビュワーが別のエージェントであってもよい。
 
 本スキルには工程計測用の `ocw-meter` 呼び出しが含まれる。すべて fail-open であり、
@@ -145,10 +145,9 @@ fi
 
 **convention_docs** が未設定の場合、このスキル自体のレビュー規約を唯一の情報源とする。
 
-**reviewer_cmd** が未設定なら、Phase 0 で読み取った `$REVIEWER_AGENT` をそのまま起動
-コマンドとして使う（Herdr が報告する agent 名は `claude` / `codex` / `opencode` のように
-起動コマンドと一致するのが通例）。`$REVIEWER_AGENT` も空なら、Phase 2 Step 2 の
-「起動コマンドの決定」に従う。
+**reviewer_cmd** が未設定なら、Phase 0 で読み取った `$REVIEWER_AGENT` を KIND として
+`herdr agent start` で起動する（Herdr が報告する agent 名は起動の KIND と一致するのが通例）。
+`$REVIEWER_AGENT` も空なら、Phase 2 Step 2 の「起動コマンドの決定」に従う。
 
 以降のフェーズでは、解決した設定値を以下の変数で参照する:
 
@@ -161,7 +160,7 @@ fi
 
 サイクル開始時に1回だけ実行:
 
-**工程計測についての注記（このPhase以降で共通）**: `$ROUND` はシェル変数ではない。本スキルの各コードブロックは独立したBashツール呼び出しとして実行され、シェル変数は呼び出しをまたいで保持されない。`$ROUND` は「エージェントが追跡している現在のレビューサイクル数（1始まり。Phase 7の報告項目にある『レビューサイクル数』と同じ値、安全制約の『6サイクル』のカウントと同じ値）」を指す記法であり、`--round` を実行する際は、この時点のサイクル数をリテラルな整数値として埋めること。`$PR` / `$HEAD_SHA` / `$FINDINGS_COUNT` / `$URL` / `$OCW_RUN_ID` / `$REVIEW_REQUEST`（Phase 2 Step 1 で決めるレビュー指示ファイルの絶対パス）/ `$REVIEWER_PANE` / `$REVIEWER_AGENT` / `$REVIEWER_CMD` も同様に、直前に取得・保持した実際の値をその場でリテラルに埋め込む記法であり、新しいシェル変数を宣言する意味ではない。**特に `$REVIEW_REQUEST` は `herdr pane run` でレビュワーへ渡す文字列の中に入る。** レビュワーのペインは別プロセスでこちらのシェル変数を参照できないため、必ずリテラルな絶対パスとして埋めること。
+**工程計測についての注記（このPhase以降で共通）**: `$ROUND` はシェル変数ではない。本スキルの各コードブロックは独立したBashツール呼び出しとして実行され、シェル変数は呼び出しをまたいで保持されない。`$ROUND` は「エージェントが追跡している現在のレビューサイクル数（1始まり。Phase 7の報告項目にある『レビューサイクル数』と同じ値、安全制約の『6サイクル』のカウントと同じ値）」を指す記法であり、`--round` を実行する際は、この時点のサイクル数をリテラルな整数値として埋めること。`$PR` / `$HEAD_SHA` / `$FINDINGS_COUNT` / `$URL` / `$OCW_RUN_ID` / `$REVIEW_REQUEST`（Phase 2 Step 1 で決めるレビュー指示ファイルの絶対パス）/ `$REVIEWER_PANE` / `$REVIEWER_AGENT` / `$REVIEWER_CMD` も同様に、直前に取得・保持した実際の値をその場でリテラルに埋め込む記法であり、新しいシェル変数を宣言する意味ではない。**特に `$REVIEW_REQUEST` は `herdr agent prompt` などでレビュワーへ渡す文字列の中に入る。** レビュワーのペインは別プロセスでこちらのシェル変数を参照できないため、必ずリテラルな絶対パスとして埋めること。
 
 工程計測（サイクル1周目の開始）:
 
@@ -438,7 +437,7 @@ command -v ocw-meter >/dev/null && ocw-meter event phase.end --phase self_review
 command -v ocw-meter >/dev/null && ocw-meter event phase.start --phase review_request --source pr-review-loop --round "$ROUND" || true
 ```
 
-レビュー指示をファイルに書き出し、短いコマンドでレビュワーに読ませる。**長文を pane run に詰め込むとペースト確認が入って2往復になるため絶対にやらない。**
+レビュー指示をファイルに書き出し、短い依頼文でレビュワーに読ませる。**依頼文に長文を詰め込まない**（0.9.0 より前の `herdr pane run` ではペースト確認が入って2往復になった。経緯はADR DOC-2609072215）。
 
 ### Step 1: レビュー指示ファイルを作成
 
@@ -676,7 +675,7 @@ REVIEW_EOF
 
 ### Step 2: レビュワーの状態確認と起動
 
-**すべての `herdr pane run` の前にこの手順を実行すること。`agent_status=None` を「エージェント未起動」と思い込むな。**
+**依頼を送る前（およびレビュワーを起動し直す前）にこの手順を実行すること。`agent_status` が `unknown` なのは「エージェントがいない」場合だけではない（下表）。**
 
 ```bash
 STATUS=$(herdr pane get "$REVIEWER_PANE" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['result']['pane'].get('agent_status',''))")
@@ -689,13 +688,13 @@ STATUS=$(herdr pane get "$REVIEWER_PANE" | python3 -c "import json,sys; d=json.l
 |--------|------|-------------|
 | `idle` | エージェント起動中、待機状態 | Step 3へ |
 | `done` | 前ラウンドの完了結果が未読のまま。待機状態であることは `idle` と同じ | Step 3へ |
-| `working` | エージェントが処理中 | Phase 3a と同じループ（`--status done` を60秒刻みで待ち、`idle`/`blocked` も完了として拾う）で完了を待ってからStep 3へ。無人の背面ペインは完了しても `done` で止まり自動では `idle` にならないため、単発の `--status idle` 待ちは10分空転する |
+| `working` | エージェントが処理中 | Phase 3a と同じ `herdr agent wait "$REVIEWER_PANE" --timeout 600000`（`--until` なし）で待ち、**抜けたら `agent_status` を取り直してこの表を引き直す**（`blocked` でも待ちは成立するため、権限確認のダイアログに依頼文を送らないよう、`idle` / `done` を確認してからStep 3へ）。無人の背面ペインは完了しても `done` で止まり自動では `idle` にならないため、`--until idle` だけを待つと10分空転する |
 | `blocked` | 判断待ちで停止 | ペイン出力を読んで可能なら回答。人手が必要ならユーザーに伝える |
-| `unknown` / `None` または空 | 要確認。エージェントが入力待ち状態で動いている可能性がある | 以下の「None時の確認手順」を実行 |
+| `unknown` または空 | エージェントのいないペイン（シェルだけのペインなど）は `unknown` を返す。**エージェントがいるが herdr が状態を分類できない場合にも `unknown` が返る**ので、`unknown` だけでは終了とは決められない | 以下の「unknown 時の確認手順」を実行 |
 
-**None時の確認手順:**
+**unknown 時の確認手順:**
 
-`agent_status=None` でもエージェントは動いていることがある。必ず目視で確認する:
+`unknown` でもエージェントは動いていることがある。必ず目視で確認する（検出ルールと根拠を見たいときは `herdr agent explain "$REVIEWER_PANE"` も使える。ただし target は「エージェントがいるペイン」に限られ、終了済みのペインには使えない）:
 
 ```bash
 herdr pane read "$REVIEWER_PANE" --source detection --lines 3
@@ -707,8 +706,9 @@ herdr pane read "$REVIEWER_PANE" --source detection --lines 3
   → 起動済み。`herdr pane send-keys "$REVIEWER_PANE" Enter` で確定させ、`idle` または `done`
   になってから Step 3 へ。
 - **シェルプロンプト**（`$` や `❯` で終わる行だけがあり、エージェントの応答が無い）
-  → エージェントは終了している。下記「起動コマンドの決定」に従って起動し直し、
-  `herdr wait agent-status "$REVIEWER_PANE" --status idle --timeout 30000` で起動完了を待つ。
+  → エージェントは終了している。下記「起動コマンドの決定」に従って起動し直す
+  （主経路の `herdr agent start` は入力可能になってから戻る。`pane run` に落ちたときは
+  同じ節の起動待ちが要る）。
 - **エージェントの応答が表示されている**（直近の行がエージェントの出力）→ 実は起動中。
   `herdr pane get` を再実行して状態を再確認。
 
@@ -720,17 +720,93 @@ herdr pane read "$REVIEWER_PANE" --source detection --lines 3
 
 **起動コマンドの決定:**
 
-1. `REVIEWER_CMD`（Phase 0.5 の `reviewer_cmd`）があればそれを使う
-2. 無ければ Phase 0 で読み取った `$REVIEWER_AGENT` をコマンド名として使う
+KIND（`herdr agent start --kind` に渡す種別）と引数を、次の順で決める。KIND の一覧は
+スキルに書き写さず、`herdr agent` の出力の `kinds:` 行を正典として参照する
+（herdr のバージョンで増減する）。
+
+1. `REVIEWER_CMD`（Phase 0.5 の `reviewer_cmd`）があるとき、その**先頭の語**を見る
+   - 先頭の語が `herdr agent` の `kinds:` に載っている → それが KIND。残りの語は引数
+     （`claude --model opus` なら KIND=`claude`、引数=`--model opus`）。**ただし残りに引用符・
+     バックスラッシュ・`$`・`;` などシェルの解釈が要る文字が含まれるときは、引数に分けず**
+     KIND が決まらない場合と同じく `pane run` で `REVIEWER_CMD` をそのまま起動する
+     （引数の分割をシェル任せにすると、zsh では1語にまとまり、bash では引用符が壊れる）
+   - 先頭が環境変数の代入（`FOO=bar claude`）やラッパー（`env ...` など）、または
+     `kinds:` に無い語で KIND が決まらない → **推測せず**、下記「`pane run` での起動
+     （フォールバック）」で `REVIEWER_CMD` をそのまま起動する
+2. `REVIEWER_CMD` が無ければ、Phase 0 で読み取った `$REVIEWER_AGENT` を KIND に使う
+   （引数なし）。この経路で `pane run` に落ちるときは `REVIEWER_CMD` の代わりに
+   `$REVIEWER_AGENT` をそのままコマンド名として使う
 3. どちらも空なら**推測して起動しない。** 停止してユーザーに
    「レビュワーペインのエージェントが終了しており、起動コマンドが特定できません。
    `.claude/pr-review.yml` に `reviewer_cmd` を設定するか、ペインで手動で起動してください」
    と伝える。誤ったコマンドを撃つとシェルにゴミが流れ、以降の状態判定が壊れる。
 
+**`herdr agent start` での起動（主経路）:**
+
+`agent start` は、ペインにシェルが前面でプロンプト待ちのとき、エージェントが検出されて入力可能に
+なってから戻る。起動待ちの手順は要らない。NAME は**サーバー全体で一意**
+（`[a-z][a-z0-9_-]{0,31}`、生きているエージェントの間で一意）でなければならないため、
+ペインIDから機械的に作る（`wEB:p3` → `rv-web-p3`。小文字化して `:` を `-` にする）。
+役割の識別に NAME は使わない（ワークスペースごとに reviewer がいて衝突する。役割は
+ペインの `label` で識別する）。
+
+```bash
+NAME="rv-$(printf '%s' "$REVIEWER_PANE" | tr 'A-Z:' 'a-z-')"
+# 引数なし
+herdr agent start "$NAME" --kind "$KIND" --pane "$REVIEWER_PANE"
+# 引数あり（例: REVIEWER_CMD が "claude --model opus" のとき。-- の後ろに、
+# 先頭の語より後ろの単語をリテラルに並べる。シェル変数には入れない）
+herdr agent start "$NAME" --kind "$KIND" --pane "$REVIEWER_PANE" -- --model opus
+```
+
+`$NAME` / `$KIND` と `--` の後ろの引数は、Phase 1 の注記と同じく実際の値をその場で
+リテラルに埋める記法である。
+
+実測（2026-10-11、herdr 0.9.0、`--kind claude`）: 空のシェルペインで約4秒で戻り、返りの
+`result.agent` に `agent_status: "idle"`・`interactive_ready: true`・`name` が入る
+（`result.argv` は起動された実際のコマンド列）。`-- --model haiku` は
+`argv: ["claude","--model","haiku"]` として渡った。既定のタイムアウト（30秒）で足りたので
+`--timeout` は通常指定しない。戻ったら `agent_status` が `idle` であることだけ確認して
+Step 3 へ進む。
+
+失敗したときは**同じ呼び出しを繰り返さず**、エラーコードで分ける:
+
+- `agent_name_taken`（名前の衝突）→ NAME の末尾に `-2` などを付けて**一度だけ**作り直す
+  （実測: 同じ名前を別ペインに使うと、衝突している側のペインを `candidates` に付けて
+  このコードで即座に失敗する）。それでも失敗したらフォールバックへ
+- `unsupported interactive agent kind: ...`（`kinds:` に無い種別）→ フォールバックへ
+- `agent_not_ready`（起動時に `blocked`。ログイン・承認待ちなど）→ フォールバックには落とさず、
+  `herdr pane read "$REVIEWER_PANE" --source detection --lines 10` で画面を確認して、可能なら
+  回答し、人手が必要ならユーザーに伝える
+- タイムアウト → エージェントは起動中かもしれない。`herdr pane get "$REVIEWER_PANE"` の
+  `agent` / `agent_status` を確認し、検出されていれば成功として扱う。検出されていなければ
+  `herdr pane read "$REVIEWER_PANE" --source detection --lines 10` で画面を見て、
+  **シェルプロンプトに戻っているときだけ**フォールバックへ進む。それ以外（起動途中の画面）は
+  何も送らず、少し待って `pane get` で確かめ直すか、ユーザーに伝える（起動途中の入力欄に
+  `pane run` の文字列が入ると、レビュワーへの最初の指示になってしまう）
+
+**`pane run` での起動（フォールバック）:**
+
+KIND が決まらない `REVIEWER_CMD`、および上記で `agent start` が使えなかった場合にだけ使う。
+コマンドは `REVIEWER_CMD`、無ければ `$REVIEWER_AGENT`（「起動コマンドの決定」の手順2）。
+
 ```bash
 herdr pane run "$REVIEWER_PANE" "$REVIEWER_CMD"
-herdr wait agent-status "$REVIEWER_PANE" --status idle --timeout 30000
 ```
+
+`pane run` で起動した場合、エージェントが検出されるまで `herdr agent wait` の target に
+ならない（`agent_not_found` で即失敗する）ので、`agent_status` を短い間隔で見て最大30秒待つ:
+
+```bash
+for _ in $(seq 1 30); do
+  STATUS=$(herdr pane get "$REVIEWER_PANE" | python3 -c "import json,sys; print(json.load(sys.stdin)['result']['pane'].get('agent_status',''))")
+  case "$STATUS" in idle|done|blocked) break ;; esac
+  sleep 1
+done
+```
+
+抜けたあとの `STATUS` が `idle` / `done` でなければ（`unknown` のまま、または `blocked`）、
+Step 3 へ進まず `herdr pane read "$REVIEWER_PANE" --source detection --lines 10` で画面を確認する。
 
 ### Step 3: 依頼を送信
 
@@ -746,8 +822,11 @@ ADR DOC-2609072215 参照）: **自分（この Phase を実行している側�
 フォールバックへ落ちる。
 
 ```bash
-herdr pane run "$REVIEWER_PANE" "以下を読んでPRレビューを実行してください。レビュー指示: $REVIEW_REQUEST"
+herdr agent prompt "$REVIEWER_PANE" "以下を読んでPRレビューを実行してください。レビュー指示: $REVIEW_REQUEST" --wait --timeout 10000
 ```
+
+返り値の読み方（`timeout` / `agent_prompt_stalled` は未達の証明にならず**再送しない**、
+`agent_blocked` は何も送られていない、など）は同節「フォールバック」に従う。
 
 ### Step 4: 配信確認
 
@@ -755,27 +834,12 @@ herdr pane run "$REVIEWER_PANE" "以下を読んでPRレビューを実行して
 `herdr pane get "$REVIEWER_PANE"` で取得しておく）から変化していることを確認する。
 変化していなければ（特に送信前がすでに `done` だった場合、状態だけでは届いたか
 判別できない）`herdr pane read "$REVIEWER_PANE" --source recent-unwrapped --lines 10`
-で画面を目視し、新しい応答が出ていなければフォールバック（`herdr pane run`）に切り替える。
+で画面を目視し、新しい応答が出ていなければフォールバック（`herdr agent prompt`）に切り替える。
 
-**フォールバック（`herdr pane run`）を使った場合**:
-
-**herdr 自身の公式ドキュメント（`herdr` skill）は「`pane run` sends the text and
-Enter together」（テキストとEnterをまとめて送る）としているが、実際にはこの
-実装がプロンプトを打ち込むだけで Enter を送らないことがある。** ドキュメント通りに
-動くと信じて確認を省略しないこと:
-
-```bash
-sleep 2
-herdr pane get "$REVIEWER_PANE"
-```
-
-`agent_status` が `working` になっていれば送信成功。**`working` にならない
-（`idle` または `done` のまま）なら `herdr pane send-keys "$REVIEWER_PANE" Enter`
-を撃って再確認する。** `done` は Step 2 の表が「Step 3へ」に振る待機状態であり、
-Enter が送られず `done` のまま止まっているケースも同じ手当てが要る。同じ本文を
-`herdr pane run` で再送してはいけない（本文自体は届いており、再送するとプロンプト欄に
-2重に積まれる）。それでも届いていなければ `herdr pane read "$REVIEWER_PANE"
---source detection --lines 3` で画面を確認する。
+**フォールバック（`herdr agent prompt`）を使った場合**: 返り値と、必要なら
+`herdr agent get "$REVIEWER_PANE"` / `herdr agent read "$REVIEWER_PANE"` で確認する
+（読み方は `umbrella-orchestrator/SKILL.md` §5「フォールバック」に従う。`send-keys Enter` は
+不要）。**同じ本文を再送しない。**
 
 工程計測:
 
@@ -794,22 +858,20 @@ command -v ocw-meter >/dev/null && ocw-meter event phase.start --phase review_wa
 ### 作業開始を待つ
 
 ```bash
-herdr wait agent-status "$REVIEWER_PANE" --status working --timeout 30000
+herdr agent wait "$REVIEWER_PANE" --until working --timeout 30000
 ```
 
-タイムアウトしたら `herdr pane get "$REVIEWER_PANE"` と `herdr pane read "$REVIEWER_PANE" --source detection --lines 10` で確認。
-本文が届いたまま Enter だけが送られていない状態（Step 4 と同一の症状）なら、
-Step 4 と同じ手段で確定させる:
+完了待ち（Phase 3a）の前にこの `working` を必ず観測する。`herdr agent wait` は対象がすでに
+`idle` / `done` なら即座に戻るため、送信前の `idle` のまま完了待ちに入ると空振りする。
 
-```bash
-herdr pane send-keys "$REVIEWER_PANE" Enter
-```
-
-その後、再度workingを待つ。
+タイムアウトしたら `herdr pane get "$REVIEWER_PANE"` と `herdr pane read "$REVIEWER_PANE" --source detection --lines 10` で確認する。
+**依頼を再送しない**（Step 4 と同じ。本文は届いている可能性がある）。本文が見えるのに
+動いていなければ、人間に報告する。
 
 ### Phase 3a: 完了を待つ（イベント駆動）
 
-`herdr wait` はイベント駆動で、状態遷移までブロックする。正しい対象状態を選ぶのが重要。
+`herdr agent wait` はイベント駆動で、状態が条件に合うまでブロックする。`--until` を省略すると
+`idle` / `done` / `blocked` のどれかで成立する。
 
 **`done` と `idle` は別の状態への遷移ではなく、同じ「完了」状態を「見られたか」で
 呼び分けているだけ**（herdr 自身の公式ドキュメント、`herdr` skill）。ペインの
@@ -820,33 +882,30 @@ herdr pane send-keys "$REVIEWER_PANE" Enter
 `REVIEWER_PANE` は無人（誰もそのタブを見に行かない）で完了することが多いが、
 **端末クライアントが繋がっていないヘッドレス実行（cron 等）では、globally active
 tab にいるペインは完了時に直接 `idle` になる**（herdr 公式ドキュメントの記述。
-`/autopilot` から回すときはこちらが標準的な条件）。`herdr wait agent-status` は
-`--status` を1つしか取れず「`done` か `idle` のどちらか」を1回の待機では
-表現できないため、**短く区切って両方を見るループにする**。`done` を待たずに
-`idle` へ直行するケースでフルタイムアウトを浪費しないための工夫である:
+`/autopilot` から回すときはこちらが標準的な条件）。したがって完了は `done` と `idle` の
+両方で見る必要があるが、`--until` を省略した `herdr agent wait` は `idle` / `done` /
+`blocked` のどれでも成立するので、ループは要らず1行で済む:
 
 ```bash
-# herdr wait は --status を1つしか取れないため、短く待って両方を見る
-for _ in $(seq 1 10); do
-  herdr wait agent-status "$REVIEWER_PANE" --status done --timeout 60000 && break
-  STATUS=$(herdr pane get "$REVIEWER_PANE" | python3 -c "import json,sys; print(json.load(sys.stdin)['result']['pane'].get('agent_status',''))")
-  case "$STATUS" in idle|blocked) break ;; esac
-done
+herdr agent wait "$REVIEWER_PANE" --timeout 600000
 ```
 
-（合計タイムアウトは 60000ms × 10 = 600000ms＝10分。`done` に到達すれば即座に
-`break`、`idle`/`blocked` になっていればそこで `break`、どちらでもなければ次の
-60秒枠へ）
+（タイムアウトは 600000ms＝10分。タイムアウトすると終了コード1で
+`{"error":{"code":"timeout",...}}` が返る。対象がすでに `idle` / `done` なら即座に戻るので、
+「作業開始を待つ」で `working` を観測してから呼ぶこと。target は「エージェントがいる
+ペイン」でなければならず、エージェントが終了していると使えない）
 
-10分以内に `done` にも `idle` にも達しなかった場合の確認:
+待ちが終わったら（成功でもタイムアウトでも）、**毎回**状態を取り直して分岐する。`--until` なしの待ちは
+`blocked` でも成立するため、成功で戻っても完了とは限らない:
 
 ```bash
 STATUS=$(herdr pane get "$REVIEWER_PANE" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['result']['pane'].get('agent_status',''))")
 ```
 
 - `blocked` → 出力を読んで可能なら回答。人手が必要なら停止してユーザーに伝える。
-- `working`（継続中）→ レビューに時間がかかっている。ペイン出力を読む。
-- それ以外（`idle` を含む） → Phase 3bへ。
+- `working`（継続中、タイムアウト）→ レビューに時間がかかっている。ペイン出力を読む。
+- `idle` / `done` → Phase 3bへ。
+- それ以外（`unknown` など） → ペインを目視して確認する。
 
 工程計測:
 
@@ -1060,16 +1119,17 @@ command -v ocw-meter >/dev/null && ocw-meter event phase.start --phase rereview_
 どちらかを満たさなければ以下のフォールバック）:
 
 ```bash
-herdr pane run "$REVIEWER_PANE" "PR #$PR 再レビュー依頼。レビュー指示: $REVIEW_REQUEST 全指摘に対応コメント書きました。前回レビュー対象: $HEAD_SHA → 現HEAD: $NEW_HEAD_SHA"
+herdr agent prompt "$REVIEWER_PANE" "PR #$PR 再レビュー依頼。レビュー指示: $REVIEW_REQUEST 全指摘に対応コメント書きました。前回レビュー対象: $HEAD_SHA → 現HEAD: $NEW_HEAD_SHA" --wait --timeout 10000
 ```
 
    フォールバック送信前に、Phase 2 Step 2 と同じ手順でレビュワーの状態を確認する。
-   **ラウンドの合間にエージェントが終了していることがあり**、そのまま `herdr pane run`
-   を撃つとプロンプトがシェルへ流れて依頼が届かない。`idle` / `done` を確認してから送ること。
+   **ラウンドの合間にエージェントが終了していることがあり**、そのまま送るとエージェントが
+   いないペインへの送信になって依頼が届かない（`herdr agent prompt` は
+   エージェントのいないペインには使えない）。`idle` / `done` を確認してから送ること。
 
 5. 配信確認（Phase 2 Step 4と同様。`SendMessage` なら送信直前に控えた `agent_status`
-   から変化したかを確認し、変化していなければ画面を目視、フォールバックなら
-   `agent_status` が `working` にならなければ `herdr pane send-keys "$REVIEWER_PANE" Enter`）。
+   から変化したかを確認し、変化していなければ画面を目視。フォールバックなら
+   返り値の読み方に従い、`timeout` / `stalled` でも再送しない）。
 
 工程計測:
 

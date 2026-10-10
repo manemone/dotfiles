@@ -63,6 +63,11 @@ Herdr があると自動化度が上がるが、必須ではない。
 
 計画書を書いたら、全孫について「外側フェンスがちょうど2本あるか」を検算すること。
 
+Herdr がある環境では、司令官は spawn のたびに、孫へ送る文（§3.2「推奨フォーマット」）の
+末尾に、自分のペインID（`$HERDR_PANE_ID`）を伝える1文を足す。ペインIDは司令官ごとに違い、
+計画書に書くと司令官のペインを作り直したときに古くなるため、計画書ではなく送信文で渡す。
+計画書の孫用プロンプトには、通知の手順そのもの（§3.2 の手順5）だけを書く。
+
 傘の孫 PR の並びを、他人にレビューを頼むための PR 群の地図にするなら `pr-group-request` を使う
 （進捗テーブルの読み方は同スキルの §1.3）。
 
@@ -230,44 +235,26 @@ ok = m and (latest_sha.startswith(m.group(1)) or m.group(1).startswith(latest_sh
      （書式・手順は §5「ワークスペースラベル」参照。**プロンプト送信より前**に行う）
    - 起動した implementer ペーンにプロンプトを送信する。**送信は §5「AI間送信手順
      （二段構え）」に従う**（相手が Claude Code だと判別できれば `SendMessage`、
-     できなければ以下の `herdr pane run` 手順）
+     できなければ `herdr agent prompt`）
 
-   **⚠️ herdr pane run の最重要注意点（フォールバック経路。このルールを破ると
-   毎回実装AIが動かない）**:
+   **⚠️ 送信の注意点（フォールバック経路 `herdr agent prompt`。このルールを破ると
+   実装AIが動かない）**:
 
-   1. **プロンプト全文を打ち込まない。** 計画書の絶対パスとセクション名だけを伝える。
-      `herdr pane run` は文字を1文字ずつターミナルに打ち込む。長文プロンプトは途中で止まり、
-      送信されずペーストされただけの状態で放置される（Enterが送られない）。
+   1. **プロンプト全文を書き込まない。** 計画書の絶対パスとセクション名だけを伝える。
+      `herdr agent prompt` は貼り付けモードを守って本文と Enter を1回の送信として送る
+      ので、長文でも途中で止まらない（herdr 0.9.0 の実測は ADR DOC-2609072215）。それでも
+      本文は短く保つ。詳細は計画書に書いてあり、送信文に重複させる理由がない。
    2. **絶対に「〜とだけ返事してください」「〜だけ確認してください」のようなメタ指示を付けない。**
       実装AIはそれを実行して返事だけして停止する。
-   3. **`herdr pane run` は本文だけ打ち込んで Enter を送らないことがある。送信後に必ず
-      `herdr pane send-keys <pane-id> Enter` を撃つこと。**
-      1つの傘で **8回送って8回とも** これだった（spawn 4回・復帰指示 4回）。
-
-      **ただし別の傘のブリーフ送信では、2回中2回とも Enter が届いた**（`herdr pane run`
-      直後の `herdr pane get` で両方とも `agent_status: working` に遷移しており
-      `send-keys Enter` は不要だった。約200文字・改行なしの日本語1行、実測日
-      2026-09-07。詳細はADR DOC-2609072215 §5。このADRは dotfiles リポジトリの
-      `docs/adr/` 配下にあり、配布された本スキル単体からは参照できない）。
-      **どちらも実際に起きたことであり、一方が既定でもう一方が例外とは言い切れない。**
-      条件差（本文長・改行の有無・送信先の状態）は切り分けられていないため、
-      「届かないことがある」という前提で、**送信後は必ず `agent_status` を確認する**
-      手順を省略しないこと（失敗時のコストが大きいため）。
-
-      **herdr 自身の公式ドキュメント（`herdr` skill）は「`pane run` sends the text
-      and Enter together」（テキストとEnterをまとめて送る）と説明しており、8回中8回
-      失敗した実測とは食い違う。** 原因は特定できていない（herdr のバージョン差か、
-      長文・複数行プロンプト特有の条件かは不明）。ドキュメント通りに動くと信じて
-      確認を省略しないこと — このPRのレビュー往復自体でも、送信後に確認したところ
-      `idle` のままだったケースが複数回発生している（実測）。
-
-      送信 → `herdr pane get <pane-id>` で `agent_status` を確認 → `idle` のままなら
-      `send-keys Enter` → 再確認、を `working` になるまで繰り返す。
-
-      **`herdr pane run` で同じ本文を再送してはいけない。** 本文自体は届いており
-      Enter だけが送られていないので、再送するとプロンプト欄に**2重に積まれる**。
-      画面上は `Press up to edit queued messages` のような表示になり、送信済みに見えて
-      実際には走っていない状態が続く。確認を省略すると孫が起動しないまま巡回だけが進む。
+   3. **`timeout` / `agent_prompt_stalled` が返っても、同じ本文を再送しない。**
+      これらは「届かなかった」ことの証明にならない（herdr 公式の注意。実測でも、
+      `working` 中の相手への送信は `timeout` を返したうえで、本文は相手のターン終了後に
+      1回だけ処理された）。再送するとプロンプト欄に**2重に積まれる**。返り値の読み方と
+      次の手は §5「AI間送信手順」の「フォールバック」を参照する。
+      （0.9.0 より前の `herdr pane run` + `send-keys Enter` 方式で起きた事故——8回中8回
+      Enter が飛んだ・長文が途中で止まった・再送で2重に積まれた——の実測と経緯は
+      ADR DOC-2609072215。このADRは dotfiles リポジトリの `docs/adr/` 配下にあり、
+      配布された本スキル単体からは参照できない。）
    4. **spawn したコマンドが意図どおりか `ps` で確認する。**
       implementer / reviewer のモデルや権限モードを環境変数
       （`OCW_IMPLEMENTER_COMMAND` / `OCW_REVIEWER_COMMAND`）で指定している場合、
@@ -280,13 +267,18 @@ ok = m and (latest_sha.startswith(m.group(1)) or m.group(1).startswith(latest_sh
 
    **推奨フォーマット（これだけ送ればよい）**:
    ```
-   herdr pane run <pane-id> "計画書 <計画書の絶対パス> の「## 孫N用プロンプト」セクションのコードブロック内の指示に従って実装してください。実装が完了したら計画書末尾の指示に従ってPR作成・レビューまで自律的に進めてください。reviewerはdone状態で完了し完了通知は来ないので、待機して停止せず gh pr view をポーリングしてレビューの有無を確認してください。"
+   herdr agent prompt <pane-id> "計画書 <計画書の絶対パス> の「## 孫N用プロンプト」セクションのコードブロック内の指示に従って実装してください。実装が完了したら計画書末尾の指示に従ってPR作成・レビューまで自律的に進めてください。reviewerはdone状態で完了し完了通知は来ないので、待機して停止せず gh pr view をポーリングしてレビューの有無を確認してください。マージを終えたら、計画書の指示のとおり司令官のペイン <司令官のペインID> へ完了を通知してください。" --wait --timeout 10000
    ```
 
-   **末尾の1文を削らないこと。** これが §5「レビュー待ちデッドロック」の**予防**である。
-   この1文の有無で実測がはっきり分かれた（同一の傘での実測。内訳は §5 を参照）:
+   **最後の「マージを終えたら〜通知してください。」は Herdr ありのときだけ付ける**
+   （`<司令官のペインID>` は司令官自身のシェルで `echo "$HERDR_PANE_ID"` した値。空なら
+   Herdr なしなので文ごと付けない）。「プロンプト全文を書き込まない」（注意点1）の
+   例外であり、宛先はこの1文でしか孫に届かない。
 
-   | 孫 | 末尾の1文 | デッドロック発生 |
+   **「reviewerはdone状態で完了し〜確認してください。」のポーリングの1文を削らないこと。** これが §5「レビュー待ちデッドロック」の**予防**である。
+   このポーリングの1文の有無で実測がはっきり分かれた（同一の傘での実測。内訳は §5 を参照）:
+
+   | 孫 | ポーリングの1文 | デッドロック発生 |
    |---|---|---|
    | 孫1 | なし | 1回（約10分ロス） |
    | 孫3 | なし | **3回**（司令官が毎回拾いに行った） |
@@ -294,7 +286,7 @@ ok = m and (latest_sha.startswith(m.group(1)) or m.group(1).startswith(latest_sh
 
    孫2 はこの表に含めていない。デッドロック発生の有無を個別に記録していないため、
    憶測で0回や1回と書き足すと表そのものの信頼性を損なう。この表が支える主張は
-   「末尾の1文があれば発生しない」であり、孫1・孫3（なし）と孫4（あり）の対比だけで
+   「ポーリングの1文があれば発生しない」であり、孫1・孫3（なし）と孫4（あり）の対比だけで
    十分に示せる。
 
    デッドロックは司令官が拾えば復旧できるが、**拾えるのは次の巡回まで待ってから**である。
@@ -310,6 +302,12 @@ ok = m and (latest_sha.startswith(m.group(1)) or m.group(1).startswith(latest_sh
      3. レビュー指摘があれば修正し、承認されるまで繰り返す
      4. 承認されたら /pr-review-loop がそのままマージまで実行する（base が傘ブランチのため、
         人間の許可を待つ必要はない。`gh pr merge <PR番号> --squash --delete-branch`）
+     5. （Herdr あり・司令官が宛先を埋め込んだときだけ）マージを終えたら司令官へ完了を通知する。
+        宛先は、司令官が spawn の送信文で渡した司令官の Herdr ペイン（渡されていなければ
+        通知しない）。送り方は umbrella-orchestrator スキル §5「AI間送信手順（二段構え）」に従う。本文は
+        「孫N `<孫ブランチ名>` の PR #<番号> を <傘ブランチ> へマージしました。」だけにする
+        （「〜とだけ返事して」のような指示は付けない）。通知は1回だけ。送れなくても止まらず
+        （司令官の巡回が拾う）、送れなかったことを最終報告に1行書く
      実装が終わったタイミングで止まらず、必ずここまでやりきってください。
 
      ## ブランチ作成時の注意（最重要）
@@ -323,6 +321,12 @@ ok = m and (latest_sha.startswith(m.group(1)) or m.group(1).startswith(latest_sh
      ```
 
     `<傘ブランチ>` は実際の傘ブランチ名（計画書の進捗テーブルやブランチ命名から取得）に置換すること。
+
+    **完了通知（手順5）の宛先は、spawn の送信文の最後にある通知の1文（「推奨フォーマット」）で
+    渡す。** セッション名は再起動で変わりうるので、宛先の一次情報はペインIDにし、孫は
+    送る時点で §5 の手順で解決する。Herdr なしのとき（`HERDR_PANE_ID` が空のとき）は
+    送信文の1文を付けず、手順5も実行されない（今までどおり人間が中継する）。
+    受け取った司令官の振る舞いは §3.6。
 
    **Herdr なし**:
    - `git worktree add -b <孫ブランチ名> ../<dir> <傘ブランチ名>` を表示。**この経路は
@@ -508,19 +512,15 @@ ok = m and (latest_sha.startswith(m.group(1)) or m.group(1).startswith(latest_sh
 
 **やること**:
 
-1. **司令官自身のワークスペースを特定**（§5「自分のworkspaceの見つけ方」と同じ `cwd` 突き合わせ
-   方式。`agent_status=='working'` 方式は使わない。孫のワークスペースは §3.3 のクリーンアップを
+1. **司令官自身のワークスペースを特定**（§5「自分のworkspaceの見つけ方」に従う。
+   `$HERDR_WORKSPACE_ID` が非空ならそれが `MY_WORKSPACE`、空のときだけ `cwd` 突き合わせ。
+   `agent_status=='working'` 方式は使わない。孫のワークスペースは §3.3 のクリーンアップを
    人間が承認するまで残り、その pane が `working` になりうるため、誤って孫を掴む）
    ```bash
-   herdr pane list | python3 -c "
-   import sys, json, os
-   my_cwd = os.getcwd()
-   ids = {p['workspace_id'] for p in json.load(sys.stdin)['result']['panes'] if p.get('cwd') == my_cwd}
-   for i in sorted(ids):
-       print(f'MY_WORKSPACE={i}')
-   "
+   echo "MY_WORKSPACE=$HERDR_WORKSPACE_ID"
    ```
-   出力された `MY_WORKSPACE` が司令官のワークスペース。以後このワークスペースの implementer/reviewer を使う。
+   空なら §5 の `cwd` 突き合わせ（`python3` のスニペット）を実行して得る。
+   `MY_WORKSPACE` が司令官のワークスペース。以後このワークスペースの implementer/reviewer を使う。
 
 2. **ペーン構成を確認**
    ```bash
@@ -534,7 +534,7 @@ ok = m and (latest_sha.startswith(m.group(1)) or m.group(1).startswith(latest_sh
    - **送信は §5「AI間送信手順（二段構え）」に従う**（自分が `SendMessage` を呼べる
      Claude Code セッションで、かつ implementer の `agent` が `"claude"` で
      `agent_session.value` から `~/.claude/sessions/` を引ければ `SendMessage`、
-     どちらかを満たさなければ以下の `herdr pane run` 手順）
+     どちらかを満たさなければ `herdr agent prompt`）
    - 以下の情報を含むプロンプトを送信:
      - base: `<ベースブランチ>`、head: `<傘ブランチ名>`（ベースブランチは傘ブランチが追跡するリモートブランチから判定。`main`/`master` 等リポジトリごとに異なる）
      - 変更概要（孫PR番号、変更ファイル数、テスト結果）
@@ -542,12 +542,11 @@ ok = m and (latest_sha.startswith(m.group(1)) or m.group(1).startswith(latest_sh
      - PR説明文の作法（対象リポジトリの `docs/design/` にある「プルリクエストの作法」文書を
        参照させる指示。DOC-ID は対象リポジトリごとに異なるため、文書名で指示する）
 
-   **⚠️ フォールバック（`herdr pane run`）ではプロンプトを短くする。** 文字を1文字ずつ
-   打ち込むため、長文プロンプトは途中で止まり届かない。要点だけを伝え、詳細は計画書を読ませる。
+   **プロンプトは短くする。** 要点だけを伝え、詳細は計画書を読ませる（§3.2 の送信の注意点）。
 
    **推奨フォーマット（フォールバック時）**:
    ```
-   herdr pane run <implementer-id> "最終PRを作成してください。base:<ベースブランチ> head:<傘ブランチ>。完了したらpr-review-loopを起動。reviewerは<reviewer-id>。計画書 docs/planning/DOC-XXXX_計画.md も参照。"
+   herdr agent prompt <implementer-id> "最終PRを作成してください。base:<ベースブランチ> head:<傘ブランチ>。完了したらpr-review-loopを起動。reviewerは<reviewer-id>。計画書 docs/planning/DOC-XXXX_計画.md も参照。" --wait --timeout 10000
    ```
 
 4. **implementer の起動を確認**
@@ -558,14 +557,8 @@ ok = m and (latest_sha.startswith(m.group(1)) or m.group(1).startswith(latest_sh
    張り付く**（§3.5 の `/autopilot` 手順と同じ前提）ため、「`working` にならなければ
    未達」という基準は使わない。
 
-   フォールバック経路（`herdr pane run`）なら §3.2 注意点3と同じ手順を踏む
-   （本文とEnterは別送信。届いていないのは大抵Enterだけで、本文自体は届いている）:
-   ```bash
-   herdr pane get <implementer-id>
-   ```
-   `agent_status: working` になれば成功。**`working` にならない（`idle` または
-   `done` のまま）なら** `herdr pane send-keys <implementer-id> Enter` を撃って
-   再確認する。**同じ本文を `herdr pane run` で再送しない**（プロンプト欄に2重に積まれる）。
+   フォールバック経路（`herdr agent prompt`）なら §5「AI間送信手順」の「フォールバック」の
+   返り値の読み方に従う。**同じ本文を再送しない**（プロンプト欄に2重に積まれる）。
 
 5. **以降は自律運転**
    - implementer が PR を作成し、`/pr-review-loop` を起動
@@ -600,7 +593,9 @@ main へのマージは人間が手動で行う。
 3. **CronCreate で自動進行ジョブを登録**（約10分おき、`:00` `:30` 回避で `3,13,23,33,43,53`）
 
    以下のプロンプトを cron に設定する。`<計画書の絶対パス>` と `<傘ブランチ名>` と
-   `<司令官のworkspace_id>` は実際の値に置換すること：
+   `<司令官のworkspace_id>` と `<司令官のペインID>`（登録時に司令官自身のシェルで
+   `echo "$HERDR_PANE_ID"` した値。空なら Herdr なしなので、通知の1文は付けない）は
+   実際の値に置換すること：
 
    ```
    # 傘ブランチ自動進行 (autopilot)
@@ -614,6 +609,9 @@ main へのマージは人間が手動で行う。
       （🔄 実装中 が現在の孫、✅ マージ済 は完了）
    2. アクティブな孫の implementer 状態を確認:
       herdr pane list | python3で全workspaceのpaneを確認
+   0. **この cron は孫からの完了通知（§3.6）と重なりうる。** 通知で前倒しされた処理が
+      すでに計画書を ✅ に更新していたら、その孫については何もしない。手順1で 🔄 の孫が
+      見つからない・✅ に変わっていたら、それは二重処理ではなく通知が先に処理した結果である
    3. **まずマージ済みかを確認する**（`/pr-review-loop` が承認後に自律マージ済みの
       場合を含むため、オープンなPRだけを探すと`gh pr list`の既定 `--state open` に
       阻まれて既にマージ済みのPRを永久に見失う）:
@@ -644,26 +642,36 @@ main へのマージは人間が手動で行う。
         失敗しても警告のみで続行する）
       implementerにプロンプト送信（末尾に「reviewerはdone状態で完了し完了通知は
         来ないので、待機して停止せず gh pr view をポーリングしてレビューの有無を
-        確認してください」を必ず含める。§3.2 注意点3参照）
-      送信後 herdr pane get で agent_status を確認し、idle のままなら
-        herdr pane send-keys <implementer-id> Enter で確定させる
+        確認してください」を必ず含める。§3.2 参照）
+        Herdr ありなら、送信文の末尾に完了通知の宛先の1文
+        （「マージを終えたら、計画書の指示のとおり司令官のペイン <司令官のペインID> へ
+        完了を通知してください。」。§3.2 推奨フォーマット）も付ける。
+      送信は §5「AI間送信手順（二段構え）」に従い、到達確認も同じ節に従う
+        （フォールバックは herdr agent prompt <implementer-id> "<本文>" --wait --timeout 10000。
+        timeout / stalled でも再送しない）
       計画書を「🔄 実装中」に更新してcommit+push
    9. 全孫マージ済みなら finalize:
       司令官自身のworkspaceを特定（§5「自分のworkspaceの見つけ方」参照。
         agent_status=='working' 方式は使わない。この cron 巡回中は孫の
-        implementerも working になっており、誤って孫のworkspaceを掴む）:
+        implementerも working になっており、誤って孫のworkspaceを掴む）。
+        登録時に置換した <司令官のworkspace_id> を使う。cron 本文は司令官のシェルの環境変数を
+        引き継がない場合があるため、置換済みの値が空なら §5 の cwd 突き合わせへ落ちる:
         herdr pane list | python3 -c "import sys,json,os; my_cwd=os.getcwd(); ids={p['workspace_id'] for p in json.load(sys.stdin)['result']['panes'] if p.get('cwd')==my_cwd}; [print(i) for i in sorted(ids)]"
       そのworkspaceのimplementerに送信:
-        herdr pane run <impl-pane-id> "最終PRを作成。base:main head:<傘ブランチ>。pr-review-loop起動。reviewerは<同workspaceのreviewer>。mainマージは人間手動。計画書 <計画書の絶対パス> 参照。"
-      送信後 herdr pane get で agent_status を確認し、working にならない
-        （idle または done のまま）なら herdr pane send-keys <impl-pane-id> Enter
-        で確定させる（このimplementerは以前に作業を終えている可能性があり、
-        フォーカスされていなければ done のまま張り付く）
+        送信は §5「AI間送信手順（二段構え）」に従う（フォールバックは
+        herdr agent prompt <impl-pane-id> "最終PRを作成。base:main head:<傘ブランチ>。pr-review-loop起動。reviewerは<同workspaceのreviewer>。mainマージは人間手動。計画書 <計画書の絶対パス> 参照。" --wait --timeout 10000）
+        このimplementerは以前に作業を終えている可能性があり、フォーカスされて
+        いなければ done のまま張り付くので、到達確認では「working になること」を
+        条件にしない（§5 の到達確認に従う）
       CronDelete でこのcronを停止
       PushNotification でユーザーに「全工程完了。mainへのPR作成済み。手動マージしてください」と通知
 
    ## 注意
    - 実装AIが working なら何もせず次のcron
+   - **孫からの完了通知（§3.6）が届いても、この cron は止めない。** 通知は巡回を前倒しする
+     合図であって、巡回の代わりではない（孫が通知せずに止まった・通知が届かなかった・
+     取りこぼしたときの保険がこの巡回である）。通知と巡回のどちらから走っても、計画書の
+     進捗テーブルが ✅ の孫は処理しない
    - 判定が「承認」でないPRはマージしない
    - PRがない/実装中なら待機
    - 検証失敗時は計画書を更新せずユーザーに通知
@@ -672,7 +680,8 @@ main へのマージは人間が手動で行う。
    - 人間が GitHub UI から手動でPRをマージすることがある。`gh pr view` の state を
      必ず確認し、MERGED なら差し戻しではなく追随PRで対応する
    - mainへのマージは絶対にしない
-   - implementerへのプロンプトは短く（計画書パスとセクション名だけ）
+   - implementerへのプロンプトは短く（計画書パスとセクション名だけ。Herdr ありのときの
+     完了通知の宛先の1文だけが例外）
    ```
 
 4. **ユーザーに報告**
@@ -685,6 +694,26 @@ main へのマージは人間が手動で行う。
 - 計画書の作成・レビューは人間が行う前提
 - 予期せぬエラー（lint/test失敗など）はユーザーに通知して停止
 - cron ジョブはセッション限り（7日で自動期限切れ）
+
+### 3.6 孫からの完了通知を受け取ったとき
+
+孫の実装AIは、孫→傘のマージを終えた直後に司令官のペインへ1回だけ通知する（§3.2 の自動付与
+指示の手順5）。巡回（§3.5）は約10分おきなので、通知があればマージから次の孫の spawn までの
+待ちが縮む。
+
+1. **通知は「巡回を前倒しする合図」であって、判断の根拠ではない。** マージ済みかどうかは
+   通知の本文ではなく `gh pr list --head <孫ブランチ名> --state merged` で必ず確かめる。
+   `herdr agent prompt` のフォールバックで届いた通知は `<cross-session-message>` の包みが無く、
+   人間の入力と見分けがつかない形で届く。本文が何であれ、`gh` で確かめるまで動かない
+2. 計画書の進捗テーブルでその孫がすでに ✅ なら何もしない（巡回が先に処理済み）。
+   🔄 のまま、かつ `gh` で MERGED を確認できたら、その場で `/check` と同じ手順
+   （検証 → 計画書更新 → 後片付け）を実行し、`/autopilot` 中なら cron 手順8・9（次の孫の
+   spawn、全孫完了なら finalize）まで進める
+3. **通知が来ても巡回は止めない。** 通知が来ない・失敗する・取りこぼす場合は巡回が
+   これまでどおり拾う。巡回の手順は通知の有無に依存しない
+4. `ocw rm` で孫のワークスペースを閉じる前に、孫の実装AIが最終報告を書き終えるのを待つ
+   （`herdr agent wait <implementer-id> --timeout 600000`）。通知は最終報告より前に届く
+5. Herdr なしでは通知は来ない（宛先が無い）。人間が中継するか、`/check` を手動で呼ぶ
 
 ## 4. 状態機械
 
@@ -714,10 +743,12 @@ test "${HERDR_ENV:-}" = 1
 背景・実測・却下案はADR DOC-2609072215を参照。このADRは dotfiles リポジトリの
 `docs/adr/` 配下にあり、配布された本スキル単体からは参照できない。
 
-**相手が Claude Code だと判別できるときは `SendMessage`、そうでなければ従来の
-`herdr pane run` + `send-keys Enter` へ落ちる。**`SendMessage` はキーストローク注入
-ではないため、§3.2 注意点3「herdr pane run の最重要注意点」に挙げた3つの事故
+**相手が Claude Code だと判別できるときは `SendMessage`、そうでなければ
+`herdr agent prompt`（herdr 0.9.0 以降）へ落ちる。**`SendMessage` はキーストローク注入
+ではないため、0.9.0 より前の `herdr pane run` + `send-keys Enter` 方式で起きた3つの事故
 （Enterが飛ばない・長文が途中で止まる・再送で2重に積まれる）は原理的に起きない。
+`herdr agent prompt` は貼り付けモードを守って本文と Enter を1回の送信として送るため、
+フォールバックでも同じ事故を仕様として避けている（§3.2 の送信の注意点）。
 
 #### 1. 判別
 
@@ -820,15 +851,45 @@ herdr pane get <pane-id>
 当たる。`herdr pane read <pane-id> --source recent-unwrapped --lines 10` で画面を
 目視し、新しい応答が出ていれば到達成功、出ていなければフォールバックへ切り替える。
 
-#### フォールバック（従来手順）
+#### フォールバック（`herdr agent prompt`）
 
-`herdr pane run <pane-id> "<本文>"` → 送信後 `herdr pane get <pane-id>` で
-`agent_status` を確認 → `idle` のままなら `herdr pane send-keys <pane-id> Enter` →
-再確認、を `working` になるまで繰り返す。**それでも `working` にならない場合は
-`herdr pane read <pane-id> --source detection --lines 3` で画面を確認する**
-（無人ペインは `working` を経ず直接 `done` になりうるため。上記「4. 到達確認」と
-同じ扱い）。**同じ本文を `herdr pane run` で再送しない**（プロンプト欄に2重に積まれる）。
-手順の詳細と実測は §3.2 注意点3「herdr pane run の最重要注意点」を参照。
+```bash
+herdr agent prompt <pane-id> "<本文>" --wait --timeout 10000
+```
+
+- **`--wait` に `--until` を重ねない**（herdr 公式の使い方）。`--timeout` は送信時間を
+  含めて数えられ、動き出しの活動ゲート（最大5秒）はその後に始まる。**ゲートより先に
+  呼び出し側が切れないよう、10000ms 程度にする**（短すぎると、動き出さなかった場合も
+  `agent_prompt_stalled` ではなく `timeout` が返り、返り値だけでは区別できなくなる）。
+  **長い待機に `--wait` を使わない。** 実装AIへの指示は何十分も続くので、長い
+  タイムアウトで司令官をブロックしない
+- 返り値の読み方（実測は herdr 0.9.0、2026-10-11）。**どの返り値でも、最後に
+  `herdr agent get <pane-id>` の `agent_status` を見る習慣を省かない**:
+  - **正常終了（終了コード0、`"type":"agent_prompted"`）**: 送信済みで、相手が
+    `idle` / `done` / **`blocked`** のいずれかに落ち着いて戻った。`blocked` は
+    送信後に承認待ち・質問ダイアログで止まった状態で、**成功として戻ってくる**ので、
+    JSON の `agent_status`（無ければ `agent get`）が `blocked` なら下の `agent_blocked` と
+    同じく画面を読む
+  - **`timeout`（終了コード1）**: 送信時間を含む呼び出し側の時間切れ。**`working` を
+    観測した結果かどうかは、この返り値だけでは分からない。** 実装AIへの長い指示で
+    `working` のまま切れるのは普通だが、動き出していない場合にも返りうる。
+    `herdr agent get <pane-id>` で `working` になっているかを必ず確かめる。
+    `working` 中の相手への送信も `timeout` を返したうえで、本文は相手のターン終了後に
+    1回だけ処理された（実測）
+  - **`agent_prompt_stalled`**（herdr 公式の仕様。2026-10-11 の実測では再現していない）:
+    非 working 状態から送って、送信後5秒以内に `working` か `blocked` が観測されなかった。
+    **届いていないとは限らない**（`done`/`idle` のまま処理済みのこともある。
+    上記「4. 到達確認」と同じ事情）
+  - **`agent_blocked`**: 相手が承認待ち・質問ダイアログで、**何も送られていない**。
+    `herdr agent read <pane-id>` で画面を読み、判断が要るなら人間に伝える
+- **`timeout` / `stalled` では再送しない。** 公式も「A timeout or stalled response does not
+  prove the prompt was never delivered; do not blindly submit it again」と明記している。
+  再送するとプロンプト欄に2重に積まれる。次の手は「4. 到達確認」と同じ:
+  `herdr agent get <pane-id>` で `agent_status` を、`herdr agent read <pane-id>` で
+  画面を確かめ、本文が見えれば到達済み。**どこにも本文が無い場合に限って**、
+  人間に報告するか、状況を確かめたうえで再度送る
+- `herdr pane run` はシェルでコマンドを走らせる用途のものであり、エージェントへの
+  指示の送信には使わない。`send-keys Enter` も不要
 
 ### ワークスペース階層（最重要）
 
@@ -856,22 +917,36 @@ herdr pane get <pane-id>
 
 `agent_status == 'working'` で探す方法は使わない。`/autopilot` の巡回中は孫の
 implementerも `working` になっており、複数ヒットして自分のworkspaceを一意に
-特定できない。代わりに、`python3` が起動時に継承する現在の作業ディレクトリ
-（傘ブランチのワークツリーの絶対パス）を使い、`herdr pane list` の各pane の
-`cwd` と突き合わせる（環境変数の受け渡しは不要）:
+特定できない。次の順で特定する:
 
-```bash
-herdr pane list | python3 -c "
-import sys, json, os
-my_cwd = os.getcwd()
-ids = {p['workspace_id'] for p in json.load(sys.stdin)['result']['panes'] if p.get('cwd') == my_cwd}
-for i in sorted(ids):
-    print(i)
-"
-```
+1. **`$HERDR_WORKSPACE_ID` が非空ならそれを使う。** herdr は各ペインへ呼び出し元の
+   文脈を環境変数（`$HERDR_WORKSPACE_ID` / `$HERDR_TAB_ID` / `$HERDR_PANE_ID`）で渡す
+   （2026-10-11、herdr 0.9.0 で確認）。**この環境変数はプロセスが起動したときに受け継いだ
+   値で、ペインを別の workspace へ移しても変わらない**（下の注意参照）。
+   ```bash
+   echo "$HERDR_WORKSPACE_ID"
+   ```
+2. **空のとき（herdr の外のシェルなど）だけ、`cwd` 突き合わせへ落ちる。** `python3` が
+   起動時に継承する現在の作業ディレクトリ（傘ブランチのワークツリーの絶対パス）を使い、
+   `herdr pane list` の各pane の `cwd` と突き合わせる:
+   ```bash
+   herdr pane list | python3 -c "
+   import sys, json, os
+   my_cwd = os.getcwd()
+   ids = {p['workspace_id'] for p in json.load(sys.stdin)['result']['panes'] if p.get('cwd') == my_cwd}
+   for i in sorted(ids):
+       print(i)
+   "
+   ```
+   司令官の作業ディレクトリと一致するpaneのworkspace_idが司令官のworkspace。傘
+   ワークスペースは複数pane（3ペイン）が同じ`cwd`を持つため、`set` で重複を畳んでいる。
 
-司令官の作業ディレクトリと一致するpaneのworkspace_idが司令官のworkspace。傘
-ワークスペースは複数pane（3ペイン）が同じ`cwd`を持つため、`set` で重複を畳んでいる。
+**注意**: ペインを別の workspace へ移すと、そのペインの workspace ID は変わる（herdr の
+公式スキルの記述）。一方 `$HERDR_WORKSPACE_ID` は移したあとも古い値のままで、`cwd` 突き合わせにも
+落ちない。移したあとに取り直すときは環境変数ではなく
+`herdr pane current --current` の `result.pane.workspace_id` を使う（読み取り専用。2026-10-11、
+herdr 0.9.0 で確認）。cron 本文に登録時に埋めた `<司令官のworkspace_id>` も、司令官のペインを
+移したら古くなる。
 
 ### `ocw -H` が作るもの
 
@@ -982,12 +1057,13 @@ finalize のフローを止める理由にならない。
    - 自分が `SendMessage` を呼べる Claude Code セッションで、かつ implementer の
      `agent` が `"claude"` で `agent_session.value` から `~/.claude/sessions/` を
      引けたら `SendMessage({ to: <name>, message: "<prompt>" })`
-   - それ以外は `herdr pane run <implementer-id> "<prompt>"`（フォールバック）
+   - それ以外は `herdr agent prompt <implementer-id> "<prompt>" --wait --timeout 10000`
+     （フォールバック）
+   - 送信文の末尾に、Herdr ありなら完了通知の宛先の1文（§3.2 推奨フォーマット）も付ける
 5. 到達確認: `SendMessage` 経路なら§5「AI間送信手順」#4（送信直前の状態からの変化を見る）
-   に従う。動いていなければフォールバック（`herdr pane run` + `send-keys Enter`）へ
-   切り替える。フォールバック経路なら `herdr pane get <implementer-id>` で
-   `agent_status` を確認し、`idle` のままなら `herdr pane send-keys <implementer-id> Enter`
-   を撃って再確認する（§3.2 注意点3）
+   に従う。動いていなければフォールバック（`herdr agent prompt`）へ切り替える。
+   フォールバック経路なら返り値を同節「フォールバック」のとおりに読む
+   （`timeout` / `stalled` でも再送しない）
 6. 以上。reviewer は `/pr-review-loop` が勝手に使うので司令官は触らない
 
 ### 状態確認（`/check` から使う）
@@ -996,14 +1072,11 @@ finalize のフローを止める理由にならない。
 # implementer の状態を見る
 herdr pane get <implementer-id>  # agent_status: idle/working/blocked/done
 
-# 完了を待つ（--status は1つしか取れないため、短く区切ってdone/idle両方を見る。
+# 完了を待つ（--until を省略すると idle / done / blocked のどれかで成立する。
 # 端末クライアントが繋がっていないヘッドレス実行では globally active tab のペインは
-# 完了時に直接 idle になりうるため、done 単独で120000msフル待機すると空転する）
-for _ in $(seq 1 6); do
-  herdr wait agent-status <implementer-id> --status done --timeout 20000 && break
-  STATUS=$(herdr pane get <implementer-id> | python3 -c "import json,sys; print(json.load(sys.stdin)['result']['pane'].get('agent_status',''))")
-  case "$STATUS" in idle|blocked) break ;; esac
-done
+# 完了時に直接 idle になりうるため、done と idle の両方を1行で拾える）。
+# 対象がすでに idle / done なら即座に戻るので、送信直後は working を観測してから呼ぶ
+herdr agent wait <implementer-id> --timeout 120000
 
 # PR 番号を検出（出力から抽出）
 herdr pane read <implementer-id> --source recent-unwrapped --lines 40
@@ -1026,14 +1099,15 @@ herdr 自身の公式ドキュメント（`herdr` skill）によれば、`idle` 
 無人監視する場面では、そのペインを誰も見に行かないため `done` のまま張り付く
 （herdr の不具合ではなく仕様どおりの挙動）。
 
-実装AIが reviewer の完了を待つとき `herdr wait agent-status <reviewer> --status idle`
-を使うことがあり、この待機は**（そのペインをフォーカスしない限り）成立せずタイムアウトまで
+実装AIが reviewer の完了を待つとき `herdr agent wait <reviewer> --until idle`
+のように `idle` だけを待つことがあり、この待機は**（そのペインをフォーカスしない限り）成立せずタイムアウトまで
 空回りする**。孫1で1回発生した（約10分ロス。§3.2 実測表と同じ事例）。
 
-**注記**: `pr-review-loop` スキル（`skills/pr-review-loop/SKILL.md` Phase 3a）も
-同じ仕組みに基づき、`idle` ではなく `done` を待つ形に修正済み（本PRで対応）。
+**注記**: `pr-review-loop` スキル（`skills/pr-review-loop/SKILL.md` Phase 3a）は
+`--until` を付けない `herdr agent wait <reviewer> --timeout <MS>` で `idle` / `done` /
+`blocked` のどれでも拾う形になっており、この空回りは起きない。
 
-**待ち方は1種類ではない。** 孫3では `herdr wait` を使わず
+**待ち方は1種類ではない。** 孫3では `herdr agent wait` を使わず
 「バックグラウンドで再度待機中です。通知を待ちます」と称して**バックグラウンドシェルを
 走らせたまま止まる**形が3回出た。このとき pane の `agent_status` は
 `working` ではなく **`done`** になる。つまり
@@ -1056,20 +1130,17 @@ herdr 自身の公式ドキュメント（`herdr` skill）によれば、`idle` 
 herdr pane read <implementer-id> --source recent-unwrapped --lines 20
 ```
 
-`herdr wait agent-status` が走っている、または「通知を待ちます」と言ったまま
+`herdr agent wait` が走っている、または「通知を待ちます」と言ったまま
 バックグラウンドシェルが残っていることを確認してから、短く送って復帰させる。
 送信は「AI間送信手順（二段構え）」に従う（`SendMessage` が使えるならそちら、
 使えなければ以下のフォールバック）:
 
 ```bash
-herdr pane run <implementer-id> "reviewerは完了済みで最新レビューが投稿されています。待機をやめて gh pr view <PR番号> --json reviews で最新レビューを読み、指摘に対応してpushし、再レビューを依頼してください。"
-herdr pane send-keys <implementer-id> Enter
+herdr agent prompt <implementer-id> "reviewerは完了済みで最新レビューが投稿されています。待機をやめて gh pr view <PR番号> --json reviews で最新レビューを読み、指摘に対応してpushし、再レビューを依頼してください。" --wait --timeout 10000
 ```
 
-**フォールバック経路では `send-keys Enter` を忘れない**（§3.2 の注意点3）。
-復帰指示も他の送信と同じく Enter が送られないことがあるため、これを撃たないと
-「復帰させたつもりで止まったまま」になる。`SendMessage` 経路では Enter は不要だが、
-§5「AI間送信手順」の到達確認（`agent_status` が動くこと）は同様に行う。
+復帰指示も他の送信と同じ手順で、到達確認（相手の状態が動くこと）と返り値の読み方、
+`timeout` / `stalled` で再送しないことは同節に従う。
 
 **同じ孫で2回目以降の復帰になったら、対症療法ではなく待ち方そのものを変えさせる。**
 復帰指示の末尾に「以後も push 後に完了通知を待つ形で停止しないでください。
@@ -1084,9 +1155,10 @@ herdr pane send-keys <implementer-id> Enter
 
 ### 司令官がやること
 - 計画書の読み取りと更新
-- 孫の spawn（`ocw -H` + `herdr pane run`）
+- 孫の spawn（`ocw -H` + 「AI間送信手順」によるプロンプト送信）
 - 孫→傘 PR のマージ検出・検証（`/autopilot` では承認済み PR のマージ実行も含む。
-  `gh pr merge <PR番号> --squash --delete-branch`）
+  `gh pr merge <PR番号> --squash --delete-branch`）。孫の完了通知を受けたら前倒しで同じ
+  処理をする（§3.6。通知を根拠にせず `gh` で確かめる。巡回は止めない）
 - 計画書の commit / push
 
 ### 司令官がやらないこと
@@ -1099,6 +1171,8 @@ herdr pane send-keys <implementer-id> Enter
 ### 実装AIに期待すること
 - プロンプトを受け取ったら実装を開始
 - PR 作成後 `/pr-review-loop` を起動
+- 孫→傘のマージを終えたら、司令官のペインIDが渡されていれば完了を通知する（§3.2 の手順5。
+  失敗しても止まらず、最終報告に1行書く。Herdr なしでは通知しない）
 - 承認されたときの扱いは base による: **孫→傘のPR**は `/pr-review-loop` がそのまま
   マージする（人間に依頼する必要はない）。**傘→既定ブランチの最終PR**（`/finalize`）は
   マージせず、人間に「マージしてください」と依頼する（§3.4 手順5）
