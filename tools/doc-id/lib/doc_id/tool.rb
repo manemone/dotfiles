@@ -150,7 +150,7 @@ module DocId
       if old_doc_id
         content = File.read abs_path
         boundary = bare_ref_boundary old_doc_id, clean
-        replaced = replace_self_ref(content, old_doc_id, doc_id, clean, boundary)
+        replaced = replace_self_ref content, old_doc_id, doc_id, clean, boundary
         File.write abs_path, replaced if replaced != content
       end
       new_path = File.join File.dirname(abs_path), "#{doc_id}_#{clean}"
@@ -167,7 +167,7 @@ module DocId
       boundary = bare_ref_boundary old_id, clean_name
       searchable_files.reject { |f| excluded_path? f }.each do |file|
         content = File.read file
-        replaced = replace_self_ref(content, old_id, new_id, clean_name, boundary)
+        replaced = replace_self_ref content, old_id, new_id, clean_name, boundary
         next if replaced == content
 
         File.write file, replaced
@@ -191,7 +191,7 @@ module DocId
     def bare_ref_boundary(old_id, clean_name)
       bare_name = clean_name.delete_suffix ".md"
       continuations = Dir.glob(File.join(@docs_dir, "**", "#{old_id}_*")).filter_map do |f|
-        other = File.basename(f).delete_prefix("#{old_id}_").delete_suffix(".md")
+        other = File.basename(f).delete_prefix("#{old_id}_").delete_suffix ".md"
         next if other == bare_name || !other.start_with?(bare_name)
 
         other.delete_prefix bare_name

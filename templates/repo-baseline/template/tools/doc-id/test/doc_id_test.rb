@@ -135,7 +135,7 @@ class DocIdVerifyTest < Minitest::Test
     File.write File.join(@repo_root, "README.md"),
                "[link](docs/design/#{NONEXISTENT_ID}_存在しない文書.md)"
     output = capture_stdout { @tool.verify }
-    assert_equal 1, output.lines.count { |l| l.start_with? "❌" }
+    assert_equal(1, output.lines.count { |l| l.start_with? "❌" })
   end
 
   # docs/spec/ は仕様書ディレクトリであり、テストコードの spec/ とは違う。
@@ -208,7 +208,7 @@ class DocIdVerifyTest < Minitest::Test
     File.write File.join(@repo_root, "README.md"),
                "docs/design/DOC-2606281807_別名.md に注意。"
     output = capture_stdout { @tool.verify }
-    assert_equal 1, output.lines.count { |l| l.start_with? "❌" }
+    assert_equal(1, output.lines.count { |l| l.start_with? "❌" })
   end
 
   # 長いファイル名を「...」で省略して言及する地の文（実在確認の対象外の書き方）を、
@@ -330,6 +330,10 @@ end
 class DocIdAssignTest < Minitest::Test
   include DocIdTestHelper
 
+  PLAN_PLACEHOLDER = "docs/design/DOC-DOCID_PLACEHOLDER_計画.md"
+  PATH_STORE = "docs/design/DOC-DOCID_PLACEHOLDER_店舗情報.md"
+  PATH_PENDING = "docs/tracking/DOC-DOCID_PLACEHOLDER_未確定事項.md"
+
   def setup
     @old_git_env = ENV.slice "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"
     ENV.delete "GIT_DIR"
@@ -350,49 +354,59 @@ class DocIdAssignTest < Minitest::Test
     @old_git_env.each { |k, v| v ? ENV[k] = v : ENV.delete(k) }
   end
 
-  def commit_file(path, content)
-    File.write File.join(@repo_root, path), content
-    Open3.capture2 git_env, "git", "add", path, chdir: @repo_root
-    Open3.capture2 git_env, "git", "commit", "-m", "add #{path}", chdir: @repo_root
+  def git(*args, env: git_env) = Open3.capture2(env, "git", *args, chdir: @repo_root)
+
+  # リポジトリ直下からの相対パスにファイルを書いて git add する。書いた絶対パスを返す。
+  def stage(path, content)
+    full = File.join @repo_root, path
+    FileUtils.mkdir_p File.dirname(full)
+    File.write full, content
+    git "add", path
+    full
   end
 
+  def commit(message, env: git_env) = git("commit", "-m", message, env: env)
+
+  def commit_file(path, content)
+    stage path, content
+    commit "add #{path}"
+  end
+
+  def assign_quietly(path) = silence_stdout { @tool.assign path }
+
+  def assert_link_rewritten(content, old_placeholder, new_link_pattern)
+    refute_includes content, old_placeholder
+    assert_match new_link_pattern, content
+  end
+
+  def design_docs(pattern) = Dir.glob File.join(@docs_dir, "design", pattern)
+
   def test_assigns_doc_id_to_a_file_without_one
-    path = File.join @docs_dir, "design", "no_prefix.md"
-    File.write path, "# Test\n"
-    Open3.capture2 git_env, "git", "add", "docs/design/no_prefix.md", chdir: @repo_root
-    Open3.capture2 git_env, "git", "commit", "-m", "add", chdir: @repo_root
+    commit_file "docs/design/no_prefix.md", "# Test\n"
     silence_stdout { assert_equal 0, @tool.assign("docs/design/no_prefix.md") }
-    renamed = Dir.glob File.join(@docs_dir, "design", "DOC-*_no_prefix.md")
-    assert_equal 1, renamed.size
+    assert_equal 1, design_docs("DOC-*_no_prefix.md").size
   end
 
   def test_skips_file_with_proper_doc_id
     test_file = "DOC-2606281807_test.md"
-    path = File.join @docs_dir, "design", test_file
     commit_file "docs/design/#{test_file}", "# Test\n"
     silence_stdout { assert_equal 0, @tool.assign("docs/design/#{test_file}") }
-    assert File.exist?(path)
+    assert File.exist?(File.join(@docs_dir, "design", test_file))
   end
 
   def test_does_not_treat_midnight_timestamp_as_placeholder
     legit_file = "docs/design/DOC-2607190000_設計.md"
-    path = File.join @repo_root, legit_file
-    File.write path, "# 設計\n"
-    Open3.capture2 git_env, "git", "add", legit_file, chdir: @repo_root
-    Open3.capture2 git_env, "git", "commit", "-m", "add legit midnight file", chdir: @repo_root
+    commit_file legit_file, "# 設計\n"
     silence_stdout { assert_equal 0, @tool.assign(legit_file) }
-    assert File.exist?(path)
+    assert File.exist?(File.join(@repo_root, legit_file))
   end
 
   def test_placeholder_file_renamed_and_content_replaced
-    path = File.join @repo_root, "docs/design/DOC-DOCID_PLACEHOLDER_計画.md"
-    File.write path, "# 計画\n> **DOC-ID**: DOC-DOCID_PLACEHOLDER_計画\n"
-    Open3.capture2 git_env, "git", "add", "docs/design/DOC-DOCID_PLACEHOLDER_計画.md", chdir: @repo_root
-    Open3.capture2 git_env, "git", "commit", "-m", "add placeholder", chdir: @repo_root
+    commit_file PLAN_PLACEHOLDER, "# 計画\n> **DOC-ID**: DOC-DOCID_PLACEHOLDER_計画\n"
 
-    silence_stdout { @tool.assign "docs/design/DOC-DOCID_PLACEHOLDER_計画.md" }
+    assign_quietly PLAN_PLACEHOLDER
 
-    renamed = Dir.glob File.join(@docs_dir, "design", "DOC-*_計画.md")
+    renamed = design_docs "DOC-*_計画.md"
     assert_equal 1, renamed.size
     refute_includes File.basename(renamed.first), "DOCID_PLACEHOLDER"
 
@@ -402,57 +416,25 @@ class DocIdAssignTest < Minitest::Test
   end
 
   def test_updates_references_across_multiple_file_types_and_locations
-    # .md at repo root
-    readme = File.join @repo_root, "README.md"
-    File.write readme, "[計画](docs/design/DOC-DOCID_PLACEHOLDER_計画.md) と DOC-DOCID_PLACEHOLDER\n"
-    Open3.capture2 git_env, "git", "add", "README.md", chdir: @repo_root
-    # .sh in a subdirectory
-    shared_dir = File.join @repo_root, "shared"
-    FileUtils.mkdir_p shared_dir
-    sh_file = File.join shared_dir, "helpers.sh"
-    File.write sh_file, "# 設計は DOC-DOCID_PLACEHOLDER_計画 を参照\n"
-    Open3.capture2 git_env, "git", "add", "shared/helpers.sh", chdir: @repo_root
-    # .yml in a subdirectory
-    examples = File.join @repo_root, "examples"
-    FileUtils.mkdir_p examples
-    yml_file = File.join examples, "conf.yml"
-    File.write yml_file, "doc: DOC-DOCID_PLACEHOLDER_計画\n"
-    Open3.capture2 git_env, "git", "add", "examples/conf.yml", chdir: @repo_root
-    # .md in a subdirectory
-    md_file = File.join examples, "README.md"
-    File.write md_file, "see DOC-DOCID_PLACEHOLDER_計画\n"
-    Open3.capture2 git_env, "git", "add", "examples/README.md", chdir: @repo_root
-    # Placeholder file itself
-    path = File.join @repo_root, "docs/design/DOC-DOCID_PLACEHOLDER_計画.md"
-    File.write path, "# 計画\n> **DOC-ID**: DOC-DOCID_PLACEHOLDER_計画\n"
-    Open3.capture2 git_env, "git", "add", "docs/design/DOC-DOCID_PLACEHOLDER_計画.md", chdir: @repo_root
-    Open3.capture2 git_env, "git", "commit", "-m", "add files", chdir: @repo_root
+    readme = stage "README.md", "[計画](docs/design/DOC-DOCID_PLACEHOLDER_計画.md) と DOC-DOCID_PLACEHOLDER\n"
+    sh_file = stage "shared/helpers.sh", "# 設計は DOC-DOCID_PLACEHOLDER_計画 を参照\n"
+    yml_file = stage "examples/conf.yml", "doc: DOC-DOCID_PLACEHOLDER_計画\n"
+    md_file = stage "examples/README.md", "see DOC-DOCID_PLACEHOLDER_計画\n"
+    commit_file PLAN_PLACEHOLDER, "# 計画\n> **DOC-ID**: DOC-DOCID_PLACEHOLDER_計画\n"
 
-    silence_stdout { @tool.assign "docs/design/DOC-DOCID_PLACEHOLDER_計画.md" }
+    assign_quietly PLAN_PLACEHOLDER
 
-    readme_content = File.read readme
-    assert_match(%r{\[計画\]\(docs/design/DOC-\d{10}_計画\.md\) と DOC-DOCID_PLACEHOLDER}, readme_content)
-
-    sh_content = File.read sh_file
-    assert_match(/# 設計は DOC-\d{10}_計画 を参照/, sh_content)
-
-    yml_content = File.read yml_file
-    assert_match(/doc: DOC-\d{10}_計画/, yml_content)
-
-    md_content = File.read md_file
-    assert_match(/see DOC-\d{10}_計画/, md_content)
+    assert_match %r{\[計画\]\(docs/design/DOC-\d{10}_計画\.md\) と DOC-DOCID_PLACEHOLDER}, File.read(readme)
+    assert_match(/# 設計は DOC-\d{10}_計画 を参照/, File.read(sh_file))
+    assert_match(/doc: DOC-\d{10}_計画/, File.read(yml_file))
+    assert_match(/see DOC-\d{10}_計画/, File.read(md_file))
   end
 
   def test_preserves_suffix_bearing_doc_ids_and_replaces_only_document_reference
-    readme = File.join @repo_root, "README.md"
-    File.write readme, "DOC-DOCID_PLACEHOLDER_計画 と DOC-DOCID_PLACEHOLDER と DOC-DOCID_PLACEHOLDER-a の比較\n"
-    Open3.capture2 git_env, "git", "add", "README.md", chdir: @repo_root
-    path = File.join @repo_root, "docs/design/DOC-DOCID_PLACEHOLDER_計画.md"
-    File.write path, "# 計画\n"
-    Open3.capture2 git_env, "git", "add", "docs/design/DOC-DOCID_PLACEHOLDER_計画.md", chdir: @repo_root
-    Open3.capture2 git_env, "git", "commit", "-m", "add files", chdir: @repo_root
+    readme = stage "README.md", "DOC-DOCID_PLACEHOLDER_計画 と DOC-DOCID_PLACEHOLDER と DOC-DOCID_PLACEHOLDER-a の比較\n"
+    commit_file PLAN_PLACEHOLDER, "# 計画\n"
 
-    silence_stdout { @tool.assign "docs/design/DOC-DOCID_PLACEHOLDER_計画.md" }
+    assign_quietly PLAN_PLACEHOLDER
 
     content = File.read readme
     assert_includes content, "DOC-DOCID_PLACEHOLDER-a"
@@ -460,83 +442,63 @@ class DocIdAssignTest < Minitest::Test
     assert_includes content, "DOC-DOCID_PLACEHOLDER と"
   end
 
+  def stage_cross_linked_pair
+    stage PATH_STORE, "# 店舗情報\n[未確定事項](../tracking/DOC-DOCID_PLACEHOLDER_未確定事項.md)\n"
+    stage PATH_PENDING, "# 未確定事項\n[店舗情報](../design/DOC-DOCID_PLACEHOLDER_店舗情報.md)\n"
+    commit "add A and B"
+  end
+
   def test_assigning_one_placeholder_does_not_corrupt_link_to_another_placeholder_document
-    design_dir = File.join @docs_dir, "design"
-    tracking_dir = File.join @docs_dir, "tracking"
-    FileUtils.mkdir_p tracking_dir
-    doc_a = File.join design_dir, "DOC-DOCID_PLACEHOLDER_店舗情報.md"
-    doc_b = File.join tracking_dir, "DOC-DOCID_PLACEHOLDER_未確定事項.md"
-    File.write doc_a, "# 店舗情報\n[未確定事項](../tracking/DOC-DOCID_PLACEHOLDER_未確定事項.md)\n"
-    File.write doc_b, "# 未確定事項\n[店舗情報](../design/DOC-DOCID_PLACEHOLDER_店舗情報.md)\n"
-    Open3.capture2 git_env, "git", "add", "docs/design/DOC-DOCID_PLACEHOLDER_店舗情報.md", chdir: @repo_root
-    Open3.capture2 git_env, "git", "add", "docs/tracking/DOC-DOCID_PLACEHOLDER_未確定事項.md", chdir: @repo_root
-    Open3.capture2 git_env, "git", "commit", "-m", "add A and B", chdir: @repo_root
+    stage_cross_linked_pair
 
-    silence_stdout { @tool.assign "docs/design/DOC-DOCID_PLACEHOLDER_店舗情報.md" }
+    assign_quietly PATH_STORE
 
-    renamed_a = Dir.glob(File.join(design_dir, "DOC-*_店舗情報.md")).first
-    refute_nil renamed_a
-    content_a = File.read renamed_a
     # 穴1: Bはまだ未採番なので、Bへのプレースホルダ参照は書き換わらず残る
-    assert_includes content_a, "DOC-DOCID_PLACEHOLDER_未確定事項.md"
+    assert_includes File.read(design_docs("DOC-*_店舗情報.md").first), "DOC-DOCID_PLACEHOLDER_未確定事項.md"
+    assert_link_rewritten File.read(File.join(@repo_root, PATH_PENDING)), "DOC-DOCID_PLACEHOLDER_店舗情報",
+                          %r{\.\./design/DOC-\d{10}_店舗情報\.md}
+  end
 
-    content_b = File.read doc_b
-    refute_includes content_b, "DOC-DOCID_PLACEHOLDER_店舗情報"
-    assert_match(%r{\.\./design/DOC-\d{10}_店舗情報\.md}, content_b)
+  def test_assigning_the_second_placeholder_rewrites_the_link_left_in_the_first
+    stage_cross_linked_pair
+    assign_quietly PATH_STORE
+    git "add", "-A"
+    commit "assign a"
 
-    Open3.capture2 git_env, "git", "add", "-A", chdir: @repo_root
-    Open3.capture2 git_env, "git", "commit", "-m", "assign a", chdir: @repo_root
+    assign_quietly PATH_PENDING
 
-    silence_stdout { @tool.assign "docs/tracking/DOC-DOCID_PLACEHOLDER_未確定事項.md" }
-
-    renamed_b = Dir.glob(File.join(tracking_dir, "DOC-*_未確定事項.md")).first
-    refute_nil renamed_b
-    content_a_after = File.read renamed_a
-    refute_includes content_a_after, "DOC-DOCID_PLACEHOLDER"
-    assert_match(%r{\.\./tracking/DOC-\d{10}(?:-[a-z])?_未確定事項\.md}, content_a_after)
+    assert_link_rewritten File.read(design_docs("DOC-*_店舗情報.md").first), "DOC-DOCID_PLACEHOLDER",
+                          %r{\.\./tracking/DOC-\d{10}(?:-[a-z])?_未確定事項\.md}
   end
 
   def test_assign_does_not_corrupt_placeholder_link_to_document_whose_name_shares_a_prefix
-    readme = File.join @repo_root, "README.md"
-    File.write readme, "[計画書](docs/design/DOC-DOCID_PLACEHOLDER_計画書.md) を参照\n"
-    Open3.capture2 git_env, "git", "add", "README.md", chdir: @repo_root
-    path = File.join @repo_root, "docs/design/DOC-DOCID_PLACEHOLDER_計画.md"
-    File.write path,
-               "# 計画\nDOC-DOCID_PLACEHOLDER_計画を参照。\n" \
-               "[計画書](DOC-DOCID_PLACEHOLDER_計画書.md) を参照\n"
-    Open3.capture2 git_env, "git", "add", "docs/design/DOC-DOCID_PLACEHOLDER_計画.md", chdir: @repo_root
-    sibling = File.join @repo_root, "docs/design/DOC-DOCID_PLACEHOLDER_計画書.md"
-    File.write sibling, "# 計画書\n"
-    Open3.capture2 git_env, "git", "add", "docs/design/DOC-DOCID_PLACEHOLDER_計画書.md", chdir: @repo_root
-    Open3.capture2 git_env, "git", "commit", "-m", "add files", chdir: @repo_root
+    readme = stage "README.md", "[計画書](docs/design/DOC-DOCID_PLACEHOLDER_計画書.md) を参照\n"
+    stage PLAN_PLACEHOLDER,
+          "# 計画\nDOC-DOCID_PLACEHOLDER_計画を参照。\n" \
+          "[計画書](DOC-DOCID_PLACEHOLDER_計画書.md) を参照\n"
+    stage "docs/design/DOC-DOCID_PLACEHOLDER_計画書.md", "# 計画書\n"
+    commit "add files"
 
-    silence_stdout { @tool.assign "docs/design/DOC-DOCID_PLACEHOLDER_計画.md" }
+    assign_quietly PLAN_PLACEHOLDER
 
-    renamed = Dir.glob(File.join(@docs_dir, "design", "DOC-*_計画.md")).first
-    content = File.read renamed
+    content = File.read design_docs("DOC-*_計画.md").first
     # 助詞が直接続く省略形の自己参照は置換される
     assert_match(/DOC-\d{10}_計画を参照。/, content)
     # 計画書.md はまだ未採番なので、計画.md 自身の中の参照も書き換わらない
     assert_includes content, "DOC-DOCID_PLACEHOLDER_計画書.md"
-
-    readme_content = File.read readme
-    assert_includes readme_content, "DOC-DOCID_PLACEHOLDER_計画書.md"
+    assert_includes File.read(readme), "DOC-DOCID_PLACEHOLDER_計画書.md"
   end
 
   def test_assign_leaves_unrelated_placeholder_mentions_in_self_file_unchanged
-    path = File.join @repo_root, "docs/design/DOC-DOCID_PLACEHOLDER_計画.md"
-    File.write path,
-               "# 計画\n> **DOC-ID**: DOC-DOCID_PLACEHOLDER_計画\n\n" \
-               "`DOC-DOCID_PLACEHOLDER_<説明的ファイル名>.md` という名前で作り、" \
-               "採番前は `DOC-DOCID_PLACEHOLDER` のままにする。\n\n" \
-               "[別文書](../tracking/DOC-DOCID_PLACEHOLDER_未確定事項.md) も参照。\n"
-    Open3.capture2 git_env, "git", "add", "docs/design/DOC-DOCID_PLACEHOLDER_計画.md", chdir: @repo_root
-    Open3.capture2 git_env, "git", "commit", "-m", "add placeholder", chdir: @repo_root
+    commit_file PLAN_PLACEHOLDER,
+                "# 計画\n> **DOC-ID**: DOC-DOCID_PLACEHOLDER_計画\n\n" \
+                "`DOC-DOCID_PLACEHOLDER_<説明的ファイル名>.md` という名前で作り、" \
+                "採番前は `DOC-DOCID_PLACEHOLDER` のままにする。\n\n" \
+                "[別文書](../tracking/DOC-DOCID_PLACEHOLDER_未確定事項.md) も参照。\n"
 
-    silence_stdout { @tool.assign "docs/design/DOC-DOCID_PLACEHOLDER_計画.md" }
+    assign_quietly PLAN_PLACEHOLDER
 
-    renamed = Dir.glob(File.join(@docs_dir, "design", "DOC-*_計画.md")).first
-    content = File.read renamed
+    content = File.read design_docs("DOC-*_計画.md").first
 
     # 自己参照（.md 無し）は新IDに置換される
     refute_includes content, "DOC-DOCID_PLACEHOLDER_計画"
@@ -548,17 +510,10 @@ class DocIdAssignTest < Minitest::Test
   end
 
   def test_does_not_update_references_inside_excluded_test_directory
-    test_dir = File.join @repo_root, "test"
-    FileUtils.mkdir_p test_dir
-    fixture = File.join test_dir, "fixture.md"
-    File.write fixture, "DOC-DOCID_PLACEHOLDER_計画\n"
-    Open3.capture2 git_env, "git", "add", "test/fixture.md", chdir: @repo_root
-    path = File.join @repo_root, "docs/design/DOC-DOCID_PLACEHOLDER_計画.md"
-    File.write path, "# 計画\n"
-    Open3.capture2 git_env, "git", "add", "docs/design/DOC-DOCID_PLACEHOLDER_計画.md", chdir: @repo_root
-    Open3.capture2 git_env, "git", "commit", "-m", "add files", chdir: @repo_root
+    fixture = stage "test/fixture.md", "DOC-DOCID_PLACEHOLDER_計画\n"
+    commit_file PLAN_PLACEHOLDER, "# 計画\n"
 
-    silence_stdout { @tool.assign "docs/design/DOC-DOCID_PLACEHOLDER_計画.md" }
+    assign_quietly PLAN_PLACEHOLDER
 
     assert_includes File.read(fixture), "DOC-DOCID_PLACEHOLDER_計画"
   end
@@ -566,17 +521,10 @@ class DocIdAssignTest < Minitest::Test
   # docs/spec/ は仕様書ディレクトリであり、除外対象にしてはならない。除外すると
   # iosci で実際に起きたとおり、参照更新が漏れる（実バグの regression）。
   def test_updates_references_inside_docs_spec_directory
-    spec_dir = File.join @docs_dir, "spec"
-    FileUtils.mkdir_p spec_dir
-    fixture = File.join spec_dir, "fixture.md"
-    File.write fixture, "DOC-DOCID_PLACEHOLDER_計画\n"
-    Open3.capture2 git_env, "git", "add", "docs/spec/fixture.md", chdir: @repo_root
-    path = File.join @repo_root, "docs/design/DOC-DOCID_PLACEHOLDER_計画.md"
-    File.write path, "# 計画\n"
-    Open3.capture2 git_env, "git", "add", "docs/design/DOC-DOCID_PLACEHOLDER_計画.md", chdir: @repo_root
-    Open3.capture2 git_env, "git", "commit", "-m", "add files", chdir: @repo_root
+    fixture = stage "docs/spec/fixture.md", "DOC-DOCID_PLACEHOLDER_計画\n"
+    commit_file PLAN_PLACEHOLDER, "# 計画\n"
 
-    silence_stdout { @tool.assign "docs/design/DOC-DOCID_PLACEHOLDER_計画.md" }
+    assign_quietly PLAN_PLACEHOLDER
 
     content = File.read fixture
     refute_includes content, "DOC-DOCID_PLACEHOLDER_計画"
@@ -584,37 +532,33 @@ class DocIdAssignTest < Minitest::Test
   end
 
   def test_assigns_doc_id_matching_git_commit_date
-    date_env = git_env.merge(
-      "GIT_AUTHOR_DATE" => "2026-01-05T03:04:00+09:00",
-      "GIT_COMMITTER_DATE" => "2026-01-05T03:04:00+09:00"
-    )
     path = "docs/design/no_prefix.md"
-    File.write File.join(@repo_root, path), "# Test\n"
-    Open3.capture2 date_env, "git", "add", path, chdir: @repo_root
-    Open3.capture2 date_env, "git", "commit", "-m", "add", chdir: @repo_root
+    stage path, "# Test\n"
+    commit "add", env: dated_git_env("2026-01-05T03:04:00+09:00")
 
-    silence_stdout { @tool.assign path }
+    assign_quietly path
 
-    renamed = Dir.glob File.join(@docs_dir, "design", "DOC-*_no_prefix.md")
+    renamed = design_docs "DOC-*_no_prefix.md"
     assert_equal 1, renamed.size
     assert_equal "DOC-2601050304_no_prefix.md", File.basename(renamed.first)
   end
 
   def test_assigns_suffixes_on_timestamp_collision
-    date_env = git_env.merge(
-      "GIT_AUTHOR_DATE" => "2026-02-10T09:00:00+09:00",
-      "GIT_COMMITTER_DATE" => "2026-02-10T09:00:00+09:00"
-    )
+    date_env = dated_git_env "2026-02-10T09:00:00+09:00"
+
     %w[first second third].each do |name|
       path = "docs/design/#{name}.md"
-      File.write File.join(@repo_root, path), "# #{name}\n"
-      Open3.capture2 date_env, "git", "add", path, chdir: @repo_root
-      Open3.capture2 date_env, "git", "commit", "-m", "add #{name}", chdir: @repo_root
-      silence_stdout { @tool.assign path }
+      stage path, "# #{name}\n"
+      commit "add #{name}", env: date_env
+      assign_quietly path
     end
 
-    assert_equal 1, Dir.glob(File.join(@docs_dir, "design", "DOC-2602100900_first.md")).size
-    assert_equal 1, Dir.glob(File.join(@docs_dir, "design", "DOC-2602100900-a_second.md")).size
-    assert_equal 1, Dir.glob(File.join(@docs_dir, "design", "DOC-2602100900-b_third.md")).size
+    %w[DOC-2602100900_first.md DOC-2602100900-a_second.md DOC-2602100900-b_third.md].each do |expected|
+      assert_equal 1, design_docs(expected).size
+    end
   end
+
+  private
+
+  def dated_git_env(iso8601) = git_env.merge("GIT_AUTHOR_DATE" => iso8601, "GIT_COMMITTER_DATE" => iso8601)
 end

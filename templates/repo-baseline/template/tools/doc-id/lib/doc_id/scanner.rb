@@ -125,9 +125,9 @@ module DocId
     # NAMED_REF に一致した箇所を検証し、二重報告を避けるため一致箇所を空白に潰した
     # 行を返す（続く裸の DOC-ID だけのスキャンが同じ箇所を ID 存在のみで再検査しないため）。
     def check_named_refs(line, rel, num, broken)
-      line.gsub(NAMED_REF) do |matched|
-        id = ::Regexp.last_match(1)
-        name = ::Regexp.last_match(2)
+      line.gsub NAMED_REF do |matched|
+        id = ::Regexp.last_match 1
+        name = ::Regexp.last_match 2
         broken << { file: rel, ref: "#{id}_#{name}", line: num } unless named_doc_id_exists? id, name
         " " * matched.length
       end
@@ -141,16 +141,16 @@ module DocId
       git_tracked_files.select { |f| searchable_file? f }
     end
 
-    def searchable_file?(f)
-      SEARCHABLE_EXTENSIONS.any? { |ext| f.end_with? ext } || extensionless_shebang_script?(f)
+    def searchable_file?(file)
+      SEARCHABLE_EXTENSIONS.any? { |ext| file.end_with? ext } || extensionless_shebang_script?(file)
     end
 
     # 拡張子なしの実行ファイル（bin/ocw 等）は shebang の有無で判定する。
     # 拡張子を持つファイル（.rb 等、意図的に SEARCHABLE_EXTENSIONS から除外しているもの）は対象にしない。
-    def extensionless_shebang_script?(f)
-      return false unless File.extname(f).empty?
+    def extensionless_shebang_script?(file)
+      return false unless File.extname(file).empty?
 
-      File.open(f, "rb") { |io| io.read(2) } == "#!"
+      File.open(file, "rb") { |io| io.read(2) } == "#!"
     rescue Errno::ENOENT, IOError
       false
     end
@@ -160,7 +160,7 @@ module DocId
     # docs/ 配下のパスには適用しない: docs/spec/ 等は仕様書ディレクトリであり、
     # テストコードではないため（docs/ の外にある test/ tests/ spec/ のみ除外する）。
     def excluded_path?(path)
-      segments = relative_path(path).split("/")
+      segments = relative_path(path).split "/"
       return false if segments.first == DOCS_DIR_NAME
 
       segments.any? { |seg| EXCLUDED_DIR_NAMES.include? seg }
@@ -173,17 +173,19 @@ module DocId
       # non-ASCII paths (e.g., Japanese filenames).
       env = { "GIT_DIR" => nil, "GIT_WORK_TREE" => nil, "GIT_INDEX_FILE" => nil }
       result, status = Open3.capture2 env, "git", "ls-files", "--cached", "-z", chdir: @repo_root
-      unless status.success?
-        # Fall back to glob scan when not in a git repo (e.g., unit tests with temp dirs).
-        # Exclude .git/ in case a real .git directory exists alongside the scan root.
-        ext_pattern = SEARCHABLE_EXTENSIONS.map { |e| e.delete_prefix "." }.join(",")
-        return Dir.glob(
-          File.join(@repo_root, "**", "*.{#{ext_pattern}}"),
-          File::FNM_DOTMATCH
-        ).reject { |f| f.include? "/.git/" }
-      end
+      return glob_searchable_files unless status.success?
 
       result.split("\0").map { |f| File.join @repo_root, f.strip }.reject { |f| f == @repo_root.to_s }
+    end
+
+    # Fall back to glob scan when not in a git repo (e.g., unit tests with temp dirs).
+    # Exclude .git/ in case a real .git directory exists alongside the scan root.
+    def glob_searchable_files
+      ext_pattern = SEARCHABLE_EXTENSIONS.map { |e| e.delete_prefix "." }.join(",")
+      Dir.glob(
+        File.join(@repo_root, "**", "*.{#{ext_pattern}}"),
+        File::FNM_DOTMATCH
+      ).reject { |f| f.include? "/.git/" }
     end
 
     def relative_path(abs_path) = abs_path.sub(%r{\A#{Regexp.escape @repo_root}/}, "")
