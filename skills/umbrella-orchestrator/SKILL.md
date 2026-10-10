@@ -262,7 +262,7 @@ ok = m and (latest_sha.startswith(m.group(1)) or m.group(1).startswith(latest_sh
 
    **推奨フォーマット（これだけ送ればよい）**:
    ```
-   herdr agent prompt <pane-id> "計画書 <計画書の絶対パス> の「## 孫N用プロンプト」セクションのコードブロック内の指示に従って実装してください。実装が完了したら計画書末尾の指示に従ってPR作成・レビューまで自律的に進めてください。reviewerはdone状態で完了し完了通知は来ないので、待機して停止せず gh pr view をポーリングしてレビューの有無を確認してください。" --wait --timeout 5000
+   herdr agent prompt <pane-id> "計画書 <計画書の絶対パス> の「## 孫N用プロンプト」セクションのコードブロック内の指示に従って実装してください。実装が完了したら計画書末尾の指示に従ってPR作成・レビューまで自律的に進めてください。reviewerはdone状態で完了し完了通知は来ないので、待機して停止せず gh pr view をポーリングしてレビューの有無を確認してください。" --wait --timeout 10000
    ```
 
    **末尾の1文を削らないこと。** これが §5「レビュー待ちデッドロック」の**予防**である。
@@ -528,7 +528,7 @@ ok = m and (latest_sha.startswith(m.group(1)) or m.group(1).startswith(latest_sh
 
    **推奨フォーマット（フォールバック時）**:
    ```
-   herdr agent prompt <implementer-id> "最終PRを作成してください。base:<ベースブランチ> head:<傘ブランチ>。完了したらpr-review-loopを起動。reviewerは<reviewer-id>。計画書 docs/planning/DOC-XXXX_計画.md も参照。" --wait --timeout 5000
+   herdr agent prompt <implementer-id> "最終PRを作成してください。base:<ベースブランチ> head:<傘ブランチ>。完了したらpr-review-loopを起動。reviewerは<reviewer-id>。計画書 docs/planning/DOC-XXXX_計画.md も参照。" --wait --timeout 10000
    ```
 
 4. **implementer の起動を確認**
@@ -621,7 +621,7 @@ main へのマージは人間が手動で行う。
         来ないので、待機して停止せず gh pr view をポーリングしてレビューの有無を
         確認してください」を必ず含める。§3.2 参照）
       送信は §5「AI間送信手順（二段構え）」に従い、到達確認も同じ節に従う
-        （フォールバックは herdr agent prompt <implementer-id> "<本文>" --wait --timeout 5000。
+        （フォールバックは herdr agent prompt <implementer-id> "<本文>" --wait --timeout 10000。
         timeout / stalled でも再送しない）
       計画書を「🔄 実装中」に更新してcommit+push
    9. 全孫マージ済みなら finalize:
@@ -631,7 +631,7 @@ main へのマージは人間が手動で行う。
         herdr pane list | python3 -c "import sys,json,os; my_cwd=os.getcwd(); ids={p['workspace_id'] for p in json.load(sys.stdin)['result']['panes'] if p.get('cwd')==my_cwd}; [print(i) for i in sorted(ids)]"
       そのworkspaceのimplementerに送信:
         送信は §5「AI間送信手順（二段構え）」に従う（フォールバックは
-        herdr agent prompt <impl-pane-id> "最終PRを作成。base:main head:<傘ブランチ>。pr-review-loop起動。reviewerは<同workspaceのreviewer>。mainマージは人間手動。計画書 <計画書の絶対パス> 参照。" --wait --timeout 5000）
+        herdr agent prompt <impl-pane-id> "最終PRを作成。base:main head:<傘ブランチ>。pr-review-loop起動。reviewerは<同workspaceのreviewer>。mainマージは人間手動。計画書 <計画書の絶対パス> 参照。" --wait --timeout 10000）
         このimplementerは以前に作業を終えている可能性があり、フォーカスされて
         いなければ done のまま張り付くので、到達確認では「working になること」を
         条件にしない（§5 の到達確認に従う）
@@ -801,22 +801,32 @@ herdr pane get <pane-id>
 #### フォールバック（`herdr agent prompt`）
 
 ```bash
-herdr agent prompt <pane-id> "<本文>" --wait --timeout 5000
+herdr agent prompt <pane-id> "<本文>" --wait --timeout 10000
 ```
 
-- **`--wait` に `--until` を重ねない**（herdr 公式の使い方）。`--timeout` は
-  「動き出したことの確認」に足りる短い値（5000ms 程度）にする。**長い待機に `--wait` を
-  使わない。** 実装AIへの指示は何十分も続くので、長いタイムアウトで司令官をブロック
-  しない
-- 返り値の読み方（実測は herdr 0.9.0、2026-10-11）:
-  - **正常終了（終了コード0、`"type":"agent_prompted"`）**: 送信済み。相手が 5 秒以内に
-    処理を終えれば `--wait` はそこで戻る。それ以外の確認は不要
-  - **`timeout`（終了コード1）**: **失敗ではない。** `--wait` は相手が動き出したあとも
-    完了まで待ち続けるため、実装AIへの長い指示では普通に返る。`working` 中の相手への
-    送信も `timeout` を返したうえで、本文は相手のターン終了後に1回だけ処理された
+- **`--wait` に `--until` を重ねない**（herdr 公式の使い方）。`--timeout` は送信時間を
+  含めて数えられ、動き出しの活動ゲート（最大5秒）はその後に始まる。**ゲートより先に
+  呼び出し側が切れないよう、10000ms 程度にする**（短すぎると、動き出さなかった場合も
+  `agent_prompt_stalled` ではなく `timeout` が返り、返り値だけでは区別できなくなる）。
+  **長い待機に `--wait` を使わない。** 実装AIへの指示は何十分も続くので、長い
+  タイムアウトで司令官をブロックしない
+- 返り値の読み方（実測は herdr 0.9.0、2026-10-11）。**どの返り値でも、最後に
+  `herdr agent get <pane-id>` の `agent_status` を見る習慣を省かない**:
+  - **正常終了（終了コード0、`"type":"agent_prompted"`）**: 送信済みで、相手が
+    `idle` / `done` / **`blocked`** のいずれかに落ち着いて戻った。`blocked` は
+    送信後に承認待ち・質問ダイアログで止まった状態で、**成功として戻ってくる**ので、
+    JSON の `agent_status`（無ければ `agent get`）が `blocked` なら下の `agent_blocked` と
+    同じく画面を読む
+  - **`timeout`（終了コード1）**: 送信時間を含む呼び出し側の時間切れ。**`working` を
+    観測した結果かどうかは、この返り値だけでは分からない。** 実装AIへの長い指示で
+    `working` のまま切れるのは普通だが、動き出していない場合にも返りうる。
+    `herdr agent get <pane-id>` で `working` になっているかを必ず確かめる。
+    `working` 中の相手への送信も `timeout` を返したうえで、本文は相手のターン終了後に
+    1回だけ処理された（実測）
   - **`agent_prompt_stalled`**（herdr 公式の仕様。2026-10-11 の実測では再現していない）:
-    非 working 状態から送って5秒以内に `working` か `blocked` が観測されなかった。**届いていないとは限らない**（`done`/`idle` のまま
-    処理済みのこともある。上記「4. 到達確認」と同じ事情）
+    非 working 状態から送って、送信後5秒以内に `working` か `blocked` が観測されなかった。
+    **届いていないとは限らない**（`done`/`idle` のまま処理済みのこともある。
+    上記「4. 到達確認」と同じ事情）
   - **`agent_blocked`**: 相手が承認待ち・質問ダイアログで、**何も送られていない**。
     `herdr agent read <pane-id>` で画面を読み、判断が要るなら人間に伝える
 - **`timeout` / `stalled` では再送しない。** 公式も「A timeout or stalled response does not
@@ -980,7 +990,7 @@ finalize のフローを止める理由にならない。
    - 自分が `SendMessage` を呼べる Claude Code セッションで、かつ implementer の
      `agent` が `"claude"` で `agent_session.value` から `~/.claude/sessions/` を
      引けたら `SendMessage({ to: <name>, message: "<prompt>" })`
-   - それ以外は `herdr agent prompt <implementer-id> "<prompt>" --wait --timeout 5000`
+   - それ以外は `herdr agent prompt <implementer-id> "<prompt>" --wait --timeout 10000`
      （フォールバック）
 5. 到達確認: `SendMessage` 経路なら§5「AI間送信手順」#4（送信直前の状態からの変化を見る）
    に従う。動いていなければフォールバック（`herdr agent prompt`）へ切り替える。
@@ -1058,7 +1068,7 @@ herdr pane read <implementer-id> --source recent-unwrapped --lines 20
 使えなければ以下のフォールバック）:
 
 ```bash
-herdr agent prompt <implementer-id> "reviewerは完了済みで最新レビューが投稿されています。待機をやめて gh pr view <PR番号> --json reviews で最新レビューを読み、指摘に対応してpushし、再レビューを依頼してください。" --wait --timeout 5000
+herdr agent prompt <implementer-id> "reviewerは完了済みで最新レビューが投稿されています。待機をやめて gh pr view <PR番号> --json reviews で最新レビューを読み、指摘に対応してpushし、再レビューを依頼してください。" --wait --timeout 10000
 ```
 
 復帰指示も他の送信と同じ手順で、到達確認（相手の状態が動くこと）と返り値の読み方、

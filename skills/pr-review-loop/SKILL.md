@@ -761,7 +761,7 @@ ADR DOC-2609072215 参照）: **自分（この Phase を実行している側�
 フォールバックへ落ちる。
 
 ```bash
-herdr agent prompt "$REVIEWER_PANE" "以下を読んでPRレビューを実行してください。レビュー指示: $REVIEW_REQUEST" --wait --timeout 5000
+herdr agent prompt "$REVIEWER_PANE" "以下を読んでPRレビューを実行してください。レビュー指示: $REVIEW_REQUEST" --wait --timeout 10000
 ```
 
 返り値の読み方（`timeout` / `agent_prompt_stalled` は未達の証明にならず**再送しない**、
@@ -1058,7 +1058,7 @@ command -v ocw-meter >/dev/null && ocw-meter event phase.start --phase rereview_
 どちらかを満たさなければ以下のフォールバック）:
 
 ```bash
-herdr agent prompt "$REVIEWER_PANE" "PR #$PR 再レビュー依頼。レビュー指示: $REVIEW_REQUEST 全指摘に対応コメント書きました。前回レビュー対象: $HEAD_SHA → 現HEAD: $NEW_HEAD_SHA" --wait --timeout 5000
+herdr agent prompt "$REVIEWER_PANE" "PR #$PR 再レビュー依頼。レビュー指示: $REVIEW_REQUEST 全指摘に対応コメント書きました。前回レビュー対象: $HEAD_SHA → 現HEAD: $NEW_HEAD_SHA" --wait --timeout 10000
 ```
 
    フォールバック送信前に、Phase 2 Step 2 と同じ手順でレビュワーの状態を確認する。

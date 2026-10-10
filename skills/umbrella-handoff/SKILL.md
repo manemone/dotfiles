@@ -184,7 +184,7 @@ commander には**絶対パス**で渡す（§6）。**commander が計画書へ
 - 相談AI自身が `SendMessage` を呼べる Claude Code セッションで、かつ commander
   ペインの `agent`（`herdr pane get <commander のペインID>`。値は §5 手順3 の出力の
   `commander:` 行から取る）が `"claude"` であれば `SendMessage`
-- どちらかが満たされなければ `herdr agent prompt <commander のペインID> "<本文>" --wait --timeout 5000`
+- どちらかが満たされなければ `herdr agent prompt <commander のペインID> "<本文>" --wait --timeout 10000`
   （返り値の読み方は `umbrella-orchestrator/SKILL.md` §5「フォールバック」。
   同 §3.2 の送信の注意点 — プロンプト全文を書き込まない、メタ指示を付けない、
   `timeout` / `stalled` でも同じ本文を再送しない — をそのまま踏む）
