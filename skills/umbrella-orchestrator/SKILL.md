@@ -921,7 +921,8 @@ implementerも `working` になっており、複数ヒットして自分のwork
 
 1. **`$HERDR_WORKSPACE_ID` が非空ならそれを使う。** herdr は各ペインへ呼び出し元の
    文脈を環境変数（`$HERDR_WORKSPACE_ID` / `$HERDR_TAB_ID` / `$HERDR_PANE_ID`）で渡す
-   （2026-10-11、herdr 0.9.0 で確認）。
+   （2026-10-11、herdr 0.9.0 で確認）。**この環境変数はプロセスが起動したときに受け継いだ
+   値で、ペインを別の workspace へ移しても変わらない**（下の注意参照）。
    ```bash
    echo "$HERDR_WORKSPACE_ID"
    ```
@@ -941,8 +942,11 @@ implementerも `working` になっており、複数ヒットして自分のwork
    ワークスペースは複数pane（3ペイン）が同じ`cwd`を持つため、`set` で重複を畳んでいる。
 
 **注意**: ペインを別の workspace へ移すと、そのペインの workspace ID は変わる（herdr の
-公式スキルの記述）。移したあとに、移す前に控えた ID を使い回さず、取り直すこと。
-cron 本文に登録時に埋めた `<司令官のworkspace_id>` も、司令官のペインを移したら古くなる。
+公式スキルの記述）。一方 `$HERDR_WORKSPACE_ID` は移したあとも古い値のままで、`cwd` 突き合わせにも
+落ちない。移したあとに取り直すときは環境変数ではなく
+`herdr pane current --current` の `result.pane.workspace_id` を使う（読み取り専用。2026-10-11、
+herdr 0.9.0 で確認）。cron 本文に登録時に埋めた `<司令官のworkspace_id>` も、司令官のペインを
+移したら古くなる。
 
 ### `ocw -H` が作るもの
 

@@ -726,12 +726,16 @@ KIND（`herdr agent start --kind` に渡す種別）と引数を、次の順で�
 
 1. `REVIEWER_CMD`（Phase 0.5 の `reviewer_cmd`）があるとき、その**先頭の語**を見る
    - 先頭の語が `herdr agent` の `kinds:` に載っている → それが KIND。残りの語は引数
-     （`claude --model opus` なら KIND=`claude`、引数=`--model opus`）
+     （`claude --model opus` なら KIND=`claude`、引数=`--model opus`）。**ただし残りに引用符・
+     バックスラッシュ・`$`・`;` などシェルの解釈が要る文字が含まれるときは、引数に分けず**
+     KIND が決まらない場合と同じく `pane run` で `REVIEWER_CMD` をそのまま起動する
+     （引数の分割をシェル任せにすると、zsh では1語にまとまり、bash では引用符が壊れる）
    - 先頭が環境変数の代入（`FOO=bar claude`）やラッパー（`env ...` など）、または
      `kinds:` に無い語で KIND が決まらない → **推測せず**、下記「`pane run` での起動
      （フォールバック）」で `REVIEWER_CMD` をそのまま起動する
 2. `REVIEWER_CMD` が無ければ、Phase 0 で読み取った `$REVIEWER_AGENT` を KIND に使う
-   （引数なし）
+   （引数なし）。この経路で `pane run` に落ちるときは `REVIEWER_CMD` の代わりに
+   `$REVIEWER_AGENT` をそのままコマンド名として使う
 3. どちらも空なら**推測して起動しない。** 停止してユーザーに
    「レビュワーペインのエージェントが終了しており、起動コマンドが特定できません。
    `.claude/pr-review.yml` に `reviewer_cmd` を設定するか、ペインで手動で起動してください」
@@ -750,9 +754,13 @@ KIND（`herdr agent start --kind` に渡す種別）と引数を、次の順で�
 NAME="rv-$(printf '%s' "$REVIEWER_PANE" | tr 'A-Z:' 'a-z-')"
 # 引数なし
 herdr agent start "$NAME" --kind "$KIND" --pane "$REVIEWER_PANE"
-# 引数あり（REVIEWER_CMD の先頭の語の残り）
-herdr agent start "$NAME" --kind "$KIND" --pane "$REVIEWER_PANE" -- $ARGS
+# 引数あり（例: REVIEWER_CMD が "claude --model opus" のとき。-- の後ろに、
+# 先頭の語より後ろの単語をリテラルに並べる。シェル変数には入れない）
+herdr agent start "$NAME" --kind "$KIND" --pane "$REVIEWER_PANE" -- --model opus
 ```
+
+`$NAME` / `$KIND` と `--` の後ろの引数は、Phase 1 の注記と同じく実際の値をその場で
+リテラルに埋める記法である。
 
 実測（2026-10-11、herdr 0.9.0、`--kind claude`）: 空のシェルペインで約4秒で戻り、返りの
 `result.agent` に `agent_status: "idle"`・`interactive_ready: true`・`name` が入る
@@ -771,11 +779,16 @@ Step 3 へ進む。
   `herdr pane read "$REVIEWER_PANE" --source detection --lines 10` で画面を確認して、可能なら
   回答し、人手が必要ならユーザーに伝える
 - タイムアウト → エージェントは起動中かもしれない。`herdr pane get "$REVIEWER_PANE"` の
-  `agent` / `agent_status` を確認し、検出されていれば成功として扱う
+  `agent` / `agent_status` を確認し、検出されていれば成功として扱う。検出されていなければ
+  `herdr pane read "$REVIEWER_PANE" --source detection --lines 10` で画面を見て、
+  **シェルプロンプトに戻っているときだけ**フォールバックへ進む。それ以外（起動途中の画面）は
+  何も送らず、少し待って `pane get` で確かめ直すか、ユーザーに伝える（起動途中の入力欄に
+  `pane run` の文字列が入ると、レビュワーへの最初の指示になってしまう）
 
 **`pane run` での起動（フォールバック）:**
 
 KIND が決まらない `REVIEWER_CMD`、および上記で `agent start` が使えなかった場合にだけ使う。
+コマンドは `REVIEWER_CMD`、無ければ `$REVIEWER_AGENT`（「起動コマンドの決定」の手順2）。
 
 ```bash
 herdr pane run "$REVIEWER_PANE" "$REVIEWER_CMD"
