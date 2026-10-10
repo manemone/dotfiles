@@ -40,7 +40,10 @@ uv tool run copier copy https://github.com/manemone/dotfiles.git .
 
 元（`_src_path`）はこのリポジトリのルート（git の URL を推奨。他のマシンでも update できる）。
 URL から撒くとリモートの既定ブランチ（`master`）の HEAD が撒かれるので、マージ前の直しを試すときは
-ローカルの絶対パス（必要なら `--vcs-ref`）を使います。相対パスは update が失敗するので使いません。
+ローカルの絶対パス（必要なら `--vcs-ref`）を使います。**ただし元の作業ツリーに未コミットの変更があると、
+copier は変更を一時コミットして撒き、`_commit` にどこにも存在しないコミットが記録されて、その撒き先は
+`copier update` できなくなります。** 試すときは元の変更をコミットしてから撒き、そうして撒いた先は
+試し用と割り切るか、`_commit` を本物のコミットに直してください。相対パスは update が失敗するので使いません。
 `.copier-answers.yml` の `_commit` / `_src_path` は update が使うので、消したり伏せたりしません。
 
 質問に答えると、選んだ内容に応じて以下が生成されます。

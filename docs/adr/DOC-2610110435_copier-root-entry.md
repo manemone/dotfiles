@@ -37,7 +37,10 @@ B ではテンプレートとそれを使うスキル（`skills/repo-baseline/`�
 
 - 推奨は公開の HTTPS の git URL（`https://github.com/manemone/dotfiles.git`）。どのマシンでも update できる。
   URL から撒くとリモートの既定ブランチ（`master`）の HEAD が撒かれる。マージ前の直しを試すときは
-  ローカルの絶対パス（必要なら `--vcs-ref`）を使う。
+  ローカルの絶対パス（必要なら `--vcs-ref`）を使う。ただし元の作業ツリーに未コミットの変更があると、
+  copier は変更を一時クローンの中でコミットして撒くため、`_commit` にどのリポジトリにも存在しない
+  コミットが記録され、撒いた先は `copier update` できなくなる（レビューで再現）。試すときは元の変更を
+  コミットしてから撒き、`_commit` が本物のコミットであることを確かめる。
 - 相対パスは使わない（update が失敗する）。
 - **`_src_path` を伏せない。** 伏せると update できない。namecheck を持つリポジトリでは、許可リスト
   （`tools/namecheck/allowlist.txt`）に `.copier-answers.yml` を足す（持ち主が許可。2026-10-11）。
