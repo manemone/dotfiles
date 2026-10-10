@@ -512,19 +512,15 @@ ok = m and (latest_sha.startswith(m.group(1)) or m.group(1).startswith(latest_sh
 
 **やること**:
 
-1. **司令官自身のワークスペースを特定**（§5「自分のworkspaceの見つけ方」と同じ `cwd` 突き合わせ
-   方式。`agent_status=='working'` 方式は使わない。孫のワークスペースは §3.3 のクリーンアップを
+1. **司令官自身のワークスペースを特定**（§5「自分のworkspaceの見つけ方」に従う。
+   `$HERDR_WORKSPACE_ID` が非空ならそれが `MY_WORKSPACE`、空のときだけ `cwd` 突き合わせ。
+   `agent_status=='working'` 方式は使わない。孫のワークスペースは §3.3 のクリーンアップを
    人間が承認するまで残り、その pane が `working` になりうるため、誤って孫を掴む）
    ```bash
-   herdr pane list | python3 -c "
-   import sys, json, os
-   my_cwd = os.getcwd()
-   ids = {p['workspace_id'] for p in json.load(sys.stdin)['result']['panes'] if p.get('cwd') == my_cwd}
-   for i in sorted(ids):
-       print(f'MY_WORKSPACE={i}')
-   "
+   echo "MY_WORKSPACE=$HERDR_WORKSPACE_ID"
    ```
-   出力された `MY_WORKSPACE` が司令官のワークスペース。以後このワークスペースの implementer/reviewer を使う。
+   空なら §5 の `cwd` 突き合わせ（`python3` のスニペット）を実行して得る。
+   `MY_WORKSPACE` が司令官のワークスペース。以後このワークスペースの implementer/reviewer を使う。
 
 2. **ペーン構成を確認**
    ```bash
@@ -657,7 +653,9 @@ main へのマージは人間が手動で行う。
    9. 全孫マージ済みなら finalize:
       司令官自身のworkspaceを特定（§5「自分のworkspaceの見つけ方」参照。
         agent_status=='working' 方式は使わない。この cron 巡回中は孫の
-        implementerも working になっており、誤って孫のworkspaceを掴む）:
+        implementerも working になっており、誤って孫のworkspaceを掴む）。
+        登録時に置換した <司令官のworkspace_id> を使う。cron 本文は司令官のシェルの環境変数を
+        引き継がない場合があるため、置換済みの値が空なら §5 の cwd 突き合わせへ落ちる:
         herdr pane list | python3 -c "import sys,json,os; my_cwd=os.getcwd(); ids={p['workspace_id'] for p in json.load(sys.stdin)['result']['panes'] if p.get('cwd')==my_cwd}; [print(i) for i in sorted(ids)]"
       そのworkspaceのimplementerに送信:
         送信は §5「AI間送信手順（二段構え）」に従う（フォールバックは
@@ -919,22 +917,36 @@ herdr agent prompt <pane-id> "<本文>" --wait --timeout 10000
 
 `agent_status == 'working'` で探す方法は使わない。`/autopilot` の巡回中は孫の
 implementerも `working` になっており、複数ヒットして自分のworkspaceを一意に
-特定できない。代わりに、`python3` が起動時に継承する現在の作業ディレクトリ
-（傘ブランチのワークツリーの絶対パス）を使い、`herdr pane list` の各pane の
-`cwd` と突き合わせる（環境変数の受け渡しは不要）:
+特定できない。次の順で特定する:
 
-```bash
-herdr pane list | python3 -c "
-import sys, json, os
-my_cwd = os.getcwd()
-ids = {p['workspace_id'] for p in json.load(sys.stdin)['result']['panes'] if p.get('cwd') == my_cwd}
-for i in sorted(ids):
-    print(i)
-"
-```
+1. **`$HERDR_WORKSPACE_ID` が非空ならそれを使う。** herdr は各ペインへ呼び出し元の
+   文脈を環境変数（`$HERDR_WORKSPACE_ID` / `$HERDR_TAB_ID` / `$HERDR_PANE_ID`）で渡す
+   （2026-10-11、herdr 0.9.0 で確認）。**この環境変数はプロセスが起動したときに受け継いだ
+   値で、ペインを別の workspace へ移しても変わらない**（下の注意参照）。
+   ```bash
+   echo "$HERDR_WORKSPACE_ID"
+   ```
+2. **空のとき（herdr の外のシェルなど）だけ、`cwd` 突き合わせへ落ちる。** `python3` が
+   起動時に継承する現在の作業ディレクトリ（傘ブランチのワークツリーの絶対パス）を使い、
+   `herdr pane list` の各pane の `cwd` と突き合わせる:
+   ```bash
+   herdr pane list | python3 -c "
+   import sys, json, os
+   my_cwd = os.getcwd()
+   ids = {p['workspace_id'] for p in json.load(sys.stdin)['result']['panes'] if p.get('cwd') == my_cwd}
+   for i in sorted(ids):
+       print(i)
+   "
+   ```
+   司令官の作業ディレクトリと一致するpaneのworkspace_idが司令官のworkspace。傘
+   ワークスペースは複数pane（3ペイン）が同じ`cwd`を持つため、`set` で重複を畳んでいる。
 
-司令官の作業ディレクトリと一致するpaneのworkspace_idが司令官のworkspace。傘
-ワークスペースは複数pane（3ペイン）が同じ`cwd`を持つため、`set` で重複を畳んでいる。
+**注意**: ペインを別の workspace へ移すと、そのペインの workspace ID は変わる（herdr の
+公式スキルの記述）。一方 `$HERDR_WORKSPACE_ID` は移したあとも古い値のままで、`cwd` 突き合わせにも
+落ちない。移したあとに取り直すときは環境変数ではなく
+`herdr pane current --current` の `result.pane.workspace_id` を使う（読み取り専用。2026-10-11、
+herdr 0.9.0 で確認）。cron 本文に登録時に埋めた `<司令官のworkspace_id>` も、司令官のペインを
+移したら古くなる。
 
 ### `ocw -H` が作るもの
 
