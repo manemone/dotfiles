@@ -332,8 +332,8 @@ each pane is started with OCW_ROLE set to its role name (commander /
 implementer / reviewer -- an implementer-as-root pane under
 --no-commander still gets OCW_ROLE=implementer, never commander) and
 OCW_RUN_ID set to the run's id -- see `ocw help meter`. (`worktree open`
-has no --env, so the root pane gets them as a `OCW_ROLE=.. OCW_RUN_ID=.. `
-prefix on its launch command; split panes use --env.) Panes are also
+has no --env, so the root pane shell gets them via `export OCW_ROLE=..
+OCW_RUN_ID=..;` typed before its launch command; split panes use --env.) Panes are also
 renamed to match their role, and the tab is renamed "agents".
 
 workspace label: "<repo_name> :: <slug>" (':: ', not '/' -- the slug can
@@ -387,8 +387,8 @@ follows the merge-check verdict (`ocw help rm`), not whether -f was
 passed.
 
 OCW_RUN_ID propagation: in Herdr mode, every pane already gets
-OCW_RUN_ID set automatically (--env, or a command prefix on the root
-pane; see `ocw help herdr`) -- no action needed. In the default (non-Herdr, VS Code) mode,
+OCW_RUN_ID set automatically (--env, or an `export` typed into the root
+pane shell; see `ocw help herdr`) -- no action needed. In the default (non-Herdr, VS Code) mode,
 nothing sets OCW_RUN_ID for you; export it manually inside the worktree
 if you want ocw-meter events from that shell tied to the run:
 
@@ -936,7 +936,7 @@ setup_herdr_workspace() {
 
   if [ "$no_commander" = "true" ]; then
     root_label="implementer"
-    implementer_env_prefix="OCW_ROLE=implementer OCW_RUN_ID=${run_id} "
+    implementer_env_prefix="export OCW_ROLE=implementer OCW_RUN_ID=${run_id}; "
   fi
 
   # The worktree is already created by ocw; hand it to Herdr's worktree
@@ -1074,10 +1074,11 @@ setup_herdr_workspace() {
     return 1
 
   if [ "$no_commander" != "true" ]; then
-    # Commander is the root pane: no --env at open time, so prefix the env.
+    # Commander is the root pane: no --env at open time (and the pane shell
+    # inherits the herdr server env, not ours), so export in the pane shell.
     herdr pane run \
       "$HERDR_SETUP_COMMANDER_PANE_ID" \
-      "OCW_ROLE=commander OCW_RUN_ID=${run_id} $(pane_command_with_name "$COMMANDER_COMMAND" "${workspace_label} / 司令官")" \
+      "export OCW_ROLE=commander OCW_RUN_ID=${run_id}; $(pane_command_with_name "$COMMANDER_COMMAND" "${workspace_label} / 司令官")" \
       >/dev/null ||
       return 1
   fi

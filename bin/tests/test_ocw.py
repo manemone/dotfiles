@@ -1720,7 +1720,7 @@ class HerdrPaneModeTests(HerdrOcwTestCase):
 
         # グループに乗る呼び出し: メインのチェックアウトを --cwd、作ったワーク
         # ツリーを --path に渡す。worktree open は --env を持たないので、ルート
-        # (司令官) ペインの環境変数は起動コマンドの前置で渡る。
+        # (司令官) ペインの環境変数は起動前の export でシェル自体に入る。
         open_call = next(c for c in calls if c[:2] == ["worktree", "open"])
         self.assertFalse(any(c[:2] == ["workspace", "create"] for c in calls))
         self.assertEqual(
@@ -1733,11 +1733,13 @@ class HerdrPaneModeTests(HerdrOcwTestCase):
         self.assertNotIn("--env", open_call)
         self.assertNotIn("--trust-repository", open_call)
         run_cmds = [c[3] for c in calls if c[:2] == ["pane", "run"]]
-        root_words = shlex.split(run_cmds[0])
-        self.assertEqual(root_words[0], "OCW_ROLE=commander")
-        self.assertTrue(root_words[1].startswith("OCW_RUN_ID="))
-        # 前置があっても claude 判定が効き、--name が付く。
-        self.assertIn("--name", root_words)
+        # シェル自体に export する (起動し直したエージェントにも継がれる)。
+        root_export, root_cmd = run_cmds[0].split("; ", 1)
+        root_words = shlex.split(root_export)
+        self.assertEqual(root_words[:2], ["export", "OCW_ROLE=commander"])
+        self.assertTrue(root_words[2].startswith("OCW_RUN_ID="))
+        # export があっても claude 判定が効き、--name が付く。
+        self.assertIn("--name", shlex.split(root_cmd))
         self.assertEqual(
             [c[c.index("--env") + 1] for c in calls if c[:2] == ["pane", "split"]][0],
             "OCW_ROLE=implementer",
@@ -1768,9 +1770,7 @@ class HerdrPaneModeTests(HerdrOcwTestCase):
         self.assertEqual(len(run_cmds), 3)
         self.assertEqual(len(set(run_cmds)), 3)
         for cmd, role in zip(run_cmds, ["司令官", "実装", "レビュー"]):
-            words = shlex.split(cmd)
-            while "=" in words[0]:  # ルートペインの OCW_ROLE=… 前置
-                words.pop(0)
+            words = shlex.split(cmd.split("; ", 1)[-1])  # ルートの export を除く
             self.assertEqual(words[0], "claude")
             self.assertEqual(words[words.index("--name") + 1], f"{label} / {role}")
 
@@ -1804,7 +1804,7 @@ class HerdrPaneModeTests(HerdrOcwTestCase):
         run_cmds = [c[3] for c in self.herdr_calls() if c[:2] == ["pane", "run"]]
         # ルートペイン (司令官) だけ環境変数の前置が付く。名前の規則は不変。
         self.assertRegex(
-            run_cmds[0], r"^OCW_ROLE=commander OCW_RUN_ID=\S+ codex --model x$"
+            run_cmds[0], r"^export OCW_ROLE=commander OCW_RUN_ID=\S+; codex --model x$"
         )
         self.assertEqual(
             shlex.split(run_cmds[1]),
@@ -1820,7 +1820,7 @@ class HerdrPaneModeTests(HerdrOcwTestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         run_cmds = [c[3] for c in self.herdr_calls() if c[:2] == ["pane", "run"]]
         self.assertRegex(
-            run_cmds[0], r"^OCW_ROLE=implementer OCW_RUN_ID=\S+ env X=1 claude$"
+            run_cmds[0], r"^export OCW_ROLE=implementer OCW_RUN_ID=\S+; env X=1 claude$"
         )
 
     def test_no_commander_creates_two_panes_with_implementer_as_root(self):
@@ -1840,7 +1840,7 @@ class HerdrPaneModeTests(HerdrOcwTestCase):
         # never commander -- this is what bin/ocw-meter attributes cost to.
         # No --env on worktree open, so it rides on the launch command.
         run_cmds = [c[3] for c in calls if c[:2] == ["pane", "run"]]
-        self.assertEqual(shlex.split(run_cmds[0])[0], "OCW_ROLE=implementer")
+        self.assertEqual(shlex.split(run_cmds[0])[:2], ["export", "OCW_ROLE=implementer"])
         self.assertFalse(any("OCW_ROLE=commander" in c for c in run_cmds))
 
         # Exactly one split (root -> reviewer), not two -- there is no
