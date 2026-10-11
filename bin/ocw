@@ -8,6 +8,7 @@ ORIGINAL_INVOCATION="ocw $*"
 
 USE_HERDR=false
 NO_COMMANDER=false
+WORKSPACE_LABEL_OVERRIDE=""
 
 COMMANDER_COMMAND="${OCW_COMMANDER_COMMAND:-claude}"
 IMPLEMENTER_COMMAND="${OCW_IMPLEMENTER_COMMAND:-claude}"
@@ -32,9 +33,9 @@ HERDR_SETUP_REVIEWER_PANE_ID=""
 usage() {
   cat <<'USAGE'
 usage:
-  ocw [-H|--herdr] [--no-commander] <worktree-name> [base-ref]
-  ocw [-H|--herdr] [--no-commander] new <worktree-name> [base-ref]
-  ocw new [-H|--herdr] [--no-commander] <worktree-name> [base-ref]
+  ocw [-H|--herdr] [--no-commander] [--label <text>] <worktree-name> [base-ref]
+  ocw [-H|--herdr] [--no-commander] [--label <text>] new <worktree-name> [base-ref]
+  ocw new [-H|--herdr] [--no-commander] [--label <text>] <worktree-name> [base-ref]
   ocw rm <worktree-name>
   ocw rm -f <worktree-name>
   ocw ls
@@ -58,10 +59,18 @@ create behavior:
     requires -H/--herdr on create; without it, ocw dies
     ignored by ls/rm, like -H
 
+  --label <text>
+    with -H/--herdr, the Herdr workspace label (default:
+    "<repo_name> :: <slug>"); each pane's claude is also started with
+    --name "<label> / <role>" so the Claude app shows the same title
+    requires -H/--herdr on create; without it, ocw dies
+    ignored by ls/rm, like -H
+
 examples:
   ocw dataset-importer
   ocw --herdr optimize-generation
   ocw --herdr --no-commander optimize-generation
+  ocw --herdr --label "myrepo :: タイトル" optimize-generation
   ocw new --herdr caption-parser origin/main
   ocw rm dataset-importer
   ocw rm -f failed-experiment
@@ -318,7 +327,19 @@ renamed to match their role, and the tab is renamed "agents".
 
 workspace label: "<repo_name> :: <slug>" (':: ', not '/' -- the slug can
 itself contain '/', which would make the repo/slug boundary ambiguous
-with a plain '/' separator).
+with a plain '/' separator). `--label <text>` replaces it (requires -H,
+like --no-commander); renaming afterwards with `herdr workspace rename`
+still works.
+
+session name: when a pane's command is claude (first word, ignoring
+leading VAR=value words and any directory part), ocw appends
+--name "<label> / <role>" so the Claude app / Remote Control
+conversation title matches the Herdr label and panes of one workspace
+never share a name. <role> is 司令官 / 実装 / レビュー for commander /
+implementer / reviewer. Commands that are not claude (Codex, OpenCode,
+wrappers such as `env X=1 claude`) and claude commands that already
+carry --name / -n are left untouched. It is also the SendMessage
+address of that session.
 
 on any setup failure, ocw rolls back: closes the Herdr workspace (if one
 was created), force-removes the worktree, deletes the branch, and (if a
@@ -830,6 +851,54 @@ open_vscode() {
     warn "failed to open VS Code"
 }
 
+# Echo the command to run in a pane. When it is a claude command, append
+# --name "<label> / <role>" so the Claude app / Remote Control conversation
+# title (and the SendMessage address) matches the Herdr workspace label.
+# Anything else (Codex, OpenCode, `env X=1 claude`, ...) and claude commands
+# that already carry --name / -n come back unchanged.
+pane_command_with_name() {
+  local command_line="$1"
+  local session_name="$2"
+  local -a words=()
+  local word=""
+  local first=""
+
+  read -r -a words <<<"$command_line"
+
+  # bash 3.2 (macOS) treats expanding an empty array as unbound under set -u.
+  if [ "${#words[@]}" -eq 0 ]; then
+    printf '%s' "$command_line"
+    return 0
+  fi
+
+  for word in "${words[@]}"; do
+    case "$word" in
+      *=*) ;;
+      *)
+        first="${word##*/}"
+        break
+        ;;
+    esac
+  done
+
+  if [ "$first" != "claude" ]; then
+    printf '%s' "$command_line"
+    return 0
+  fi
+
+  for word in "${words[@]}"; do
+    case "$word" in
+      --name | --name=* | -n)
+        printf '%s' "$command_line"
+        return 0
+        ;;
+    esac
+  done
+
+  # Single-quote by hand: printf %q emits $'\ooo' escapes in the C locale.
+  printf "%s --name '%s'" "$command_line" "${session_name//\'/\'\\\'\'}"
+}
+
 setup_herdr_workspace() {
   local worktree_dir="$1"
   local workspace_label="$2"
@@ -975,20 +1044,20 @@ setup_herdr_workspace() {
   if [ "$no_commander" != "true" ]; then
     herdr pane run \
       "$HERDR_SETUP_COMMANDER_PANE_ID" \
-      "$COMMANDER_COMMAND" \
+      "$(pane_command_with_name "$COMMANDER_COMMAND" "${workspace_label} / 司令官")" \
       >/dev/null ||
       return 1
   fi
 
   herdr pane run \
     "$HERDR_SETUP_IMPLEMENTER_PANE_ID" \
-    "$IMPLEMENTER_COMMAND" \
+    "$(pane_command_with_name "$IMPLEMENTER_COMMAND" "${workspace_label} / 実装")" \
     >/dev/null ||
     return 1
 
   herdr pane run \
     "$HERDR_SETUP_REVIEWER_PANE_ID" \
-    "$REVIEWER_COMMAND" \
+    "$(pane_command_with_name "$REVIEWER_COMMAND" "${workspace_label} / レビュー")" \
     >/dev/null ||
     return 1
 
@@ -1049,6 +1118,12 @@ create_worktree() {
     die "--no-commander requires -H/--herdr"
   fi
 
+  # Same reasoning as --no-commander: a label only names the Herdr
+  # workspace and its panes' sessions, so outside -H it is a typo to report.
+  if [ -n "$WORKSPACE_LABEL_OVERRIDE" ] && [ "$USE_HERDR" != "true" ]; then
+    die "--label requires -H/--herdr"
+  fi
+
   if [ -z "$base_ref" ]; then
     base_ref="$(
       git -C "$repo_root" symbolic-ref refs/remotes/origin/HEAD 2>/dev/null |
@@ -1091,6 +1166,9 @@ create_worktree() {
   # a lone '/' as the repo/slug separator would be visually indistinguishable
   # from a '/' inside the slug (e.g. "myrepo / feature/foo").
   workspace_label="${repo_name} :: ${slug}"
+  if [ -n "$WORKSPACE_LABEL_OVERRIDE" ]; then
+    workspace_label="$WORKSPACE_LABEL_OVERRIDE"
+  fi
 
   echo "repo:        ${repo_name}"
   echo "main dir:    ${repo_root}"
@@ -1804,6 +1882,11 @@ while true; do
       NO_COMMANDER=true
       shift
       ;;
+    --label)
+      [ "$#" -ge 2 ] || die "--label requires a value"
+      WORKSPACE_LABEL_OVERRIDE="$2"
+      shift 2
+      ;;
     *)
       break
       ;;
@@ -1840,6 +1923,11 @@ case "$cmd" in
         --no-commander)
           NO_COMMANDER=true
           shift
+          ;;
+        --label)
+          [ "$#" -ge 2 ] || die "--label requires a value"
+          WORKSPACE_LABEL_OVERRIDE="$2"
+          shift 2
           ;;
         *)
           break
