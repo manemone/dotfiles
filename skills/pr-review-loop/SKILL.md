@@ -836,6 +836,17 @@ done
 抜けたあとの `STATUS` が `idle` / `done` でなければ（`unknown` のまま、または `blocked`）、
 Step 3 へ進まず `herdr pane read "$REVIEWER_PANE" --source detection --lines 10` で画面を確認する。
 
+**起動したあとは `$REVIEWER_AGENT` を読み直す。** Phase 0 の時点でエージェントがいなかった
+（`ocw -H` が作ったまま）と `$REVIEWER_AGENT` は空のままで、Step 3 と Phase 6 の
+`SendMessage` の条件（「`$REVIEWER_AGENT` が `claude`」）が成り立たず、毎ラウンド
+`herdr agent prompt` に落ちる。`ocw agent` / `herdr agent start` / `pane run` のどれで
+起動した場合も、起動待ちが終わったら Phase 0 と同じ手順で `agent` を取り直して更新する
+（Phase 6 の再依頼も Step 2 を通るので、ここに置けば両方に効く）:
+
+```bash
+herdr pane get "$REVIEWER_PANE" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['result']['pane'].get('agent') or '')"
+```
+
 ### Step 3: 依頼を送信
 
 レビュワーが `idle` または `done`（どちらも待機状態）であることを確認した上で、依頼を送信する。

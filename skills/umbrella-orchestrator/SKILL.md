@@ -346,6 +346,12 @@ gh pr view <PR番号> -R <owner/name> --json baseRefName,reviews,commits
       ps -eo args | grep "permission-mode"   # 起動したコマンドの実体を確認
       ```
 
+      `ps` で確かめられるのは、**spawn 時点で起動している implementer だけ**である。
+      孫の `ocw -H --no-commander` は reviewer のエージェントを起動しない（ADR
+      DOC-2610112129）ので、reviewer の行が出なくても失敗ではない。reviewer の
+      `OCW_REVIEWER_COMMAND` の効きは、作成時に残された起動行で確かめる:
+      `cat "$(git -C <孫のワークツリー> rev-parse --absolute-git-dir)/ocw-agent-reviewer"`
+
    **推奨フォーマット（これだけ送ればよい）**:
    ```
    herdr agent prompt <pane-id> "計画書 <計画書の絶対パス> の「## 孫N用プロンプト」セクションのコードブロック内の指示に従って実装してください。実装が完了したら計画書末尾の指示に従ってPR作成・レビューまで自律的に進めてください。reviewerはdone状態で完了し完了通知は来ないので、待機して停止せず gh pr view をポーリングしてレビューの有無を確認してください。マージを終えたら、計画書の指示のとおり司令官のペイン <司令官のペインID> へ完了を通知してください。" --wait --timeout 10000
