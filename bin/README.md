@@ -101,15 +101,18 @@ ocw rm -f my-feature  # 強制削除（マージ済み判定による拒否・�
 
 # worktree 一覧
 ocw ls
+
+# ラベルの接頭辞（git config ocw.labelPrefix。未設定ならリポ名）を1行で出力
+ocw label-prefix
 ```
 
-**コマンド構文・オプション一覧、および挙動の事実（`git config ocw.*` の4キー・プレースホルダ・
+**コマンド構文・オプション一覧、および挙動の事実（`git config ocw.*` の5キー・プレースホルダ・
 命名規則・`ocw rm` の解決規則とマージ済み判定・Herdr ペイン構成・環境変数・`ocw-meter`
 連携）は、すべて `ocw help` に一次情報源がある。** ここには再掲しない。
 
 ```bash
 ocw help         # コマンド構文（synopsis）+ topic 一覧
-ocw help config  # ワークツリーの作成先、git config ocw.* の4キー
+ocw help config  # ワークツリーの作成先、git config ocw.* の5キー
 ocw help naming  # 名前 → ブランチ名・ディレクトリ名の変換規則
 ocw help rm      # ocw rm の解決規則・マージ済み判定
 ocw help herdr   # -H / --no-commander / --label のペイン構成・グループ・会話名・ocw agent
