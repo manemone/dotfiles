@@ -1717,6 +1717,19 @@ class HerdrPaneModeTests(HerdrOcwTestCase):
     により解消されている。
     """
 
+    def agent_lines(self, name):
+        """作成時に残された各役割の起動行 (`ocw agent` が後で走らせるもの)。"""
+        git_dir = pathlib.Path(
+            _git(
+                ["rev-parse", "--absolute-git-dir"], self.repo_root.parent / name
+            ).stdout.strip()
+        )
+        return {
+            role: (git_dir / f"ocw-agent-{role}").read_text(encoding="utf-8").strip()
+            for role in ("commander", "implementer", "reviewer")
+            if (git_dir / f"ocw-agent-{role}").exists()
+        }
+
     def test_default_herdr_still_creates_three_panes_and_starts_commander(self):
         # 既定の `ocw -H` の3ペイン構成は本傘の前提条件そのものであり、無警告
         # で壊してはならない (計画書「検証方針」)。
@@ -1759,8 +1772,11 @@ class HerdrPaneModeTests(HerdrOcwTestCase):
         pane_rename_names = [c[3] for c in calls if c[:2] == ["pane", "rename"]]
         self.assertEqual(pane_rename_names, ["commander", "implementer", "reviewer"])
 
+        # ペインは3つとも作るが、エージェントを起動するのは司令官だけ
+        # (ADR DOC-2610112129)。
         pane_run_calls = [c for c in calls if c[:2] == ["pane", "run"]]
-        self.assertEqual(len(pane_run_calls), 3)
+        self.assertEqual(len(pane_run_calls), 1)
+        self.assertEqual(set(self.agent_lines("widget-maker")), {"commander", "implementer", "reviewer"})
 
         split_calls = [c for c in calls if c[:2] == ["pane", "split"]]
         self.assertEqual(len(split_calls), 2)
@@ -1777,13 +1793,18 @@ class HerdrPaneModeTests(HerdrOcwTestCase):
         create_call = next(c for c in calls if c[:2] == ["worktree", "open"])
         self.assertEqual(create_call[create_call.index("--label") + 1], label)
 
-        run_cmds = [c[3] for c in calls if c[:2] == ["pane", "run"]]
-        self.assertEqual(len(run_cmds), 3)
-        self.assertEqual(len(set(run_cmds)), 3)
-        for cmd, role in zip(run_cmds, ["司令官", "実装", "レビュー"]):
-            words = shlex.split(cmd.split("; ", 1)[-1])  # ルートの export を除く
+        # 起動行は3役割とも残り、名前が重ならない。即時に起動した司令官の
+        # 行は残した行と同じ。
+        lines = self.agent_lines("widget-maker")
+        self.assertEqual(len(set(lines.values())), 3)
+        for role, label_role in zip(
+            ["commander", "implementer", "reviewer"], ["司令官", "実装", "レビュー"]
+        ):
+            words = shlex.split(lines[role])
             self.assertEqual(words[0], "claude")
-            self.assertEqual(words[words.index("--name") + 1], f"{label} / {role}")
+            self.assertEqual(words[words.index("--name") + 1], f"{label} / {label_role}")
+        run_cmds = [c[3] for c in calls if c[:2] == ["pane", "run"]]
+        self.assertEqual(run_cmds[0].split("; ", 1)[-1], lines["commander"])
 
         # 指定なしは今までどおりのラベル、名前もそれに揃う。
         self.herdr_log.unlink()
@@ -1793,9 +1814,9 @@ class HerdrPaneModeTests(HerdrOcwTestCase):
         create_call = next(c for c in calls if c[:2] == ["worktree", "open"])
         default_label = create_call[create_call.index("--label") + 1]
         self.assertTrue(default_label.endswith(" :: gadget-maker"))
-        run_cmds = [c[3] for c in calls if c[:2] == ["pane", "run"]]
+        lines = self.agent_lines("gadget-maker")
         self.assertEqual(
-            [shlex.split(c)[-1] for c in run_cmds],
+            [shlex.split(lines[r])[-1] for r in ("implementer", "reviewer")],
             [f"{default_label} / 実装", f"{default_label} / レビュー"],
         )
 
@@ -1812,16 +1833,18 @@ class HerdrPaneModeTests(HerdrOcwTestCase):
             },
         )
         self.assertEqual(result.returncode, 0, result.stderr)
+        lines = self.agent_lines("widget-maker")
         run_cmds = [c[3] for c in self.herdr_calls() if c[:2] == ["pane", "run"]]
-        # ルートペイン (司令官) だけ環境変数の前置が付く。名前の規則は不変。
+        # 即時に起動するのは司令官だけ。ルートペインなので環境変数の前置が付く。
         self.assertRegex(
             run_cmds[0], r"^export OCW_ROLE=commander OCW_RUN_ID=\S+; codex --model x$"
         )
+        self.assertEqual(lines["commander"], "codex --model x")
         self.assertEqual(
-            shlex.split(run_cmds[1]),
+            shlex.split(lines["implementer"]),
             ["FOO=1", "/usr/bin/claude", "--permission-mode", "auto", "--name", "L / 実装"],
         )
-        self.assertEqual(run_cmds[2], "claude --name mine")
+        self.assertEqual(lines["reviewer"], "claude --name mine")
 
         self.herdr_log.unlink()
         result = self.run_herdr_ocw(
@@ -1833,6 +1856,49 @@ class HerdrPaneModeTests(HerdrOcwTestCase):
         self.assertRegex(
             run_cmds[0], r"^export OCW_ROLE=implementer OCW_RUN_ID=\S+; env X=1 claude$"
         )
+
+    def test_agent_subcommand_starts_stored_line_with_role_and_run_id(self):
+        # 後から起動したエージェントが、即時起動と同じ会話の名前・OCW_*_COMMAND
+        # の上書き・OCW_ROLE / OCW_RUN_ID を受け取る (名前が落ちると孫2 の成果が
+        # 消え、上書きが効かないと人間の設定を壊すため固定する)。
+        bin_dir = pathlib.Path(self.tmpdir.name) / "fake-claude"
+        bin_dir.mkdir()
+        fake = bin_dir / "claude"
+        fake.write_text(
+            '#!/bin/sh\nprintf \'%s|%s|%s|\' "$OCW_ROLE" "$OCW_RUN_ID" "$FOO"\n'
+            'for a in "$@"; do printf \'[%s]\' "$a"; done\n',
+            encoding="utf-8",
+        )
+        fake.chmod(0o755)
+        result = self.run_herdr_ocw(
+            ["-H", "--label", "L x", "widget-maker"],
+            extra_env={"OCW_REVIEWER_COMMAND": "FOO=1 claude --permission-mode auto"},
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        run_id = extract_run_id(result.stdout)
+        worktree = self.repo_root.parent / "widget-maker"
+
+        # 環境変数 OCW_ROLE (ペインのシェルが持つ) から役割を引く。
+        out = run_ocw(
+            ["agent"],
+            worktree,
+            extra_env={"OCW_ROLE": "reviewer"},
+            path_prepend=[str(bin_dir)],
+        )
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertEqual(
+            out.stdout,
+            f"reviewer|{run_id}|1|[--permission-mode][auto][--name][L x / レビュー]",
+        )
+
+        # 役割の明示指定。OCW_ROLE が無くても run id は作成時のものを使う。
+        out = run_ocw(["agent", "implementer"], worktree, path_prepend=[str(bin_dir)])
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertEqual(out.stdout, f"implementer|{run_id}||[--name][L x / 実装]")
+
+        # 起動行が無い役割・役割不明は黙らず落ちる。
+        self.assertNotEqual(run_ocw(["agent", "bogus"], worktree).returncode, 0)
+        self.assertNotEqual(run_ocw(["agent", "reviewer"], self.repo_root).returncode, 0)
 
     def test_no_commander_creates_two_panes_with_implementer_as_root(self):
         result = self.run_herdr_ocw(
@@ -1864,8 +1930,10 @@ class HerdrPaneModeTests(HerdrOcwTestCase):
 
         # The commander launch command itself is never invoked: it never
         # appears in any pane run call, nor anywhere else in the log.
+        # Only the implementer starts now; the reviewer waits for `ocw agent`.
         pane_run_calls = [c for c in calls if c[:2] == ["pane", "run"]]
-        self.assertEqual(len(pane_run_calls), 2)
+        self.assertEqual(len(pane_run_calls), 1)
+        self.assertEqual(set(self.agent_lines("widget-maker")), {"implementer", "reviewer"})
         for call in calls:
             self.assertNotIn("commander-should-never-run", call)
 

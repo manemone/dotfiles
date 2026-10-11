@@ -169,6 +169,10 @@ commander には**絶対パス**で渡す（§6）。**commander が計画書へ
    ocw -H --label "<repo_name> :: <傘の日本語要約>" <傘ブランチ名> <ターゲットブランチ>
    ```
 
+   エージェントが起動するのは commander だけで、implementer / reviewer のペインはシェルの
+   まま（最終 PR の `/finalize` で司令官が `ocw agent` で起動する。agents の欄を混雑させない
+   ため）。引き継ぎの送信先は commander なので、この手順は変わらない。
+
    ラベルを先に渡すのは、ペインの claude がこのラベルから作った会話名
    （`<ラベル> / 司令官` など）で起動し、Claude アプリの会話タイトルと `SendMessage` の宛先名が
    Herdr のラベルと揃うため。起動後に `herdr workspace rename` で改名しても、会話名は

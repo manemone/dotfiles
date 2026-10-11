@@ -198,7 +198,9 @@ ocw -H --no-commander --label "<repo_name> :: <日本語の説明>" <ブラン�
 - `git fetch origin` は作業ツリーを触らない（`origin/*` を更新するだけ）ので、人間の
   メインワークツリーで叩いてよい。**`git checkout` / `git merge` / `git pull` は叩かない**
 - `--no-commander` を付けて2ペイン（implementer / reviewer）にする。1本規模に司令官は
-  要らない
+  要らない。エージェントが起動するのは implementer だけで、reviewer のペインはシェルのまま
+  （`pr-review-loop` がレビューを頼むときに `ocw agent` で起動する。agents の欄を混雑させない
+  ため）。ブリーフの送信先は implementer なので、この手順は変わらない
 - base-ref（`origin/<既定ブランチ>`）は省略しない。既定ブランチは対象リポで
   `gh repo view --json defaultBranchRef -q .defaultBranchRef.name` で確かめる
 - ブランチ名は対象リポの規約に従う（例: 分析リポの単発分析なら
