@@ -173,7 +173,7 @@ scratchpad にも置かない（実装AIは別のセッションで動くため�
 dirname "$(git worktree list --porcelain | sed -n '1s/^worktree //p')"
 ```
 
-### 5.2 ワークスペースを作る
+### 5.2 日本語ラベル付きでワークスペースを作る
 
 対象リポの**メインワークツリーに `cd` して**次を叩く（`ocw` は対象リポをカレント
 ディレクトリから解決する。相談の会話が別のリポにいるまま叩くと、別のリポに
@@ -182,9 +182,14 @@ dirname "$(git worktree list --porcelain | sed -n '1s/^worktree //p')"
 ```bash
 cd <対象リポのメインワークツリーの絶対パス>
 git fetch origin
-ocw -H --no-commander <ブランチ名> origin/<既定ブランチ>
+ocw -H --no-commander --label "<repo_name> :: <日本語の説明>" <ブランチ名> origin/<既定ブランチ>
 ```
 
+- **ラベルは作成時に `--label` で渡す**（書式は `umbrella-orchestrator` §5「ワークスペース
+  ラベル」。説明は全角16文字以内を目安に、ブリーフのテーマから起こす）。ペインの claude が
+  このラベルから作った会話名（`<ラベル> / 実装` など）で起動し、Claude アプリの会話タイトルと
+  `SendMessage` の宛先名が Herdr のラベルと揃う。作成後の `herdr workspace rename` では
+  会話名は変わらない
 - **`git fetch origin` を省かない。** `ocw` は自分では fetch しないので、省くと
   `origin/<既定ブランチ>` はメインワークツリーで最後に fetch したときのまま使われる。
   メインワークツリーは人間が普段使う作業場所で、何日も fetch されていないことがある。
@@ -213,22 +218,9 @@ reviewer:    w0:p2
 `ocw <ブランチ名> origin/<既定ブランチ>` でワークツリーだけを作り
 （`git worktree add` を直書きしない。`ocw.worktreeDir` の設定を迂回するため）、人間に
 「新しい会話でこのワークツリーを開き、ブリーフ `<ブリーフの絶対パス>` を読んで
-実装するよう指示してください」と案内して終える。§5.3・§5.4 は Herdr がある場合のみ。
+実装するよう指示してください」と案内して終える。§5.3 は Herdr がある場合のみ。
 
-### 5.3 日本語ラベルへ改名する
-
-出力の `workspace:` の ID を、`umbrella-orchestrator` §5「ワークスペースラベル」の
-書式（`<repo_name> :: <日本語の説明>`）で改名する。説明は全角16文字以内を目安に、
-ブリーフのテーマから起こす。
-
-```bash
-herdr workspace rename <workspace_id> "<repo_name> :: <日本語の説明>"
-```
-
-**rename が失敗しても警告のみで続行する**（表示上の都合であり、引き継ぎを止める
-理由にならない）。
-
-### 5.4 implementer へ送る
+### 5.3 implementer へ送る
 
 送信手順・到達確認は `umbrella-orchestrator` §5「AI間送信手順（二段構え）」に従う。
 正典はそちらにあり、このスキルは参照するだけで全文をコピーしない。宛先は §5.2 の
@@ -242,7 +234,7 @@ herdr workspace rename <workspace_id> "<repo_name> :: <日本語の説明>"
 ブリーフ <ブリーフの絶対パス> を読んで実装してください。PR 作成後は /pr-review-loop を回してください。マージは人間が行います。
 ```
 
-### 5.5 手を引く
+### 5.4 手を引く
 
 到達を確認できたら、相談AIはここで手を引く。人間には「`<repo_name>` の
 `<ブランチ名>` へ引き継ぎました（ブリーフ: `<ブリーフの絶対パス>`）」とだけ報告する。
