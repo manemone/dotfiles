@@ -140,7 +140,7 @@ for details. `bin/` changes should additionally be verified with
 ├── shared/
 │   └── helpers.sh             # Shared shell functions (logging, symlinks, platform detection)
 ├── bin/
-│   ├── ocw                    # Git worktree manager with Herdr integration
+│   ├── ocw                    # Git worktree manager with Herdr integration (workspace joins the repo's worktree group; --label also names the panes' Claude sessions)
 │   ├── claude-ds              # Claude Code via DeepSeek API wrapper
 │   ├── ocw-meter              # LLM cost / Claude quota observability (report auto-ingests; prune-diagnostics writes)
 │   ├── persona                # Edit CLAUDE.machine.md + regenerate Codex's AGENTS.md (single entry point)
