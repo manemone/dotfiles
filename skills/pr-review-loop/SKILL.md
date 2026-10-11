@@ -710,9 +710,11 @@ herdr pane read "$REVIEWER_PANE" --source detection --lines 3
   → 起動済み。`herdr pane send-keys "$REVIEWER_PANE" Enter` で確定させ、`idle` または `done`
   になってから Step 3 へ。
 - **シェルプロンプト**（`$` や `❯` で終わる行だけがあり、エージェントの応答が無い）
-  → エージェントは終了している。下記「起動コマンドの決定」に従って起動し直す
-  （主経路の `herdr agent start` は入力可能になってから戻る。`pane run` に落ちたときは
-  同じ節の起動待ちが要る）。
+  → エージェントはいない（終了したのか、`ocw -H` が作ったまま一度も起動していないのかは
+  区別しなくてよい。どちらも「シェルだけのペイン」で、起動してよいという結論が同じ）。
+  下記「`ocw agent` での起動」を先に試し、使えなければ「起動コマンドの決定」に従って
+  起動し直す（主経路の `herdr agent start` は入力可能になってから戻る。`pane run` に
+  落ちたときは同じ節の起動待ちが要る）。
 - **エージェントの応答が表示されている**（直近の行がエージェントの出力）→ 実は起動中。
   `herdr pane get` を再実行して状態を再確認。
 
@@ -721,6 +723,28 @@ herdr pane read "$REVIEWER_PANE" --source detection --lines 3
 | エージェント | 確定待ちの表示例 | 応答中の表示例 |
 |---|---|---|
 | Claude Code | `-- INSERT --`, `accept edits on`, `← for agents` | `●` や `✻` で始まる行 |
+
+**`ocw agent` での起動（`ocw -H` で作ったワークスペースの reviewer ペイン）:**
+
+`ocw -H` は reviewer のエージェントを起動せずペインだけ作る（agents の欄を混雑させないため。
+ADR DOC-2610112129）。作成時に reviewer の起動行（会話の名前 `--name '<ラベル> / レビュー'` と
+`OCW_REVIEWER_COMMAND` の上書き込み）が git dir に残っているので、`ocw agent` を打てば
+即時起動と同じエージェントが立つ。**ペインが上の判定でシェルだけと確かめられたときに限る**
+（エージェントが動いているペインに打つと、その文字列が依頼として届く）。使えるのは、`ocw` が
+PATH にあり、かつ起動行が残っているときだけ:
+
+```bash
+command -v ocw >/dev/null && test -f "$(git rev-parse --absolute-git-dir)/ocw-agent-reviewer" && echo OK
+```
+
+`OK` のとき、次で起動し、下記「`pane run` での起動（フォールバック）」と同じ起動待ち
+（`agent_status` が `idle` / `done` / `blocked` になるまで最大30秒）をする。
+`OK` が出ない（`ocw` が無い環境・他人のリポ・Codex 等・`ocw agent` ができる前に作った
+ワークスペース）ときは使わず、そのまま下の「起動コマンドの決定」へ進む。
+
+```bash
+herdr pane run "$REVIEWER_PANE" "ocw agent reviewer"
+```
 
 **起動コマンドの決定:**
 
@@ -811,6 +835,17 @@ done
 
 抜けたあとの `STATUS` が `idle` / `done` でなければ（`unknown` のまま、または `blocked`）、
 Step 3 へ進まず `herdr pane read "$REVIEWER_PANE" --source detection --lines 10` で画面を確認する。
+
+**起動したあとは `$REVIEWER_AGENT` を読み直す。** Phase 0 の時点でエージェントがいなかった
+（`ocw -H` が作ったまま）と `$REVIEWER_AGENT` は空のままで、Step 3 と Phase 6 の
+`SendMessage` の条件（「`$REVIEWER_AGENT` が `claude`」）が成り立たず、毎ラウンド
+`herdr agent prompt` に落ちる。`ocw agent` / `herdr agent start` / `pane run` のどれで
+起動した場合も、起動待ちが終わったら Phase 0 と同じ手順で `agent` を取り直して更新する
+（Phase 6 の再依頼も Step 2 を通るので、ここに置けば両方に効く）:
+
+```bash
+herdr pane get "$REVIEWER_PANE" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['result']['pane'].get('agent') or '')"
+```
 
 ### Step 3: 依頼を送信
 

@@ -346,6 +346,12 @@ gh pr view <PR番号> -R <owner/name> --json baseRefName,reviews,commits
       ps -eo args | grep "permission-mode"   # 起動したコマンドの実体を確認
       ```
 
+      `ps` で確かめられるのは、**spawn 時点で起動している implementer だけ**である。
+      孫の `ocw -H --no-commander` は reviewer のエージェントを起動しない（ADR
+      DOC-2610112129）ので、reviewer の行が出なくても失敗ではない。reviewer の
+      `OCW_REVIEWER_COMMAND` の効きは、作成時に残された起動行で確かめる:
+      `cat "$(git -C <孫のワークツリー> rev-parse --absolute-git-dir)/ocw-agent-reviewer"`
+
    **推奨フォーマット（これだけ送ればよい）**:
    ```
    herdr agent prompt <pane-id> "計画書 <計画書の絶対パス> の「## 孫N用プロンプト」セクションのコードブロック内の指示に従って実装してください。実装が完了したら計画書末尾の指示に従ってPR作成・レビューまで自律的に進めてください。reviewerはdone状態で完了し完了通知は来ないので、待機して停止せず gh pr view をポーリングしてレビューの有無を確認してください。マージを終えたら、計画書の指示のとおり司令官のペイン <司令官のペインID> へ完了を通知してください。" --wait --timeout 10000
@@ -709,9 +715,22 @@ gh pr view <PR番号> -R <owner/name> --json baseRefName,reviews,commits
    ```
    - commander（司令官自身）、implementer、reviewer の3ペーンが揃っていることを確認
    - 足りなければ `herdr pane split` で追加
+   - **implementer / reviewer にエージェントがいなければ起動する。** `ocw -H` は agents の欄を
+     混雑させないため commander だけを起動し、この2ペインはシェルのままである（ADR
+     DOC-2610112129）。各ペインを `herdr pane get <pane>` で見て、`agent_status` が `unknown` で
+     `herdr pane read <pane> --source detection --lines 3` がシェルプロンプトだけなら、次で
+     起動して `agent_status` が `idle` になるまで待つ（最大30秒。会話の名前と `OCW_*_COMMAND` は
+     作成時のものが付く）。`ocw agent` が使えない（`ocw` が無い・起動行が無い古いワークスペース）
+     ときは、`herdr agent start <NAME> --kind claude --pane <pane>` で起動する。
+     エージェントが動いているペインには打たない（文字列がそのまま依頼として届く）
+     ```bash
+     herdr pane run <impl-pane-id> "ocw agent implementer"
+     herdr pane run <reviewer-pane-id> "ocw agent reviewer"
+     ```
 
 3. **implementer に最終PR作成プロンプトを送信**
    - implementer が `idle` または `done`（どちらも待機状態）であることを確認
+     （手順2で起動したばかりなら `idle`）
    - **送信は §5「AI間送信手順（二段構え）」に従う**（自分が `SendMessage` を呼べる
      Claude Code セッションで、かつ implementer の `agent` が `"claude"` で
      `agent_session.value` から `~/.claude/sessions/` を引ければ `SendMessage`、
@@ -841,7 +860,8 @@ main へのマージは人間が手動で行う。
         登録時に置換した <司令官のworkspace_id> を使う。cron 本文は司令官のシェルの環境変数を
         引き継がない場合があるため、置換済みの値が空なら §5 の cwd 突き合わせへ落ちる:
         herdr pane list | python3 -c "import sys,json,os; my_cwd=os.getcwd(); ids={p['workspace_id'] for p in json.load(sys.stdin)['result']['panes'] if p.get('cwd')==my_cwd}; [print(i) for i in sorted(ids)]"
-      そのworkspaceのimplementerに送信:
+      そのworkspaceのimplementer / reviewer にエージェントがいなければ §3.4 手順2 の
+        とおり `ocw agent` で起動してから、implementerに送信:
         送信は §5「AI間送信手順（二段構え）」に従う（フォールバックは
         herdr agent prompt <impl-pane-id> "最終PRを作成。base:main head:<傘ブランチ>。pr-review-loop起動。reviewerは<同workspaceのreviewer>。mainマージは人間手動。計画書 <計画書の絶対パス> 参照。" --wait --timeout 10000）
         このimplementerは以前に作業を終えている可能性があり、フォーカスされて
@@ -1165,8 +1185,8 @@ herdr agent prompt <pane-id> "<本文>" --wait --timeout 10000
 ```
 傘ブランチのワークスペース（司令官が常駐。3ペイン）
   ├─ commander ← 司令官自身
-  ├─ implementer ← /finalize で使う
-  └─ reviewer ← /finalize で使う
+  ├─ implementer ← /finalize で使う（それまでシェルだけ。/finalize で起動）
+  └─ reviewer ← /finalize で使う（同上）
 
 孫ワークスペース（ocw -H --no-commander で孫ごとに作成される別workspace。2ペイン）
   ├─ w2H: 孫1のworkspace（implementer / reviewer）
@@ -1263,10 +1283,12 @@ git worktree 作成（<孫ブランチ名> がそのままブランチ名にな�
   → 2ペーン構成（commander は作らない）:
      ┌──────────────┬──────────┐
      │ implementer  │ reviewer │
-     │ claude       │ claude   │
+     │ claude       │ （シェル）│
      │ 実装+PR      │ レビュー │
      └──────────────┴──────────┘
-  → 全ペーンでエージェント起動済み
+  → エージェントを起動するのは implementer だけ（reviewer のペインは作るがシェルのまま。
+    pr-review-loop がレビューを頼むときに `ocw agent` で起動する。agents の欄を混雑させない
+    ため。ADR DOC-2610112129）
   → 標準出力に pane ID が出力される（`commander:` 行は出ない）
 ```
 
@@ -1283,7 +1305,7 @@ reviewer:    w1:p2
 ```
      ┌────────────┬─────────────┬────────────┐
      │ commander  │ implementer │ reviewer   │
-     │ claude     │ claude      │ claude     │
+     │ claude     │ （シェル）  │ （シェル） │
      │ 司令官自身 │ finalize用  │ finalize用 │
      └────────────┴─────────────┴────────────┘
 ```
@@ -1295,6 +1317,11 @@ commander:   w0:p1
 implementer: w0:p2
 reviewer:    w0:p3
 ```
+
+**ペインは全部作るが、エージェントを起動するのは今すぐ使うペインだけ**（既定は commander、
+`--no-commander` は implementer）。残りは、使うときにそのペインで `ocw agent`
+（`herdr pane run <pane> "ocw agent"`）を打つ。起動行（会話の名前・`OCW_*_COMMAND`）は作成時に
+git dir へ残してあるので、後から起動しても即時起動と同じになる。
 
 各ペーンの既定の起動コマンドは `claude`（`bin/ocw` の `OCW_COMMANDER_COMMAND` /
 `OCW_IMPLEMENTER_COMMAND` / `OCW_REVIEWER_COMMAND` で個別に上書き可能。§3.2 注意点4。

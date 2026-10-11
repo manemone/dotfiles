@@ -80,11 +80,14 @@ ocw my-feature
 # スラッシュ入りの名前（ブランチ名の名前空間をそのまま使える）
 ocw feature/foo
 
-# Herdr 連携（commander/implementer/reviewer の3ペイン）
+# Herdr 連携（commander/implementer/reviewer の3ペイン。エージェントは commander だけ起動）
 ocw --herdr my-feature
 
-# Herdr 連携（commander を省いた implementer/reviewer の2ペイン）
+# Herdr 連携（commander を省いた implementer/reviewer の2ペイン。エージェントは implementer だけ起動）
 ocw --herdr --no-commander my-feature
+
+# 起動していないペインのエージェントを後から起動する（そのペインのシェルで）
+ocw agent reviewer
 
 # Herdr のワークスペースラベルを指定（ペインの claude の会話名にも使われる）
 ocw --herdr --label "myrepo :: タイトル" my-feature
@@ -109,7 +112,7 @@ ocw help         # コマンド構文（synopsis）+ topic 一覧
 ocw help config  # ワークツリーの作成先、git config ocw.* の4キー
 ocw help naming  # 名前 → ブランチ名・ディレクトリ名の変換規則
 ocw help rm      # ocw rm の解決規則・マージ済み判定
-ocw help herdr   # -H / --no-commander / --label のペイン構成・グループ・会話名
+ocw help herdr   # -H / --no-commander / --label のペイン構成・グループ・会話名・ocw agent
 ocw help meter   # ocw-meter 連携（run_id）
 ocw help env     # 環境変数
 ocw help all     # 全 topic を連結
@@ -123,7 +126,9 @@ ocw help all     # 全 topic を連結
 乗せた方式と実測は ADR
 [DOC-2610111932](../docs/adr/DOC-2610111932_herdr-worktree-group.md)、`--label` と
 ペインの claude の会話名（`<ラベル> / <役割>`）の設計は ADR
-[DOC-2610111939](../docs/adr/DOC-2610111939_ocw-session-name.md) を参照。
+[DOC-2610111939](../docs/adr/DOC-2610111939_ocw-session-name.md)、エージェントを
+要るペインだけ起動して残りを `ocw agent` で後から起動する方式は ADR
+[DOC-2610112129](../docs/adr/DOC-2610112129_ocw-lazy-agents.md) を参照。
 `--no-commander` の設計判断は計画書
 [DOC-2609031400](../docs/planning/DOC-2609031400_ocw-pane-roles-and-workspace-labels_計画.md)、
 `ocw help` のtopic階層化とこの整理そのものの設計判断は計画書
