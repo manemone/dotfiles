@@ -23,6 +23,7 @@
 | なぜ repo-baseline に Ruby の既定（RSpec・厳しめの RuboCop）を持たせたかを知る | [adr/DOC-2610110216_ruby-defaults-in-repo-baseline.md](adr/DOC-2610110216_ruby-defaults-in-repo-baseline.md) | Ruby のときだけ生成する質問の形（`language`）・`.rubocop.yml` を自己完結で持つ理由と写さなかったもの・`TargetRubyVersion` を `.ruby-version` から推定させる決定・lint/test フックの `files:`・既存ファイルを上書きしない扱い・道具のテストを minitest のままにする理由と、却下した案 |
 | repo-baseline で `copier update` を使えるようにした理由と、旧形で撒いたリポジトリの移行（橋渡しのコミット）を知る | [adr/DOC-2610110435_copier-root-entry.md](adr/DOC-2610110435_copier-root-entry.md) | ルートの `copier.yml` + `_subdirectory`・撒く元の推奨・`_src_path` を伏せない理由・タグの扱い・確かめた結果 |
 | `ocw -H` のワークスペースを Herdr のワークツリーグループに乗せる方式と、傘単位にまとめられない理由を知る | [adr/DOC-2610111932_herdr-worktree-group.md](adr/DOC-2610111932_herdr-worktree-group.md) | 使い捨ての別セッションでの実測（リンク済みワークツリーは親になれない・並びは作成順・`worktree remove` はチェックアウトを消す等）・方式 A〜D の比較・推奨と未確認の点 |
+| `ocw -H` で起動する claude の会話タイトルを herdr のラベルと揃えた理由と名前の形を知る | [adr/DOC-2610111939_ocw-session-name.md](adr/DOC-2610111939_ocw-session-name.md) | `--label`・`"<ラベル> / <役割>"` の名前・claude のときだけ足す判定・日本語名での `SendMessage` と宛先解決の実測・却下した案 |
 | 旧形で撒いたリポジトリ（modeldex・pixidex・sheaf）を `copier update` できる形へ移す | [reference/DOC-2610110507_repo-baseline旧形からの移行手順.md](reference/DOC-2610110507_repo-baseline旧形からの移行手順.md) | 橋渡しのコミットの手順・リポジトリごとの撒いた版と `language` の答え方・衝突しやすいファイル・namecheck |
 | なぜ他人の PR 群のレビューと自分の PR 群のレビュー依頼を今のスキル構成にしたかを知る | [adr/DOC-2609270420_multi-repo-pr-review-skills.md](adr/DOC-2609270420_multi-repo-pr-review-skills.md) | `pr-group-review`（レビュワー用）と `pr-group-request`（依頼者用）の線引き・レビュー状態の置き場所・自己完結 HTML のまとめ・COMMENT のみの投稿と権限に止められたときの振る舞いの決定と、却下した案 |
 | なぜ複数リポにまたがる作業の入口と傘の進め方を今の形にしたかを知る | [adr/DOC-2610081412_cross-repo-task-intake.md](adr/DOC-2610081412_cross-repo-task-intake.md) | 入口スキル `task-intake` の判断の3軸と振り分け・司令官の置き場・リポ間の役割分担・軽いハンドオフ・複数リポの傘（他リポの孫は既定ブランチへ PR しマージは人間）の決定と、却下した案 |
@@ -80,6 +81,7 @@
 | DOC-2610110216 | [ruby-defaults-in-repo-baseline.md](adr/DOC-2610110216_ruby-defaults-in-repo-baseline.md) | repo-baseline テンプレートに Ruby のリポジトリ向けの既定（RSpec・厳しめの RuboCop）を持たせた決定。質問 `language`・`.rubocop.yml` の自己完結・`TargetRubyVersion` の推定・フックの `files:`・`_skip_if_exists`・道具のテストを minitest のままにする理由と、却下した案を記録 |
 | DOC-2610110435 | [copier-root-entry.md](adr/DOC-2610110435_copier-root-entry.md) | repo-baseline の `copier.yml` をリポジトリのルートに置き `copier update` を使えるようにした決定。撒く元の推奨・`_src_path` を伏せない・旧形からの移行（橋渡しのコミット）を記録 |
 | DOC-2610111932 | [herdr-worktree-group.md](adr/DOC-2610111932_herdr-worktree-group.md) | `ocw -H` のワークスペースを Herdr のワークツリーグループに乗せる方式の提案。別セッションでの実測に基づき、傘単位（孫を傘の子にする）は Herdr の仕様上できないこと、リポ単位のグループ＋ラベルの工夫を推奨すること、環境変数・片付け・移行の扱いをまとめた（状態: 提案） |
+| DOC-2610111939 | [ocw-session-name.md](adr/DOC-2610111939_ocw-session-name.md) | `ocw -H` が各ペインの claude を `--name "<ラベル> / <役割>"` で起動し Claude アプリの会話タイトルを herdr のラベルに揃えた決定。実測（日本語名の `SendMessage`・宛先解決）と却下した案を記録 |
 
 ### planning/ — ロードマップ・計画
 

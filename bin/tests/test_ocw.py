@@ -1730,6 +1730,70 @@ class HerdrPaneModeTests(HerdrOcwTestCase):
         split_calls = [c for c in calls if c[:2] == ["pane", "split"]]
         self.assertEqual(len(split_calls), 2)
 
+    def test_label_names_workspace_and_each_claude_pane_uniquely(self):
+        # 会話タイトル (Claude アプリ) を Herdr のラベルと揃える: ラベルは
+        # workspace create の --label と各 claude の --name の両方に使われ、
+        # 同じワークスペースのペイン同士で名前が重ならない。
+        label = "my repo :: 日本語 'x' / y"
+        result = self.run_herdr_ocw(["-H", "--label", label, "widget-maker"])
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+        calls = self.herdr_calls()
+        create_call = next(c for c in calls if c[:2] == ["workspace", "create"])
+        self.assertEqual(create_call[create_call.index("--label") + 1], label)
+
+        run_cmds = [c[3] for c in calls if c[:2] == ["pane", "run"]]
+        self.assertEqual(len(run_cmds), 3)
+        self.assertEqual(len(set(run_cmds)), 3)
+        for cmd, role in zip(run_cmds, ["司令官", "実装", "レビュー"]):
+            words = shlex.split(cmd)
+            self.assertEqual(words[0], "claude")
+            self.assertEqual(words[words.index("--name") + 1], f"{label} / {role}")
+
+        # 指定なしは今までどおりのラベル、名前もそれに揃う。
+        self.herdr_log.unlink()
+        result = self.run_herdr_ocw(["-H", "--no-commander", "gadget-maker"])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        calls = self.herdr_calls()
+        create_call = next(c for c in calls if c[:2] == ["workspace", "create"])
+        default_label = create_call[create_call.index("--label") + 1]
+        self.assertTrue(default_label.endswith(" :: gadget-maker"))
+        run_cmds = [c[3] for c in calls if c[:2] == ["pane", "run"]]
+        self.assertEqual(
+            [shlex.split(c)[-1] for c in run_cmds],
+            [f"{default_label} / 実装", f"{default_label} / レビュー"],
+        )
+
+    def test_name_is_added_only_to_plain_claude_commands(self):
+        # 人間の OCW_*_COMMAND の上書きを壊さない: claude 以外 (Codex 等・
+        # `env X=1 claude` のようなラッパー) は一切変えず、claude の追加引数や
+        # パス付き・既に --name 付きのコマンドは壊さない。
+        result = self.run_herdr_ocw(
+            ["-H", "--label", "L", "widget-maker"],
+            extra_env={
+                "OCW_COMMANDER_COMMAND": "codex --model x",
+                "OCW_IMPLEMENTER_COMMAND": "FOO=1 /usr/bin/claude --permission-mode auto",
+                "OCW_REVIEWER_COMMAND": "claude --name mine",
+            },
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        run_cmds = [c[3] for c in self.herdr_calls() if c[:2] == ["pane", "run"]]
+        self.assertEqual(run_cmds[0], "codex --model x")
+        self.assertEqual(
+            shlex.split(run_cmds[1]),
+            ["FOO=1", "/usr/bin/claude", "--permission-mode", "auto", "--name", "L / 実装"],
+        )
+        self.assertEqual(run_cmds[2], "claude --name mine")
+
+        self.herdr_log.unlink()
+        result = self.run_herdr_ocw(
+            ["-H", "--no-commander", "gadget-maker"],
+            extra_env={"OCW_IMPLEMENTER_COMMAND": "env X=1 claude"},
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        run_cmds = [c[3] for c in self.herdr_calls() if c[:2] == ["pane", "run"]]
+        self.assertEqual(run_cmds[0], "env X=1 claude")
+
     def test_no_commander_creates_two_panes_with_implementer_as_root(self):
         result = self.run_herdr_ocw(
             ["-H", "--no-commander", "widget-maker"],
@@ -1791,6 +1855,12 @@ class NoCommanderRequiresHerdrTests(OcwTestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("--no-commander", result.stderr)
         self.assertIn("-H", result.stderr)
+        self.assertFalse((self.repo_root.parent / "widget-maker").exists())
+
+    def test_label_without_herdr_dies_with_a_clear_message(self):
+        result = run_ocw(["--label", "x", "widget-maker"], self.repo_root)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("--label", result.stderr)
         self.assertFalse((self.repo_root.parent / "widget-maker").exists())
 
     def test_no_commander_without_herdr_on_ls_is_silently_ignored(self):
