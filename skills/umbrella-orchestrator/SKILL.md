@@ -1194,8 +1194,9 @@ herdr agent prompt <pane-id> "<本文>" --wait --timeout 10000
   自動では入らない）。`ocw rm` で閉じれば消えるので放置してよい
 
 - **司令官は常に傘ブランチのworkspaceにいる。** 孫workspaceではない。
-- **傘（司令官）ワークスペースは人間が素の `ocw -H`（3ペイン、`--no-commander` を付けない）
-  で作る。** 司令官は起動後、自分の workspace を見つけて（後述）日本語ラベルへ改名する
+- **傘（司令官）ワークスペースは `umbrella-handoff` が `--label` 付きの `ocw -H`
+  （3ペイン、`--no-commander` を付けない）で作る。** 人間が素の `ocw -H` で立てた場合だけ、
+  司令官が起動後、自分の workspace を見つけて（後述）日本語ラベルへ改名する
   （§5「ワークスペースラベル」参照）
 - **`/spawn`**: `ocw -H --no-commander` が孫workspaceを**新規作成**し、そこの
   implementerに実装させる。commander ペインは作らない（誰も使わないため）
@@ -1344,7 +1345,7 @@ ocw -H --no-commander --label "<repo_name> :: <傘の日本語要約> 孫N <孫�
 **孫**: §3.2 の `ocw -H --no-commander --label "…"` に、**叩く前に**用意したラベルを渡す。
 作成後の rename は要らない。
 
-**傘（司令官スペース）**: 傘のワークスペースを立てる側（`umbrella-handoff` / `task-intake`）が
+**傘（司令官スペース）**: 傘のワークスペースを立てる `umbrella-handoff` が
 `--label` 付きで作るので、通常は何もしない。人間が素の `ocw -H` で立てた場合だけ、
 ワークスペースのラベルが既定形のままになっているので、司令官が起動後に改名する
 （この場合、会話名は自動の名前のままで、変えるなら人間が `/rename` する）:

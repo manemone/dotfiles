@@ -1,6 +1,6 @@
 ---
 name: umbrella-handoff
-description: "相談で問題意識が固まった直後から、傘ブランチの司令官が計画書を書き始める直前までを自動化する。ブリーフ起草・傘ブランチ作成・ocw -H での司令官ワークスペース起動・日本語ラベル改名・commander への引き継ぎ・到達確認を行い、そこで手を引く。相談していた会話自身は実装も計画書執筆もしない。AI 不問（Claude Code / Codex / OpenCode）。自動発動はしない。/umbrella-handoff で明示的に起動。"
+description: "相談で問題意識が固まった直後から、傘ブランチの司令官が計画書を書き始める直前までを自動化する。ブリーフ起草・傘ブランチ作成・ocw -H --label による日本語ラベル付きの司令官ワークスペース起動・commander への引き継ぎ・到達確認を行い、そこで手を引く。相談していた会話自身は実装も計画書執筆もしない。AI 不問（Claude Code / Codex / OpenCode）。自動発動はしない。/umbrella-handoff で明示的に起動。"
 ---
 
 # umbrella-handoff — 相談から傘司令官への引き継ぎ自動化
