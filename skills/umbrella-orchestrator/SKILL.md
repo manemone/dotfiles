@@ -248,8 +248,8 @@ gh pr view <PR番号> -R <owner/name> --json baseRefName,reviews,commits
 
 ### 2.5 ワークスペースラベル（任意節）
 
-計画書に `## ワークスペースラベル` 節を書くと、司令官が Herdr ワークスペースを
-改名するときの日本語ラベルを即興で作らずに済む（書式・導出規則は §5「ワークスペース
+計画書に `## ワークスペースラベル` 節を書くと、司令官が `ocw -H --label` に渡す
+日本語ラベルを即興で作らずに済む（書式・導出規則は §5「ワークスペース
 ラベル」参照）。必須ではない。節が無い計画書では、司令官が計画書の見出しや
 進捗テーブルから機械的に要約を導出する。
 
@@ -301,7 +301,8 @@ gh pr view <PR番号> -R <owner/name> --json baseRefName,reviews,commits
 2. **ワークツリーを作成し実装AIを起動**
 
    **Herdr あり（`ocw -H` が使える場合）**:
-   - `ocw -H --no-commander <孫ブランチ名> <傘ブランチ名>` を叩く。**`<傘ブランチ名>`
+   - `ocw -H --no-commander --label "<孫のラベル>" <孫ブランチ名> <傘ブランチ名>` を叩く
+     （孫のラベルは §5「ワークスペースラベル」の書式で、**叩く前に**用意する）。**`<傘ブランチ名>`
      を省略しないこと。** 省略すると `base_ref` は `origin/HEAD` → `repo_root`（main
      ワークツリー）の `HEAD` の順にデフォルト解決され、傘ではなく `master` 等の既定
      ブランチが `ocw-base-ref` に永続化される。`ocw.mergedInto` を明示設定していない
@@ -310,8 +311,9 @@ gh pr view <PR番号> -R <owner/name> --json baseRefName,reviews,commits
      `--force` を要求するようになる
    - これだけで「git worktree 作成＋Herdr ワークスペース作成＋implementer ペーン＋reviewer ペーン」が
      全部できる（孫ワークスペースに commander ペーンは作らない。§5「ワークスペース階層」参照）
-   - 出力の `workspace:` 行の ID に対して `herdr workspace rename` でラベルを日本語化する
-     （書式・手順は §5「ワークスペースラベル」参照。**プロンプト送信より前**に行う）
+   - ラベルは `ocw` に作成時に渡しているので、作成後の `herdr workspace rename` は要らない
+     （ペインの claude の会話名が `<ラベル> / 実装` で起動し、Claude アプリの会話タイトルと
+     Herdr のラベルが揃う。書式・理由は §5「ワークスペースラベル」参照）
    - 起動した implementer ペーンにプロンプトを送信する。**送信は §5「AI間送信手順
      （二段構え）」に従う**（相手が Claude Code だと判別できれば `SendMessage`、
      できなければ `herdr agent prompt`）
@@ -343,6 +345,12 @@ gh pr view <PR番号> -R <owner/name> --json baseRefName,reviews,commits
       ```bash
       ps -eo args | grep "permission-mode"   # 起動したコマンドの実体を確認
       ```
+
+      `ps` で確かめられるのは、**spawn 時点で起動している implementer だけ**である。
+      孫の `ocw -H --no-commander` は reviewer のエージェントを起動しない（ADR
+      DOC-2610112129）ので、reviewer の行が出なくても失敗ではない。reviewer の
+      `OCW_REVIEWER_COMMAND` の効きは、作成時に残された起動行で確かめる:
+      `cat "$(git -C <孫のワークツリー> rev-parse --absolute-git-dir)/ocw-agent-reviewer"`
 
    **推奨フォーマット（これだけ送ればよい）**:
    ```
@@ -442,7 +450,7 @@ gh pr view <PR番号> -R <owner/name> --json baseRefName,reviews,commits
    ```bash
    cd <メインワークツリーの絶対パス>
    git fetch origin
-   ocw -H --no-commander <孫ブランチ名> origin/<既定ブランチ>
+   ocw -H --no-commander --label "<そのリポ名> :: <傘の日本語要約> 孫N <孫の日本語要約>" <孫ブランチ名> origin/<既定ブランチ>
    ```
 
    - **base-ref（`origin/<既定ブランチ>`）を省略しない。** 理由は同じリポの孫と同じ
@@ -454,9 +462,10 @@ gh pr view <PR番号> -R <owner/name> --json baseRefName,reviews,commits
    - `git fetch origin` は作業ツリーを触らない（`origin/*` を更新するだけ）ので、人間の
      メインワークツリーで叩いてよい。**`git checkout` / `git merge` / `git pull` は叩かない**
    - 叩き終えたら傘のワークツリーへ `cd` で戻る（計画書の更新は傘のリポで行う）
-3. ラベル: `ocw` の既定ラベルの接頭辞はそのリポ名になる。日本語ラベルも
+3. ラベル: 上の `--label` に渡す日本語ラベルは
    `<そのリポ名> :: <傘の日本語要約> 孫N <孫の日本語要約>` にする（§5「ワークスペースラベル」。
-   傘のリポ名にしない。サイドバーでどのリポの作業かが分かるようにするため）
+   傘のリポ名にしない。Herdr のグループはリポ単位なので、他リポの孫はそのリポのグループに
+   入る。サイドバーでどのリポの作業かが分かるようにするため）
 4. プロンプト送信・到達確認は同じリポの孫と同じ（§5「AI間送信手順（二段構え）」）
 5. **プロンプト末尾に自動付与する指示を、次の他リポ用に差し替える**（同じリポの孫用の
    「傘ブランチへ PR → 承認後マージ」をそのまま付けると、実装AIが傘ブランチを探して迷うか、
@@ -706,9 +715,22 @@ gh pr view <PR番号> -R <owner/name> --json baseRefName,reviews,commits
    ```
    - commander（司令官自身）、implementer、reviewer の3ペーンが揃っていることを確認
    - 足りなければ `herdr pane split` で追加
+   - **implementer / reviewer にエージェントがいなければ起動する。** `ocw -H` は agents の欄を
+     混雑させないため commander だけを起動し、この2ペインはシェルのままである（ADR
+     DOC-2610112129）。各ペインを `herdr pane get <pane>` で見て、`agent_status` が `unknown` で
+     `herdr pane read <pane> --source detection --lines 3` がシェルプロンプトだけなら、次で
+     起動して `agent_status` が `idle` になるまで待つ（最大30秒。会話の名前と `OCW_*_COMMAND` は
+     作成時のものが付く）。`ocw agent` が使えない（`ocw` が無い・起動行が無い古いワークスペース）
+     ときは、`herdr agent start <NAME> --kind claude --pane <pane>` で起動する。
+     エージェントが動いているペインには打たない（文字列がそのまま依頼として届く）
+     ```bash
+     herdr pane run <impl-pane-id> "ocw agent implementer"
+     herdr pane run <reviewer-pane-id> "ocw agent reviewer"
+     ```
 
 3. **implementer に最終PR作成プロンプトを送信**
    - implementer が `idle` または `done`（どちらも待機状態）であることを確認
+     （手順2で起動したばかりなら `idle`）
    - **送信は §5「AI間送信手順（二段構え）」に従う**（自分が `SendMessage` を呼べる
      Claude Code セッションで、かつ implementer の `agent` が `"claude"` で
      `agent_session.value` から `~/.claude/sessions/` を引ければ `SendMessage`、
@@ -764,7 +786,7 @@ main へのマージは人間が手動で行う。
    - 傘ブランチ名を特定（現在のブランチまたは計画書から）
 
 2. **未着手の孫があれば最初の1件を spawn**
-   - `/spawn <N>` と同じ手順（§3.2）で `ocw -H --no-commander` + ラベル rename
+   - `/spawn <N>` と同じ手順（§3.2）で `ocw -H --no-commander --label`
      （§5「ワークスペースラベル」）+ プロンプト送信
    - 計画書を「🔄 実装中」に更新して commit + push
 
@@ -817,10 +839,8 @@ main へのマージは人間が手動で行う。
       最優先、無ければ言語自動検出。Ruby 固定ではない）
    7. 検証通過後、計画書を「✅ PR #XX マージ済」に更新してcommit+push
    8. 次の未着手の孫があれば spawn:
-      ocw -H --no-commander <次の孫ブランチ名> <傘ブランチ>
-      出力の workspace: 行のIDに herdr workspace rename でラベルを日本語化する
-        （書式・手順は §5「ワークスペースラベル」参照。プロンプト送信より前に行う。
-        失敗しても警告のみで続行する）
+      ocw -H --no-commander --label "<日本語ラベル>" <次の孫ブランチ名> <傘ブランチ>
+        （ラベルは作成時に渡す。書式は §5「ワークスペースラベル」参照）
       implementerにプロンプト送信（末尾に「reviewerはdone状態で完了し完了通知は
         来ないので、待機して停止せず gh pr view をポーリングしてレビューの有無を
         確認してください」を必ず含める。§3.2 参照）
@@ -840,7 +860,8 @@ main へのマージは人間が手動で行う。
         登録時に置換した <司令官のworkspace_id> を使う。cron 本文は司令官のシェルの環境変数を
         引き継がない場合があるため、置換済みの値が空なら §5 の cwd 突き合わせへ落ちる:
         herdr pane list | python3 -c "import sys,json,os; my_cwd=os.getcwd(); ids={p['workspace_id'] for p in json.load(sys.stdin)['result']['panes'] if p.get('cwd')==my_cwd}; [print(i) for i in sorted(ids)]"
-      そのworkspaceのimplementerに送信:
+      そのworkspaceのimplementer / reviewer にエージェントがいなければ §3.4 手順2 の
+        とおり `ocw agent` で起動してから、implementerに送信:
         送信は §5「AI間送信手順（二段構え）」に従う（フォールバックは
         herdr agent prompt <impl-pane-id> "最終PRを作成。base:main head:<傘ブランチ>。pr-review-loop起動。reviewerは<同workspaceのreviewer>。mainマージは人間手動。計画書 <計画書の絶対パス> 参照。" --wait --timeout 10000）
         このimplementerは以前に作業を終えている可能性があり、フォーカスされて
@@ -865,7 +886,8 @@ main へのマージは人間が手動で行う。
    - ⏳ のあいだ次の孫へ進んでよいかは、計画書の「依存:」の書き方に従う。
      次の孫がこの孫に依存していなければ手順8へ進む。依存していれば待機する
    - 手順8（次の孫が他リポの孫のとき）: そのリポのメインワークツリーへ cd し、
-     git fetch origin のあと ocw -H --no-commander <孫ブランチ名> origin/<既定ブランチ>
+     git fetch origin のあと
+     ocw -H --no-commander --label "<そのリポ名> :: …" <孫ブランチ名> origin/<既定ブランチ>
      （base-ref を省略しない）。ラベルの接頭辞はそのリポ名。プロンプト末尾の自動付与は
      §3.2「他リポの孫の spawn」の他リポ用に差し替える。終わったら傘のワークツリーへ戻る
    - 手順9: ⏳ の孫が残っていれば finalize せず、何もせず次のcronを待つ（ユーザーに
@@ -1163,17 +1185,38 @@ herdr agent prompt <pane-id> "<本文>" --wait --timeout 10000
 ```
 傘ブランチのワークスペース（司令官が常駐。3ペイン）
   ├─ commander ← 司令官自身
-  ├─ implementer ← /finalize で使う
-  └─ reviewer ← /finalize で使う
+  ├─ implementer ← /finalize で使う（それまでシェルだけ。/finalize で起動）
+  └─ reviewer ← /finalize で使う（同上）
 
 孫ワークスペース（ocw -H --no-commander で孫ごとに作成される別workspace。2ペイン）
   ├─ w2H: 孫1のworkspace（implementer / reviewer）
   └─ w2J: 孫2のworkspace（implementer / reviewer）
 ```
 
+**Herdr のサイドバーでのまとまり方**（ADR DOC-2610111932）: `ocw -H` はワークスペースを
+`herdr worktree open` で開くので、Herdr のワークツリーグループに入る。**グループの単位は
+リポ**で、リポのメインのチェックアウトのワークスペースが親、`ocw -H` で作ったワークスペース
+（傘も孫も）がその子としてインデントして並ぶ。
+
+- 上の図は論理的な親子関係であり、**サイドバーでの並びとは一致しない。傘の下に孫が入る
+  「傘単位」のグループは Herdr の仕様上できない**（リンクされたワークツリーのワークスペースは
+  親になれない）。傘も孫も同じ親（メインのチェックアウト）の子として平らに並ぶ
+- 子の並びは**作成順**で、並べ替えのコマンドは無い。1本の傘だけを回しているあいだは
+  「傘→孫1→孫2…」と隣り合うが、**同じリポで傘を複数本回すと、後から足した孫が別の傘の
+  孫の後ろに入って混ざる。** 区別の手がかりはラベルの接頭辞（`<repo_name> :: <傘の日本語要約> …`）
+- 他リポの孫（§3.2「他リポの孫の spawn」）はそのリポ自身のグループに入り、傘のグループには
+  入らない
+- メインのチェックアウトのワークスペースが開いていなければ、Herdr が1ペインの親を自動で
+  作る。`ocw rm` もロールバックも**親は閉じない**（子の ID だけ閉じる）ので、1ペインの親が
+  サイドバーに残る。閉じるのは人間に任せる
+- 同じパスのワークスペースが既に開いていると、`ocw -H` は既存へペインを重ねずエラーで止まる
+- この方式に切り替える前に `ocw -H` で作ったワークスペースは平らなまま残る（グループには
+  自動では入らない）。`ocw rm` で閉じれば消えるので放置してよい
+
 - **司令官は常に傘ブランチのworkspaceにいる。** 孫workspaceではない。
-- **傘（司令官）ワークスペースは人間が素の `ocw -H`（3ペイン、`--no-commander` を付けない）
-  で作る。** 司令官は起動後、自分の workspace を見つけて（後述）日本語ラベルへ改名する
+- **傘（司令官）ワークスペースは `umbrella-handoff` が `--label` 付きの `ocw -H`
+  （3ペイン、`--no-commander` を付けない）で作る。** 人間が素の `ocw -H` で立てた場合だけ、
+  司令官が起動後、自分の workspace を見つけて（後述）日本語ラベルへ改名する
   （§5「ワークスペースラベル」参照）
 - **`/spawn`**: `ocw -H --no-commander` が孫workspaceを**新規作成**し、そこの
   implementerに実装させる。commander ペインは作らない（誰も使わないため）
@@ -1234,15 +1277,18 @@ ocw -H --no-commander <孫ブランチ名> <傘ブランチ名>
 ```
 git worktree 作成（<孫ブランチ名> がそのままブランチ名になる。`/` はディレクトリの
   ネストとして温存される）
-  → herdr workspace 作成（ラベルは既定で `<repo_name> :: <slug>`。区切りは `::`。
-    このあと「ワークスペースラベル」節に従って日本語ラベルへ改名する）
+  → herdr workspace 作成（`herdr worktree open` でリポのグループの子として開く。
+    ラベルは `--label` で渡した日本語ラベル。省略時の既定は `<repo_name> :: <slug>`
+    〈区切りは `::`〉。「ワークスペースラベル」節参照）
   → 2ペーン構成（commander は作らない）:
      ┌──────────────┬──────────┐
      │ implementer  │ reviewer │
-     │ claude       │ claude   │
+     │ claude       │ （シェル）│
      │ 実装+PR      │ レビュー │
      └──────────────┴──────────┘
-  → 全ペーンでエージェント起動済み
+  → エージェントを起動するのは implementer だけ（reviewer のペインは作るがシェルのまま。
+    pr-review-loop がレビューを頼むときに `ocw agent` で起動する。agents の欄を混雑させない
+    ため。ADR DOC-2610112129）
   → 標準出力に pane ID が出力される（`commander:` 行は出ない）
 ```
 
@@ -1259,7 +1305,7 @@ reviewer:    w1:p2
 ```
      ┌────────────┬─────────────┬────────────┐
      │ commander  │ implementer │ reviewer   │
-     │ claude     │ claude      │ claude     │
+     │ claude     │ （シェル）  │ （シェル） │
      │ 司令官自身 │ finalize用  │ finalize用 │
      └────────────┴─────────────┴────────────┘
 ```
@@ -1272,6 +1318,11 @@ implementer: w0:p2
 reviewer:    w0:p3
 ```
 
+**ペインは全部作るが、エージェントを起動するのは今すぐ使うペインだけ**（既定は commander、
+`--no-commander` は implementer）。残りは、使うときにそのペインで `ocw agent`
+（`herdr pane run <pane> "ocw agent"`）を打つ。起動行（会話の名前・`OCW_*_COMMAND`）は作成時に
+git dir へ残してあるので、後から起動しても即時起動と同じになる。
+
 各ペーンの既定の起動コマンドは `claude`（`bin/ocw` の `OCW_COMMANDER_COMMAND` /
 `OCW_IMPLEMENTER_COMMAND` / `OCW_REVIEWER_COMMAND` で個別に上書き可能。§3.2 注意点4。
 `--no-commander` の2ペインモードでは `OCW_COMMANDER_COMMAND` は使われない）。
@@ -1279,8 +1330,26 @@ reviewer:    w0:p3
 ### ワークスペースラベル
 
 Herdr ワークスペースの既定ラベルは `<repo_name> :: <slug>`（区切りは ` :: `。
-`bin/ocw` が生成する）で、サイドバーからは内容が判別できない。`ocw -H` の直後に
-`herdr workspace rename <workspace_id> <label>` を叩いて日本語ラベルへ改名する。
+`bin/ocw` が生成する）で、サイドバーからは内容が判別できない。そこで日本語ラベルを
+**`ocw -H` の作成時に `--label` で渡す**:
+
+```bash
+ocw -H --no-commander --label "<repo_name> :: <傘の日本語要約> 孫N <孫の日本語要約>" <孫ブランチ名> <傘ブランチ名>
+```
+
+**なぜ作成後の `herdr workspace rename` ではなく `--label` か**（ADR DOC-2610111939）:
+`ocw -H` は、ペインの claude をこのラベルから作った会話名
+`--name "<ラベル> / <役割>"`（役割は 司令官 / 実装 / レビュー）で起動する。これが Claude アプリ
+（Remote Control）の会話タイトルと `SendMessage` の宛先名になるので、ラベルを先に渡さないと
+会話名が `<ホスト名>-<ランダム語>` の自動の名前のままになり、外から進捗を見るとき
+どの会話がどの傘・孫か分からない。**作成後に `herdr workspace rename` で改名しても、
+起動済みの会話名は変わらない**（サイドバーのラベルだけが変わる）。
+
+- `--name` を足すのは、ペインの起動コマンドが claude のときだけ。`OCW_*_COMMAND` で Codex /
+  OpenCode 等が指定されていれば何も足さない
+- 宛先の解決（§5「AI間送信手順」#2）は `sessionId` で引くので、日本語・空白・`::`・`/` を含む
+  名前でも今のまま動く（実測済み）
+- **いま動いている会話は移行しない。** 会話名を変えたければ、人間がその会話で `/rename` する
 
 **書式**:
 
@@ -1300,38 +1369,41 @@ Herdr ワークスペースの既定ラベルは `<repo_name> :: <slug>`（区�
 2. 節が無ければ機械的に導出する: 傘の要約＝計画書の H1 見出しから「計画書:」を
    除いて短縮したもの、孫の要約＝進捗テーブルの「内容」列を短縮したもの
 
-**孫の rename**: `ocw -H --no-commander ...` の出力の `workspace:` 行の ID に対して、
-**プロンプト送信より前**に行う（§3.2「/spawn」）。
+**孫**: §3.2 の `ocw -H --no-commander --label "…"` に、**叩く前に**用意したラベルを渡す。
+作成後の rename は要らない。
 
-**傘（司令官スペース）の rename**: 次の2段階で行う。
+**傘（司令官スペース）**: 傘のワークスペースを立てる `umbrella-handoff` が
+`--label` 付きで作るので、通常は何もしない。人間が素の `ocw -H` で立てた場合だけ、
+ワークスペースのラベルが既定形のままになっているので、司令官が起動後に改名する
+（この場合、会話名は自動の名前のままで、変えるなら人間が `/rename` する）:
 
 1. 「自分のworkspaceの見つけ方」（§5）の手順で自分の `workspace_id` を特定する
 2. `herdr workspace list`（または `herdr workspace get <workspace_id>`）でその
-   workspaceの現在の `label` を読み、**既定形のときだけ** rename する。既定形の判定は
-   「` :: ` の右側に非 ASCII 文字が1文字も含まれないこと」。人間が既にラベルを日本語で
-   手付けしていれば上書きしない。
+   workspaceの現在の `label` を読み、**既定形のときだけ** `herdr workspace rename` する。
+   既定形の判定は「` :: ` の右側に非 ASCII 文字が1文字も含まれないこと」。人間が既に
+   ラベルを日本語で付けていれば上書きしない。
 
-**rename が失敗しても警告のみで続行する。** ラベルは表示上の都合であり、spawn や
-finalize のフローを止める理由にならない。
+**ラベルの指定や rename が失敗しても警告のみで続行する。** ラベルは表示上の都合であり、
+spawn や finalize のフローを止める理由にならない（`--label` は `ocw` の機能なので、
+`ocw` 自体が失敗したら通常のエラーとして扱う）。
 
 ### `/spawn` の Herdr ありフロー
 
-1. `ocw -H --no-commander <孫ブランチ> <傘ブランチ>` を実行
-2. 出力から `workspace:` 行の ID を拾い、`herdr workspace rename` で日本語ラベルへ
-   改名する（§5「ワークスペースラベル」参照。失敗しても警告のみで続行）
-3. 出力から `implementer:` 行の pane ID を拾う
-4. **「AI間送信手順（二段構え）」に従ってプロンプト送信する**:
+1. 日本語ラベルを用意し（§5「ワークスペースラベル」）、
+   `ocw -H --no-commander --label "<孫のラベル>" <孫ブランチ> <傘ブランチ>` を実行
+2. 出力から `implementer:` 行の pane ID を拾う
+3. **「AI間送信手順（二段構え）」に従ってプロンプト送信する**:
    - 自分が `SendMessage` を呼べる Claude Code セッションで、かつ implementer の
      `agent` が `"claude"` で `agent_session.value` から `~/.claude/sessions/` を
      引けたら `SendMessage({ to: <name>, message: "<prompt>" })`
    - それ以外は `herdr agent prompt <implementer-id> "<prompt>" --wait --timeout 10000`
      （フォールバック）
    - 送信文の末尾に、Herdr ありなら完了通知の宛先の1文（§3.2 推奨フォーマット）も付ける
-5. 到達確認: `SendMessage` 経路なら§5「AI間送信手順」#4（送信直前の状態からの変化を見る）
+4. 到達確認: `SendMessage` 経路なら§5「AI間送信手順」#4（送信直前の状態からの変化を見る）
    に従う。動いていなければフォールバック（`herdr agent prompt`）へ切り替える。
    フォールバック経路なら返り値を同節「フォールバック」のとおりに読む
    （`timeout` / `stalled` でも再送しない）
-6. 以上。reviewer は `/pr-review-loop` が勝手に使うので司令官は触らない
+5. 以上。reviewer は `/pr-review-loop` が勝手に使うので司令官は触らない
 
 ### 状態確認（`/check` から使う）
 

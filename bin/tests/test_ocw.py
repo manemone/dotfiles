@@ -28,7 +28,7 @@ shim-directory-ahead-of-PATH shape as _CODE_SHIM_DIR / write_git_shim_*
 above, so no real Herdr server or real terminal panes are ever involved.
 That the exact `--env OCW_ROLE=...` / `--env OCW_RUN_ID=...` values bin/ocw
 constructs actually reach a real pane's shell when passed to a real `herdr
-workspace create` / `herdr pane split` was verified once, manually, against
+worktree open` / `herdr pane split` was verified once, manually, against
 a live Herdr server (see the PR description for docs/planning/
 DOC-2608021229-a_ai-llm-cost-observability_計画.md's 孫2): a throwaway
 workspace was created with `--env FOO=bar`, and `herdr pane run ... "echo
@@ -332,7 +332,7 @@ def write_git_shim_redirecting_absolute_git_dir(shim_dir, worktree_dir, redirect
 # assert what bin/ocw actually asked Herdr to do -- not just its own exit
 # code. Responds to the exact subcommands bin/ocw calls (see setup_herdr_workspace(),
 # close_herdr_workspaces_for_checkout(), rollback_created_worktree() in
-# bin/ocw); `workspace create` / `pane split` need a real, if fake, JSON
+# bin/ocw); `worktree open` / `pane split` need a real, if fake, JSON
 # response shaped like the real `{"id":...,"result":{...}}` envelope
 # (bin/ocw's json_nested_field() walks to arbitrary depth, so nesting under
 # "result" isn't strictly required, but staying close to the real shape is
@@ -373,9 +373,9 @@ case "$sub" in
   "status server")
     exit 0
     ;;
-  "workspace create")
+  "worktree open")
     id="$(next_id)"
-    printf '{"id":"cli:workspace:create","result":{"workspace":{"workspace_id":"workspace-%s"},"root_pane":{"pane_id":"pane-%s"},"tab":{"tab_id":"tab-%s"}}}\n' "$id" "$id" "$id"
+    printf '{"id":"cli:worktree:open","result":{"already_open":%s,"workspace":{"workspace_id":"workspace-%s"},"root_pane":{"pane_id":"pane-%s"},"tab":{"tab_id":"tab-%s"}}}\n' "${OCW_TEST_HERDR_ALREADY_OPEN:-false}" "$id" "$id" "$id"
     ;;
   "pane split")
     id="$(next_id)"
@@ -385,10 +385,21 @@ case "$sub" in
     exit 0
     ;;
   "workspace list")
-    printf '{"id":"cli:workspace:list","result":{"workspaces":[]}}\n'
+    # $OCW_TEST_HERDR_TOPOLOGY: JSON file {"<workspace_id>": ["<pane cwd>", ...]}
+    # describing the workspaces the fake server has open (default: none).
+    python3 - "${OCW_TEST_HERDR_TOPOLOGY:-}" <<'PY'
+import json, sys
+topo = json.load(open(sys.argv[1])) if sys.argv[1] else {}
+print(json.dumps({"id": "cli:workspace:list", "result": {"workspaces": [{"workspace_id": w} for w in topo]}}))
+PY
     ;;
   "pane list")
-    printf '{"id":"cli:pane:list","result":{"panes":[]}}\n'
+    python3 - "${OCW_TEST_HERDR_TOPOLOGY:-}" "${4:-}" <<'PY'
+import json, sys
+topo = json.load(open(sys.argv[1])) if sys.argv[1] else {}
+panes = [{"pane_id": "%s-p%d" % (sys.argv[2], i), "workspace_id": sys.argv[2], "cwd": c} for i, c in enumerate(topo.get(sys.argv[2], []))]
+print(json.dumps({"id": "cli:pane:list", "result": {"panes": panes}}))
+PY
     ;;
   *)
     echo "herdr-shim: unhandled command: $*" >&2
@@ -1706,6 +1717,19 @@ class HerdrPaneModeTests(HerdrOcwTestCase):
     により解消されている。
     """
 
+    def agent_lines(self, name):
+        """作成時に残された各役割の起動行 (`ocw agent` が後で走らせるもの)。"""
+        git_dir = pathlib.Path(
+            _git(
+                ["rev-parse", "--absolute-git-dir"], self.repo_root.parent / name
+            ).stdout.strip()
+        )
+        return {
+            role: (git_dir / f"ocw-agent-{role}").read_text(encoding="utf-8").strip()
+            for role in ("commander", "implementer", "reviewer")
+            if (git_dir / f"ocw-agent-{role}").exists()
+        }
+
     def test_default_herdr_still_creates_three_panes_and_starts_commander(self):
         # 既定の `ocw -H` の3ペイン構成は本傘の前提条件そのものであり、無警告
         # で壊してはならない (計画書「検証方針」)。
@@ -1718,17 +1742,163 @@ class HerdrPaneModeTests(HerdrOcwTestCase):
 
         calls = self.herdr_calls()
 
-        create_call = next(c for c in calls if c[:2] == ["workspace", "create"])
-        self.assertIn("OCW_ROLE=commander", create_call)
+        # グループに乗る呼び出し: メインのチェックアウトを --cwd、作ったワーク
+        # ツリーを --path に渡す。worktree open は --env を持たないので、ルート
+        # (司令官) ペインの環境変数は起動前の export でシェル自体に入る。
+        open_call = next(c for c in calls if c[:2] == ["worktree", "open"])
+        self.assertFalse(any(c[:2] == ["workspace", "create"] for c in calls))
+        self.assertEqual(
+            open_call[open_call.index("--cwd") + 1], str(self.repo_root)
+        )
+        self.assertEqual(
+            open_call[open_call.index("--path") + 1],
+            str(self.repo_root.parent / "widget-maker"),
+        )
+        self.assertNotIn("--env", open_call)
+        self.assertNotIn("--trust-repository", open_call)
+        run_cmds = [c[3] for c in calls if c[:2] == ["pane", "run"]]
+        # シェル自体に export する (起動し直したエージェントにも継がれる)。
+        root_export, root_cmd = run_cmds[0].split("; ", 1)
+        root_words = shlex.split(root_export)
+        self.assertEqual(root_words[:2], ["export", "OCW_ROLE=commander"])
+        self.assertTrue(root_words[2].startswith("OCW_RUN_ID="))
+        # export があっても claude 判定が効き、--name が付く。
+        self.assertIn("--name", shlex.split(root_cmd))
+        self.assertEqual(
+            [c[c.index("--env") + 1] for c in calls if c[:2] == ["pane", "split"]][0],
+            "OCW_ROLE=implementer",
+        )
 
         pane_rename_names = [c[3] for c in calls if c[:2] == ["pane", "rename"]]
         self.assertEqual(pane_rename_names, ["commander", "implementer", "reviewer"])
 
+        # ペインは3つとも作るが、エージェントを起動するのは司令官だけ
+        # (ADR DOC-2610112129)。
         pane_run_calls = [c for c in calls if c[:2] == ["pane", "run"]]
-        self.assertEqual(len(pane_run_calls), 3)
+        self.assertEqual(len(pane_run_calls), 1)
+        self.assertEqual(set(self.agent_lines("widget-maker")), {"commander", "implementer", "reviewer"})
 
         split_calls = [c for c in calls if c[:2] == ["pane", "split"]]
         self.assertEqual(len(split_calls), 2)
+
+    def test_label_names_workspace_and_each_claude_pane_uniquely(self):
+        # 会話タイトル (Claude アプリ) を Herdr のラベルと揃える: ラベルは
+        # worktree open の --label と各 claude の --name の両方に使われ、
+        # 同じワークスペースのペイン同士で名前が重ならない。
+        label = "my repo :: 日本語 'x' / y"
+        result = self.run_herdr_ocw(["-H", "--label", label, "widget-maker"])
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+        calls = self.herdr_calls()
+        create_call = next(c for c in calls if c[:2] == ["worktree", "open"])
+        self.assertEqual(create_call[create_call.index("--label") + 1], label)
+
+        # 起動行は3役割とも残り、名前が重ならない。即時に起動した司令官の
+        # 行は残した行と同じ。
+        lines = self.agent_lines("widget-maker")
+        self.assertEqual(len(set(lines.values())), 3)
+        for role, label_role in zip(
+            ["commander", "implementer", "reviewer"], ["司令官", "実装", "レビュー"]
+        ):
+            words = shlex.split(lines[role])
+            self.assertEqual(words[0], "claude")
+            self.assertEqual(words[words.index("--name") + 1], f"{label} / {label_role}")
+        run_cmds = [c[3] for c in calls if c[:2] == ["pane", "run"]]
+        self.assertEqual(run_cmds[0].split("; ", 1)[-1], lines["commander"])
+
+        # 指定なしは今までどおりのラベル、名前もそれに揃う。
+        self.herdr_log.unlink()
+        result = self.run_herdr_ocw(["-H", "--no-commander", "gadget-maker"])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        calls = self.herdr_calls()
+        create_call = next(c for c in calls if c[:2] == ["worktree", "open"])
+        default_label = create_call[create_call.index("--label") + 1]
+        self.assertTrue(default_label.endswith(" :: gadget-maker"))
+        lines = self.agent_lines("gadget-maker")
+        self.assertEqual(
+            [shlex.split(lines[r])[-1] for r in ("implementer", "reviewer")],
+            [f"{default_label} / 実装", f"{default_label} / レビュー"],
+        )
+
+    def test_name_is_added_only_to_plain_claude_commands(self):
+        # 人間の OCW_*_COMMAND の上書きを壊さない: claude 以外 (Codex 等・
+        # `env X=1 claude` のようなラッパー) は一切変えず、claude の追加引数や
+        # パス付き・既に --name 付きのコマンドは壊さない。
+        result = self.run_herdr_ocw(
+            ["-H", "--label", "L", "widget-maker"],
+            extra_env={
+                "OCW_COMMANDER_COMMAND": "codex --model x",
+                "OCW_IMPLEMENTER_COMMAND": "FOO=1 /usr/bin/claude --permission-mode auto",
+                "OCW_REVIEWER_COMMAND": "claude --name mine",
+            },
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        lines = self.agent_lines("widget-maker")
+        run_cmds = [c[3] for c in self.herdr_calls() if c[:2] == ["pane", "run"]]
+        # 即時に起動するのは司令官だけ。ルートペインなので環境変数の前置が付く。
+        self.assertRegex(
+            run_cmds[0], r"^export OCW_ROLE=commander OCW_RUN_ID=\S+; codex --model x$"
+        )
+        self.assertEqual(lines["commander"], "codex --model x")
+        self.assertEqual(
+            shlex.split(lines["implementer"]),
+            ["FOO=1", "/usr/bin/claude", "--permission-mode", "auto", "--name", "L / 実装"],
+        )
+        self.assertEqual(lines["reviewer"], "claude --name mine")
+
+        self.herdr_log.unlink()
+        result = self.run_herdr_ocw(
+            ["-H", "--no-commander", "gadget-maker"],
+            extra_env={"OCW_IMPLEMENTER_COMMAND": "env X=1 claude"},
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        run_cmds = [c[3] for c in self.herdr_calls() if c[:2] == ["pane", "run"]]
+        self.assertRegex(
+            run_cmds[0], r"^export OCW_ROLE=implementer OCW_RUN_ID=\S+; env X=1 claude$"
+        )
+
+    def test_agent_subcommand_starts_stored_line_with_role_and_run_id(self):
+        # 後から起動したエージェントが、即時起動と同じ会話の名前・OCW_*_COMMAND
+        # の上書き・OCW_ROLE / OCW_RUN_ID を受け取る (名前が落ちると孫2 の成果が
+        # 消え、上書きが効かないと人間の設定を壊すため固定する)。
+        bin_dir = pathlib.Path(self.tmpdir.name) / "fake-claude"
+        bin_dir.mkdir()
+        fake = bin_dir / "claude"
+        fake.write_text(
+            '#!/bin/sh\nprintf \'%s|%s|%s|\' "$OCW_ROLE" "$OCW_RUN_ID" "$FOO"\n'
+            'for a in "$@"; do printf \'[%s]\' "$a"; done\n',
+            encoding="utf-8",
+        )
+        fake.chmod(0o755)
+        result = self.run_herdr_ocw(
+            ["-H", "--label", "L x", "widget-maker"],
+            extra_env={"OCW_REVIEWER_COMMAND": "FOO=1 claude --permission-mode auto"},
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        run_id = extract_run_id(result.stdout)
+        worktree = self.repo_root.parent / "widget-maker"
+
+        # 環境変数 OCW_ROLE (ペインのシェルが持つ) から役割を引く。
+        out = run_ocw(
+            ["agent"],
+            worktree,
+            extra_env={"OCW_ROLE": "reviewer"},
+            path_prepend=[str(bin_dir)],
+        )
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertEqual(
+            out.stdout,
+            f"reviewer|{run_id}|1|[--permission-mode][auto][--name][L x / レビュー]",
+        )
+
+        # 役割の明示指定。OCW_ROLE が無くても run id は作成時のものを使う。
+        out = run_ocw(["agent", "implementer"], worktree, path_prepend=[str(bin_dir)])
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertEqual(out.stdout, f"implementer|{run_id}||[--name][L x / 実装]")
+
+        # 起動行が無い役割・役割不明は黙らず落ちる。
+        self.assertNotEqual(run_ocw(["agent", "bogus"], worktree).returncode, 0)
+        self.assertNotEqual(run_ocw(["agent", "reviewer"], self.repo_root).returncode, 0)
 
     def test_no_commander_creates_two_panes_with_implementer_as_root(self):
         result = self.run_herdr_ocw(
@@ -1743,11 +1913,12 @@ class HerdrPaneModeTests(HerdrOcwTestCase):
 
         calls = self.herdr_calls()
 
-        # root pane (workspace create's root_pane) carries OCW_ROLE=implementer,
+        # root pane (worktree open's root_pane) carries OCW_ROLE=implementer,
         # never commander -- this is what bin/ocw-meter attributes cost to.
-        create_call = next(c for c in calls if c[:2] == ["workspace", "create"])
-        self.assertIn("OCW_ROLE=implementer", create_call)
-        self.assertNotIn("OCW_ROLE=commander", create_call)
+        # No --env on worktree open, so it rides on the launch command.
+        run_cmds = [c[3] for c in calls if c[:2] == ["pane", "run"]]
+        self.assertEqual(shlex.split(run_cmds[0])[:2], ["export", "OCW_ROLE=implementer"])
+        self.assertFalse(any("OCW_ROLE=commander" in c for c in run_cmds))
 
         # Exactly one split (root -> reviewer), not two -- there is no
         # commander pane to split off of.
@@ -1759,8 +1930,10 @@ class HerdrPaneModeTests(HerdrOcwTestCase):
 
         # The commander launch command itself is never invoked: it never
         # appears in any pane run call, nor anywhere else in the log.
+        # Only the implementer starts now; the reviewer waits for `ocw agent`.
         pane_run_calls = [c for c in calls if c[:2] == ["pane", "run"]]
-        self.assertEqual(len(pane_run_calls), 2)
+        self.assertEqual(len(pane_run_calls), 1)
+        self.assertEqual(set(self.agent_lines("widget-maker")), {"implementer", "reviewer"})
         for call in calls:
             self.assertNotIn("commander-should-never-run", call)
 
@@ -1791,6 +1964,12 @@ class NoCommanderRequiresHerdrTests(OcwTestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("--no-commander", result.stderr)
         self.assertIn("-H", result.stderr)
+        self.assertFalse((self.repo_root.parent / "widget-maker").exists())
+
+    def test_label_without_herdr_dies_with_a_clear_message(self):
+        result = run_ocw(["--label", "x", "widget-maker"], self.repo_root)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("--label", result.stderr)
         self.assertFalse((self.repo_root.parent / "widget-maker").exists())
 
     def test_no_commander_without_herdr_on_ls_is_silently_ignored(self):
@@ -1844,6 +2023,66 @@ class HerdrSetupRollbackTests(HerdrOcwTestCase):
         # No commander pane is ever created in --no-commander mode, so
         # nothing naming one should appear anywhere in the log.
         self.assertFalse(any("commander" in arg for call in calls for arg in call))
+
+
+class HerdrAlreadyOpenTests(HerdrOcwTestCase):
+    """同じパスのワークスペースが既に開いている (`already_open: true`) とき、
+    ペインを重ねず失敗し、ocw が作っていない既存のワークスペースを閉じない。"""
+
+    def test_already_open_workspace_fails_without_stacking_or_closing_it(self):
+        result = self.run_herdr_ocw(
+            ["-H", "widget-maker"],
+            extra_env={"OCW_TEST_HERDR_ALREADY_OPEN": "true"},
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("already open", result.stderr)
+
+        calls = self.herdr_calls()
+        self.assertFalse(any(c[:2] == ["pane", "split"] for c in calls))
+        self.assertFalse(any(c[:2] == ["workspace", "close"] for c in calls))
+        self.assertFalse((self.repo_root.parent / "widget-maker").exists())
+
+
+class HerdrRmGroupedWorkspaceTests(HerdrOcwTestCase):
+    """`ocw rm` が閉じる Herdr ワークスペースは、ペインの cwd が消すワークツリーと
+    一致するものだけ（ADR DOC-2610111932 §4）。ワークツリーグループの親（メインの
+    チェックアウト）・兄弟の子・無関係なワークスペースは閉じない。親を閉じると
+    `workspace_group_close_required` になるうえ人間のワークスペースを巻き込むため、
+    `--group` も付けない。グループに乗った子と、移行前の平らなワークスペースは
+    どちらも同じ cwd 一致で閉じられる。閉じるのに失敗しても git 側の削除は進む。"""
+
+    def test_rm_closes_only_workspaces_whose_pane_cwd_is_the_removed_worktree(self):
+        for name in ("widget-maker", "gadget-maker"):
+            create = run_ocw([name], self.repo_root)
+            self.assertEqual(create.returncode, 0, create.stderr)
+
+        parent = self.repo_root.parent
+        topology = parent / "topology.json"
+        topology.write_text(
+            json.dumps(
+                {
+                    "w-parent": [str(self.repo_root)],
+                    "w-grouped": [str(parent / "widget-maker")],
+                    "w-sibling": [str(parent / "gadget-maker")],
+                    "w-legacy": [str(parent / "widget-maker")],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        result = self.run_herdr_ocw(
+            ["rm", "widget-maker"],
+            fail_on="workspace close",
+            extra_env={"OCW_TEST_HERDR_TOPOLOGY": str(topology)},
+        )
+        # Closing fails here; git-side removal still proceeds with a warning.
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("failed to close Herdr workspace", result.stderr)
+
+        closes = [c for c in self.herdr_calls() if c[:2] == ["workspace", "close"]]
+        self.assertEqual(sorted(c[2] for c in closes), ["w-grouped", "w-legacy"])
+        self.assertFalse(any("--group" in c for c in closes))
+        self.assertFalse((parent / "widget-maker").exists())
 
 
 class HelpTopicTests(unittest.TestCase):

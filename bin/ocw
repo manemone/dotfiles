@@ -8,6 +8,7 @@ ORIGINAL_INVOCATION="ocw $*"
 
 USE_HERDR=false
 NO_COMMANDER=false
+WORKSPACE_LABEL_OVERRIDE=""
 
 COMMANDER_COMMAND="${OCW_COMMANDER_COMMAND:-claude}"
 IMPLEMENTER_COMMAND="${OCW_IMPLEMENTER_COMMAND:-claude}"
@@ -32,11 +33,12 @@ HERDR_SETUP_REVIEWER_PANE_ID=""
 usage() {
   cat <<'USAGE'
 usage:
-  ocw [-H|--herdr] [--no-commander] <worktree-name> [base-ref]
-  ocw [-H|--herdr] [--no-commander] new <worktree-name> [base-ref]
-  ocw new [-H|--herdr] [--no-commander] <worktree-name> [base-ref]
+  ocw [-H|--herdr] [--no-commander] [--label <text>] <worktree-name> [base-ref]
+  ocw [-H|--herdr] [--no-commander] [--label <text>] new <worktree-name> [base-ref]
+  ocw new [-H|--herdr] [--no-commander] [--label <text>] <worktree-name> [base-ref]
   ocw rm <worktree-name>
   ocw rm -f <worktree-name>
+  ocw agent [commander|implementer|reviewer]
   ocw ls
   ocw help [topic]
   ocw help all
@@ -49,7 +51,7 @@ create behavior:
     create a worktree
     register it in Herdr
     create commander/implementer/reviewer panes
-    start claude / claude / claude
+    start only the commander's claude (others: `ocw agent`)
     focus the Herdr workspace
 
   --no-commander
@@ -58,10 +60,18 @@ create behavior:
     requires -H/--herdr on create; without it, ocw dies
     ignored by ls/rm, like -H
 
+  --label <text>
+    with -H/--herdr, the Herdr workspace label (default:
+    "<repo_name> :: <slug>"); each pane's claude is also started with
+    --name "<label> / <role>" so the Claude app shows the same title
+    requires -H/--herdr on create; without it, ocw dies
+    ignored by ls/rm, like -H
+
 examples:
   ocw dataset-importer
   ocw --herdr optimize-generation
   ocw --herdr --no-commander optimize-generation
+  ocw --herdr --label "myrepo :: タイトル" optimize-generation
   ocw new --herdr caption-parser origin/main
   ocw rm dataset-importer
   ocw rm -f failed-experiment
@@ -294,17 +304,41 @@ topic: herdr
 
 `-H`/`--herdr` pane layout, and `--no-commander`.
 
+The workspace is opened with `herdr worktree open --cwd <main checkout>
+--path <worktree>`, so it joins the repo's Herdr worktree group (nested
+under the main checkout's workspace in the sidebar; the parent is created
+automatically if not open). Groups are per repo, ordered by creation: two
+umbrellas in one repo interleave -- tell them apart by the label. ocw never
+closes the parent; rollback and `ocw rm` close only the child workspace.
+If a workspace is already open on the worktree path, ocw refuses (error)
+rather than stacking panes onto it.
+
 Default (-H alone): 3 panes in one Herdr workspace, left to right --
-commander, implementer, reviewer. Each pane is started with `herdr pane
-run <pane> "$<ROLE>_COMMAND"` once the workspace/panes/env are all set up;
-the workspace is refocused at the end.
+commander, implementer, reviewer. All panes are always created, but only the
+commander's agent is started (`herdr pane run <pane> "$COMMANDER_COMMAND"`)
+once the workspace/panes/env are all set up; implementer and reviewer stay
+plain shells so the sidebar's agents list is not crowded. Start one later by
+running `ocw agent` in its pane (see below). The workspace is refocused at
+the end.
 
 --no-commander: 2 panes only -- implementer, reviewer. Requires -H (used
 without it, ocw dies: "--no-commander requires -H/--herdr"); on `ocw
 ls`/`ocw rm` it's accepted and silently ignored, exactly like -H is. The
 root pane is created as implementer directly rather than being created as
 commander and then torn down -- no commander `claude` process is ever
-started, and OCW_COMMANDER_COMMAND is not read in this mode.
+started, and OCW_COMMANDER_COMMAND is not read in this mode. Only the
+implementer's agent is started; the reviewer's waits for `ocw agent`.
+
+starting an agent later: `ocw agent [commander|implementer|reviewer]`, typed
+into the pane's shell (e.g. `herdr pane run <pane> "ocw agent"`), replaces
+the shell with that pane's agent. The role defaults to $OCW_ROLE, which
+every pane shell has. The launch line (OCW_*_COMMAND at creation time, plus
+--name, see "session name") is written at creation to `ocw-agent-<role>` in
+the worktree's git dir, so a late agent is identical to an immediate one;
+OCW_*_COMMAND set at `ocw agent` time is not read. It dies if the worktree
+has no such file (not made by `ocw -H`, or made before `ocw agent` existed)
+-- callers then fall back to `herdr agent start`. Never run it in a pane
+whose agent is already running: the text would be sent to that agent.
 
 commands run per pane come from environment variables -- see `ocw help
 env` for OCW_COMMANDER_COMMAND / OCW_IMPLEMENTER_COMMAND /
@@ -313,12 +347,26 @@ OCW_REVIEWER_COMMAND.
 each pane is started with OCW_ROLE set to its role name (commander /
 implementer / reviewer -- an implementer-as-root pane under
 --no-commander still gets OCW_ROLE=implementer, never commander) and
-OCW_RUN_ID set to the run's id -- see `ocw help meter`. Panes are also
+OCW_RUN_ID set to the run's id -- see `ocw help meter`. (`worktree open`
+has no --env, so the root pane shell gets them via `export OCW_ROLE=..
+OCW_RUN_ID=..;` typed before its launch command; split panes use --env.) Panes are also
 renamed to match their role, and the tab is renamed "agents".
 
 workspace label: "<repo_name> :: <slug>" (':: ', not '/' -- the slug can
 itself contain '/', which would make the repo/slug boundary ambiguous
-with a plain '/' separator).
+with a plain '/' separator). `--label <text>` replaces it (requires -H,
+like --no-commander); renaming afterwards with `herdr workspace rename`
+still works.
+
+session name: when a pane's command is claude (first word, ignoring
+leading VAR=value words and any directory part), ocw appends
+--name "<label> / <role>" so the Claude app / Remote Control
+conversation title matches the Herdr label and panes of one workspace
+never share a name. <role> is 司令官 / 実装 / レビュー for commander /
+implementer / reviewer. Commands that are not claude (Codex, OpenCode,
+wrappers such as `env X=1 claude`) and claude commands that already
+carry --name / -n are left untouched. It is also the SendMessage
+address of that session.
 
 on any setup failure, ocw rolls back: closes the Herdr workspace (if one
 was created), force-removes the worktree, deletes the branch, and (if a
@@ -355,8 +403,8 @@ follows the merge-check verdict (`ocw help rm`), not whether -f was
 passed.
 
 OCW_RUN_ID propagation: in Herdr mode, every pane already gets
-OCW_RUN_ID set automatically via `herdr ... --env` (see `ocw help
-herdr`) -- no action needed. In the default (non-Herdr, VS Code) mode,
+OCW_RUN_ID set automatically (--env, or an `export` typed into the root
+pane shell; see `ocw help herdr`) -- no action needed. In the default (non-Herdr, VS Code) mode,
 nothing sets OCW_RUN_ID for you; export it manually inside the worktree
 if you want ocw-meter events from that shell tied to the run:
 
@@ -384,6 +432,9 @@ read by ocw:
                             command for the implementer pane
   OCW_REVIEWER_COMMAND     default: claude
                             command for the reviewer pane
+                            (these three are read at creation and stored;
+                            `ocw agent` runs the stored line -- `ocw help
+                            herdr`)
   OCW_NO_VSCODE            unset by default
                             any non-empty value skips launching VS Code
                             in the default (non-Herdr) create mode --
@@ -830,6 +881,54 @@ open_vscode() {
     warn "failed to open VS Code"
 }
 
+# Echo the command to run in a pane. When it is a claude command, append
+# --name "<label> / <role>" so the Claude app / Remote Control conversation
+# title (and the SendMessage address) matches the Herdr workspace label.
+# Anything else (Codex, OpenCode, `env X=1 claude`, ...) and claude commands
+# that already carry --name / -n come back unchanged.
+pane_command_with_name() {
+  local command_line="$1"
+  local session_name="$2"
+  local -a words=()
+  local word=""
+  local first=""
+
+  read -r -a words <<<"$command_line"
+
+  # bash 3.2 (macOS) treats expanding an empty array as unbound under set -u.
+  if [ "${#words[@]}" -eq 0 ]; then
+    printf '%s' "$command_line"
+    return 0
+  fi
+
+  for word in "${words[@]}"; do
+    case "$word" in
+      *=*) ;;
+      *)
+        first="${word##*/}"
+        break
+        ;;
+    esac
+  done
+
+  if [ "$first" != "claude" ]; then
+    printf '%s' "$command_line"
+    return 0
+  fi
+
+  for word in "${words[@]}"; do
+    case "$word" in
+      --name | --name=* | -n)
+        printf '%s' "$command_line"
+        return 0
+        ;;
+    esac
+  done
+
+  # Single-quote by hand: printf %q emits $'\ooo' escapes in the C locale.
+  printf "%s --name '%s'" "$command_line" "${session_name//\'/\'\\\'\'}"
+}
+
 setup_herdr_workspace() {
   local worktree_dir="$1"
   local workspace_label="$2"
@@ -837,6 +936,7 @@ setup_herdr_workspace() {
   local no_commander="$4"
 
   local open_json=""
+  local already_open=""
   local split_json=""
   local tab_id=""
   local root_pane_id=""
@@ -844,7 +944,6 @@ setup_herdr_workspace() {
   # pane, so the root pane becomes implementer directly instead of being
   # created as commander and later closed (which would still start one
   # unwanted `claude` process -- exactly what this flag exists to avoid).
-  local root_role="commander"
   local root_label="commander"
 
   HERDR_SETUP_WORKSPACE_ID=""
@@ -852,19 +951,40 @@ setup_herdr_workspace() {
   HERDR_SETUP_IMPLEMENTER_PANE_ID=""
   HERDR_SETUP_REVIEWER_PANE_ID=""
 
+  local implementer_env_prefix=""
+
   if [ "$no_commander" = "true" ]; then
-    root_role="implementer"
     root_label="implementer"
+    implementer_env_prefix="export OCW_ROLE=implementer OCW_RUN_ID=${run_id}; "
   fi
 
+  # The worktree is already created by ocw; hand it to Herdr's worktree
+  # groups (ADR DOC-2610111932 s4) instead of `workspace create`, so the
+  # workspace nests under the repo's main-checkout workspace in the sidebar.
+  # `worktree open` has no --env: the root pane's OCW_ROLE / OCW_RUN_ID are
+  # prefixed onto its launch command below instead.
   open_json="$(
-    herdr workspace create \
-      --cwd "$worktree_dir" \
+    herdr worktree open \
+      --cwd "$repo_root" \
+      --path "$worktree_dir" \
       --label "$workspace_label" \
-      --env "OCW_ROLE=${root_role}" \
-      --env "OCW_RUN_ID=${run_id}" \
       --no-focus
   )" || return 1
+
+  # A workspace already open on this path comes back as-is (already_open).
+  # Refuse it instead of stacking panes on top, and leave
+  # HERDR_SETUP_WORKSPACE_ID empty so rollback never closes a workspace ocw
+  # did not create.
+  already_open="$(
+    json_nested_field \
+      "$open_json" \
+      result \
+      already_open
+  )" || already_open=""
+  if [ "$already_open" = "True" ]; then
+    echo "error: a Herdr workspace is already open on ${worktree_dir}; close it first" >&2
+    return 1
+  fi
 
   HERDR_SETUP_WORKSPACE_ID="$(
     json_nested_field \
@@ -972,30 +1092,78 @@ setup_herdr_workspace() {
     >/dev/null ||
     return 1
 
+  # Launch lines are fixed here (--name included) and persisted for every
+  # pane, so an agent started later with `ocw agent` is identical to one
+  # started now (ADR DOC-2610112129). Only the pane that is needed right away
+  # is started: commander by default, implementer under --no-commander.
+  local commander_line=""
+  local implementer_line=""
+  local reviewer_line=""
+  local agent_git_dir=""
+
+  commander_line="$(pane_command_with_name "$COMMANDER_COMMAND" "${workspace_label} / 司令官")"
+  implementer_line="$(pane_command_with_name "$IMPLEMENTER_COMMAND" "${workspace_label} / 実装")"
+  reviewer_line="$(pane_command_with_name "$REVIEWER_COMMAND" "${workspace_label} / レビュー")"
+
+  agent_git_dir="$(git -C "$worktree_dir" rev-parse --absolute-git-dir)" || return 1
   if [ "$no_commander" != "true" ]; then
+    printf '%s\n' "$commander_line" >"${agent_git_dir}/ocw-agent-commander" || return 1
+  fi
+  printf '%s\n' "$implementer_line" >"${agent_git_dir}/ocw-agent-implementer" || return 1
+  printf '%s\n' "$reviewer_line" >"${agent_git_dir}/ocw-agent-reviewer" || return 1
+
+  if [ "$no_commander" != "true" ]; then
+    # Commander is the root pane: no --env at open time (and the pane shell
+    # inherits the herdr server env, not ours), so export in the pane shell.
     herdr pane run \
       "$HERDR_SETUP_COMMANDER_PANE_ID" \
-      "$COMMANDER_COMMAND" \
+      "export OCW_ROLE=commander OCW_RUN_ID=${run_id}; ${commander_line}" \
+      >/dev/null ||
+      return 1
+  else
+    # Under --no-commander the implementer is the root pane and needs the
+    # env prefix. (Default mode: implementer / reviewer panes stay plain
+    # shells -- they were split with --env -- until `ocw agent`.)
+    herdr pane run \
+      "$HERDR_SETUP_IMPLEMENTER_PANE_ID" \
+      "${implementer_env_prefix}${implementer_line}" \
       >/dev/null ||
       return 1
   fi
-
-  herdr pane run \
-    "$HERDR_SETUP_IMPLEMENTER_PANE_ID" \
-    "$IMPLEMENTER_COMMAND" \
-    >/dev/null ||
-    return 1
-
-  herdr pane run \
-    "$HERDR_SETUP_REVIEWER_PANE_ID" \
-    "$REVIEWER_COMMAND" \
-    >/dev/null ||
-    return 1
 
   herdr workspace focus \
     "$HERDR_SETUP_WORKSPACE_ID" \
     >/dev/null ||
     return 1
+}
+
+# `ocw agent [commander|implementer|reviewer]`: run in a pane's shell, start
+# that pane's agent with the launch line persisted at creation time
+# (ocw-agent-<role> in the worktree's git dir). The role defaults to
+# $OCW_ROLE, which every pane shell already has.
+start_pane_agent() {
+  local role="${1:-${OCW_ROLE:-}}"
+  local git_dir=""
+  local line=""
+  local run_id="${OCW_RUN_ID:-}"
+
+  case "$role" in
+    commander | implementer | reviewer) ;;
+    "") die "ocw agent: no role (give commander|implementer|reviewer, or run in a pane with OCW_ROLE set)" ;;
+    *) die "ocw agent: unknown role: ${role}" ;;
+  esac
+
+  git_dir="$(git rev-parse --absolute-git-dir 2>/dev/null)" ||
+    die "ocw agent: not inside a git worktree"
+  [ -f "${git_dir}/ocw-agent-${role}" ] ||
+    die "ocw agent: no launch line for ${role} in this worktree (not made by ocw -H, or made before ocw agent existed)"
+  line="$(cat "${git_dir}/ocw-agent-${role}")"
+
+  if [ -z "$run_id" ] && [ -f "${git_dir}/ocw-run-id" ]; then
+    run_id="$(cat "${git_dir}/ocw-run-id")"
+  fi
+
+  OCW_ROLE="$role" OCW_RUN_ID="$run_id" exec bash -c "$line"
 }
 
 rollback_created_worktree() {
@@ -1049,6 +1217,12 @@ create_worktree() {
     die "--no-commander requires -H/--herdr"
   fi
 
+  # Same reasoning as --no-commander: a label only names the Herdr
+  # workspace and its panes' sessions, so outside -H it is a typo to report.
+  if [ -n "$WORKSPACE_LABEL_OVERRIDE" ] && [ "$USE_HERDR" != "true" ]; then
+    die "--label requires -H/--herdr"
+  fi
+
   if [ -z "$base_ref" ]; then
     base_ref="$(
       git -C "$repo_root" symbolic-ref refs/remotes/origin/HEAD 2>/dev/null |
@@ -1091,6 +1265,9 @@ create_worktree() {
   # a lone '/' as the repo/slug separator would be visually indistinguishable
   # from a '/' inside the slug (e.g. "myrepo / feature/foo").
   workspace_label="${repo_name} :: ${slug}"
+  if [ -n "$WORKSPACE_LABEL_OVERRIDE" ]; then
+    workspace_label="$WORKSPACE_LABEL_OVERRIDE"
+  fi
 
   echo "repo:        ${repo_name}"
   echo "main dir:    ${repo_root}"
@@ -1274,6 +1451,13 @@ raise SystemExit(0 if walk(data) else 1)
 PY
 }
 
+# Closes only workspaces with a pane whose cwd is exactly the removed
+# worktree. A Herdr worktree group's parent (the main checkout) and sibling
+# children never match, so they stay open; never pass --group here, since
+# closing a parent with children fails with workspace_group_close_required and
+# --group would take the human's own workspaces down with it (ADR
+# DOC-2610111932 §2.2/§4). `workspace close`, not `worktree remove`, because
+# the latter deletes the checkout, which this script does itself.
 close_herdr_workspaces_for_checkout() {
   local worktree_dir="$1"
 
@@ -1804,6 +1988,11 @@ while true; do
       NO_COMMANDER=true
       shift
       ;;
+    --label)
+      [ "$#" -ge 2 ] || die "--label requires a value"
+      WORKSPACE_LABEL_OVERRIDE="$2"
+      shift 2
+      ;;
     *)
       break
       ;;
@@ -1841,6 +2030,11 @@ case "$cmd" in
           NO_COMMANDER=true
           shift
           ;;
+        --label)
+          [ "$#" -ge 2 ] || die "--label requires a value"
+          WORKSPACE_LABEL_OVERRIDE="$2"
+          shift 2
+          ;;
         *)
           break
           ;;
@@ -1850,6 +2044,15 @@ case "$cmd" in
     init_repo_context
     resolve_worktree_layout
     create_worktree "$@"
+    ;;
+
+  agent)
+    shift
+
+    [ "$#" -le 1 ] ||
+      die "too many arguments for agent"
+
+    start_pane_agent "$@"
     ;;
 
   rm | remove)
