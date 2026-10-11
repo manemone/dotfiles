@@ -162,11 +162,11 @@ commander には**絶対パス**で渡す（§6）。**commander が計画書へ
    傘の司令官ワークスペースは常に3ペインであることは `umbrella-orchestrator/SKILL.md`
    §5「ワークスペース階層」参照）。ラベルは `ocw` に**作成時に** `--label` で渡す。
    書式は `umbrella-orchestrator/SKILL.md` §5「ワークスペースラベル」に従う
-   （`<ラベル接頭辞> :: <傘の日本語要約>`。接頭辞 `$prefix` は `umbrella-orchestrator/SKILL.md` §5「ワークスペースラベル」の手順で取る。傘の日本語要約は全角12文字以内の目安。
+   （`<ラベル接頭辞> :: <傘の日本語要約>`。接頭辞（`--label` の中に `$(…)` で埋める。変数に入れて別の呼び出しで使わない）は `umbrella-orchestrator/SKILL.md` §5「ワークスペースラベル」の手順で取る。傘の日本語要約は全角12文字以内の目安。
    ブリーフの問題意識から相談AI自身が起こしてよい。この時点で計画書はまだ無い）:
 
    ```bash
-   ocw -H --label "$prefix :: <傘の日本語要約>" <傘ブランチ名> <ターゲットブランチ>
+   ocw -H --label "$(ocw help 2>/dev/null | grep -q 'ocw label-prefix' && ocw label-prefix || echo '<repo_name>') :: <傘の日本語要約>" <傘ブランチ名> <ターゲットブランチ>
    ```
 
    エージェントが起動するのは commander だけで、implementer / reviewer のペインはシェルの

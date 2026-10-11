@@ -182,8 +182,8 @@ dirname "$(git worktree list --porcelain | sed -n '1s/^worktree //p')"
 ```bash
 cd <対象リポのメインワークツリーの絶対パス>
 git fetch origin
-# $prefix は umbrella-orchestrator §5「ワークスペースラベル」の手順（古い ocw への備え込み）で取る
-ocw -H --no-commander --label "$prefix :: <日本語の説明>" <ブランチ名> origin/<既定ブランチ>
+# ラベル接頭辞の取り方は umbrella-orchestrator §5「ワークスペースラベル」参照（同じ呼び出しの中で完結させる）
+ocw -H --no-commander --label "$(ocw help 2>/dev/null | grep -q 'ocw label-prefix' && ocw label-prefix || echo '<repo_name>') :: <日本語の説明>" <ブランチ名> origin/<既定ブランチ>
 ```
 
 - **ラベルの接頭辞はリポ名ではなく `ocw label-prefix` で取る**（`git config ocw.labelPrefix`、

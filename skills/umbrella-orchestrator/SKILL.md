@@ -450,7 +450,7 @@ gh pr view <PR番号> -R <owner/name> --json baseRefName,reviews,commits
    ```bash
    cd <メインワークツリーの絶対パス>
    git fetch origin
-   ocw -H --no-commander --label "$prefix :: <傘の日本語要約> 孫N <孫の日本語要約>" <孫ブランチ名> origin/<既定ブランチ>
+   ocw -H --no-commander --label "$(ocw help 2>/dev/null | grep -q 'ocw label-prefix' && ocw label-prefix || echo '<repo_name>') :: <傘の日本語要約> 孫N <孫の日本語要約>" <孫ブランチ名> origin/<既定ブランチ>
    ```
 
    - **base-ref（`origin/<既定ブランチ>`）を省略しない。** 理由は同じリポの孫と同じ
@@ -463,7 +463,7 @@ gh pr view <PR番号> -R <owner/name> --json baseRefName,reviews,commits
      メインワークツリーで叩いてよい。**`git checkout` / `git merge` / `git pull` は叩かない**
    - 叩き終えたら傘のワークツリーへ `cd` で戻る（計画書の更新は傘のリポで行う）
 3. ラベル: 上の `--label` に渡す日本語ラベルは
-   `<そのリポのラベル接頭辞> :: <傘の日本語要約> 孫N <孫の日本語要約>` にする（`$prefix` は §5「ワークスペースラベル」の手順をそのリポで実行して取る）（§5「ワークスペースラベル」。
+   `<そのリポのラベル接頭辞> :: <傘の日本語要約> 孫N <孫の日本語要約>` にする（`--label` の中に §5「ワークスペースラベル」の `$(…)` を埋める。`cd` したそのリポで評価される）（§5「ワークスペースラベル」。
    傘のリポ名にしない。Herdr のグループはリポ単位なので、他リポの孫はそのリポのグループに
    入る。サイドバーでどのリポの作業かが分かるようにするため）
 4. プロンプト送信・到達確認は同じリポの孫と同じ（§5「AI間送信手順（二段構え）」）
@@ -887,8 +887,8 @@ main へのマージは人間が手動で行う。
      次の孫がこの孫に依存していなければ手順8へ進む。依存していれば待機する
    - 手順8（次の孫が他リポの孫のとき）: そのリポのメインワークツリーへ cd し、
      git fetch origin のあと
-     ocw -H --no-commander --label "$prefix :: …" <孫ブランチ名> origin/<既定ブランチ>
-     （base-ref を省略しない）。ラベルの接頭辞はそのリポで取った `$prefix`。プロンプト末尾の自動付与は
+     ocw -H --no-commander --label "$(ocw help 2>/dev/null | grep -q 'ocw label-prefix' && ocw label-prefix || echo '<repo_name>') :: …" <孫ブランチ名> origin/<既定ブランチ>
+     （base-ref を省略しない）。ラベルの接頭辞は§5「ワークスペースラベル」の `$(…)` をそのまま埋める（そのリポで実行されるので、そのリポの接頭辞になる）。プロンプト末尾の自動付与は
      §3.2「他リポの孫の spawn」の他リポ用に差し替える。終わったら傘のワークツリーへ戻る
    - 手順9: ⏳ の孫が残っていれば finalize せず、何もせず次のcronを待つ（ユーザーに
      確認しない。cron は巡回ごとに前回を覚えておらず、確認すると毎回繰り返すため。
@@ -1334,7 +1334,7 @@ Herdr ワークスペースの既定ラベルは `<ラベル接頭辞> :: <slug>
 **`ocw -H` の作成時に `--label` で渡す**:
 
 ```bash
-ocw -H --no-commander --label "$prefix :: <傘の日本語要約> 孫N <孫の日本語要約>" <孫ブランチ名> <傘ブランチ名>
+ocw -H --no-commander --label "$(ocw help 2>/dev/null | grep -q 'ocw label-prefix' && ocw label-prefix || echo '<repo_name>') :: <傘の日本語要約> 孫N <孫の日本語要約>" <孫ブランチ名> <傘ブランチ名>
 ```
 
 **なぜ作成後の `herdr workspace rename` ではなく `--label` か**（ADR DOC-2610111939）:
@@ -1359,19 +1359,18 @@ ocw -H --no-commander --label "$prefix :: <傘の日本語要約> 孫N <孫の�
 
 **`<ラベル接頭辞>` は `ocw label-prefix` で取る**（一次情報源は `ocw`。`git config ocw.labelPrefix`、
 未設定ならリポ名。長いリポ名をサイドバーで短く見せるための表示専用のキーで、ワークツリーの
-パス `{repo}` には効かない）。**ラベルを組むリポで**（他リポの孫ならそのリポのメイン
-ワークツリーで）次のように `prefix` に入れてから `--label` に使う:
+パス `{repo}` には効かない）。**この `--label` の中に次の `$(…)` をそのまま埋める**:
 
 ```bash
-# 対象リポのメインワークツリーで実行する。古い ocw には label-prefix が無く、
-# 叩くとワークツリー "label-prefix" が作られてしまうので、help で存在を確かめてから使う
-if ocw help 2>/dev/null | grep -q 'ocw label-prefix'; then
-  prefix="$(ocw label-prefix)"
-else
-  prefix="<repo_name>"   # 古い ocw: 従来どおりリポ名
-fi
+ocw -H … --label "$(ocw help 2>/dev/null | grep -q 'ocw label-prefix' && ocw label-prefix || echo '<repo_name>') :: <説明>" …
 ```
 
+- `<repo_name>` は実際のリポ名に置換する。古い `ocw` には `label-prefix` が無く、叩くと
+  ワークツリー `label-prefix` が作られてしまうので、`ocw help` に載っているかを確かめてから
+  使い、無ければ従来どおりリポ名になる
+- **変数（`prefix=…`）に入れて別のコードブロック・別の Bash 呼び出しで使わない。** シェル変数は
+  呼び出しをまたいで残らず、空のまま ` :: <説明>` というラベルで起動してしまう。`$(…)` を
+  `ocw -H` と同じ呼び出しの `--label` の中に置けば、空にならず、`cd` したリポで評価される
 
 - 傘（司令官スペース）: `<ラベル接頭辞> :: <傘の日本語要約>`
 - 孫（実装ワークスペース）: `<ラベル接頭辞> :: <傘の日本語要約> 孫N <孫の日本語要約>`

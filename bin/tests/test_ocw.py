@@ -1842,6 +1842,25 @@ class HerdrPaneModeTests(HerdrOcwTestCase):
             [f"{default_label} / 実装", f"{default_label} / レビュー"],
         )
 
+    def test_default_label_uses_label_prefix_when_configured(self):
+        # 既定ラベル (と各 claude の --name) の接頭辞は、未設定ならリポ名
+        # (make_repo() の origin -> "origin")、ocw.labelPrefix があればそれ。
+        result = self.run_herdr_ocw(["-H", "--no-commander", "gadget-maker"])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        create_call = next(c for c in self.herdr_calls() if c[:2] == ["worktree", "open"])
+        self.assertEqual(create_call[create_call.index("--label") + 1], "origin :: gadget-maker")
+
+        self.herdr_log.unlink()
+        set_config(self.repo_root, "ocw.labelPrefix", "LDF")
+        result = self.run_herdr_ocw(["-H", "--no-commander", "widget-maker"])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        create_call = next(c for c in self.herdr_calls() if c[:2] == ["worktree", "open"])
+        self.assertEqual(create_call[create_call.index("--label") + 1], "LDF :: widget-maker")
+        lines = self.agent_lines("widget-maker")
+        self.assertEqual(
+            shlex.split(lines["implementer"])[-1], "LDF :: widget-maker / 実装"
+        )
+
     def test_name_is_added_only_to_plain_claude_commands(self):
         # 人間の OCW_*_COMMAND の上書きを壊さない: claude 以外 (Codex 等・
         # `env X=1 claude` のようなラッパー) は一切変えず、claude の追加引数や
