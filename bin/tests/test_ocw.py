@@ -1981,7 +1981,7 @@ class HerdrRmGroupedWorkspaceTests(HerdrOcwTestCase):
     チェックアウト）・兄弟の子・無関係なワークスペースは閉じない。親を閉じると
     `workspace_group_close_required` になるうえ人間のワークスペースを巻き込むため、
     `--group` も付けない。グループに乗った子と、移行前の平らなワークスペースは
-    どちらも同じ cwd 一致で閉じられる。"""
+    どちらも同じ cwd 一致で閉じられる。閉じるのに失敗しても git 側の削除は進む。"""
 
     def test_rm_closes_only_workspaces_whose_pane_cwd_is_the_removed_worktree(self):
         for name in ("widget-maker", "gadget-maker"):
@@ -2004,9 +2004,12 @@ class HerdrRmGroupedWorkspaceTests(HerdrOcwTestCase):
 
         result = self.run_herdr_ocw(
             ["rm", "widget-maker"],
+            fail_on="workspace close",
             extra_env={"OCW_TEST_HERDR_TOPOLOGY": str(topology)},
         )
+        # Closing fails here; git-side removal still proceeds with a warning.
         self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("failed to close Herdr workspace", result.stderr)
 
         closes = [c for c in self.herdr_calls() if c[:2] == ["workspace", "close"]]
         self.assertEqual(sorted(c[2] for c in closes), ["w-grouped", "w-legacy"])
