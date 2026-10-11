@@ -385,10 +385,21 @@ case "$sub" in
     exit 0
     ;;
   "workspace list")
-    printf '{"id":"cli:workspace:list","result":{"workspaces":[]}}\n'
+    # $OCW_TEST_HERDR_TOPOLOGY: JSON file {"<workspace_id>": ["<pane cwd>", ...]}
+    # describing the workspaces the fake server has open (default: none).
+    python3 - "${OCW_TEST_HERDR_TOPOLOGY:-}" <<'PY'
+import json, sys
+topo = json.load(open(sys.argv[1])) if sys.argv[1] else {}
+print(json.dumps({"id": "cli:workspace:list", "result": {"workspaces": [{"workspace_id": w} for w in topo]}}))
+PY
     ;;
   "pane list")
-    printf '{"id":"cli:pane:list","result":{"panes":[]}}\n'
+    python3 - "${OCW_TEST_HERDR_TOPOLOGY:-}" "${4:-}" <<'PY'
+import json, sys
+topo = json.load(open(sys.argv[1])) if sys.argv[1] else {}
+panes = [{"pane_id": "%s-p%d" % (sys.argv[2], i), "workspace_id": sys.argv[2], "cwd": c} for i, c in enumerate(topo.get(sys.argv[2], []))]
+print(json.dumps({"id": "cli:pane:list", "result": {"panes": panes}}))
+PY
     ;;
   *)
     echo "herdr-shim: unhandled command: $*" >&2
@@ -1962,6 +1973,48 @@ class HerdrAlreadyOpenTests(HerdrOcwTestCase):
         self.assertFalse(any(c[:2] == ["pane", "split"] for c in calls))
         self.assertFalse(any(c[:2] == ["workspace", "close"] for c in calls))
         self.assertFalse((self.repo_root.parent / "widget-maker").exists())
+
+
+class HerdrRmGroupedWorkspaceTests(HerdrOcwTestCase):
+    """`ocw rm` が閉じる Herdr ワークスペースは、ペインの cwd が消すワークツリーと
+    一致するものだけ（ADR DOC-2610111932 §4）。ワークツリーグループの親（メインの
+    チェックアウト）・兄弟の子・無関係なワークスペースは閉じない。親を閉じると
+    `workspace_group_close_required` になるうえ人間のワークスペースを巻き込むため、
+    `--group` も付けない。グループに乗った子と、移行前の平らなワークスペースは
+    どちらも同じ cwd 一致で閉じられる。閉じるのに失敗しても git 側の削除は進む。"""
+
+    def test_rm_closes_only_workspaces_whose_pane_cwd_is_the_removed_worktree(self):
+        for name in ("widget-maker", "gadget-maker"):
+            create = run_ocw([name], self.repo_root)
+            self.assertEqual(create.returncode, 0, create.stderr)
+
+        parent = self.repo_root.parent
+        topology = parent / "topology.json"
+        topology.write_text(
+            json.dumps(
+                {
+                    "w-parent": [str(self.repo_root)],
+                    "w-grouped": [str(parent / "widget-maker")],
+                    "w-sibling": [str(parent / "gadget-maker")],
+                    "w-legacy": [str(parent / "widget-maker")],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        result = self.run_herdr_ocw(
+            ["rm", "widget-maker"],
+            fail_on="workspace close",
+            extra_env={"OCW_TEST_HERDR_TOPOLOGY": str(topology)},
+        )
+        # Closing fails here; git-side removal still proceeds with a warning.
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("failed to close Herdr workspace", result.stderr)
+
+        closes = [c for c in self.herdr_calls() if c[:2] == ["workspace", "close"]]
+        self.assertEqual(sorted(c[2] for c in closes), ["w-grouped", "w-legacy"])
+        self.assertFalse(any("--group" in c for c in closes))
+        self.assertFalse((parent / "widget-maker").exists())
 
 
 class HelpTopicTests(unittest.TestCase):

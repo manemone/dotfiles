@@ -1388,6 +1388,13 @@ raise SystemExit(0 if walk(data) else 1)
 PY
 }
 
+# Closes only workspaces with a pane whose cwd is exactly the removed
+# worktree. A Herdr worktree group's parent (the main checkout) and sibling
+# children never match, so they stay open; never pass --group here, since
+# closing a parent with children fails with workspace_group_close_required and
+# --group would take the human's own workspaces down with it (ADR
+# DOC-2610111932 §2.2/§4). `workspace close`, not `worktree remove`, because
+# the latter deletes the checkout, which this script does itself.
 close_herdr_workspaces_for_checkout() {
   local worktree_dir="$1"
 
