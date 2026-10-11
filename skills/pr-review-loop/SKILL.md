@@ -700,7 +700,11 @@ STATUS=$(herdr pane get "$REVIEWER_PANE" | python3 -c "import json,sys; d=json.l
 herdr pane read "$REVIEWER_PANE" --source detection --lines 3
 ```
 
-判定は**エージェント固有の飾りではなく、次の3つのどれに当たるか**で行う:
+判定は**エージェント固有の飾りではなく、次の3つのどれに当たるか**で行う。
+**入力欄（`❯` の行）に文が見えるだけでは「本文を抱えている」と判定しない。** Claude Code は
+次に打ちそうな文を自動で推測し、入力欄に薄い字の候補として出す。`herdr pane read` では普通の
+文字と同じに見えるが、人が打った本文ではない（入力モードやペースト確認の表示が無ければ候補である）。
+人間の操作の根拠にもしない:
 
 - **エージェントが入力欄に本文を抱えたまま確定待ち**（入力モードやペースト確認の表示が出ている）
   → 起動済み。`herdr pane send-keys "$REVIEWER_PANE" Enter` で確定させ、`idle` または `done`
