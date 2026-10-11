@@ -1772,7 +1772,7 @@ class HerdrPaneModeTests(HerdrOcwTestCase):
             ["-H", "--label", "L", "widget-maker"],
             extra_env={
                 "OCW_COMMANDER_COMMAND": "codex --model x",
-                "OCW_IMPLEMENTER_COMMAND": "/usr/bin/claude --permission-mode auto",
+                "OCW_IMPLEMENTER_COMMAND": "FOO=1 /usr/bin/claude --permission-mode auto",
                 "OCW_REVIEWER_COMMAND": "claude --name mine",
             },
         )
@@ -1781,7 +1781,7 @@ class HerdrPaneModeTests(HerdrOcwTestCase):
         self.assertEqual(run_cmds[0], "codex --model x")
         self.assertEqual(
             shlex.split(run_cmds[1]),
-            ["/usr/bin/claude", "--permission-mode", "auto", "--name", "L / 実装"],
+            ["FOO=1", "/usr/bin/claude", "--permission-mode", "auto", "--name", "L / 実装"],
         )
         self.assertEqual(run_cmds[2], "claude --name mine")
 
