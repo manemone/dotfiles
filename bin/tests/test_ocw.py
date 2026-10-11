@@ -964,6 +964,28 @@ class RepoNamePathGuessTests(unittest.TestCase):
             self.assertEqual(extract_repo_name(result.stdout), "myrepo")
 
 
+class LabelPrefixTests(OcwTestCase):
+    """ocw.labelPrefix: 表示専用の接頭辞。未設定なら repo_name、設定時も
+    {repo}（ワークツリーのパス）には効かない。`ocw label-prefix` が一次情報源。"""
+
+    def test_label_prefix_falls_back_to_repo_name_when_unset(self):
+        result = run_ocw(["label-prefix"], self.repo_root)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "origin\n")
+
+    def test_label_prefix_config_is_display_only(self):
+        set_config(self.repo_root, "ocw.labelPrefix", "LDF")
+        set_config(self.repo_root, "ocw.worktreeDir", "{repo_parent}/{repo}-{name}")
+
+        result = run_ocw(["label-prefix"], self.repo_root)
+        self.assertEqual(result.stdout, "LDF\n")
+
+        create = run_ocw(["widget-maker"], self.repo_root)
+        self.assertEqual(create.returncode, 0, create.stderr)
+        self.assertEqual(extract_repo_name(create.stdout), "origin")
+        self.assertTrue((self.repo_root.parent / "origin-widget-maker").is_dir())
+
+
 class WorktreeDirTemplateTests(OcwTestCase):
     """ocw.worktreeDir の雛形展開・検証・掃除境界の逆算 (ADR DOC-2608062258
     §3.4 / §3.5 / §2.9)."""

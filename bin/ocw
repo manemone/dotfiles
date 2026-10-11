@@ -40,6 +40,7 @@ usage:
   ocw rm -f <worktree-name>
   ocw agent [commander|implementer|reviewer]
   ocw ls
+  ocw label-prefix
   ocw help [topic]
   ocw help all
 
@@ -62,7 +63,7 @@ create behavior:
 
   --label <text>
     with -H/--herdr, the Herdr workspace label (default:
-    "<repo_name> :: <slug>"); each pane's claude is also started with
+    "<label_prefix> :: <slug>"; see `ocw help config`); each pane's claude is also started with
     --name "<label> / <role>" so the Claude app shows the same title
     requires -H/--herdr on create; without it, ocw dies
     ignored by ls/rm, like -H
@@ -159,12 +160,19 @@ repo_name ({repo}) resolution order:
      basename(repo_root) in {main,master,trunk} -> basename(repo_parent);
      otherwise -> basename(repo_root)
 
+ocw.labelPrefix (display only):
+  the short repo prefix of the workspace label ("<label_prefix> :: <slug>")
+  and of the Claude session names derived from it. Falls back to repo_name
+  when unset. Unlike ocw.repoName it never touches {repo} / worktree paths.
+  `ocw label-prefix` prints the resolved value on one line, so skills can
+  build `--label "$(ocw label-prefix) :: ..."` without duplicating the logic.
+
 other ocw.* keys:
   ocw.mergedInto        highest-priority integration ref for `ocw rm`'s
                          merge check -- see `ocw help rm`
   ocw.githubMergeCheck  bool, default false -- see `ocw help rm`
 
-All 4 keys are read via the normal git config layering (local > global >
+All 5 keys are read via the normal git config layering (local > global >
 system); set in a repo's .git/config for that repo only, or in
 ~/.gitconfig as a personal default across repos.
 TOPIC
@@ -352,7 +360,8 @@ has no --env, so the root pane shell gets them via `export OCW_ROLE=..
 OCW_RUN_ID=..;` typed before its launch command; split panes use --env.) Panes are also
 renamed to match their role, and the tab is renamed "agents".
 
-workspace label: "<repo_name> :: <slug>" (':: ', not '/' -- the slug can
+workspace label: "<label_prefix> :: <slug>" (label_prefix is ocw.labelPrefix,
+falling back to repo_name -- see `ocw help config`) (':: ', not '/' -- the slug can
 itself contain '/', which would make the repo/slug boundary ambiguous
 with a plain '/' separator). `--label <text>` replaces it (requires -H,
 like --no-commander); renaming afterwards with `herdr workspace rename`
@@ -625,6 +634,7 @@ invocation_root=""
 repo_root=""
 repo_parent=""
 repo_name=""
+label_prefix=""
 is_bare="false"
 worktree_dir_template=""
 worktree_cleanup_boundary=""
@@ -723,6 +733,17 @@ resolve_repo_name() {
       repo_name="$root_base"
       ;;
   esac
+}
+
+# Display-only prefix for workspace labels: ocw.labelPrefix, else repo_name.
+# Deliberately separate from ocw.repoName, which also feeds {repo} in worktree
+# paths. Must be called after resolve_repo_name.
+resolve_label_prefix() {
+  label_prefix="$(ocw_config_get ocw.labelPrefix "")"
+
+  if [ -z "$label_prefix" ]; then
+    label_prefix="$repo_name"
+  fi
 }
 
 # Substitutes the known ocw.worktreeDir placeholders. `name` is passed
@@ -1264,7 +1285,8 @@ create_worktree() {
   # ' :: ' rather than ' / ' -- $slug can itself contain '/' (ADR §3.3), and
   # a lone '/' as the repo/slug separator would be visually indistinguishable
   # from a '/' inside the slug (e.g. "myrepo / feature/foo").
-  workspace_label="${repo_name} :: ${slug}"
+  resolve_label_prefix
+  workspace_label="${label_prefix} :: ${slug}"
   if [ -n "$WORKSPACE_LABEL_OVERRIDE" ]; then
     workspace_label="$WORKSPACE_LABEL_OVERRIDE"
   fi
@@ -2015,6 +2037,17 @@ case "$cmd" in
 
     init_repo_context
     git -C "$repo_root" worktree list
+    ;;
+
+  label-prefix)
+    shift
+
+    [ "$#" -eq 0 ] ||
+      die "ocw label-prefix does not accept arguments"
+
+    init_repo_context
+    resolve_label_prefix
+    printf '%s\n' "$label_prefix"
     ;;
 
   new)

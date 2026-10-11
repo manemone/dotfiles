@@ -182,9 +182,12 @@ dirname "$(git worktree list --porcelain | sed -n '1s/^worktree //p')"
 ```bash
 cd <対象リポのメインワークツリーの絶対パス>
 git fetch origin
-ocw -H --no-commander --label "<repo_name> :: <日本語の説明>" <ブランチ名> origin/<既定ブランチ>
+# $prefix は umbrella-orchestrator §5「ワークスペースラベル」の手順（古い ocw への備え込み）で取る
+ocw -H --no-commander --label "$prefix :: <日本語の説明>" <ブランチ名> origin/<既定ブランチ>
 ```
 
+- **ラベルの接頭辞はリポ名ではなく `ocw label-prefix` で取る**（`git config ocw.labelPrefix`、
+  未設定ならリポ名。リポごとに短くできる）。
 - **ラベルは作成時に `--label` で渡す**（書式は `umbrella-orchestrator` §5「ワークスペース
   ラベル」。説明は全角16文字以内を目安に、ブリーフのテーマから起こす）。ペインの claude が
   このラベルから作った会話名（`<ラベル> / 実装` など）で起動し、Claude アプリの会話タイトルと
