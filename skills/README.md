@@ -16,7 +16,7 @@ AI コーディングエージェント向けのスキル。**Claude Code 専用
 | `umbrella-handoff` | 相談で問題意識が固まった直後から傘の司令官が計画書を書き始める直前までを自動化。ブリーフ起草・傘ブランチ作成・commander への引き継ぎ |
 | `repo-baseline` | `templates/repo-baseline/` copier テンプレートを既存リポジトリへ適用する手順と判断ガイド |
 | `ocw` | `ocw` CLI（Git worktree 管理）の存在告知。使い方は `ocw help <topic>` へ誘導するだけで、挙動の事実は書かない |
-| `worktree-cleanup` | 不要になった git ワークツリーの掃除。現在地からスコープ（傘／リポジトリ／herdr全体）を自動決定し、削除候補を一覧提示して人間の承認を得てから `ocw rm` で削除する |
+| `worktree-cleanup` | 不要になった git ワークツリーの掃除。現在地からスコープ（傘／リポジトリ／herdr全体）を自動決定し、削除候補を一覧提示して人間の承認を得てから `ocw rm` で削除する。ワークツリーが無いのに残った Herdr ワークスペース（孤児）の閉鎖は `orphan` を明示指定する |
 | `dfxfer` | 共有サーバ上で `dfup`/`dfdown` の受け渡し場所（`~/dfxfer/inbox` / `~/dfxfer/outbox`）を扱うときの知識。「inbox に来てるファイル」「outbox に置いといて」のような指示に対応する |
 
 `pr-review-loop` は各Phaseの境界で `ocw-meter event`（工程計測。
