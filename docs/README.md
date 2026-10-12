@@ -28,6 +28,7 @@
 | 旧形で撒いたリポジトリ（modeldex・pixidex・sheaf）を `copier update` できる形へ移す | [reference/DOC-2610110507_repo-baseline旧形からの移行手順.md](reference/DOC-2610110507_repo-baseline旧形からの移行手順.md) | 橋渡しのコミットの手順・リポジトリごとの撒いた版と `language` の答え方・衝突しやすいファイル・namecheck |
 | なぜ他人の PR 群のレビューと自分の PR 群のレビュー依頼を今のスキル構成にしたかを知る | [adr/DOC-2609270420_multi-repo-pr-review-skills.md](adr/DOC-2609270420_multi-repo-pr-review-skills.md) | `pr-group-review`（レビュワー用）と `pr-group-request`（依頼者用）の線引き・レビュー状態の置き場所・自己完結 HTML のまとめ・COMMENT のみの投稿と権限に止められたときの振る舞いの決定と、却下した案 |
 | なぜ複数リポにまたがる作業の入口と傘の進め方を今の形にしたかを知る | [adr/DOC-2610081412_cross-repo-task-intake.md](adr/DOC-2610081412_cross-repo-task-intake.md) | 入口スキル `task-intake` の判断の3軸と振り分け・司令官の置き場・リポ間の役割分担・軽いハンドオフ・複数リポの傘（他リポの孫は既定ブランチへ PR しマージは人間）の決定と、却下した案 |
+| なぜ孫の PR を承認後も孫がマージせず、傘の司令官がマージするようにしたかを知る | [adr/DOC-2610130212_commander-merges-grandchildren.md](adr/DOC-2610130212_commander-merges-grandchildren.md) | `pr-review-loop` がどの PR もマージしない形・司令官のマージ条件・巡回 cron を30分にした理由・ADR DOC-2609121719 との関係 |
 | `ocw-meter` のイベントスキーマを調べる | [reference/DOC-2608021229-c_ocw-meterイベントスキーマ.md](reference/DOC-2608021229-c_ocw-meterイベントスキーマ.md) | 全 event_type・全フィールド・費用計算式の一次情報源 |
 | LLM費用のベースラインを測る手順を知る | [reference/DOC-2608021229-b_LLM費用観測ベースライン計測手順.md](reference/DOC-2608021229-b_LLM費用観測ベースライン計測手順.md) | 実PR 5〜10本での計測手順 |
 | 傘ブランチの計画を確認する | [planning/](planning/) 配下の各計画書 | 進行中・完了した傘ブランチの計画書 |
@@ -83,6 +84,7 @@
 | DOC-2610110435 | [copier-root-entry.md](adr/DOC-2610110435_copier-root-entry.md) | repo-baseline の `copier.yml` をリポジトリのルートに置き `copier update` を使えるようにした決定。撒く元の推奨・`_src_path` を伏せない・旧形からの移行（橋渡しのコミット）を記録 |
 | DOC-2610111932 | [herdr-worktree-group.md](adr/DOC-2610111932_herdr-worktree-group.md) | `ocw -H` のワークスペースを Herdr のワークツリーグループに乗せる方式の決定。別セッションでの実測に基づき、傘単位（孫を傘の子にする）は Herdr の仕様上できないこと、リポ単位のグループ＋ラベルの工夫を推奨すること、ルートペインの環境変数（シェルへ `export`）・`already_open` で止める・`--trust-repository` を付けない決定、片付け・移行の扱いをまとめた（状態: 採用） |
 | DOC-2610111939 | [ocw-session-name.md](adr/DOC-2610111939_ocw-session-name.md) | `ocw -H` が各ペインの claude を `--name "<ラベル> / <役割>"` で起動し Claude アプリの会話タイトルを herdr のラベルに揃えた決定。実測（日本語名の `SendMessage`・宛先解決）と却下した案を記録 |
+| DOC-2610130212 | [commander-merges-grandchildren.md](adr/DOC-2610130212_commander-merges-grandchildren.md) | 孫の PR は承認されてもマージせず傘の司令官がマージする決定。`pr-review-loop` はどの PR もマージしない・司令官のマージ条件・巡回 cron 30分・ADR DOC-2609121719 との関係 |
 
 ### planning/ — ロードマップ・計画
 
