@@ -1,5 +1,6 @@
 import json,glob,os,re,collections,datetime
-since=datetime.datetime(2026,10,11,16,0).astimezone()
+since=datetime.datetime.fromisoformat(os.environ.get('USAGE_SINCE','2026-10-11T16:00')).astimezone()
+until=datetime.datetime.fromisoformat(os.environ.get('USAGE_UNTIL','2026-10-12T22:00')).astimezone()
 # 集計対象のリポ名をカンマ区切りで渡す（例: USAGE_REPOS=dotfiles,other-repo）
 REPOS=[r for r in os.environ.get('USAGE_REPOS','dotfiles').split(',') if r]
 def branch(proj):
@@ -30,7 +31,7 @@ for f in glob.glob(os.path.expanduser('~/.claude/projects/*/*.jsonl')):
         if d.get('type')=='assistant' and d.get('timestamp'):
             t=datetime.datetime.fromisoformat(d['timestamp'].replace('Z','+00:00'))
             m=d.get('message',{})
-            if t>=since and m.get('id'): msgs[m['id']]=(m.get('model') or '',m.get('usage') or {})
+            if since<=t<until and m.get('id'): msgs[m['id']]=(m.get('model') or '',m.get('usage') or {})
     if not msgs: continue
     role=classify(proj,texts); nsess[role]+=1
     for mo,u in msgs.values():

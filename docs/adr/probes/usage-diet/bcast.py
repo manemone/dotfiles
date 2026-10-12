@@ -1,5 +1,6 @@
 import json,glob,os,re,collections,datetime
-since=datetime.datetime(2026,10,11,16,0).astimezone()
+since=datetime.datetime.fromisoformat(os.environ.get('USAGE_SINCE','2026-10-11T16:00')).astimezone()
+until=datetime.datetime.fromisoformat(os.environ.get('USAGE_UNTIL','2026-10-12T22:00')).astimezone()
 P={'opus':(4,20,0.20,5,8),'sonnet':(2,10,0.20,2.5,4),'haiku':(0.10,0.50,0.01,0.125,0.20)}
 def cost(mo,u):
     k='opus' if 'opus' in mo else ('sonnet' if 'sonnet' in mo else 'haiku')
@@ -23,14 +24,16 @@ for f in glob.glob(os.path.expanduser('~/.claude/projects/*/*.jsonl')):
                 b=re.sub(r'.*?<cross-session-message[^>]*>','',c,flags=re.S).strip()
                 if b.startswith('ハブ') or b.startswith('【ハブ'): trig='ハブの周知'
                 elif '返事は不要' in b[:80] or '返事は要りません' in b[:80] or 'お知らせ' in b[:40]: trig='他の傘からのお知らせ'
+                elif b.startswith(('計画書','ブリーフ')): trig='spawn・引き継ぎ指示'
+                elif re.search(r'PR\s*#?\d+',b[:200]): trig='PR・承認・マージの報告'
                 else: trig='その他のセッション間'
                 t=datetime.datetime.fromisoformat(d['timestamp'].replace('Z','+00:00'))
-                if t>=since: n[trig]+=1
+                if since<=t<until: n[trig]+=1
             else: trig='other'
         if d.get('type')=='assistant' and d.get('timestamp'):
             t=datetime.datetime.fromisoformat(d['timestamp'].replace('Z','+00:00'))
             m=d.get('message',{})
-            if t>=since and m.get('id') and m['id'] not in seen:
+            if since<=t<until and m.get('id') and m['id'] not in seen:
                 seen.add(m['id']); by[trig]+=cost(m.get('model') or '',m.get('usage') or {})
 T=sum(by.values())
 for k,v in by.most_common(): print(f'{k:16} ${v:6.0f} {100*v/T:4.1f}%  受信={n[k]}')

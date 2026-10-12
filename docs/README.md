@@ -30,6 +30,7 @@
 | なぜ複数リポにまたがる作業の入口と傘の進め方を今の形にしたかを知る | [adr/DOC-2610081412_cross-repo-task-intake.md](adr/DOC-2610081412_cross-repo-task-intake.md) | 入口スキル `task-intake` の判断の3軸と振り分け・司令官の置き場・リポ間の役割分担・軽いハンドオフ・複数リポの傘（他リポの孫は既定ブランチへ PR しマージは人間）の決定と、却下した案 |
 | `ocw-meter` のイベントスキーマを調べる | [reference/DOC-2608021229-c_ocw-meterイベントスキーマ.md](reference/DOC-2608021229-c_ocw-meterイベントスキーマ.md) | 全 event_type・全フィールド・費用計算式の一次情報源 |
 | LLM費用のベースラインを測る手順を知る | [reference/DOC-2608021229-b_LLM費用観測ベースライン計測手順.md](reference/DOC-2608021229-b_LLM費用観測ベースライン計測手順.md) | 実PR 5〜10本での計測手順 |
+| Claude の使用量を実ログから測る手順と、どこを削れるかの調査結果を知る | [reference/DOC-2610130216_使用量の測り方と削りどころの調査結果.md](reference/DOC-2610130216_使用量の測り方と削りどころの調査結果.md) | 集計スクリプト（`docs/adr/probes/usage-diet/`）の使い方・役割別の費用・キャッシュ切れ・文脈の太り方・compact の試算と、効かないとわかった案 |
 | 傘ブランチの計画を確認する | [planning/](planning/) 配下の各計画書 | 進行中・完了した傘ブランチの計画書 |
 | このリポジトリの AI 支援基盤を他のリポジトリへ配布する | [../templates/repo-baseline/README.md](../templates/repo-baseline/README.md) | copier テンプレート。dotfiles 本体とは独立・自己完結 |
 
