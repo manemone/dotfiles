@@ -9,13 +9,12 @@ from common import *
 
 CATS = ["A", "B", "C", "D1", "D2"]
 KINDS = [("docs", "文書だけ"), ("foundation", "土台"), ("small", "小さい"), ("code", "実装コード")]
-GROUPS = ["Sonnet", "Opus", "その他(弱いモデル等)", "不明"]
-GROUP = {"Sonnet": "Sonnet", "Opus": "Opus", "不明": "不明", "混在": "不明"}
+GROUPS = ["Sonnet", "Opus", "弱いモデル(DeepSeek/Qwen/Kimi)", "その他(Fable/GPT)", "不明"]
 sel = sys.argv[1] if len(sys.argv) > 1 else "all"
 
 prs = {f'{p["repo"]}#{p["n"]}': p for p in json.load(open(os.path.join(DERIVED, "prs_attr.json")))}
 for k, p in prs.items():
-    p["grp"] = GROUP.get(p["impl"], "その他(弱いモデル等)")
+    p["grp"] = model_group(p["impl"])
 
 
 def load_labels(d="labels"):
@@ -95,6 +94,13 @@ def sample():
           [[x, c[x], pct(c[x], len(fl)), sum(1 for f in fl if f[2] == x and f[3]),
             pct(sum(1 for f in fl if f[2] == x and f[3]), c[x])] for x in CATS]
           + [["計", len(fl), "", sum(1 for f in fl if f[3]), pct(sum(1 for f in fl if f[3]), len(fl))]])
+    rc = Counter((f[2], f[4]) for f in fl)
+    print("#### 指摘への対応の結末（resolution）\n")
+    table(["区分", "直した", "実装者が反論・見送り", "判定不能"],
+          [[x, rc[(x, "fixed")], rc[(x, "declined")], rc[(x, "unknown")]] for x in CATS]
+          + [["計", sum(v for (c_, r), v in rc.items() if r == "fixed"),
+              sum(v for (c_, r), v in rc.items() if r == "declined"),
+              sum(v for (c_, r), v in rc.items() if r == "unknown")]])
     ab_only = [j for j in L.values() if not any((not f.get("repeat")) and f["cat"] in ("A", "B", "C") for f in j["findings"])]
     print(f"A/B/C を1件も含まない PR（指摘は D1/D2 だけ、または無し）: {len(ab_only)} / {len(L)} ({pct(len(ab_only), len(L))})\n")
     # 仮判定との一致
@@ -128,10 +134,9 @@ def kappa():
 
 def umbrella():
     L = load_labels()
-    ub = os.environ.get("REVIEW_UMBRELLAS", "")
     print("### 再現実験の対象の傘\n")
     rows = []
-    for n, u in enumerate([x for x in ub.split(",") if x], 1):
+    for n, u in enumerate(umbrellas(), 1):
         repo, base = u.split("/", 1)
         ps = [p for p in prs.values() if p["repo"] == repo and p["base"] == base]
         fl = []

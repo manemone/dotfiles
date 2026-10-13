@@ -63,3 +63,24 @@ def events(pr):
     ev = [(c.get("createdAt", ""), c["body"]) for c in pr["comments"]]
     ev += [(r.get("submittedAt", ""), r["body"]) for r in pr["reviews"]]
     return sorted(ev)
+
+
+def umbrellas():
+    """再現実験の対象の傘。環境変数 REVIEW_UMBRELLAS、無ければ derived/umbrellas.txt（並び順が傘の通し番号）"""
+    v = os.environ.get("REVIEW_UMBRELLAS")
+    if v is None:
+        p = os.path.join(DERIVED, "umbrellas.txt")
+        v = open(p).read().strip() if os.path.exists(p) else ""
+    return [u for u in v.split(",") if u]
+
+
+def model_group(impl):
+    """表示用のモデル群。sample.py の層（弱いモデルと Fable/GPT を一緒にした『その他』）とは別に、
+    集計では DeepSeek・Qwen・Kimi（弱いモデル）と Fable・GPT（その他の強いモデル）を分ける"""
+    if impl in ("Sonnet", "Opus"):
+        return impl
+    if impl in ("DeepSeek", "Qwen", "Kimi"):
+        return "弱いモデル(DeepSeek/Qwen/Kimi)"
+    if impl in ("Fable", "GPT"):
+        return "その他(Fable/GPT)"
+    return "不明"

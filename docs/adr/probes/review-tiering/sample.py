@@ -1,5 +1,5 @@
 """層化抜き取り。層 = 仮の PR 種類 × 実装役のモデル群。指摘のあった PR（rounds_with_findings>=1）
-から取る。再現実験の対象の傘（環境変数 REVIEW_UMBRELLAS=リポ/ベース,...）の孫 PR は全数入れる。
+から取る。再現実験の対象の傘（環境変数 REVIEW_UMBRELLAS=リポ/ベース,...、無ければ derived/umbrellas.txt）の孫 PR は全数入れる。
 乱数は固定シード。結果は derived/sample_ids.json。
 """
 import json, os, random
@@ -8,10 +8,11 @@ from common import *
 
 TARGET = int(os.environ.get("REVIEW_SAMPLE_TARGET", "150"))
 MIN_PER_CELL = 3
+# 層の作り方（2026-10-14 の抜き取りのまま固定。再現のため変えない）。Fable・GPT も弱いモデルと同じ層に入る
 GROUP = {"Sonnet": "Sonnet", "Opus": "Opus", "不明": "不明", "混在": "不明"}
 
 prs = json.load(open(os.path.join(DERIVED, "prs_attr.json")))
-umb = {tuple(u.split("/", 1)) for u in os.environ.get("REVIEW_UMBRELLAS", "").split(",") if u}
+umb = {tuple(u.split("/", 1)) for u in umbrellas()}
 for p in prs:
     p["grp"] = GROUP.get(p["impl"], "その他(弱いモデル等)")
     p["id"] = f'{p["repo"]}#{p["n"]}'
