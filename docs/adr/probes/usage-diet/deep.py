@@ -1,7 +1,7 @@
 """設計3 の観点（キャッシュ書き込み・固定部分・文脈の太り方・レビュアー）で実ログを深掘りする。
 
 使い方: USAGE_REPOS=dotfiles,<他のリポ名> python3 -I deep.py <cache|fixed|band|tools|review|all>
-期間は USAGE_SINCE / USAGE_UNTIL（ISO 8601。既定は背景4 と同じ 2026-10-11T16:00〜2026-10-12T22:00）。
+期間は USAGE_SINCE / USAGE_UNTIL（ISO 8601。既定は 2026-10-11T16:00〜2026-10-12T22:00。背景4 の期間（終わりは 21:xx）とほぼ同じで、終わりだけ 22:00 に固定）。
 ログは読むだけで書き換えない。会話の本文は集計に使うだけで出力しない（分類名・数値だけを出す）。
 """
 import json,glob,os,re,collections,datetime,statistics,sys
@@ -192,6 +192,8 @@ def review(S):
     for s in S:
         if s['role']=='レビュー': byproj[s['proj']].append(s)
     ses=[s for v in byproj.values() for s in v]
+    if not ses:
+        print('この期間にレビュアーのセッションはありません'); return
     rr=collections.Counter(min(s['rereview'],5) for s in ses)
     print('再レビュー依頼を受けた回数の分布（5以上は5に丸め。0 = 初回レビューだけで終わった）:',dict(sorted(rr.items())))
     print(f'レビュアーのセッション {len(ses)} 本 / ワークツリー {len(byproj)} 個（1ワークツリーあたり {len(ses)/max(1,len(byproj)):.1f} 本）')

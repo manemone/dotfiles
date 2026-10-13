@@ -45,7 +45,9 @@ for f in glob.glob(os.path.expanduser('~/.claude/projects/*/*.jsonl')):
             elif c.startswith('<task-notification'): trig='バックグラウンド/Monitor通知'
             elif c.startswith('This session is being continued'): trig='compact後の再開'
             else: trig='人間/その他'
-            turns[trig]+=1; samples.setdefault(trig,c[:100])
+            ut=d.get('timestamp')
+            if ut and since<=datetime.datetime.fromisoformat(ut.replace('Z','+00:00'))<until:
+                turns[trig]+=1; samples.setdefault(trig,c[:100])
         if d.get('type')=='assistant' and d.get('timestamp'):
             t=datetime.datetime.fromisoformat(d['timestamp'].replace('Z','+00:00'))
             m=d.get('message',{})
