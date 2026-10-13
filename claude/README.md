@@ -128,7 +128,7 @@ EOF
 Claude Code の設定ファイル。以下の汎用設定を含む（マシン固有の `additionalDirectories`、
 `hooks`（git-guard フックを除く。§3.5参照）は**意図的に除外**。`permissions.allow` は
 リポジトリ側のベース設定には分類器対策の狭いルール（`mkdir -p` / `chmod +x` /
-一時ディレクトリの `rm -r`。§3.5・ADR §3.3/§3.5参照）と、司令官が自分のペインだけを compact する
+一時ディレクトリの `rm -r`。§3.5・ADR §3.3/§3.5参照）と、司令官と実装の孫が自分のペインだけを compact する
 `ocw self-compact`（ADR DOC-2610130913。`herdr agent prompt` 全般は許していない）のみ含む。deploy 時には、これに加えて学習済みの分が自動的に
 合成される — §3.2.1参照）。
 
@@ -143,7 +143,7 @@ Claude Code の設定ファイル。以下の汎用設定を含む（マシン�
 | `switchModelsOnFlag` | `true` | フラグによるモデル切り替え |
 | `skipWorkflowUsageWarning` | `true` | ワークフロー警告スキップ |
 | `permissions.defaultMode` | `acceptEdits` | 権限のデフォルトモード |
-| `permissions.allow` | 分類器対策の狭いルール（9件） | `mkdir -p` / `chmod +x` / 一時ディレクトリの `rm -r` は auto mode の分類器待ちになるため、`permissions` 側で即決させる（§3.5・ADR §3.3/§3.5）。`ocw self-compact *` は司令官が自分のペインへ `/compact` と続きの1通だけを送る専用コマンド（宛先は `$HERDR_PANE_ID` 固定。ADR DOC-2610130913） |
+| `permissions.allow` | 分類器対策の狭いルール（9件） | `mkdir -p` / `chmod +x` / 一時ディレクトリの `rm -r` は auto mode の分類器待ちになるため、`permissions` 側で即決させる（§3.5・ADR §3.3/§3.5）。`ocw self-compact *` は司令官・実装の孫が自分のペインへ `/compact` と続きの1通だけを送る専用コマンド（宛先は `$HERDR_PANE_ID` 固定。ADR DOC-2610130913） |
 | `permissions.deny` | セキュリティポリシー（24件） | `.env`, `.ssh`, `.aws`, API キー等へのアクセスをブロック |
 | `permissions.ask` | 危険コマンドパターン（57件） | `git push --force`, `rm -r /home*` 等の名指しした絶対パス, `sudo` 等の実行前に確認（§3.5参照） |
 | `statusLine` | `{"type":"command","command":"ocw-meter snapshot-quota"}` | Claude 利用枠(5時間枠・週間枠)のステータスバー表示。§3.4参照 |

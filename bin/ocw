@@ -352,8 +352,9 @@ whose agent is already running: the text would be sent to that agent.
 self-compact: `ocw self-compact "<instruction>"` sends "/compact <instruction>"
 to the pane this shell runs in ($HERDR_PANE_ID) and to no other pane, and a
 background watcher sends a fixed "resume" prompt once compact has finished;
-with $HERDR_PANE_ID empty (outside Herdr) it sends nothing and fails. Meant for a commander compacting itself at
-a natural break (umbrella-orchestrator skill, section 3.7); it exists so a
+with $HERDR_PANE_ID empty (outside Herdr) it sends nothing and fails. Meant for a commander (umbrella-orchestrator
+skill, section 3.7) or an implementer (pr-review-loop skill) compacting itself
+at a natural break; it exists so a
 narrow permission rule (`Bash(ocw self-compact *)`) can allow it. End the
 turn right after it succeeds -- /compact runs once the current turn ends.
 
@@ -2015,6 +2016,9 @@ remove_worktree() {
 # allows only `ocw self-compact *` cannot be used to drive anyone else's
 # session. Outside Herdr ($HERDR_PANE_ID empty) it sends nothing and fails: an
 # empty target must never fall through to some default.
+#
+# Both commanders and implementers call this, so the fixed resume prompt must
+# stay role-neutral: the role-specific "where to resume" lives in the memo file.
 #
 # The resume prompt must NOT be sent right away: a message sent during the
 # current turn is consumed as input of that turn, before /compact runs, and

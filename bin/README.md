@@ -89,7 +89,7 @@ ocw --herdr --no-commander my-feature
 # 起動していないペインのエージェントを後から起動する（そのペインのシェルで）
 ocw agent reviewer
 
-# 司令官が自分のペインへ /compact を送り、compact の完了後に続きの1通も送る（Herdr のペイン内でのみ。他のペインへは送れない）
+# 司令官・実装の孫が自分のペインへ /compact を送り、compact の完了後に続きの1通も送る（Herdr のペイン内でのみ。他のペインへは送れない）
 ocw self-compact "復帰メモ <パス> を最初に読む。正典は計画書 <パス>"
 
 # Herdr のワークスペースラベルを指定（ペインの claude の会話名にも使われる）
