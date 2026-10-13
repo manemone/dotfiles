@@ -2015,7 +2015,7 @@ remove_worktree() {
 # so a permission rule that allows only `ocw self-compact *` cannot be used to
 # drive anyone else's session. Outside Herdr ($HERDR_PANE_ID empty) it sends
 # nothing and fails: an empty target must never fall through to some default.
-SELF_COMPACT_RESUME_PROMPT="compact が終わりました。復帰メモを読み、計画書の続きから再開してください。"
+SELF_COMPACT_RESUME_PROMPT="復帰メモがあれば読み、計画書の続きから再開してください。"
 
 self_compact() {
   [ "$#" -eq 1 ] && [ -n "$1" ] ||
