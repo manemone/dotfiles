@@ -113,6 +113,7 @@
 | DOC-2610110122 | [herdr-09-cli-migration_計画.md](planning/DOC-2610110122_herdr-09-cli-migration_計画.md) | 配布スキルを herdr 0.9.0 の CLI へ追随させる傘ブランチ計画書（傘 `herdr-09-cli-migration`）。消えた `herdr wait agent-status` の `herdr agent wait` への置き換え、AI間送信のフォールバックの `herdr agent prompt` への移行、孫から司令官への完了通知、レビュワー再起動の `herdr agent start` への移行の4本の孫へ分解したもの |
 | DOC-2610110211 | [ruby-defaults_計画.md](planning/DOC-2610110211_ruby-defaults_計画.md) | Ruby のリポジトリの既定（RSpec・厳しめの RuboCop）を repo-baseline テンプレートとスキルに持たせる傘ブランチ計画書（傘 `ruby-defaults`）。Ruby のときだけ生成する `.rubocop.yml`・RSpec の足場・`files:` 付きのフック、テンプレート自身の `tools/doc-id` を RuboCop に通すこと、道具のテストの形から規約を推測しないことを書くスキルの更新の3本の孫へ分解したもの |
 | DOC-2610110426 | [copier-update_計画.md](planning/DOC-2610110426_copier-update_計画.md) | repo-baseline テンプレートで `copier update` を使えるようにする傘ブランチ計画書（傘 `copier-update`）。dotfiles のルートへ `copier.yml` を移して `_subdirectory` でテンプレートの中身を指す入口の移動、スキルの update の手順の書き直し、既に撒いたリポジトリ（modeldex・pixidex・sheaf）の移行の手順書の3本の孫へ分解したもの |
+| DOC-2610140002 | [review-tiering_計画.md](planning/DOC-2610140002_review-tiering_計画.md) | 孫ごとのレビューの費用対効果を過去データと実験で検証し、レビュー運用を見直す傘ブランチ計画書（傘 `review-tiering`）。指摘の分類し直しと実装役のモデル別の集計、役割別の費用の測定の土台、「最後に1回だけレビュー」の再現実験、結果を受けた段階的レビューの反映の4本の孫へ分解したもの |
 
 ### reference/ — 運用リファレンス
 
