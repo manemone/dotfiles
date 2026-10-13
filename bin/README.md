@@ -89,6 +89,9 @@ ocw --herdr --no-commander my-feature
 # 起動していないペインのエージェントを後から起動する（そのペインのシェルで）
 ocw agent reviewer
 
+# 司令官が自分のペインへ /compact を送り、compact の完了後に続きの1通も送る（Herdr のペイン内でのみ。他のペインへは送れない）
+ocw self-compact "復帰メモ <パス> を最初に読む。正典は計画書 <パス>"
+
 # Herdr のワークスペースラベルを指定（ペインの claude の会話名にも使われる）
 ocw --herdr --label "myrepo :: タイトル" my-feature
 
@@ -115,7 +118,7 @@ ocw help         # コマンド構文（synopsis）+ topic 一覧
 ocw help config  # ワークツリーの作成先、git config ocw.* の5キー
 ocw help naming  # 名前 → ブランチ名・ディレクトリ名の変換規則
 ocw help rm      # ocw rm の解決規則・マージ済み判定
-ocw help herdr   # -H / --no-commander / --label のペイン構成・グループ・会話名・ocw agent
+ocw help herdr   # -H / --no-commander / --label のペイン構成・グループ・会話名・ocw agent・ocw self-compact
 ocw help meter   # ocw-meter 連携（run_id）
 ocw help env     # 環境変数
 ocw help all     # 全 topic を連結

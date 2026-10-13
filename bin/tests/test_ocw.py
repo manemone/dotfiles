@@ -45,6 +45,7 @@ import shlex
 import shutil
 import subprocess
 import tempfile
+import time
 import unittest
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
@@ -381,8 +382,21 @@ case "$sub" in
     id="$(next_id)"
     printf '{"id":"cli:pane:split","result":{"pane":{"pane_id":"pane-%s"}}}\n' "$id"
     ;;
-  "tab rename" | "pane rename" | "pane run" | "workspace focus" | "workspace close")
+  "tab rename" | "pane rename" | "pane run" | "workspace focus" | "workspace close" | "agent prompt")
     exit 0
+    ;;
+  "pane get")
+    # $OCW_TEST_HERDR_STATUS_SEQ: file of agent_status values, one per line;
+    # each call consumes one, the last line repeats forever.
+    seq="${OCW_TEST_HERDR_STATUS_SEQ:-}"
+    st=working
+    if [ -n "$seq" ] && [ -s "$seq" ]; then
+      st="$(head -n1 "$seq")"
+      [ "$(wc -l <"$seq")" -gt 1 ] && sed -i.bak 1d "$seq" && rm -f "$seq.bak"
+    fi
+    # `fail` simulates a transient herdr error.
+    [ "$st" = fail ] && exit 1
+    printf '{"id":"cli:pane:get","result":{"pane":{"agent_status":"%s","pane_id":"%s"}}}\n' "$st" "${3:-}"
     ;;
   "workspace list")
     # $OCW_TEST_HERDR_TOPOLOGY: JSON file {"<workspace_id>": ["<pane cwd>", ...]}
@@ -2124,6 +2138,101 @@ class HerdrRmGroupedWorkspaceTests(HerdrOcwTestCase):
         self.assertEqual(sorted(c[2] for c in closes), ["w-grouped", "w-legacy"])
         self.assertFalse(any("--group" in c for c in closes))
         self.assertFalse((parent / "widget-maker").exists())
+
+
+class SelfCompactTests(HerdrOcwTestCase):
+    """`ocw self-compact` (ADR DOC-2610130913). The regression that matters:
+    a permission rule allows exactly this command, so it must only ever talk
+    to the caller's own pane ($HERDR_PANE_ID) and must send nothing at all
+    when that is unset -- otherwise it could compact someone else's session."""
+
+    def run_self_compact(self, args, pane_id):
+        # run_ocw() builds a minimal env, so HERDR_PANE_ID is set only when
+        # given; the empty case is passed explicitly (an exported-but-empty
+        # variable is the shape this guards against).
+        extra_env = {} if pane_id is None else {"HERDR_PANE_ID": pane_id}
+        return self.run_herdr_ocw(["self-compact", *args], cwd=self.tmpdir.name, extra_env=extra_env)
+
+    def wait_for_calls(self, count, timeout=10):
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            calls = self.herdr_calls()
+            if len([c for c in calls if c[:2] == ["agent", "prompt"]]) >= count:
+                return calls
+            time.sleep(0.05)
+        return self.herdr_calls()
+
+    def test_sends_compact_now_and_resume_prompt_only_after_compact_finishes(self):
+        # working x5 (one poll fails transiently) = the current turn plus
+        # compact; then done. The resume
+        # prompt sent mid-turn is consumed before /compact and nothing wakes
+        # the session afterwards, so it must wait for the status to leave
+        # `working`.
+        seq = pathlib.Path(self.tmpdir.name) / "status-seq"
+        seq.write_text("working\nworking\nfail\nworking\nworking\ndone\n", encoding="utf-8")
+        env_extra = {"OCW_TEST_HERDR_STATUS_SEQ": str(seq), "OCW_SELF_COMPACT_POLL_SEC": "0.05"}
+        extra_env = {"HERDR_PANE_ID": "wXX:p1", **env_extra}
+        result = self.run_herdr_ocw(
+            ["self-compact", "復帰メモ /tmp/memo を読め"], cwd=self.tmpdir.name, extra_env=extra_env
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+        # Right after the command returns only /compact has been sent.
+        prompts = [c for c in self.herdr_calls() if c[:2] == ["agent", "prompt"]]
+        self.assertEqual(len(prompts), 1)
+        self.assertEqual(prompts[0][:3], ["agent", "prompt", "wXX:p1"])
+        self.assertEqual(prompts[0][3], "/compact 復帰メモ /tmp/memo を読め")
+
+        calls = self.wait_for_calls(2)
+        prompts = [c for c in calls if c[:2] == ["agent", "prompt"]]
+        self.assertEqual(len(prompts), 2, calls)
+        self.assertEqual(prompts[1][:3], ["agent", "prompt", "wXX:p1"])
+        self.assertIn("計画書", prompts[1][3])
+        self.assertFalse(prompts[1][3].startswith("/"), "the resume prompt must not be a slash command")
+        # Sent only after the status had left `working`.
+        self.assertEqual(seq.read_text(encoding="utf-8").strip(), "done")
+        # No --wait: the pane is this very session; waiting on it would deadlock.
+        for call in calls:
+            self.assertNotIn("--wait", call)
+        # Own pane only.
+        for call in calls:
+            if call[:2] == ["pane", "get"]:
+                self.assertEqual(call[2], "wXX:p1")
+
+    def test_sends_nothing_outside_herdr_or_on_bad_arguments(self):
+        for label, args, pane_id in [
+            ("unset pane id", ["memo"], None),
+            ("empty pane id", ["memo"], ""),
+            ("no instruction", [], "wXX:p1"),
+            ("empty instruction", [""], "wXX:p1"),
+            ("extra argument", ["a", "b"], "wXX:p1"),
+            ("multi-line instruction", ["a\nb"], "wXX:p1"),
+        ]:
+            with self.subTest(label):
+                result = self.run_self_compact(args, pane_id)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(self.herdr_calls(), [])
+
+    def test_allow_rule_is_scoped_to_this_command_only(self):
+        # The rule exists to get past the auto-mode classifier ([Tmux Self
+        # Drive]); allowing `herdr agent prompt` in general would let the AI
+        # drive any pane, which is exactly what the classifier prevents.
+        settings = json.loads((REPO_ROOT / "claude" / "settings.json").read_text(encoding="utf-8"))
+        allow = settings["permissions"]["allow"]
+        self.assertIn("Bash(ocw self-compact *)", allow)
+        for rule in allow:
+            self.assertNotIn("herdr", rule)
+            self.assertFalse(rule in ("Bash(ocw *)", "Bash(*)", "Bash"), rule)
+
+    def test_fails_when_the_first_send_fails_and_does_not_send_the_second(self):
+        result = self.run_herdr_ocw(
+            ["self-compact", "memo"],
+            cwd=self.tmpdir.name,
+            fail_on="agent prompt",
+            extra_env={"HERDR_PANE_ID": "wXX:p1"},
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(len(self.herdr_calls()), 1)
 
 
 class HelpTopicTests(unittest.TestCase):
