@@ -39,6 +39,7 @@ usage:
   ocw rm <worktree-name>
   ocw rm -f <worktree-name>
   ocw agent [commander|implementer|reviewer]
+  ocw self-compact <instruction>
   ocw ls
   ocw label-prefix
   ocw help [topic]
@@ -347,6 +348,15 @@ OCW_*_COMMAND set at `ocw agent` time is not read. It dies if the worktree
 has no such file (not made by `ocw -H`, or made before `ocw agent` existed)
 -- callers then fall back to `herdr agent start`. Never run it in a pane
 whose agent is already running: the text would be sent to that agent.
+
+self-compact: `ocw self-compact "<instruction>"` sends "/compact <instruction>"
+to the pane this shell runs in ($HERDR_PANE_ID) and to no other pane, and a
+background watcher sends a fixed "resume" prompt once compact has finished;
+with $HERDR_PANE_ID empty (outside Herdr) it sends nothing and fails. Meant for a commander (umbrella-orchestrator
+skill, section 3.7) or an implementer (pr-review-loop skill) compacting itself
+at a natural break; it exists so a
+narrow permission rule (`Bash(ocw self-compact *)`) can allow it. End the
+turn right after it succeeds -- /compact runs once the current turn ends.
 
 commands run per pane come from environment variables -- see `ocw help
 env` for OCW_COMMANDER_COMMAND / OCW_IMPLEMENTER_COMMAND /
@@ -2000,6 +2010,87 @@ remove_worktree() {
   fi
 }
 
+# Sends "/compact <instruction>" to the Herdr pane this shell runs in, and
+# nowhere else (ADR DOC-2610130913). The target is always $HERDR_PANE_ID --
+# there is deliberately no way to name another pane, so a permission rule that
+# allows only `ocw self-compact *` cannot be used to drive anyone else's
+# session. Outside Herdr ($HERDR_PANE_ID empty) it sends nothing and fails: an
+# empty target must never fall through to some default.
+#
+# Both commanders and implementers call this, so the fixed resume prompt must
+# stay role-neutral: the role-specific "where to resume" lives in the memo file.
+#
+# The resume prompt must NOT be sent right away: a message sent during the
+# current turn is consumed as input of that turn, before /compact runs, and
+# nothing resumes the session after compact. So a detached watcher sends it
+# once the pane has left `working` (compact runs inside the same working
+# period and ends in done/idle; measured in the ADR).
+SELF_COMPACT_RESUME_PROMPT="復帰メモがあれば読み、計画書の続きから再開してください。"
+
+# A failed `herdr pane get` yields an empty status (treated as still working by
+# the watcher) instead of killing the watcher under pipefail.
+pane_agent_status() {
+  herdr pane get "$1" 2>/dev/null |
+    sed -n 's/.*"agent_status":"\([a-z]*\)".*/\1/p' || true
+}
+
+# Poll interval in seconds; OCW_SELF_COMPACT_POLL_SEC exists for the tests.
+self_compact_resume_watcher() {
+  local pane="$1" prompt="$2" poll="${OCW_SELF_COMPACT_POLL_SEC:-1}"
+  local status calm=0 waited=0 limit=1200
+
+  # Phase 1: the turn that queued /compact is still running. Wait until we
+  # have seen `working` (or stop waiting after 20 polls and continue, for the
+  # case where the pane was already idle and compact started at once).
+  while [ "$waited" -lt 20 ]; do
+    status="$(pane_agent_status "$pane")"
+    [ "$status" = "working" ] && break
+    waited=$((waited + 1))
+    sleep "$poll"
+  done
+
+  # Phase 2: wait until the pane stays out of `working` for 2 polls in a row
+  # (turn + compact finished), then resume. Gives up after $limit polls.
+  waited=0
+  while [ "$waited" -lt "$limit" ]; do
+    status="$(pane_agent_status "$pane")"
+    case "$status" in
+      "" | working) calm=0 ;;
+      *) calm=$((calm + 1)) ;;
+    esac
+    if [ "$calm" -ge 2 ]; then
+      herdr agent prompt "$pane" "$prompt" >/dev/null 2>&1
+      return 0
+    fi
+    waited=$((waited + 1))
+    sleep "$poll"
+  done
+  return 1
+}
+
+self_compact() {
+  [ "$#" -eq 1 ] && [ -n "$1" ] ||
+    die "usage: ocw self-compact <instruction>"
+
+  case "$1" in
+    *$'\n'* | *$'\r'*) die "the instruction must be a single line" ;;
+  esac
+
+  [ -n "${HERDR_PANE_ID:-}" ] ||
+    die "HERDR_PANE_ID is not set; ocw self-compact works only inside a Herdr pane"
+
+  require_command herdr
+
+  herdr agent prompt "$HERDR_PANE_ID" "/compact $1" >/dev/null ||
+    die "failed to send /compact to pane ${HERDR_PANE_ID}"
+
+  # Detached so it outlives this command and the tool call that ran it.
+  (self_compact_resume_watcher "$HERDR_PANE_ID" "$SELF_COMPACT_RESUME_PROMPT" \
+    </dev/null >/dev/null 2>&1 &)
+
+  echo "queued /compact for pane ${HERDR_PANE_ID}; a background watcher sends the resume prompt after compact finishes; end this turn now"
+}
+
 while true; do
   case "${1:-}" in
     -H | --herdr)
@@ -2077,6 +2168,11 @@ case "$cmd" in
     init_repo_context
     resolve_worktree_layout
     create_worktree "$@"
+    ;;
+
+  self-compact)
+    shift
+    self_compact "$@"
     ;;
 
   agent)
