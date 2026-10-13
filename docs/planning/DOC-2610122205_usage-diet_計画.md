@@ -34,7 +34,7 @@
 | 2 | `ud-02-compact-probe` | 司令官が自分自身に compact（または同等の文脈の縮小）をかける手段を、使い捨ての環境で確かめて ADR にまとめる（コードは変えない） | ✅ PR #152 マージ済 |
 | 3 | `ud-03-usage-survey` | 他の削りどころを実ログで調査し、提案を文書にまとめる（スキル・コードは変えない） | ✅ PR #151 マージ済 |
 | 4 | `ud-04-auto-compact` | 孫2 の結論に従い、司令官がマージ後の区切りで自動で compact する形を `umbrella-orchestrator` に組み込む | ✅ PR #153 マージ済 |
-| 5 | `ud-05-implementer-compact` | 実装の孫も、PR を出した直後などの区切りで文脈が大きければ孫4 の専用コマンドで compact する形を `pr-review-loop` / `umbrella-orchestrator` に組み込む | ⬜ 待機中 |
+| 5 | `ud-05-implementer-compact` | 実装の孫も、PR を出した直後などの区切りで文脈が大きければ孫4 の専用コマンドで compact する形を `pr-review-loop` / `umbrella-orchestrator` に組み込む | 🔄 実装中 |
 
 依存: 孫1・孫2・孫3 は**並列**。孫4 は**孫1 と孫2 の両方のマージ後**（どちらも
 `umbrella-orchestrator` の §3.5〜§3.7 に触る。孫4 は孫2 の結論を前提にする）。
