@@ -927,8 +927,8 @@ push して再レビューを依頼した直後。**実装・修正の途中、P
      レビュワーの状態を取り、`working` なら Phase 3a の `herdr agent wait`、`idle` / `done` なら
      Phase 3b（`gh pr view "$PR" --json reviews,comments` ほか）で結果を収集する。完了通知は
      来ないので、待たずに `gh pr view` で投稿の有無を確かめてよい
-   - Phase 3 以降を続けるのに要る値: PR 番号とリポ（`$OWNER` / `$REPO`）、`$ROUND`、
-     レビュー対象の `$HEAD_SHA`（再レビュー後なら `$NEW_HEAD_SHA`）、`$REVIEWER_PANE`、
+   - Phase 3 以降を続けるのに要る値: PR 番号とリポ（`$OWNER` / `$REPO`）、`$ROUND`（Phase 6 からの compact なら、手順6で繰り上げた後の値。次の Phase 3 で使う値）、
+     レビュー対象の `$HEAD_SHA`（Phase 6 からなら差し替え後の、再レビュー依頼で送った現HEAD）、`$REVIEWER_PANE`、
      `$REVIEWER_AGENT`、`$REVIEW_REQUEST` の絶対パス、`.claude/pr-review.yml` から解決した設定
      （`TEST_CMD` ほか）、直近のレビュー指摘への対応の要点
    - 起動時の指示から引き継ぐもの: 計画書の絶対パスとその孫用プロンプトの場所、承認後に報告する
@@ -1245,10 +1245,9 @@ herdr agent prompt "$REVIEWER_PANE" "PR #$PR 再レビュー依頼。レビュ�
 command -v ocw-meter >/dev/null && ocw-meter event phase.end --phase rereview_request --source pr-review-loop --round "$ROUND" || true
 ```
 
-6. 「区切りでの自己 compact（実装側のみ）」の判断をする（閾値以下・使えないなら飛ばす）。
-7. レビュワーの作業開始を待ち、Phase 3に戻る。
-
-次のサイクルに入るため、`$ROUND` が指すサイクル数を1つ進める（次にPhase 1.5以降で `--round` を発行するときは、この進めた後の値をリテラルに使う）。あわせて、次のサイクルでは `$NEW_HEAD_SHA` が `$HEAD_SHA`（レビュー対象HEAD）になる。
+6. 次のサイクルに入るため、`$ROUND` が指すサイクル数を1つ進める（次にPhase 1.5以降で `--round` を発行するときは、この進めた後の値をリテラルに使う）。あわせて、次のサイクルでは `$NEW_HEAD_SHA` が `$HEAD_SHA`（レビュー対象HEAD）になる。**この繰り上げは、次の手順7で compact する場合も先に済ませる**（復帰メモには繰り上げ後の値を書く）。
+7. 「区切りでの自己 compact（実装側のみ）」の判断をする（閾値以下・使えないなら飛ばす）。
+8. レビュワーの作業開始を待ち、Phase 3に戻る。
 
 ### アンチパターン: 冗長な再レビュープロンプト
 

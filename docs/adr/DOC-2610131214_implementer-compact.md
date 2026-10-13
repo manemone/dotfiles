@@ -21,7 +21,7 @@
 2. **閾値は 200,000 トークン**。文脈がこれを超えているときだけ行う。測り方は司令官（SKILL.md §3.7）と同じ
    （セッションログの直近の assistant の使用量の合計）
 3. **復帰メモ**: リポ外のファイルに書き、先頭に「次は Phase 3（レビュワーの完了待ち）に戻る。依頼は
-   再送しない」と書く。続きに要る値（PR・`$ROUND`・`$HEAD_SHA`・`$REVIEWER_PANE`・`$REVIEW_REQUEST` のパス・
+   再送しない」と書く。続きに要る値（PR・`$ROUND`〔Phase 6 からなら繰り上げ後の値〕・`$HEAD_SHA`〔同、差し替え後〕・`$REVIEWER_PANE`・`$REVIEW_REQUEST` のパス・
    設定・計画書の場所・司令官のペイン ID）も入れる。待っていたレビューは、復帰後に `herdr pane get` で
    状態を見て、`working` なら `herdr agent wait`、`idle`/`done` なら GitHub の投稿を収集する。完了通知は
    来ないので、compact の間に投稿されたレビューも GitHub から拾える
