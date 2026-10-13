@@ -25,6 +25,7 @@
 | `ocw -H` のワークスペースを Herdr のワークツリーグループに乗せる方式と、傘単位にまとめられない理由を知る | [adr/DOC-2610111932_herdr-worktree-group.md](adr/DOC-2610111932_herdr-worktree-group.md) | 使い捨ての別セッションでの実測（リンク済みワークツリーは親になれない・並びは作成順・`worktree remove` はチェックアウトを消す等）・方式 A〜D の比較・推奨と、孫3 での実装上の決定（§4.1） |
 | 傘の司令官が自分自身の文脈を縮める手段（自ペインへの `/compact`・閾値の引き下げ・`/clear`）と、auto mode で人間が打つ必要がある理由を知る | [adr/DOC-2610130834_commander-self-compact.md](adr/DOC-2610130834_commander-self-compact.md) | 自セッションを被験体にした `/compact` の実測（コマンドとして実行される・cron は残る・文脈 10.5 万→会話 5.9k・約33秒・自動再開しない）、分類器の拒否2件、(b)(c) の比較、孫4 がスキルに書く要点 |
 | 傘の司令官が区切りで自分を compact する仕組み（専用コマンド `ocw self-compact`・絞った allow ルール・毎回行い 150k 以下は除く判断）と、未検証の点・確かめ方を知りたい | [adr/DOC-2610130913_commander-auto-compact.md](adr/DOC-2610130913_commander-auto-compact.md) | 宛先を `$HERDR_PANE_ID` に固定した理由、ルールを `herdr agent prompt` 全般にしなかった理由、閾値の損益見積もり、ADR DOC-2610130834 との関係、マージ・デプロイ後に司令官が確かめる手順 |
+| 実装の孫が区切り（レビューを依頼した直後）で自分を compact する条件（閾値 200k・復帰メモ・使えないときは何もしない）を知りたい | [adr/DOC-2610131214_implementer-compact.md](adr/DOC-2610131214_implementer-compact.md) | 区切りを2つに絞った理由、閾値を 200k にした試算の根拠、レビュワーを除く理由、復帰メモの中身、却下した案 |
 | `ocw -H` で起動する claude の会話タイトルを herdr のラベルと揃えた理由と名前の形を知る | [adr/DOC-2610111939_ocw-session-name.md](adr/DOC-2610111939_ocw-session-name.md) | `--label`・`"<ラベル> / <役割>"` の名前・claude のときだけ足す判定・日本語名での `SendMessage` と宛先解決の実測・却下した案 |
 | `ocw -H` がエージェントを要るペインだけ起動する理由と、後から起動する `ocw agent` の方式を知る | [adr/DOC-2610112129_ocw-lazy-agents.md](adr/DOC-2610112129_ocw-lazy-agents.md) | ペインは全部作りエージェントの起動だけ遅らせる決定・起動行を git dir に残す方式と却下した案・pr-review-loop / `/finalize` の使い方・別セッションでの実測 |
 | 旧形で撒いたリポジトリ（modeldex・pixidex・sheaf）を `copier update` できる形へ移す | [reference/DOC-2610110507_repo-baseline旧形からの移行手順.md](reference/DOC-2610110507_repo-baseline旧形からの移行手順.md) | 橋渡しのコミットの手順・リポジトリごとの撒いた版と `language` の答え方・衝突しやすいファイル・namecheck |
@@ -90,6 +91,7 @@
 | DOC-2610111939 | [ocw-session-name.md](adr/DOC-2610111939_ocw-session-name.md) | `ocw -H` が各ペインの claude を `--name "<ラベル> / <役割>"` で起動し Claude アプリの会話タイトルを herdr のラベルに揃えた決定。実測（日本語名の `SendMessage`・宛先解決）と却下した案を記録 |
 | DOC-2610130212 | [commander-merges-grandchildren.md](adr/DOC-2610130212_commander-merges-grandchildren.md) | 孫の PR は承認されてもマージせず傘の司令官がマージする決定。`pr-review-loop` はどの PR もマージしない・司令官のマージ条件・巡回 cron 30分・ADR DOC-2609121719 との関係 |
 | DOC-2610130913 | [commander-auto-compact.md](adr/DOC-2610130913_commander-auto-compact.md) | 傘の司令官が区切りで専用コマンド `ocw self-compact`（自ペイン固定で `/compact` を送り、compact の完了後に続きを促す1通をバックグラウンドの監視が送る）により自分を compact する決定。`Bash(ocw self-compact *)` だけを許す allow ルール、毎回行い 150k 以下は除く閾値の見積もり、ADR DOC-2610130834 との関係、ルールが分類器に勝つかは未検証・監視による復帰は実機で1回確認済みであることとマージ後の確かめ方を記録 |
+| DOC-2610131214 | [implementer-compact.md](adr/DOC-2610131214_implementer-compact.md) | 実装の孫がレビューを依頼した直後の区切り（PR 提出後・再レビュー依頼後）で `ocw self-compact` により自分を compact する決定。閾値 200,000（試算で純削減が最大）、実装の途中・承認後・レビュワーでは行わない、復帰メモはレビュー待ち（Phase 3）に戻す、使えないときは提案もせず何もしない（状態: 決定） |
 
 ### planning/ — ロードマップ・計画
 

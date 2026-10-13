@@ -886,6 +886,75 @@ herdr agent prompt "$REVIEWER_PANE" "以下を読んでPRレビューを実行�
 command -v ocw-meter >/dev/null && ocw-meter event phase.end --phase review_request --source pr-review-loop --round "$ROUND" || true
 ```
 
+次は「区切りでの自己 compact（実装側のみ）」の判断をしてから Phase 3 へ進む（閾値以下・使えないなら飛ばす）。
+
+## 区切りでの自己 compact（実装側のみ）
+
+実装者の会話は、PR を出してレビューを待つ間に文脈が大きく膨らんでいることが多い。文脈が大きい
+ほど、レビュー待ちのあとの毎ターンの読み込みが重い（実ログでは、実装の費用の約 53% が文脈 20万超の
+呼び出し。調査 DOC-2610130216 §3.4）。そこで **レビューを依頼した直後**（Phase 2 Step 4 の
+あと、および Phase 6 手順5のあと）の区切りで、文脈が閾値を超えていれば自分で compact する。
+専用コマンド `ocw self-compact` を使う（ADR DOC-2610130913。Claude Code 固有）。
+
+**行う区切りはこの2つだけ**: (1) PR を出してレビューを依頼した直後、(2) レビュー指摘への対応を
+push して再レビューを依頼した直後。**実装・修正の途中、Phase 7（承認後の完了報告）、
+レビュワーでは行わない。** 途中で compact すると作業中の判断が落ちる。レビュワーは文脈が 20万に
+届かず、compact のコストのほうが大きい（調査 §3.4）。承認後は残る仕事が少ない。
+
+**やること（区切りごとに1回だけ判断する）**:
+
+1. 自分の文脈の大きさを測る（Claude Code 固有。測れない・失敗した・他のエージェントなら、
+   この節を丸ごと飛ばして Phase 3 へ進む）:
+
+   ```bash
+   python3 -c "
+   import glob,json,os
+   f=glob.glob(os.path.expanduser('~/.claude/projects/*/'+os.environ['CLAUDE_CODE_SESSION_ID']+'.jsonl'))[0]
+   u=[json.loads(l)['message']['usage'] for l in open(f) if '\"type\":\"assistant\"' in l][-1]
+   print(u['input_tokens']+u.get('cache_read_input_tokens',0)+u.get('cache_creation_input_tokens',0))"
+   ```
+
+2. **200,000 を超えていなければ飛ばして Phase 3 へ進む。** 根拠は実ログの試算（調査 §3.4 の
+   `simcap`。上限を超えたら 80k まで縮めるとして compact のコストを引いた実装の純削減）で、
+   上限 150k は 98 回で 10%、200k は 44 回で **13%（最大）**、300k は 12 回で 8%。150k は
+   回数が増えて 1回あたりの得が薄くなり、300k は多くの PR が届く前に終わって取りこぼす。
+   200k を下限にした。実装は 1 PR ごとの作業で、区切りは PR 1本につき数回しか来ないので、
+   取りこぼしを避けたい。見積もりであり、実運用で見直す
+3. **復帰メモを書く。** リポの外（`mktemp -d` で作った一時ディレクトリ。システムの指定に
+   スクラッチパッドがあればそこ）のファイルに、compact 後の自分が最初に読む内容を書く:
+   - 先頭に「compact が終わったら何をするか」: **次は Phase 3（レビュワーの完了待ち）に戻る。
+     レビュー依頼は送信済みなので再送しない。** まず `herdr pane get "$REVIEWER_PANE"` で
+     レビュワーの状態を取り、`working` なら Phase 3a の `herdr agent wait`、`idle` / `done` なら
+     Phase 3b（`gh pr view "$PR" --json reviews,comments` ほか）で結果を収集する。完了通知は
+     来ないので、待たずに `gh pr view` で投稿の有無を確かめてよい
+   - Phase 3 以降を続けるのに要る値: PR 番号とリポ（`$OWNER` / `$REPO`）、`$ROUND`、
+     レビュー対象の `$HEAD_SHA`（再レビュー後なら `$NEW_HEAD_SHA`）、`$REVIEWER_PANE`、
+     `$REVIEWER_AGENT`、`$REVIEW_REQUEST` の絶対パス、`.claude/pr-review.yml` から解決した設定
+     （`TEST_CMD` ほか）、直近のレビュー指摘への対応の要点
+   - 起動時の指示から引き継ぐもの: 計画書の絶対パスとその孫用プロンプトの場所、承認後に報告する
+     司令官のペイン ID、「承認されてもマージしない」などの制約
+4. **コマンドを実行して、そのターンを終える。** メモのパスを1行にして渡す:
+
+   ```bash
+   ocw self-compact "復帰メモ <メモの絶対パス> を最初に読む。PR #<番号> のレビュー待ちの途中。メモの先頭に従い Phase 3（レビュワーの完了待ち）に戻る。依頼は再送しない"
+   ```
+
+   - このコマンドは自分のペイン（`$HERDR_PANE_ID`）へ `/compact <引数>` だけをその場で送り、
+     続きを促す固定の1通は compact の完了後にバックグラウンドの監視が送る。他のペインへは送れず、
+     Herdr の外では何もせず失敗する。`herdr agent prompt` を自分で直接打たないこと
+     （auto mode の分類器が自分のペインへの送信を拒否する。このコマンドだけは permission の allow
+     ルール `Bash(ocw self-compact *)` で通す）
+   - **成功したら新しい作業を始めず、そのターンを終える。** `/compact` は現ターンの終了後に実行される
+   - 続きを促す固定の1通は「復帰メモがあれば読み、計画書の続きから再開してください。」である。
+     メモの先頭に「計画書ではなく、メモの Phase 3 の指示に従う」と書いておけば食い違わない
+5. **コマンドが使えない・拒否された・失敗した・Claude Code 以外のエージェントのときは、何もせず
+   Phase 3 へ進む。** 人間に提案も通知もしない（人間の手を煩わせる価値が小さいため）。
+   拒否は回避せず、同じ区切りで繰り返さない
+6. **復帰したら**、メモを読んで Phase 3 から続ける。メモの一時ファイルは復帰が済んだら消す。
+   レビュワーのペインは別のセッションなので影響を受けない。待っている間にレビューが完了していても、
+   Phase 3b の収集（GitHub の投稿）で拾える。compact の完了を待つ間に孫のレビューが投稿されることは
+   正常で、取りこぼさない
+
 ## Phase 3: レビュワーの完了を待つ
 
 工程計測:
@@ -1176,7 +1245,8 @@ herdr agent prompt "$REVIEWER_PANE" "PR #$PR 再レビュー依頼。レビュ�
 command -v ocw-meter >/dev/null && ocw-meter event phase.end --phase rereview_request --source pr-review-loop --round "$ROUND" || true
 ```
 
-6. レビュワーの作業開始を待ち、Phase 3に戻る。
+6. 「区切りでの自己 compact（実装側のみ）」の判断をする（閾値以下・使えないなら飛ばす）。
+7. レビュワーの作業開始を待ち、Phase 3に戻る。
 
 次のサイクルに入るため、`$ROUND` が指すサイクル数を1つ進める（次にPhase 1.5以降で `--round` を発行するときは、この進めた後の値をリテラルに使う）。あわせて、次のサイクルでは `$NEW_HEAD_SHA` が `$HEAD_SHA`（レビュー対象HEAD）になる。
 
