@@ -29,7 +29,10 @@
   - `git pull` は AI の判断では使わない。人間が「pull しろ」と指示したときは、
     上流の取り込みが目的なので `git fetch origin` + `git rebase origin/<ブランチ>` に
     読み替えて実行してよい（`git pull` は暗黙の merge コミットを作りうるため、
-    コマンドそのものは避ける）
+    コマンドそのものは避ける）。これは冒頭の「書き換える操作」には当たらない。そこで
+    人間だけが行うのはリモートの `master` への反映（マージ・push・force push）であり、
+    ローカルの `master` を `origin/master` に追随させる取り込みは含まない（ローカルに未 push の
+    コミットが無ければ `rebase` は fast-forward と同じで履歴を書き換えない）
   - `git reset --hard` / `git clean` / 裸の `git push --force`（lease なし）は、
     ブランチを問わず引き続き人間の承認が要る
   - `claude/hooks/git-guard.sh`（PreToolUse フック。ADR
@@ -64,7 +67,8 @@
   作成・`current` の切り替え・古い世代の削除も同じ prefix 配下で実際に行われる。動作確認は
   `deploy-all.sh --dry-run`（全ツール対象）で行うのを基本とする。**`deploy-all.sh --status` は
   副作用が無いため実 `$HOME` に対して実行してよいが、`--rollback` と `--dev` は `current` を
-  実際に付け替えるため、`--dry-run` を付けずに実 `$HOME` に対して実行しない。**
+  実際に付け替えるため、人間の明示指示なしに AI の判断で `--dry-run` を付けず実 `$HOME` に
+  対して実行しない（人間が明示的に指示したときは実行してよい）。**
   `HOME` を一時ディレクトリに差し替えるサンドボックス実行が許されるツールの範囲は無条件ではない。
   副作用が `$HOME` の外（システムパッケージのインストール）や外部ネットワークに及ぶツール
   （`tmux` `zsh` `nvim`）は対象外であり、詳細と対象ツールの分類は `docs/design/` の
