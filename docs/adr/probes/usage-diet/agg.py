@@ -1,5 +1,6 @@
 import json,glob,os,sys,collections,datetime
-since=datetime.datetime(2026,10,11,16,0).astimezone()
+since=datetime.datetime.fromisoformat(os.environ.get('USAGE_SINCE','2026-10-11T16:00')).astimezone()
+until=datetime.datetime.fromisoformat(os.environ.get('USAGE_UNTIL','2026-10-12T22:00')).astimezone()
 msgs={}
 for f in glob.glob(os.path.expanduser('~/.claude/projects/**/*.jsonl'),recursive=True):
     if os.path.getmtime(f)<since.timestamp(): continue
@@ -10,7 +11,7 @@ for f in glob.glob(os.path.expanduser('~/.claude/projects/**/*.jsonl'),recursive
         ts=d.get('timestamp')
         if not ts:continue
         t=datetime.datetime.fromisoformat(ts.replace('Z','+00:00'))
-        if t<since:continue
+        if not since<=t<until:continue
         m=d.get('message',{});u=m.get('usage') or {}
         if not m.get('id'):continue
         msgs[m['id']]=(f,m.get('model'),u,t,d.get('sessionId'),d.get('isSidechain'))

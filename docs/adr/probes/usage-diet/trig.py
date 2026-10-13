@@ -1,6 +1,7 @@
 import json,glob,os,re,collections,datetime,sys
 sys.path.insert(0,'')
-since=datetime.datetime(2026,10,11,16,0).astimezone()
+since=datetime.datetime.fromisoformat(os.environ.get('USAGE_SINCE','2026-10-11T16:00')).astimezone()
+until=datetime.datetime.fromisoformat(os.environ.get('USAGE_UNTIL','2026-10-12T22:00')).astimezone()
 exec(open(os.path.join(os.path.dirname(__file__),'role.py')).read().split('agg=collections')[0])
 P={'opus':(4,20,0.20,5,8),'sonnet':(2,10,0.20,2.5,4),'haiku':(0.10,0.50,0.01,0.125,0.20)}
 def cost(mo,u):
@@ -33,16 +34,24 @@ for f in glob.glob(os.path.expanduser('~/.claude/projects/*/*.jsonl')):
             if not c: continue
             if c.startswith('# 傘ブランチ自動進行'): trig='cron巡回'
             elif c.startswith('Base directory for this skill') or c.startswith('[Image'): continue
-            elif 'Another Claude session sent a message' in c: trig='セッション間メッセージ'
+            elif 'Another Claude session sent a message' in c:
+                head=c.split('message:',1)[-1].strip()
+                if head.startswith('<agent-message') and 'Subagent hand-back' in head[:120]: trig='セッション間:サブエージェントの結果返却'
+                elif head.startswith('<agent-message'): trig='セッション間:agent-message(他)'
+                elif re.sub(r'.*?</?cross-session-message[^>]*>','',c,count=1,flags=re.S).strip().startswith(('ブリーフ','計画書')): trig='セッション間:引き継ぎ・spawn指示'
+                elif re.search(r'PR\s*#?\d+',c[:900]) and ('マージ' in c[:900] or '承認' in c[:900] or '作成' in c[:900]): trig='セッション間:PR・承認・マージの報告'
+                else: trig='セッション間:その他'
             elif 'マージしました' in c and len(c)<200: trig='孫の完了通知'
             elif c.startswith('<task-notification'): trig='バックグラウンド/Monitor通知'
             elif c.startswith('This session is being continued'): trig='compact後の再開'
             else: trig='人間/その他'
-            turns[trig]+=1; samples.setdefault(trig,c[:100])
+            ut=d.get('timestamp')
+            if ut and since<=datetime.datetime.fromisoformat(ut.replace('Z','+00:00'))<until:
+                turns[trig]+=1; samples.setdefault(trig,c[:100])
         if d.get('type')=='assistant' and d.get('timestamp'):
             t=datetime.datetime.fromisoformat(d['timestamp'].replace('Z','+00:00'))
             m=d.get('message',{})
-            if t>=since and m.get('id') and m['id'] not in seen:
+            if since<=t<until and m.get('id') and m['id'] not in seen:
                 seen.add(m['id']); by[trig]+=cost(m.get('model') or '',m.get('usage') or {})
 T=sum(by.values())
 for k,v in by.most_common(): print(f'{k:24} ${v:6.0f} {100*v/T:4.0f}%  turns={turns[k]}')
