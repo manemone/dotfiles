@@ -41,6 +41,7 @@
 | Claude の使用量を実ログから測る手順と、どこを削れるかの調査結果を知る | [reference/DOC-2610130216_使用量の測り方と削りどころの調査結果.md](reference/DOC-2610130216_使用量の測り方と削りどころの調査結果.md) | 集計スクリプト（`docs/adr/probes/usage-diet/`）の使い方・役割別の費用・キャッシュ切れ・文脈の太り方・compact の試算と、効かないとわかった案 |
 | 実装の孫の文脈が何で膨らむか（ツール結果の内訳・出力トークンの寄与）と、大きい出力の作法の根拠・置き場を知る | [reference/DOC-2610142335_実装の孫の文脈の内訳調査.md](reference/DOC-2610142335_実装の孫の文脈の内訳調査.md) | 集計スクリプト（`docs/adr/probes/context-bloat/` の `tools.py` / `share.py`）・Bash の先頭語別とサイズ別の分布・作法の中身と置き場・入れなかった場所 |
 | Figma プラグイン（`figma@synced`）をユーザー全体で止めてリポごとに有効にできるかの検証結果を知る | [reference/DOC-2610150527_Figmaプラグインの有効範囲の検証.md](reference/DOC-2610150527_Figmaプラグインの有効範囲の検証.md) | 設定の階層ごとの実測表・実 `$HOME` を触らない確かめ方・machine 設定のマージ結果・実機で止める順序 |
+| 孫 PR ごとのレビューが何を止めてきたか（PR の種類・実装役のモデル別）を知る | [reference/DOC-2610140007_孫PRレビューの過去データ分析.md](reference/DOC-2610140007_孫PRレビューの過去データ分析.md) | 指摘の分類基準（A/B/C/D1/D2）・抜き取りの方法・集計スクリプト（`docs/adr/probes/review-tiering/`）・再現実験の対象の傘・限界 |
 | 傘ブランチの計画を確認する | [planning/](planning/) 配下の各計画書 | 進行中・完了した傘ブランチの計画書 |
 | このリポジトリの AI 支援基盤を他のリポジトリへ配布する | [../templates/repo-baseline/README.md](../templates/repo-baseline/README.md) | copier テンプレート。dotfiles 本体とは独立・自己完結 |
 
