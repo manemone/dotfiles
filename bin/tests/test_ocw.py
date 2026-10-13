@@ -394,6 +394,8 @@ case "$sub" in
       st="$(head -n1 "$seq")"
       [ "$(wc -l <"$seq")" -gt 1 ] && sed -i.bak 1d "$seq" && rm -f "$seq.bak"
     fi
+    # `fail` simulates a transient herdr error.
+    [ "$st" = fail ] && exit 1
     printf '{"id":"cli:pane:get","result":{"pane":{"agent_status":"%s","pane_id":"%s"}}}\n' "$st" "${3:-}"
     ;;
   "workspace list")
@@ -2161,12 +2163,13 @@ class SelfCompactTests(HerdrOcwTestCase):
         return self.herdr_calls()
 
     def test_sends_compact_now_and_resume_prompt_only_after_compact_finishes(self):
-        # working x4 = the current turn plus compact; then done. The resume
+        # working x5 (one poll fails transiently) = the current turn plus
+        # compact; then done. The resume
         # prompt sent mid-turn is consumed before /compact and nothing wakes
         # the session afterwards, so it must wait for the status to leave
         # `working`.
         seq = pathlib.Path(self.tmpdir.name) / "status-seq"
-        seq.write_text("working\nworking\nworking\nworking\ndone\n", encoding="utf-8")
+        seq.write_text("working\nworking\nfail\nworking\nworking\ndone\n", encoding="utf-8")
         env_extra = {"OCW_TEST_HERDR_STATUS_SEQ": str(seq), "OCW_SELF_COMPACT_POLL_SEC": "0.05"}
         extra_env = {"HERDR_PANE_ID": "wXX:p1", **env_extra}
         result = self.run_herdr_ocw(

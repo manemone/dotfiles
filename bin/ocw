@@ -2023,9 +2023,11 @@ remove_worktree() {
 # period and ends in done/idle; measured in the ADR).
 SELF_COMPACT_RESUME_PROMPT="復帰メモがあれば読み、計画書の続きから再開してください。"
 
+# A failed `herdr pane get` yields an empty status (treated as still working by
+# the watcher) instead of killing the watcher under pipefail.
 pane_agent_status() {
   herdr pane get "$1" 2>/dev/null |
-    sed -n 's/.*"agent_status":"\([a-z]*\)".*/\1/p'
+    sed -n 's/.*"agent_status":"\([a-z]*\)".*/\1/p' || true
 }
 
 # Poll interval in seconds; OCW_SELF_COMPACT_POLL_SEC exists for the tests.
