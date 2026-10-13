@@ -34,7 +34,7 @@
 | 2 | `ud-02-compact-probe` | 司令官が自分自身に compact（または同等の文脈の縮小）をかける手段を、使い捨ての環境で確かめて ADR にまとめる（コードは変えない） | ✅ PR #152 マージ済 |
 | 3 | `ud-03-usage-survey` | 他の削りどころを実ログで調査し、提案を文書にまとめる（スキル・コードは変えない） | ✅ PR #151 マージ済 |
 | 4 | `ud-04-auto-compact` | 孫2 の結論に従い、司令官がマージ後の区切りで自動で compact する形を `umbrella-orchestrator` に組み込む | ✅ PR #153 マージ済 |
-| 5 | `ud-05-implementer-compact` | 実装の孫も、PR を出した直後などの区切りで文脈が大きければ孫4 の専用コマンドで compact する形を `pr-review-loop` / `umbrella-orchestrator` に組み込む | 🔄 実装中 |
+| 5 | `ud-05-implementer-compact` | 実装の孫も、PR を出した直後などの区切りで文脈が大きければ孫4 の専用コマンドで compact する形を `pr-review-loop` / `umbrella-orchestrator` に組み込む | ✅ PR #154 マージ済 |
 
 依存: 孫1・孫2・孫3 は**並列**。孫4 は**孫1 と孫2 の両方のマージ後**（どちらも
 `umbrella-orchestrator` の §3.5〜§3.7 に触る。孫4 は孫2 の結論を前提にする）。
@@ -401,6 +401,8 @@
   問題が2回出た。司令官が起こして対策を求め、孫4 は「compact の完了（`working` を抜けた）を待って2通目を送る
   バックグラウンドの監視」に変え、実機で自動復帰を確かめた。許可ルール `Bash(ocw self-compact *)` が本番の
   PATH 上の `ocw` で分類器に効くかは、デプロイ後の確認が残る（ADR DOC-2610130913 §6）。PR #153 を司令官がマージした
+- 2026-10-13: 孫5 の PR #154 を司令官がマージし、全孫がマージ済みになった。報告を受けた時点で implementer が
+  `working` だったので、`done`/`idle` になるのを待ってから（HEAD 不変を確かめて）マージした
 
 ## 孫1用プロンプト:
 
