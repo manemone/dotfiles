@@ -15,6 +15,8 @@ upr=$(python3 -c "import json,sys;print(json.load(open(sys.argv[1]))['umbrella_p
 dir="$parent/u$n"
 git clone -q --no-checkout "https://github.com/$REVIEW_OWNER/$repo.git" "$dir"
 cd "$dir"
+# 途中で失敗しても push 先（origin）が scratch に残らないようにする
+trap 'git -C "$dir" remote remove origin 2>/dev/null || true' EXIT
 python3 - "$meta" >"$parent/u$n.prs.tsv" <<'P'
 import json,sys
 d=json.load(open(sys.argv[1]))

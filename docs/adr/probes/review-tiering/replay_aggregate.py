@@ -37,6 +37,20 @@ def tally(rows, key, cats=("A", "B", "C")):
     return agg
 
 
+def _sens(rows):
+    """part_filled=False の正解だけを数えた全体（'外した場合'）と、全部を数えた全体（'含めた場合'）"""
+    agg = collections.defaultdict(lambda: collections.Counter())
+    for un, model, run, truth, m in rows:
+        for v in m["truth"]:
+            t = truth.get(v["gid"])
+            if not t or t["excluded"]:
+                continue
+            for k in (["含めた場合"] + ([] if t.get("part_filled") else ["外した場合"])):
+                agg[k]["n"] += 1
+                agg[k][v["verdict"]] += 1
+    return agg
+
+
 def show(title, agg):
     print(f"\n### {title}\n\n| 区分 | 正解数(のべ) | hit | hit+partial |\n|---|---|---|---|")
     for k in sorted(agg, key=str):
@@ -53,6 +67,7 @@ show("元の実装役別", tally(rows, lambda u, mo, t: IMPL[u]))
 show("指摘の種類別", tally(rows, lambda u, mo, t: t["cat"]))
 show("後続の孫へ波及する指摘（spill）", tally(rows, lambda u, mo, t: f"spill={bool(t.get('spill'))}"))
 show("指摘が出たラウンド（gid の2番目）", tally(rows, lambda u, mo, t: "1回目のレビュー" if t["gid"].split("-")[1] == "1" else "2回目以降（修正の差分への指摘を含む）"))
+show("一部だけマージ後の版で埋めた孫の指摘を外した場合（感度分析）", tally([r for r in rows], lambda u, mo, t: "外す" if not t.get("part_filled") else "含める(参考)") if False else _sens(rows))
 show("種類×モデル", tally(rows, lambda u, mo, t: f"{t['cat']} {mo}"))
 
 # 2回の走りの一致（ばらつき）: 同じ傘・モデルで gid ごとに run1/run2 の hit が一致した割合

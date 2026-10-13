@@ -12,23 +12,34 @@ for i, u in enumerate(umbrellas(), 1):
     items, excl_prs = [], []
     # ブランチに当たらなかった孫（傘の履歴に無かった等）は取りこぼしの判定から外す。REPLAY_SCRATCH は replay_build.sh の親ディレクトリ
     not_applied = set()
+    all_filled, part_filled = set(), set()  # 全ファイルをマージ後の版で埋めた孫 / 一部だけ埋めた孫
     logp = os.path.join(os.environ.get("REPLAY_SCRATCH", ""), f"u{i}.build.log")
     if os.path.exists(logp):
         for line in open(logp):
             if "NOT-APPLIED" in line:
                 not_applied.add(int(line.split("\t")[0][2:]))
+            elif "\tconflict:" in line and "total_files=" in line:
+                cols = line.rstrip("\n").split("\t")
+                pr = int(cols[0][2:])
+                filled = int(cols[1].split(":")[1].removesuffix("files"))
+                total = int(cols[3].split("=")[1])
+                (all_filled if filled >= total else part_filled).add(pr)
     for p in meta["prs"]:
         lp = os.path.join(DERIVED, "labels", f"{repo}-{p['n']}.json")
         if not os.path.exists(lp):
             continue
-        fills = p["pre_review_head"] is None or p["n"] in not_applied
+        # レビュー前 head が取れず最終版で埋めた孫、ブランチに当たらなかった孫、全ファイルをマージ後の版で埋めた孫は、
+        # 欠陥が replay ブランチに無い（直った後のコードをレビューさせている）ので判定から外す
+        fills = p["pre_review_head"] is None or p["n"] in not_applied or p["n"] in all_filled
         if fills:
             excl_prs.append(p["n"])
+        # 一部だけ埋めた孫は、ラベルにファイルの情報が無いのでファイル単位では外せない（part_filled で感度分析する）
         for f in json.load(open(lp))["findings"]:
             if f.get("repeat") or f["cat"] not in ("A", "B", "C"):
                 continue
             items.append({"gid": f"{p['n']}-{f['round']}-{f['idx']}", "pr": p["n"], "cat": f["cat"],
-                          "spill": f.get("spill"), "note": f.get("note", ""), "excluded": fills})
+                          "spill": f.get("spill"), "note": f.get("note", ""), "excluded": fills,
+                          "part_filled": p["n"] in part_filled})
     json.dump({"umbrella": i, "excluded_prs": excl_prs, "findings": items}, open(os.path.join(OUT, f"u{i}.json"), "w"),
               ensure_ascii=False, indent=1)
     n_ok = [x for x in items if not x["excluded"]]
