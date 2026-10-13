@@ -387,6 +387,7 @@ README。**risk-based なテスト方針の3箇所**（`skills/pr-review-loop/SK
 （司令官が運用中に分かったこと・人間の承認や決定をここに日付つきで追記する）
 
 - 2026-10-14: 計画書を起草し、孫1・孫2 を spawn した（実装役は `OCW_IMPLEMENTER_COMMAND` により Sonnet）。孫3 は設計3.5 の費用見積もりの人間の承認待ち
+- 2026-10-14: 孫2 の PR #158 を傘へマージした（設計2 は (b) を採用。`ocw-meter` は直さず、傘・PR 単位の役割別の費用は `docs/adr/probes/usage-diet/by_unit.py` で出す。孫3・孫4 で費用を測るときはこれを使う）
 
 ## 孫1用プロンプト:
 
