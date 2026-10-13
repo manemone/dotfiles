@@ -39,12 +39,14 @@
       別々のコマンドとして実行する**
   - 傘ブランチ方式を使わない場合、上記の例外は適用されない
   - `git pull` は AI の判断では使わない。人間が「pull しろ」と指示したときは、
-    上流の取り込みが目的なので `git fetch origin` + `git rebase origin/<ブランチ>` に
-    読み替えて実行してよい（`git pull` は暗黙の merge コミットを作りうるため、
-    コマンドそのものは避ける）。これは冒頭の「書き換える操作」には当たらない。そこで
-    人間だけが行うのはリモートの `{{ default_branch }}` への反映（マージ・push・force push）であり、
-    ローカルの `{{ default_branch }}` を `origin/{{ default_branch }}` に追随させる取り込みは含まない（ローカルに未 push の
-    コミットが無ければ `rebase` は fast-forward と同じで履歴を書き換えない）
+    読み替えず `git pull --ff-only` をそのまま打つ（`--ff-only` なら暗黙の merge
+    コミットも rebase も起きず、fast-forward できるときだけ成功する）。**失敗したとき
+    （上流と分岐しているとき）は、黙って `--rebase` や `git merge` へフォールバックせず、
+    人間に報告して止まる。** 人間は止まることを承知で `--ff-only` を選んでいる。
+    これは冒頭の「書き換える操作」には当たらない。そこで人間だけが行うのはリモートの
+    `{{ default_branch }}` への反映（マージ・push・force push）であり、ローカルの `{{ default_branch }}` を
+    `origin/{{ default_branch }}` に追随させる取り込みは含まない（ローカルに未 push のコミットが
+    無ければ `--ff-only` は fast-forward するだけで履歴を書き換えない）
   - `git reset --hard` / `git clean` / 裸の `git push --force`（lease なし）は、
     ブランチを問わず引き続き人間の承認が要る
 
