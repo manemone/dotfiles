@@ -10,8 +10,8 @@
 PR の特定: 傘ブランチを向き先にした PR（gh pr list --base <傘>）の head ブランチを孫とみなし、
 そのブランチ名のワークツリー（同じリポのもの）で動いたセッションを、その PR の費用とする。
 傘ブランチ自身のワークツリーのセッションは「傘（司令官）」に積む。
-役割: 孫 PR のセッションは、最初の指示（セッション間メッセージを含む）に「PRレビューを実行してください」が
-あればレビュー、なければ実装。傘のセッションは司令官。
+役割: 最初の指示（セッション間メッセージを含む）に「PRレビューを実行してください」があればレビュー、
+なければ、孫 PR のセッションは実装・傘のセッションは司令官。傘の行のレビューは傘→master の最終レビュー。
 単価: Claude は role2.py と同じ（DOC-2610130216 §1）。DeepSeek は bin/prices/deepseek-*.json の最新。
 どちらでもないモデルは費用に入れず、末尾に警告する。サブエージェントのログは含めない。
 ログ（~/.claude/projects）は約30日で消えるので、古い傘は欠ける。欠けた PR は「ログなし」と出す。
@@ -120,10 +120,11 @@ def collect(targets):
         head, msgs = read_session(f)
         if not msgs:
             continue
+        review = REVIEW_MARK in "".join(head[:1])
         if num is None:
-            role, unit = "司令官", "傘"
+            role, unit = ("レビュー" if review else "司令官"), "傘"
         else:
-            role = "レビュー" if REVIEW_MARK in "".join(head[:1]) else "実装"
+            role = "レビュー" if review else "実装"
             unit = "#%d %s" % (num, key[1])
         for model, u in msgs.values():
             if model.startswith("<"):
