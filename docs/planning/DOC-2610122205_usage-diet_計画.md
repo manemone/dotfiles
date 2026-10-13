@@ -33,7 +33,7 @@
 | 1 | `ud-01-commander-merge` | 孫は承認で止まって司令官へ報告し、マージは司令官が行う形に `pr-review-loop` / `umbrella-orchestrator` を変える。巡回 cron を30分ごとにする | ✅ PR #150 マージ済 |
 | 2 | `ud-02-compact-probe` | 司令官が自分自身に compact（または同等の文脈の縮小）をかける手段を、使い捨ての環境で確かめて ADR にまとめる（コードは変えない） | ✅ PR #152 マージ済 |
 | 3 | `ud-03-usage-survey` | 他の削りどころを実ログで調査し、提案を文書にまとめる（スキル・コードは変えない） | 🔄 実装中 |
-| 4 | `ud-04-auto-compact` | 孫2 の結論に従い、司令官がマージ後の区切りで自動で compact する形を `umbrella-orchestrator` に組み込む | ⬜ 待機中 |
+| 4 | `ud-04-auto-compact` | 孫2 の結論に従い、司令官がマージ後の区切りで自動で compact する形を `umbrella-orchestrator` に組み込む | 🔄 実装中 |
 
 依存: 孫1・孫2・孫3 は**並列**。孫4 は**孫1 と孫2 の両方のマージ後**（どちらも
 `umbrella-orchestrator` の §3.5〜§3.7 に触る。孫4 は孫2 の結論を前提にする）。
