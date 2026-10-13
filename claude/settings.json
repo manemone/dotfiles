@@ -4,6 +4,7 @@
     "allow": [
       "Bash(mkdir -p *)",
       "Bash(chmod +x *)",
+      "Bash(ocw self-compact *)",
       "Bash(rm -r /tmp/tmp.*)",
       "Bash(rm -rf /tmp/tmp.*)",
       "Bash(rm -fr /tmp/tmp.*)",

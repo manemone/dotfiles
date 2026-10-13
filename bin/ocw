@@ -39,6 +39,7 @@ usage:
   ocw rm <worktree-name>
   ocw rm -f <worktree-name>
   ocw agent [commander|implementer|reviewer]
+  ocw self-compact <instruction>
   ocw ls
   ocw label-prefix
   ocw help [topic]
@@ -347,6 +348,14 @@ OCW_*_COMMAND set at `ocw agent` time is not read. It dies if the worktree
 has no such file (not made by `ocw -H`, or made before `ocw agent` existed)
 -- callers then fall back to `herdr agent start`. Never run it in a pane
 whose agent is already running: the text would be sent to that agent.
+
+self-compact: `ocw self-compact "<instruction>"` sends "/compact <instruction>"
+and then a fixed "resume" prompt to the pane this shell runs in
+($HERDR_PANE_ID) and to no other pane; with $HERDR_PANE_ID empty (outside
+Herdr) it sends nothing and fails. Meant for a commander compacting itself at
+a natural break (umbrella-orchestrator skill, section 3.7); it exists so a
+narrow permission rule (`Bash(ocw self-compact *)`) can allow it. End the
+turn right after it succeeds -- /compact runs once the current turn ends.
 
 commands run per pane come from environment variables -- see `ocw help
 env` for OCW_COMMANDER_COMMAND / OCW_IMPLEMENTER_COMMAND /
@@ -2000,6 +2009,35 @@ remove_worktree() {
   fi
 }
 
+# Sends "/compact <instruction>" and then a fixed resume prompt to the Herdr
+# pane this shell runs in, and nowhere else (ADR DOC-2610130913). The target is
+# always $HERDR_PANE_ID -- there is deliberately no way to name another pane,
+# so a permission rule that allows only `ocw self-compact *` cannot be used to
+# drive anyone else's session. Outside Herdr ($HERDR_PANE_ID empty) it sends
+# nothing and fails: an empty target must never fall through to some default.
+SELF_COMPACT_RESUME_PROMPT="compact が終わりました。復帰メモを読み、計画書の続きから再開してください。"
+
+self_compact() {
+  [ "$#" -eq 1 ] && [ -n "$1" ] ||
+    die "usage: ocw self-compact <instruction>"
+
+  case "$1" in
+    *$'\n'* | *$'\r'*) die "the instruction must be a single line" ;;
+  esac
+
+  [ -n "${HERDR_PANE_ID:-}" ] ||
+    die "HERDR_PANE_ID is not set; ocw self-compact works only inside a Herdr pane"
+
+  require_command herdr
+
+  herdr agent prompt "$HERDR_PANE_ID" "/compact $1" >/dev/null ||
+    die "failed to send /compact to pane ${HERDR_PANE_ID}"
+  herdr agent prompt "$HERDR_PANE_ID" "$SELF_COMPACT_RESUME_PROMPT" >/dev/null ||
+    die "sent /compact but failed to send the resume prompt to pane ${HERDR_PANE_ID}"
+
+  echo "queued /compact and a resume prompt for pane ${HERDR_PANE_ID}; end this turn now"
+}
+
 while true; do
   case "${1:-}" in
     -H | --herdr)
@@ -2077,6 +2115,11 @@ case "$cmd" in
     init_repo_context
     resolve_worktree_layout
     create_worktree "$@"
+    ;;
+
+  self-compact)
+    shift
+    self_compact "$@"
     ;;
 
   agent)

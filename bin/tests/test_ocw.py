@@ -381,7 +381,7 @@ case "$sub" in
     id="$(next_id)"
     printf '{"id":"cli:pane:split","result":{"pane":{"pane_id":"pane-%s"}}}\n' "$id"
     ;;
-  "tab rename" | "pane rename" | "pane run" | "workspace focus" | "workspace close")
+  "tab rename" | "pane rename" | "pane run" | "workspace focus" | "workspace close" | "agent prompt")
     exit 0
     ;;
   "workspace list")
@@ -2124,6 +2124,68 @@ class HerdrRmGroupedWorkspaceTests(HerdrOcwTestCase):
         self.assertEqual(sorted(c[2] for c in closes), ["w-grouped", "w-legacy"])
         self.assertFalse(any("--group" in c for c in closes))
         self.assertFalse((parent / "widget-maker").exists())
+
+
+class SelfCompactTests(HerdrOcwTestCase):
+    """`ocw self-compact` (ADR DOC-2610130913). The regression that matters:
+    a permission rule allows exactly this command, so it must only ever talk
+    to the caller's own pane ($HERDR_PANE_ID) and must send nothing at all
+    when that is unset -- otherwise it could compact someone else's session."""
+
+    def run_self_compact(self, args, pane_id):
+        # run_ocw() builds a minimal env, so HERDR_PANE_ID is set only when
+        # given; the empty case is passed explicitly (an exported-but-empty
+        # variable is the shape this guards against).
+        extra_env = {} if pane_id is None else {"HERDR_PANE_ID": pane_id}
+        return self.run_herdr_ocw(["self-compact", *args], cwd=self.tmpdir.name, extra_env=extra_env)
+
+    def test_sends_compact_then_resume_prompt_to_own_pane_only(self):
+        result = self.run_self_compact(["復帰メモ /tmp/memo を読め"], "wXX:p1")
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+        calls = self.herdr_calls()
+        self.assertEqual([c[:3] for c in calls], [["agent", "prompt", "wXX:p1"]] * 2)
+        self.assertEqual(calls[0][3], "/compact 復帰メモ /tmp/memo を読め")
+        self.assertIn("計画書", calls[1][3])
+        self.assertFalse(calls[1][3].startswith("/"), "the resume prompt must not be a slash command")
+        # No --wait: the pane is this very session; waiting on it would deadlock.
+        for call in calls:
+            self.assertNotIn("--wait", call)
+
+    def test_sends_nothing_outside_herdr_or_on_bad_arguments(self):
+        for label, args, pane_id in [
+            ("unset pane id", ["memo"], None),
+            ("empty pane id", ["memo"], ""),
+            ("no instruction", [], "wXX:p1"),
+            ("empty instruction", [""], "wXX:p1"),
+            ("extra argument", ["a", "b"], "wXX:p1"),
+            ("multi-line instruction", ["a\nb"], "wXX:p1"),
+        ]:
+            with self.subTest(label):
+                result = self.run_self_compact(args, pane_id)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(self.herdr_calls(), [])
+
+    def test_allow_rule_is_scoped_to_this_command_only(self):
+        # The rule exists to get past the auto-mode classifier ([Tmux Self
+        # Drive]); allowing `herdr agent prompt` in general would let the AI
+        # drive any pane, which is exactly what the classifier prevents.
+        settings = json.loads((REPO_ROOT / "claude" / "settings.json").read_text(encoding="utf-8"))
+        allow = settings["permissions"]["allow"]
+        self.assertIn("Bash(ocw self-compact *)", allow)
+        for rule in allow:
+            self.assertNotIn("herdr", rule)
+            self.assertFalse(rule in ("Bash(ocw *)", "Bash(*)", "Bash"), rule)
+
+    def test_fails_when_the_first_send_fails_and_does_not_send_the_second(self):
+        result = self.run_herdr_ocw(
+            ["self-compact", "memo"],
+            cwd=self.tmpdir.name,
+            fail_on="agent prompt",
+            extra_env={"HERDR_PANE_ID": "wXX:p1"},
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(len(self.herdr_calls()), 1)
 
 
 class HelpTopicTests(unittest.TestCase):

@@ -34,7 +34,7 @@ ocw help all      # 全 topic をまとめて読む
 | `config` | ワークツリーはどこに作られるか。`git config ocw.*` の4キー |
 | `naming` | 入力した名前がどうブランチ名・ディレクトリ名になるか |
 | `rm` | `ocw rm` は何を消すか。マージ済み判定の意味論 |
-| `herdr` | `-H` / `--no-commander` のペイン構成。どのペインのエージェントがいつ起動するか（`ocw agent`） |
+| `herdr` | `-H` / `--no-commander` のペイン構成。どのペインのエージェントがいつ起動するか（`ocw agent`）。司令官が自分を compact する `ocw self-compact` |
 | `meter` | `ocw-meter` 連携（run_id の発行・伝搬） |
 | `env` | `ocw` が読む環境変数・設定する環境変数 |
 
