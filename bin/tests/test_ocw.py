@@ -45,6 +45,7 @@ import shlex
 import shutil
 import subprocess
 import tempfile
+import time
 import unittest
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
@@ -383,6 +384,17 @@ case "$sub" in
     ;;
   "tab rename" | "pane rename" | "pane run" | "workspace focus" | "workspace close" | "agent prompt")
     exit 0
+    ;;
+  "pane get")
+    # $OCW_TEST_HERDR_STATUS_SEQ: file of agent_status values, one per line;
+    # each call consumes one, the last line repeats forever.
+    seq="${OCW_TEST_HERDR_STATUS_SEQ:-}"
+    st=working
+    if [ -n "$seq" ] && [ -s "$seq" ]; then
+      st="$(head -n1 "$seq")"
+      [ "$(wc -l <"$seq")" -gt 1 ] && sed -i.bak 1d "$seq" && rm -f "$seq.bak"
+    fi
+    printf '{"id":"cli:pane:get","result":{"pane":{"agent_status":"%s","pane_id":"%s"}}}\n' "$st" "${3:-}"
     ;;
   "workspace list")
     # $OCW_TEST_HERDR_TOPOLOGY: JSON file {"<workspace_id>": ["<pane cwd>", ...]}
@@ -2139,18 +2151,50 @@ class SelfCompactTests(HerdrOcwTestCase):
         extra_env = {} if pane_id is None else {"HERDR_PANE_ID": pane_id}
         return self.run_herdr_ocw(["self-compact", *args], cwd=self.tmpdir.name, extra_env=extra_env)
 
-    def test_sends_compact_then_resume_prompt_to_own_pane_only(self):
-        result = self.run_self_compact(["復帰メモ /tmp/memo を読め"], "wXX:p1")
+    def wait_for_calls(self, count, timeout=10):
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            calls = self.herdr_calls()
+            if len([c for c in calls if c[:2] == ["agent", "prompt"]]) >= count:
+                return calls
+            time.sleep(0.05)
+        return self.herdr_calls()
+
+    def test_sends_compact_now_and_resume_prompt_only_after_compact_finishes(self):
+        # working x4 = the current turn plus compact; then done. The resume
+        # prompt sent mid-turn is consumed before /compact and nothing wakes
+        # the session afterwards, so it must wait for the status to leave
+        # `working`.
+        seq = pathlib.Path(self.tmpdir.name) / "status-seq"
+        seq.write_text("working\nworking\nworking\nworking\ndone\n", encoding="utf-8")
+        env_extra = {"OCW_TEST_HERDR_STATUS_SEQ": str(seq), "OCW_SELF_COMPACT_POLL_SEC": "0.05"}
+        extra_env = {"HERDR_PANE_ID": "wXX:p1", **env_extra}
+        result = self.run_herdr_ocw(
+            ["self-compact", "復帰メモ /tmp/memo を読め"], cwd=self.tmpdir.name, extra_env=extra_env
+        )
         self.assertEqual(result.returncode, 0, result.stderr)
 
-        calls = self.herdr_calls()
-        self.assertEqual([c[:3] for c in calls], [["agent", "prompt", "wXX:p1"]] * 2)
-        self.assertEqual(calls[0][3], "/compact 復帰メモ /tmp/memo を読め")
-        self.assertIn("計画書", calls[1][3])
-        self.assertFalse(calls[1][3].startswith("/"), "the resume prompt must not be a slash command")
+        # Right after the command returns only /compact has been sent.
+        prompts = [c for c in self.herdr_calls() if c[:2] == ["agent", "prompt"]]
+        self.assertEqual(len(prompts), 1)
+        self.assertEqual(prompts[0][:3], ["agent", "prompt", "wXX:p1"])
+        self.assertEqual(prompts[0][3], "/compact 復帰メモ /tmp/memo を読め")
+
+        calls = self.wait_for_calls(2)
+        prompts = [c for c in calls if c[:2] == ["agent", "prompt"]]
+        self.assertEqual(len(prompts), 2, calls)
+        self.assertEqual(prompts[1][:3], ["agent", "prompt", "wXX:p1"])
+        self.assertIn("計画書", prompts[1][3])
+        self.assertFalse(prompts[1][3].startswith("/"), "the resume prompt must not be a slash command")
+        # Sent only after the status had left `working`.
+        self.assertEqual(seq.read_text(encoding="utf-8").strip(), "done")
         # No --wait: the pane is this very session; waiting on it would deadlock.
         for call in calls:
             self.assertNotIn("--wait", call)
+        # Own pane only.
+        for call in calls:
+            if call[:2] == ["pane", "get"]:
+                self.assertEqual(call[2], "wXX:p1")
 
     def test_sends_nothing_outside_herdr_or_on_bad_arguments(self):
         for label, args, pane_id in [

@@ -89,7 +89,7 @@
 | DOC-2610130834 | [commander-self-compact.md](adr/DOC-2610130834_commander-self-compact.md) | 傘の司令官が自分自身の文脈を縮める手段の調査。自ペインへの `/compact` は herdr 経由でもコマンドとして実行され cron も残るが、auto mode の分類器（`[Tmux Self Drive]`）により AI 自身は送れず人間が打つ形になること、自動 compact の閾値の調整、`/clear` の机上比較、孫4 がスキルに書く要点をまとめた（状態: 調査完了） |
 | DOC-2610111939 | [ocw-session-name.md](adr/DOC-2610111939_ocw-session-name.md) | `ocw -H` が各ペインの claude を `--name "<ラベル> / <役割>"` で起動し Claude アプリの会話タイトルを herdr のラベルに揃えた決定。実測（日本語名の `SendMessage`・宛先解決）と却下した案を記録 |
 | DOC-2610130212 | [commander-merges-grandchildren.md](adr/DOC-2610130212_commander-merges-grandchildren.md) | 孫の PR は承認されてもマージせず傘の司令官がマージする決定。`pr-review-loop` はどの PR もマージしない・司令官のマージ条件・巡回 cron 30分・ADR DOC-2609121719 との関係 |
-| DOC-2610130913 | [commander-auto-compact.md](adr/DOC-2610130913_commander-auto-compact.md) | 傘の司令官が区切りで専用コマンド `ocw self-compact`（自ペイン固定で `/compact` と続きを促す1通を送る）により自分を compact する決定。`Bash(ocw self-compact *)` だけを許す allow ルール、毎回行い 150k 以下は除く閾値の見積もり、ADR DOC-2610130834 との関係、ルールが分類器に勝つか・2通目が処理されるかが未検証であることとマージ後の確かめ方を記録 |
+| DOC-2610130913 | [commander-auto-compact.md](adr/DOC-2610130913_commander-auto-compact.md) | 傘の司令官が区切りで専用コマンド `ocw self-compact`（自ペイン固定で `/compact` を送り、compact の完了後に続きを促す1通をバックグラウンドの監視が送る）により自分を compact する決定。`Bash(ocw self-compact *)` だけを許す allow ルール、毎回行い 150k 以下は除く閾値の見積もり、ADR DOC-2610130834 との関係、ルールが分類器に勝つか・2通目が処理されるかが未検証であることとマージ後の確かめ方を記録 |
 
 ### planning/ — ロードマップ・計画
 
