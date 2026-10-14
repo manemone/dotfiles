@@ -347,7 +347,7 @@ scenario_backup_symlink_idempotent_uninstall() {
     fi
     # git-guard フック（PreToolUse）の symlink。links_for_tool() の claude
     # arm への追加漏れがあると、この symlink が張られないまま静かに
-    # スキップされる（AGENTS.md「実装時の注意」参照）。
+    # スキップされる（DOC-2610150520-c「実装時の注意」参照）。
     assert_symlink "$sbx/.claude/hooks/git-guard.sh" "$prefix/current/claude/hooks/git-guard.sh"
     assert_symlink "$sbx/.claude/hooks/compact-reminder.sh" "$prefix/current/claude/hooks/compact-reminder.sh"
   fi
@@ -380,7 +380,7 @@ scenario_backup_symlink_idempotent_uninstall() {
     fi
     # opencode.json（孫2・設計3、ADR DOC-2609162327 §5）。links_for_tool() の
     # opencode arm への追加漏れがあると、このsymlinkが張られないまま
-    # 静かにスキップされる（AGENTS.md「実装時の注意」と同種の regression）。
+    # 静かにスキップされる（DOC-2610150520-c「実装時の注意」と同種の regression）。
     assert_symlink "$sbx/.config/opencode/opencode.json" "$prefix/current/opencode/opencode.json"
   fi
 
@@ -1973,7 +1973,7 @@ scenario_agent_instructions_not_installed_skip() {
   # DOC-2608272128 §2.3、ADR DOC-2609072334）。codex だけホームを作り、
   # opencode は作らない。claude/deploy.sh はこのシナリオでは呼ばないが、
   # 世代には常に全ツール分がコピーされるので symlink 元の claude/CLAUDE.md
-  # は存在する（AGENTS.md「デプロイの仕組み」の --only の注記どおり）。
+  # は存在する（DOC-2610150520-b「デプロイの仕組み」の --only の注記どおり）。
   mkdir -p "$sbx/.codex"
 
   out="$(run_deploy "$sbx" --force --only codex,opencode 2>&1)"
@@ -2223,7 +2223,7 @@ scenario_distribution_artifact_cleanup() {
   if [ "$with_claude" -eq 1 ]; then
     # settings.machine.json は人間のマシン設定であり、この repo の配布物
     # ではないため uninstall は symlink だけを撤去し実体は消さない
-    # （AGENTS.md「claude の例外」）。したがって generations/current/.tmp
+    # （DOC-2610150520-b「claude の例外」）。したがって generations/current/.tmp
     # がすべて片付いても prefix 自体は空にならず残り続ける — これは
     # バグではなく設計6の意図した挙動。
     assert_not_exists "$sbx/.claude/settings.machine.json"
