@@ -263,7 +263,7 @@ OpenCode 1.18.31 の `packages/opencode/src/config/config.ts` を調べると、
 選ばれる。** 設定UIで何か変更すると、その書き込みは symlink 経由で世代ディレクトリの
 中へ着地し、次の deploy で新世代が作られるとソースツリーの `opencode/opencode.json` から
 上書きコピーされて**警告なく消える**（`nvim/lazy-lock.json` と同じ「`$HOME` 側 symlink 経由の
-世代への書き戻し」パターン。ADR DOC-2608040229 §4.9 / ルート `AGENTS.md`「状態ファイル」節）。
+世代への書き戻し」パターン。ADR DOC-2608040229 §4.9 / DOC-2610150520-b「状態ファイル」節）。
 
 **決定（初版・レビューで撤回）**: 当初は `shared/helpers.sh` の `state_files_for_tool()` に
 `opencode) printf '%s\n' "opencode.json" ;;` を追加し、`nvim/lazy-lock.json` と同じ
