@@ -26,11 +26,11 @@ Claude Code の会話は、compact の直後でも毎回、ルール文書（各
 | 孫 | リポ | ブランチ | 内容 | 状況 |
 |---|---|---|---|---|
 | 1 | dotfiles | `fc-01-agents-md-policy` | `AGENTS.md` の芯と詳細の分け方の方針を決めて文書にし、dotfiles の `AGENTS.md` と `templates/repo-baseline` の雛形に適用する。他リポへの適用手順（copier を撒いたリポの扱いを含む）も決める | ✅ PR #170 マージ済 |
-| 2 | lora-dataset-forge | `fc-02-agents-md-split` | 孫1 の方針で `AGENTS.md` を芯と詳細に分ける | ⬜ 待機中 |
-| 3 | pixidex | `fc-03-agents-md-split` | 孫1 の方針で `AGENTS.md` を分ける（孫7 の検証済みなら Figma の有効化の1行も同乗） | ⬜ 待機中 |
-| 4 | modeldex | `fc-04-agents-md-split` | 孫1 の方針で `AGENTS.md` を分ける | ⬜ 待機中 |
-| 5 | sheaf | `fc-05-agents-md-split` | 孫1 の方針で `AGENTS.md` を分ける（孫7 の検証済みなら Figma の有効化の1行も同乗） | ⬜ 待機中 |
-| 6 | iosci | `fc-06-agents-md-split` | 孫1 の方針で `AGENTS.md` を分ける（孫7 の検証済みなら Figma の有効化の1行も同乗） | ⬜ 待機中 |
+| 2 | lora-dataset-forge | `fc-02-agents-md-split` | 孫1 の方針で `AGENTS.md` を芯と詳細に分ける | 🔄 実装中 |
+| 3 | pixidex | `fc-03-agents-md-split` | 孫1 の方針で `AGENTS.md` を分ける（孫7 の検証済みなら Figma の有効化の1行も同乗） | 🔄 実装中 |
+| 4 | modeldex | `fc-04-agents-md-split` | 孫1 の方針で `AGENTS.md` を分ける | 🔄 実装中 |
+| 5 | sheaf | `fc-05-agents-md-split` | 孫1 の方針で `AGENTS.md` を分ける（孫7 の検証済みなら Figma の有効化の1行も同乗） | 🔄 実装中 |
+| 6 | iosci | `fc-06-agents-md-split` | 孫1 の方針で `AGENTS.md` を分ける（孫7 の検証済みなら Figma の有効化の1行も同乗） | 🔄 実装中 |
 | 7 | dotfiles | `fc-07-figma-scope` | `figma@synced` にリポごとの `enabledPlugins` の上書きが効くかを確かめ、machine 設定でユーザー全体を止める手順とリポ側で有効にする書き方を書く | ✅ PR #171 マージ済 |
 
 依存:
