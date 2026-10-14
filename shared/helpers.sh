@@ -237,6 +237,7 @@ links_for_tool() {
         "$HOME/.claude/CLAUDE.md" \
         "$HOME/.claude/CLAUDE.machine.md" \
         "$HOME/.claude/hooks/git-guard.sh" \
+        "$HOME/.claude/hooks/compact-reminder.sh" \
         "$HOME/.claude/settings.machine.json"
       ;;
     codex)
