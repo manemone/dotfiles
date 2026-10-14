@@ -31,7 +31,7 @@ Claude Code の会話は、compact の直後でも毎回、ルール文書（各
 | 4 | modeldex | `fc-04-agents-md-split` | 孫1 の方針で `AGENTS.md` を分ける | ⬜ 待機中 |
 | 5 | sheaf | `fc-05-agents-md-split` | 孫1 の方針で `AGENTS.md` を分ける（孫7 の検証済みなら Figma の有効化の1行も同乗） | ⬜ 待機中 |
 | 6 | iosci | `fc-06-agents-md-split` | 孫1 の方針で `AGENTS.md` を分ける（孫7 の検証済みなら Figma の有効化の1行も同乗） | ⬜ 待機中 |
-| 7 | dotfiles | `fc-07-figma-scope` | `figma@synced` にリポごとの `enabledPlugins` の上書きが効くかを確かめ、machine 設定でユーザー全体を止める手順とリポ側で有効にする書き方を書く | ⬜ 待機中 |
+| 7 | dotfiles | `fc-07-figma-scope` | `figma@synced` にリポごとの `enabledPlugins` の上書きが効くかを確かめ、machine 設定でユーザー全体を止める手順とリポ側で有効にする書き方を書く | 🔄 実装中 |
 
 依存:
 
