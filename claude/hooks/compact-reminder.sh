@@ -24,10 +24,12 @@ command -v python3 >/dev/null 2>&1 || exit 0
 # 状態（セッションごとに最後に差し込んだときの文脈の大きさ）はリポ外へ置く。
 STATE_ROOT="${XDG_STATE_HOME:-$HOME/.local/state}/dotfiles/compact-reminder"
 
-# ペイロードは stdin ではなく引数で渡す（ヒアドキュメントが stdin を占有するため。git-guard.sh と同じ）。
-INPUT="$(cat)"
-
-COMPACT_REMINDER_STATE_ROOT="$STATE_ROOT" python3 - "$INPUT" <<'PYEOF'
+# ペイロードは stdin のまま python3 へ渡す。引数1つで渡すと、tool_response（ツール出力全体）が
+# 128 KiB（Linux の MAX_ARG_STRLEN）を超えたとき exec が E2BIG で失敗する。git-guard.sh は
+# matcher が Bash の PreToolUse でコマンド文字列しか受けないため引数渡しで足りるが、このフックは
+# matcher なしの PostToolUse で、大きい入力が来る。そのため python のコードの側を -c で渡す。
+PY_SRC="$(
+  cat <<'PYEOF'
 import json
 import os
 import sys
@@ -71,7 +73,11 @@ def context_size(path):
 
 
 def main():
-    payload = json.loads(sys.argv[1])
+    payload = json.load(sys.stdin)
+    # サブエージェントのツール呼び出しでも、同じフックが発火して agent_id が入る。
+    # 通知が親の孫に届かず、サブエージェントが親のペインを compact しうるので黙る。
+    if payload.get("agent_id"):
+        return
     session_id = payload.get("session_id")
     transcript = payload.get("transcript_path")
     if not isinstance(session_id, str) or not isinstance(transcript, str):
@@ -130,4 +136,7 @@ try:
 except Exception:
     pass
 PYEOF
+)"
+
+COMPACT_REMINDER_STATE_ROOT="$STATE_ROOT" python3 -c "$PY_SRC"
 exit 0

@@ -53,15 +53,22 @@ with open(path, "w") as f:
 PY
 }
 
-# run_hook <role> <session> <transcript>
+# run_hook <role> <session> <transcript> [extra-kind]
+# extra-kind: big（tool_response が 128 KiB 超）/ subagent（agent_id 付き）
 run_hook() {
-  local role="$1" session="$2" transcript="$3"
+  local role="$1" session="$2" transcript="$3" extra="${4:-}"
   local json
   json=$(python3 -c '
 import json, sys
-print(json.dumps({"session_id": sys.argv[1], "transcript_path": sys.argv[2],
-                  "hook_event_name": "PostToolUse", "tool_name": "Bash"}))
-' "$session" "$transcript")
+d = {"session_id": sys.argv[1], "transcript_path": sys.argv[2],
+     "hook_event_name": "PostToolUse", "tool_name": "Bash"}
+if sys.argv[3] == "big":
+    d["tool_response"] = {"stdout": "x" * 300000}
+if sys.argv[3] == "subagent":
+    d["agent_id"] = "a1b2c3"
+    d["agent_type"] = "Explore"
+print(json.dumps(d))
+' "$session" "$transcript" "$extra")
   if [ -n "$role" ]; then
     printf '%s' "$json" | OCW_ROLE="$role" "$HOOK"
   else
@@ -110,6 +117,17 @@ write_transcript "$T" 80000
 assert_silent "compact で閾値以下に戻ると黙る" "$(run_hook implementer $S "$T")"
 write_transcript "$T" 210000
 assert_speaks "戻ったあと再び超えたら最初の 1 回から差し込む" "$(run_hook implementer $S "$T")"
+
+log "--- 実入力の形（大きい tool_response・サブエージェント） ---"
+# PostToolUse は matcher なしで全ツールの出力を含む。引数渡しだと 128 KiB 超で exec が失敗し、
+# 文脈が最も増える呼び出しで通知が落ちる。
+S=s-extra
+write_transcript "$T" 300000
+assert_speaks "128 KiB 超の tool_response でも差し込む" "$(run_hook implementer $S "$T" big)"
+# サブエージェントの呼び出しは黙り、間引き状態も進めない（そのあと本体の呼び出しでは差し込む）。
+S=s-sub
+assert_silent "agent_id 付き（サブエージェント）では閾値超えでも黙る" "$(run_hook implementer $S "$T" subagent)"
+assert_speaks "サブエージェントは状態を進めず、本体の呼び出しでは差し込む" "$(run_hook implementer $S "$T")"
 
 log "--- 判定できない入力では黙り、止めない ---"
 printf 'not json' | OCW_ROLE=implementer "$HOOK"

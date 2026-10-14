@@ -20,6 +20,9 @@ DOC-2610142337（実装途中の自己 compact）が決めた区切り・閾値�
 2. **`OCW_ROLE=implementer` のときだけ働く。** `ocw -H` が各ペインに渡す環境変数で絞る。司令官
    （DOC-2610130913・DOC-2610140044）、レビュワー、傘の運用外のセッションには何も言わない。絞りは
    シェルの先頭で行い、対象外の呼び出しでは python3 を起動しない（全ツール呼び出しで走るため）
+   **サブエージェントのツール呼び出し（入力に `agent_id` がある）も黙る。** 環境変数は
+   サブエージェントにも受け継がれるが、通知が親の孫に届かず、サブエージェントが親のペインを
+   区切りでない時点で compact しうるため
 3. **種類は PostToolUse（matcher なし）。** 実装の孫は長い 1 ターンで走り続けるので、ターンの終わりに
    しか来ない Stop では届きにくい。返し方は `hookSpecificOutput.additionalContext`
 4. **文脈の測り方は transcript の末尾 1 MiB だけを読み、直近の assistant の `usage` の入力・
@@ -34,7 +37,10 @@ DOC-2610142337（実装途中の自己 compact）が決めた区切り・閾値�
 7. **判定できないときは黙る。** `OCW_ROLE` 以外、python3 が無い・入力が壊れている・transcript が
    読めない・usage が取れない・session_id が不正（パス区切りを含む）、のいずれも出力なしで exit 0。
    エージェントを止めない（`git-guard.sh` と同じ方針）
-8. **言語は POSIX sh + python3**（`git-guard.sh` と同じ。JSON を扱うため python3 が要る）
+8. **言語は POSIX sh + python3**（`git-guard.sh` と同じ。JSON を扱うため python3 が要る）。
+   ただしペイロードは `git-guard.sh` と違い stdin のまま渡し、python のコードを `-c` で渡す。
+   matcher なしの PostToolUse には `tool_response`（ツール出力全体）が入り、引数1つで渡すと
+   128 KiB（`MAX_ARG_STRLEN`）超で exec が失敗するため
 9. **差し込む文面は短くし、手順の本文を持たない。** 「区切りなら `ocw self-compact` を判断」と、
    区切りの定義・WIP と指摘対応の修正の途中を除くことを一言で示し、手順は §3.2 の自動付与指示と
    `pr-review-loop` へ誘導する。実装中の孫に届く場所の本文（自動付与指示）にはフックへの言及を
