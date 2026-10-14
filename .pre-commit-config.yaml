@@ -74,6 +74,13 @@ repos:
         pass_filenames: false
         files: ^(claude/hooks/git-guard\.sh|tests/git_guard_test\.sh)$
 
+      - id: compact-reminder-test
+        name: tests/compact_reminder_test.sh (compact-reminder フックの閾値・役割・間引き)
+        entry: tests/compact_reminder_test.sh
+        language: system
+        pass_filenames: false
+        files: ^(claude/hooks/compact-reminder\.sh|tests/compact_reminder_test\.sh)$
+
       - id: bin-lint
         name: bin/tests/lint.sh (bash -n / py_compile)
         entry: bin/tests/lint.sh

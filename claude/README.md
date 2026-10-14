@@ -94,6 +94,10 @@ Claude Code がセッション開始時に読み込むグローバルな個人�
   `task-intake` スキルでの振り分けを人間に提案する。PR 1本か複数か・どのリポに
   またがるかの判断は `task-intake` に任せ、複数PR規模なら `umbrella-handoff` スキルへ
   振り分けられる。人間がその会話で進めると決めた場合は提案しない）
+- 大きい出力を文脈へ流し込まない作法（ファイルは必要な行範囲だけ読む・約100行/5,000字超の出力は
+  一時ファイルへ書き出して要約だけ見る・長いファイルは丸ごと書き直さず差分で直す）。3エージェント
+  共通の文書のため短く保ち、ツール名に依存せず書く。`skills/umbrella-orchestrator/SKILL.md` §3.2 の
+  自動付与指示の3項目と同じ内容（調査: DOC-2610142335）
 
 **人格のパーソナライズは `deploy` 不要、`~/.claude/CLAUDE.machine.md` を直接編集するだけで
 即座に反映される。** `~/.claude/CLAUDE.machine.md` は固定パス
@@ -342,6 +346,23 @@ force push は無音で通る。**`Bash(git push *--force*)` のように空白�
 無くなる**（`gh pr merge` は `permissions` のグロブで表現できないため保険が無い）。
 線引きの一次的な担保はルート `AGENTS.md` の最重要ルールであり、フックはその機械的な
 裏打ちにすぎないが、無人運転中はその裏打ちが唯一の歯止めになることに注意すること。
+
+### 3.6 compact-reminder フック — 実装の孫に自己 compact の判断を思い出させる
+
+`~/.claude/hooks/compact-reminder.sh`（`claude/hooks/compact-reminder.sh` から symlink される
+PostToolUse フック）は、**`OCW_ROLE=implementer` のペインでだけ**、文脈が 200,000 トークンを
+超えたら「区切りなら `ocw self-compact` を判断すること」と `additionalContext` で差し込む。
+**compact そのものは打たない。** それ以外の役割（司令官・レビュワー・未設定）には何も言わない。
+
+- 文脈は transcript の末尾 1 MiB だけを読んで測る（全体は読まない）
+- 間引き: 超えた最初の 1 回と、その後は前回の差し込みから 50,000 増えるごと。閾値以下に戻ると
+  （compact した）状態を消す。状態は `${XDG_STATE_HOME:-~/.local/state}/dotfiles/compact-reminder/<session_id>`
+- 判定できない入力（python3 無し・transcript が読めない・壊れた JSON）は何も言わず、エージェントを止めない
+- テストは `tests/compact_reminder_test.sh`。**実機で `additionalContext` が孫の文脈に届くかは未検証**
+  （デプロイ後に確かめる。ADR [DOC-2610142359](../docs/adr/DOC-2610142359_implementer-compact-reminder-hook.md) §4）
+
+無効化するには、リポジトリ側の `claude/settings.json` から `hooks.PostToolUse` を削除する
+（machine 設定で `hooks.PostToolUse` を空配列にしても同じ。§3.5 の無効化と同様の浅いマージ）。
 
 ## 4. Customization — マシン固有設定の追加
 

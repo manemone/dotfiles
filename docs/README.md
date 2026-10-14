@@ -27,6 +27,7 @@
 | 傘の司令官が区切りで自分を compact する仕組み（専用コマンド `ocw self-compact`・絞った allow ルール・毎回行い 150k 以下は除く判断）と、未検証の点・確かめ方を知りたい | [adr/DOC-2610130913_commander-auto-compact.md](adr/DOC-2610130913_commander-auto-compact.md) | 宛先を `$HERDR_PANE_ID` に固定した理由、ルールを `herdr agent prompt` 全般にしなかった理由、閾値の損益見積もり、ADR DOC-2610130834 との関係、マージ・デプロイ後に司令官が確かめる手順 |
 | 司令官が自己 compact を見送ったあと、どう拾い直すか（保留の印の置き場・再判断の場所）を知りたい | [adr/DOC-2610140044_commander-compact-carryover.md](adr/DOC-2610140044_commander-compact-carryover.md) | 見送りが流れた2件の原因、印を計画書に書かない理由、再判断を cron の tick と人間の返答処理に絞った理由 |
 | 実装の孫が区切り（レビューを依頼した直後）で自分を compact する条件（閾値 200k・復帰メモ・使えないときは何もしない）を知りたい | [adr/DOC-2610131214_implementer-compact.md](adr/DOC-2610131214_implementer-compact.md) | 区切りを2つに絞った理由、閾値を 200k にした試算の根拠、レビュワーを除く理由、復帰メモの中身、却下した案 |
+| 実装の孫が実装の途中（検証が通ってコミットした直後）でも自分を compact する条件と、品質低下の測り方を知りたい | [adr/DOC-2610142337_implementer-midway-compact.md](adr/DOC-2610142337_implementer-midway-compact.md) | ADR DOC-2610131214 の「途中では行わない」を覆した範囲、区切り・回数上限・実装途中用の復帰メモ、レビューの投稿数・指摘数で測る方法と再考の目安、却下した案 |
 | `ocw -H` で起動する claude の会話タイトルを herdr のラベルと揃えた理由と名前の形を知る | [adr/DOC-2610111939_ocw-session-name.md](adr/DOC-2610111939_ocw-session-name.md) | `--label`・`"<ラベル> / <役割>"` の名前・claude のときだけ足す判定・日本語名での `SendMessage` と宛先解決の実測・却下した案 |
 | `ocw -H` がエージェントを要るペインだけ起動する理由と、後から起動する `ocw agent` の方式を知る | [adr/DOC-2610112129_ocw-lazy-agents.md](adr/DOC-2610112129_ocw-lazy-agents.md) | ペインは全部作りエージェントの起動だけ遅らせる決定・起動行を git dir に残す方式と却下した案・pr-review-loop / `/finalize` の使い方・別セッションでの実測 |
 | 旧形で撒いたリポジトリ（modeldex・pixidex・sheaf）を `copier update` できる形へ移す | [reference/DOC-2610110507_repo-baseline旧形からの移行手順.md](reference/DOC-2610110507_repo-baseline旧形からの移行手順.md) | 橋渡しのコミットの手順・リポジトリごとの撒いた版と `language` の答え方・衝突しやすいファイル・namecheck |
@@ -36,6 +37,7 @@
 | `ocw-meter` のイベントスキーマを調べる | [reference/DOC-2608021229-c_ocw-meterイベントスキーマ.md](reference/DOC-2608021229-c_ocw-meterイベントスキーマ.md) | 全 event_type・全フィールド・費用計算式の一次情報源 |
 | LLM費用のベースラインを測る手順を知る | [reference/DOC-2608021229-b_LLM費用観測ベースライン計測手順.md](reference/DOC-2608021229-b_LLM費用観測ベースライン計測手順.md) | 実PR 5〜10本での計測手順 |
 | Claude の使用量を実ログから測る手順と、どこを削れるかの調査結果を知る | [reference/DOC-2610130216_使用量の測り方と削りどころの調査結果.md](reference/DOC-2610130216_使用量の測り方と削りどころの調査結果.md) | 集計スクリプト（`docs/adr/probes/usage-diet/`）の使い方・役割別の費用・キャッシュ切れ・文脈の太り方・compact の試算と、効かないとわかった案 |
+| 実装の孫の文脈が何で膨らむか（ツール結果の内訳・出力トークンの寄与）と、大きい出力の作法の根拠・置き場を知る | [reference/DOC-2610142335_実装の孫の文脈の内訳調査.md](reference/DOC-2610142335_実装の孫の文脈の内訳調査.md) | 集計スクリプト（`docs/adr/probes/context-bloat/` の `tools.py` / `share.py`）・Bash の先頭語別とサイズ別の分布・作法の中身と置き場・入れなかった場所 |
 | 傘ブランチの計画を確認する | [planning/](planning/) 配下の各計画書 | 進行中・完了した傘ブランチの計画書 |
 | このリポジトリの AI 支援基盤を他のリポジトリへ配布する | [../templates/repo-baseline/README.md](../templates/repo-baseline/README.md) | copier テンプレート。dotfiles 本体とは独立・自己完結 |
 
@@ -94,6 +96,8 @@
 | DOC-2610130913 | [commander-auto-compact.md](adr/DOC-2610130913_commander-auto-compact.md) | 傘の司令官が区切りで専用コマンド `ocw self-compact`（自ペイン固定で `/compact` を送り、compact の完了後に続きを促す1通をバックグラウンドの監視が送る）により自分を compact する決定。`Bash(ocw self-compact *)` だけを許す allow ルール、毎回行い 150k 以下は除く閾値の見積もり、ADR DOC-2610130834 との関係、ルールが分類器に勝つかは未検証・監視による復帰は実機で1回確認済みであることとマージ後の確かめ方を記録 |
 | DOC-2610140044 | [commander-compact-carryover.md](adr/DOC-2610140044_commander-compact-carryover.md) | 司令官が自己 compact を見送ったとき、リポ外の保留の印を置いて cron の tick と人間の返答処理で再判断する決定。印を計画書に書かない理由と却下案を記録 |
 | DOC-2610131214 | [implementer-compact.md](adr/DOC-2610131214_implementer-compact.md) | 実装の孫がレビューを依頼した直後の区切り（PR 提出後・再レビュー依頼後）で `ocw self-compact` により自分を compact する決定。閾値 200,000（試算で純削減が最大）、実装の途中・承認後・レビュワーでは行わない、復帰メモはレビュー待ち（Phase 3）に戻す、使えないときは提案もせず何もしない（状態: 決定） |
+| DOC-2610142337 | [implementer-midway-compact.md](adr/DOC-2610142337_implementer-midway-compact.md) | 実装の孫が実装の途中（検証が通ってコミットした直後）でも、閾値 200,000 超なら自己 compact する決定。ADR DOC-2610131214 の「途中では行わない」のうち PR を出す前の実装だけを覆す。1 PR につき多くて 3 回、実装途中用の復帰メモ、レビューの投稿数・指摘数で品質低下を測る方法と再考の目安（状態: 決定） |
+| DOC-2610142359 | [implementer-compact-reminder-hook.md](adr/DOC-2610142359_implementer-compact-reminder-hook.md) | 実装の孫の文脈が 200k を超えたら、区切りでの `ocw self-compact` の判断を促す一文を差し込む PostToolUse フック（`claude/hooks/compact-reminder.sh`）の決定。`OCW_ROLE=implementer` だけに効かせ、compact は打たず、transcript の末尾だけを読み、超えた最初の 1 回と 50k 増えるごとに間引く。判定できないときは黙る。実機で `additionalContext` が届くかは未検証として記録 |
 
 ### planning/ — ロードマップ・計画
 

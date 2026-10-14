@@ -111,6 +111,17 @@
           }
         ]
       }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$HOME/.claude/hooks/compact-reminder.sh\"",
+            "timeout": 5
+          }
+        ]
+      }
     ]
   },
   "model": "opus",
