@@ -25,7 +25,7 @@ Claude Code の会話は、compact の直後でも毎回、ルール文書（各
 
 | 孫 | リポ | ブランチ | 内容 | 状況 |
 |---|---|---|---|---|
-| 1 | dotfiles | `fc-01-agents-md-policy` | `AGENTS.md` の芯と詳細の分け方の方針を決めて文書にし、dotfiles の `AGENTS.md` と `templates/repo-baseline` の雛形に適用する。他リポへの適用手順（copier を撒いたリポの扱いを含む）も決める | ⬜ 待機中 |
+| 1 | dotfiles | `fc-01-agents-md-policy` | `AGENTS.md` の芯と詳細の分け方の方針を決めて文書にし、dotfiles の `AGENTS.md` と `templates/repo-baseline` の雛形に適用する。他リポへの適用手順（copier を撒いたリポの扱いを含む）も決める | 🔄 実装中 |
 | 2 | lora-dataset-forge | `fc-02-agents-md-split` | 孫1 の方針で `AGENTS.md` を芯と詳細に分ける | ⬜ 待機中 |
 | 3 | pixidex | `fc-03-agents-md-split` | 孫1 の方針で `AGENTS.md` を分ける（孫7 の検証済みなら Figma の有効化の1行も同乗） | ⬜ 待機中 |
 | 4 | modeldex | `fc-04-agents-md-split` | 孫1 の方針で `AGENTS.md` を分ける | ⬜ 待機中 |
@@ -313,7 +313,8 @@ iosci・sheaf・pixidex の `.claude/settings.json`（コミットされる。�
 
 （司令官が運用中に分かったこと・人間の決定をここに追記する）
 
-- 2026-10-15: 計画書を起草した。孫1 を spawn する
+- 2026-10-15: 計画書を起草した。孫1 を spawn した
+- 2026-10-15: 「人間に確認すること」の3点を人間に上げた。孫7 は背景5-2 の答えを待つ
 
 ## 孫1用プロンプト:
 
