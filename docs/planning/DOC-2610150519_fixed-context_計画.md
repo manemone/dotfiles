@@ -25,7 +25,7 @@ Claude Code の会話は、compact の直後でも毎回、ルール文書（各
 
 | 孫 | リポ | ブランチ | 内容 | 状況 |
 |---|---|---|---|---|
-| 1 | dotfiles | `fc-01-agents-md-policy` | `AGENTS.md` の芯と詳細の分け方の方針を決めて文書にし、dotfiles の `AGENTS.md` と `templates/repo-baseline` の雛形に適用する。他リポへの適用手順（copier を撒いたリポの扱いを含む）も決める | 🔄 実装中 |
+| 1 | dotfiles | `fc-01-agents-md-policy` | `AGENTS.md` の芯と詳細の分け方の方針を決めて文書にし、dotfiles の `AGENTS.md` と `templates/repo-baseline` の雛形に適用する。他リポへの適用手順（copier を撒いたリポの扱いを含む）も決める | ✅ PR #170 マージ済 |
 | 2 | lora-dataset-forge | `fc-02-agents-md-split` | 孫1 の方針で `AGENTS.md` を芯と詳細に分ける | ⬜ 待機中 |
 | 3 | pixidex | `fc-03-agents-md-split` | 孫1 の方針で `AGENTS.md` を分ける（孫7 の検証済みなら Figma の有効化の1行も同乗） | ⬜ 待機中 |
 | 4 | modeldex | `fc-04-agents-md-split` | 孫1 の方針で `AGENTS.md` を分ける | ⬜ 待機中 |
@@ -353,6 +353,7 @@ memory のディレクトリはワークツリーではなくリポ（メイン�
   スキルは、人間が重くないのではと見たので扱わない。司令官の目安でも、Figma の約 2.5k が週 $20〜25 なので 3.3k は週 $25〜35 程度で、
   `AGENTS.md`（dotfiles だけで 2 万字超）より一桁小さい。孫7 を spawn する
 - 2026-10-15: 孫7 の PR #171 を司令官がマージした。**孫7 の検証済み（Figma の有効化の1行を同乗させてよい）。** `figma@synced` は user で `false`・project の `.claude/settings.json` で `true` にすると戻る（local でも戻る）。結果は DOC-2610150527、止め方とリポ側の書き方は `claude/README.md` §4.10。孫3・5・6 は設計3.2 の1行を同乗させる。傘で `pre-commit run --all-files` が通った
+- 2026-10-15: 孫1 の PR #170 を司令官がマージした。**方針文書は DOC-2610150522（`docs/design/` 配下の「AGENTS.mdの芯と詳細の分け方」）。** 他リポへの適用手順と `MEMORY.md` の作法（設計4.2）もこの文書にある（§6 が `MEMORY.md`）。dotfiles の `AGENTS.md` の詳細は DOC-2610150520 系（`docs/design/DOC-2610150520*`）へ移った。傘で `pre-commit run --all-files`・`tests/template_smoke.sh`・`tests/deploy_smoke.sh` が通った。孫2〜6 を spawn する
 
 ## 孫1用プロンプト:
 
