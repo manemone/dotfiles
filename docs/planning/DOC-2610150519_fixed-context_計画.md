@@ -27,7 +27,7 @@ Claude Code の会話は、compact の直後でも毎回、ルール文書（各
 |---|---|---|---|---|
 | 1 | dotfiles | `fc-01-agents-md-policy` | `AGENTS.md` の芯と詳細の分け方の方針を決めて文書にし、dotfiles の `AGENTS.md` と `templates/repo-baseline` の雛形に適用する。他リポへの適用手順（copier を撒いたリポの扱いを含む）も決める | ✅ PR #170 マージ済 |
 | 2 | lora-dataset-forge | `fc-02-agents-md-split` | 孫1 の方針で `AGENTS.md` を芯と詳細に分ける | ✅ PR lora-dataset-forge#494 マージ済 |
-| 3 | pixidex | `fc-03-agents-md-split` | 孫1 の方針で `AGENTS.md` を分ける（孫7 の検証済みなら Figma の有効化の1行も同乗） | 🔄 実装中 |
+| 3 | pixidex | `fc-03-agents-md-split` | 孫1 の方針で `AGENTS.md` を分ける（孫7 の検証済みなら Figma の有効化の1行も同乗） | 🔄 Figma の1行を `fc-03b-figma-enable` で出し直し中（`AGENTS.md` の分割は PR pixidex#114 でマージ済） |
 | 4 | modeldex | `fc-04-agents-md-split` | 孫1 の方針で `AGENTS.md` を分ける | ✅ PR modeldex#114 マージ済 |
 | 5 | sheaf | `fc-05-agents-md-split` | 孫1 の方針で `AGENTS.md` を分ける（孫7 の検証済みなら Figma の有効化の1行も同乗） | ✅ PR sheaf#278 マージ済 |
 | 6 | iosci | `fc-06-agents-md-split` | 孫1 の方針で `AGENTS.md` を分ける（孫7 の検証済みなら Figma の有効化の1行も同乗） | ✅ PR iosci#130 マージ済 |
@@ -355,6 +355,7 @@ memory のディレクトリはワークツリーではなくリポ（メイン�
 - 2026-10-15: 孫7 の PR #171 を司令官がマージした。**孫7 の検証済み（Figma の有効化の1行を同乗させてよい）。** `figma@synced` は user で `false`・project の `.claude/settings.json` で `true` にすると戻る（local でも戻る）。結果は DOC-2610150527、止め方とリポ側の書き方は `claude/README.md` §4.10。孫3・5・6 は設計3.2 の1行を同乗させる。傘で `pre-commit run --all-files` が通った
 - 2026-10-15: 孫1 の PR #170 を司令官がマージした。**方針文書は DOC-2610150522（`docs/design/` 配下の「AGENTS.mdの芯と詳細の分け方」）。** 他リポへの適用手順と `MEMORY.md` の作法（設計4.2）もこの文書にある（§6 が `MEMORY.md`）。dotfiles の `AGENTS.md` の詳細は DOC-2610150520 系（`docs/design/DOC-2610150520*`）へ移った。傘で `pre-commit run --all-files`・`tests/template_smoke.sh`・`tests/deploy_smoke.sh` が通った。孫2〜6 を spawn する
 - 2026-10-15: 孫5 sheaf#278 は人間がマージした。孫2・3・4・6 も承認済みで人間のマージ待ち。**孫3 pixidex#114 には Figma の有効化の1行が入っていない**（`.claude/settings.json` の書き換えを、孫の auto mode の分類器が自己変更として止めた。孫は回避せず止まった）。人間が孫3 のペインで許可し、同じ PR に積ませている（積んだら再レビューが要るので、状況を 🔄 に戻した）。iosci#130 には入っている
+- 2026-10-15: 孫2 lora-dataset-forge#494・孫4 modeldex#114・孫6 iosci#130 は人間がマージした。孫3 pixidex#114 も人間がマージしたが、マージが Figma の1行のコミット（0815e38）を積む前の HEAD だったので、Figma の有効化は main に入っていない。孫3 に、origin/main から `fc-03b-figma-enable` を切って 0815e38 を cherry-pick し、main 向きの PR を出し直すよう頼んだ。巡回はこのブランチの PR を見る（承認なら ⏳、マージなら孫3 を ✅）
 
 ## 孫1用プロンプト:
 
