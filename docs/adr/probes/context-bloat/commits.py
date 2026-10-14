@@ -9,10 +9,12 @@ for f in sorted(glob.glob(root+'/*/*.jsonl')):
     if os.path.getmtime(f)<since.timestamp(): continue
     name=re.sub(r'^.*?-projects-','',f.split('/')[-2],count=1)
     if not re.search(r'-\d\d-',name): continue
-    seen=set();n=0;ctx=0;pr=None;commits=[]
+    seen=set();n=0;ctx=0;pr=None;commits=[];first=None
     for line in open(f,errors='ignore'):
         try:d=json.loads(line)
         except:continue
+        if first is None and d.get('type')=='user':
+            c=(d.get('message') or {}).get('content'); first=c if isinstance(c,str) else json.dumps(c,ensure_ascii=False)
         m=d.get('message') or {}
         if d.get('type')=='assistant' and m.get('usage') and m.get('id') not in seen:
             seen.add(m['id']);n+=1;u=m['usage']
@@ -22,8 +24,8 @@ for f in sorted(glob.glob(root+'/*/*.jsonl')):
             for x in c:
                 if x.get('type')!='tool_use': continue
                 s=json.dumps(x.get('input',{}),ensure_ascii=False)
-                if pr is None and 'gh pr create' in s: pr=n
                 if re.search(r'git commit',s) and pr is None: commits.append((n,ctx))
-    if n<30: continue
+                if pr is None and 'gh pr create' in s: pr=n  # commit と同じ呼び出しで PR を作る孫は、そのコミットも数える
+    if n<30 or 'PRレビュー' in (first or '')[:200]: continue  # レビュワーは miss.py と同じ判定で除く
     hits=[(i,c) for i,c in commits if c>THR]
     print(f"{name:40} calls={n:4} pr_create@{pr} commits_before_pr={len(commits)} over{THR//1000}k={len(hits)} first_hit@{hits[0][0] if hits else None}")
