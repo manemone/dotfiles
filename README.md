@@ -155,6 +155,7 @@ for details. `bin/` changes should additionally be verified with
 │   ├── CLAUDE.md              # Claude Code global personal instructions (personalization imports CLAUDE.machine.md by path)
 │   ├── settings.json          # Claude Code base settings (no machine-specific config)
 │   ├── settings.machine.json.example  # Template for machine-specific overrides
+│   ├── hooks/                 # git-guard.sh (PreToolUse), compact-reminder.sh (PostToolUse; nudges implementer panes to consider self-compact)
 │   ├── deploy.sh              # claude deployment script
 │   └── README.md
 ├── skills/

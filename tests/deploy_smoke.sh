@@ -349,6 +349,7 @@ scenario_backup_symlink_idempotent_uninstall() {
     # arm への追加漏れがあると、この symlink が張られないまま静かに
     # スキップされる（AGENTS.md「実装時の注意」参照）。
     assert_symlink "$sbx/.claude/hooks/git-guard.sh" "$prefix/current/claude/hooks/git-guard.sh"
+    assert_symlink "$sbx/.claude/hooks/compact-reminder.sh" "$prefix/current/claude/hooks/compact-reminder.sh"
   fi
 
   if has_tool codex; then
@@ -454,6 +455,7 @@ EOF
     # 復元先ではなく「撤去されたこと」自体を確認する（links_for_tool() の
     # claude arm への追加漏れがあると symlink が残ったままになる）。
     assert_not_exists "$sbx/.claude/hooks/git-guard.sh"
+    assert_not_exists "$sbx/.claude/hooks/compact-reminder.sh"
   fi
   if has_tool codex; then
     # 過去に ocw-meter が uninstall.sh から撤去漏れした不具合（ADR
