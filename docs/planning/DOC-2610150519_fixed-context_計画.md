@@ -31,7 +31,7 @@ Claude Code の会話は、compact の直後でも毎回、ルール文書（各
 | 4 | modeldex | `fc-04-agents-md-split` | 孫1 の方針で `AGENTS.md` を分ける | ⬜ 待機中 |
 | 5 | sheaf | `fc-05-agents-md-split` | 孫1 の方針で `AGENTS.md` を分ける（孫7 の検証済みなら Figma の有効化の1行も同乗） | ⬜ 待機中 |
 | 6 | iosci | `fc-06-agents-md-split` | 孫1 の方針で `AGENTS.md` を分ける（孫7 の検証済みなら Figma の有効化の1行も同乗） | ⬜ 待機中 |
-| 7 | dotfiles | `fc-07-figma-scope` | `figma@synced` にリポごとの `enabledPlugins` の上書きが効くかを確かめ、ユーザー全体で止める設定を入れる | ⬜ 待機中 |
+| 7 | dotfiles | `fc-07-figma-scope` | `figma@synced` にリポごとの `enabledPlugins` の上書きが効くかを確かめ、machine 設定でユーザー全体を止める手順とリポ側で有効にする書き方を書く | ⬜ 待機中 |
 
 依存:
 
@@ -39,7 +39,7 @@ Claude Code の会話は、compact の直後でも毎回、ルール文書（各
 - 孫2〜6 は**孫1 のマージ後**（方針と、他リポへの適用手順を孫1 が決める）。孫2〜6 どうしは**並列**
   （リポが別で、触るファイルが重ならない）。他リポの孫なので PR はそのリポの既定ブランチ向きで、マージは人間。
   ⏳（人間のマージ待ち）のあいだも、他の孫は依存しないので先へ進んでよい
-- 孫7 は**人間が背景5-2 を決めてから**（下の「人間に確認すること」）。孫1 とは触るファイルが重ならないので**並列**でよい
+- 孫7 は孫1 と触るファイルが重ならないので**並列**（背景5-2 は人間が決めた。進行記録 2026-10-15）
 - Figma の有効化の1行（iosci・sheaf・pixidex の `.claude/settings.json`）は、孫7 の検証（背景5-1）が済んでから入れる。
   その時点で孫3・5・6 がまだ spawn 前ならその PR に同乗させ、すでに走っていたら司令官が追加の孫を足す（設計3.3）
 - **ユーザー全体で止める設定が実機に効くのは、3リポの有効化がそれぞれの既定ブランチにマージされた後にする**
@@ -161,7 +161,7 @@ sheaf のメインワークツリーは人間が別のブランチを checkout �
    人間に相談する（代替: そのまま全体で有効にしておく、など）
 2. **ユーザー全体で止める設定の置き場。** `~/.claude/settings.json` は dotfiles のデプロイが生成し直すので直接いじっても消える。
    `claude/settings.json`（配布物。全マシンに効く）か `settings.machine.json`（マシンローカル。固定パス。AGENTS.md「claude の例外」）か。
-   Figma を使うマシンが限られるなら machine 側もありうる。**人間に確認する**（「人間に確認すること」）
+   → **人間が `settings.machine.json`（このマシンだけ）に決めた**（2026-10-15）
 3. **リポ側の有効化は `.claude/settings.json`（コミットされる）に書く。** `.claude/settings.local.json` は作業ツリーごとで、
    `ocw` で作る新しいワークツリーに引き継がれない
 4. **`AGENTS.md` の「芯」の基準。** 毎回の作業で守らせたい最重要ルール（`master` を書き換えない・linter を抑制しない等）は芯に
@@ -170,7 +170,7 @@ sheaf のメインワークツリーは人間が別のブランチを checkout �
 5. **他の AI（Codex・OpenCode）への影響。** `AGENTS.md` は Codex / OpenCode もそのまま読む。詳細を外へ出したときに参照を
    辿れるか（孫1）
 6. **各リポの `MEMORY.md`**（`~/.claude/projects/<リポ>/memory/`。リポの外）も固定分。lora-dataset-forge の 235 行は上限超えで
-   切れている。この傘で扱うかは**人間に確認する**（リポの外なので PR にならない）
+   切れている。→ **人間がこの傘で扱うと決めた**（2026-10-15。設計4）。リポの外なので PR にならない
 7. **（司令官が追加）copier で雛形を撒いたリポとの整合。** pixidex・modeldex・sheaf・iosci の4リポは `templates/repo-baseline` を
    copier で撒いている（`.copier-answers.yml` あり。lora-dataset-forge は無し）。pixidex・modeldex は `_src_path` が dotfiles の
    GitHub で `_commit` が記録されており `copier update` できるが、sheaf・iosci はローカルパスから撒いて `_commit` が無く
@@ -243,19 +243,52 @@ iosci・sheaf・pixidex の `.claude/settings.json`（コミットされる。�
 
 ### 3.3 ユーザー全体で止める設定と順序
 
-- 置き場は人間の決定（背景5-2）に従う。`claude/settings.json`（配布物）なら孫7 の PR で入れる。配布物の編集は、前の傘
-  （context-bloat）で `claude/CLAUDE.md` への追記が auto mode の分類器に `Self-Modification` として止められた。止められたら回避せず
-  報告し、司令官が孫7 の implementer だけ既定の権限モードで起動し直して、人間がダイアログで承認する段取りにする
-- `settings.machine.json`（マシンローカル）なら PR にならない。孫7 は手順を `claude/README.md` 等に書くだけにし、
-  実際の編集は人間が行う（または人間の明示指示で AI が行う）
-- **実機で止めるのは、3リポの有効化がそれぞれの既定ブランチにマージされてから。** `claude/settings.json` に入れる場合、
-  実機に効くのはデプロイ（人間の指示が要る）の後なので、デプロイの前に3リポのマージが済んでいるかを人間に伝える
+- 置き場は **`settings.machine.json`（このマシンだけ）**（人間の決定。背景5-2）。配布物 `claude/settings.json` には入れない
+- machine 設定はリポの外（固定パス。`~/.claude/settings.machine.json` はその symlink）なので PR にならない。孫7 は、
+  止め方（machine 設定に何を書くか・書いた後に `~/.claude/settings.json` を作り直すにはデプロイが要ること）と、リポ側で
+  有効にする書き方を `claude/README.md` 等に書くだけにする。**machine 設定の実際の編集とデプロイは人間が行う**
+  （人間が明示的に指示すれば AI が行ってよい）
+- **実機で止めるのは、3リポの有効化がそれぞれの既定ブランチにマージされてから。** 司令官は、3リポのマージが揃ったら
+  人間に「machine 設定で止めてデプロイしてよい」と伝える
 
-## 人間に確認すること（未決。司令官が聞いて、答えを進行記録に書く）
+## 設計4: 各リポの `MEMORY.md`（孫1〜6。PR の外）
 
-1. 背景5-2: ユーザー全体で Figma を止める設定の置き場（`claude/settings.json` か `settings.machine.json` か）。**孫7 の spawn はこの答えを待つ**
-2. 背景5-6: 各リポの `MEMORY.md`（リポの外）をこの傘で扱うか
-3. 背景2: claude.ai から同期されているスキル（約 3.3k）を絞るか。絞るなら残すものを人間が選ぶ
+### 4.1 現状（2026-10-15、司令官が計測。`~/.claude/projects/<メインワークツリーのパス>/memory/MEMORY.md`、`wc -lc`）
+
+| リポ | 行 | バイト |
+|---|---|---|
+| lora-dataset-forge | 236 | 36,701 |
+| sheaf | 73 | 14,006 |
+| pixidex | 33 | 6,631 |
+| modeldex | 24 | 4,630 |
+| iosci | 14 | 2,530 |
+| dotfiles | 13 | 2,257 |
+
+lora-dataset-forge は 200 行・25KB の両方を超えていて後ろが読まれていない。sheaf は行数は少ないが1行が長い。
+memory のディレクトリはワークツリーではなくリポ（メインワークツリーのパス）ごとなので、そのリポの孫のセッションが
+システムプロンプトで渡される memory のパスがそのまま対象になる。
+
+### 4.2 作法（孫1 が方針文書に書く）
+
+- `MEMORY.md` は索引だけにする。1つの記憶に1行（`- [題](ファイル.md) — 短いフック`）。中身は個別のファイルへ
+- 目安は 200 行・25KB より十分小さく。フックは1行で読み切れる長さに
+- **記憶を消さない。** `MEMORY.md` に直書きされている中身は個別のファイルへ移すだけ。重複・古いと思うものは消さずに報告する
+
+### 4.3 適用（孫2〜6。PR とは別の作業）
+
+- そのリポの孫が、`AGENTS.md` の PR とは別に、自分の memory ディレクトリの `MEMORY.md` を 4.2 の作法で整える
+- 触る前に memory ディレクトリを丸ごと複製しておく（`cp -a <memory> <memory>.bak-<日付>`。memory の親ディレクトリに置く）。
+  同じリポで他の会話が同時に記憶を書き足すことがあるので、書き換える直前に読み直し、差分は小さく当てる
+- 前後の `wc -lc` と複製のパスを最終報告と PR 本文に書く（中身は書かない）
+- 整える必要が無いほど小さければ（目安: 50 行・10KB 未満）何もしない
+- 編集が auto mode の分類器などに止められたら回避せず、止められたことを最終報告に書く（`AGENTS.md` の PR は止めない）
+- dotfiles 自身の `MEMORY.md` は小さいので対象外
+
+## 人間に確認すること（2026-10-15 に答えをもらった。詳細は進行記録）
+
+1. 背景5-2: ユーザー全体で Figma を止める設定の置き場 → `settings.machine.json`（このマシンだけ）
+2. 背景5-6: 各リポの `MEMORY.md` → この傘で扱う（設計4）
+3. 背景2: claude.ai から同期されているスキル（約 3.3k）→ この傘では扱わない（進行記録）
 
 ## 決定的な制約（孫は全部守ること）
 
@@ -315,6 +348,10 @@ iosci・sheaf・pixidex の `.claude/settings.json`（コミットされる。�
 
 - 2026-10-15: 計画書を起草した。孫1 を spawn した
 - 2026-10-15: 「人間に確認すること」の3点を人間に上げた。孫7 は背景5-2 の答えを待つ
+- 2026-10-15: 人間の答え。(1) Figma を止める設定は `settings.machine.json`（このマシンだけ）に置く（設計3.3 を書き換えた）。
+  (2) 各リポの `MEMORY.md` もこの傘で扱う（設計4 を足した。孫1 にも方針文書へ作法を足すよう伝えた）。(3) claude.ai 同期の
+  スキルは、人間が重くないのではと見たので扱わない。司令官の目安でも、Figma の約 2.5k が週 $20〜25 なので 3.3k は週 $25〜35 程度で、
+  `AGENTS.md`（dotfiles だけで 2 万字超）より一桁小さい。孫7 を spawn する
 
 ## 孫1用プロンプト:
 
@@ -338,7 +375,7 @@ iosci・sheaf・pixidex の `.claude/settings.json`（コミットされる。�
 
 1. 計画書 設計1.1 の項目を決め、`docs/design/` に方針文書を書く（`DOC-DOCID_PLACEHOLDER_*.md` で作って
    `./tools/doc-id/doc-id assign`）。他リポへの適用手順（背景5-7。copier を撒いたリポの扱い）もこの文書に書く。
-   孫2〜6（他リポの実装AI）がこの文書だけを読んで作業できるように書く
+   孫2〜6（他リポの実装AI）がこの文書だけを読んで作業できるように書く。計画書 設計4.2 の `MEMORY.md` の作法もこの文書に書く
 2. 計画書 設計1.2 に従い、dotfiles のルート `AGENTS.md` を芯と詳細に分ける。ルールを消さず、移すだけにする
 3. `templates/repo-baseline/template/AGENTS.md.jinja` にも方針を入れる（必要なら詳細の雛形ファイルを足す）
 4. 移した節への参照を `git grep` で洗って直す（設計1.2）。`opencode.json` の `instructions` は設計1.1 の判断に従う
@@ -429,7 +466,9 @@ PR を作る前に `docs/design/DOC-2608020715_プルリクエストの作法.md
 3. 分ける前後の `wc -lm`（毎回読み込まれるファイルの合計）を PR 本文に書く
 4. 計画書の進行記録に「孫7 の検証済み（Figma の有効化の1行を同乗させてよい）」と書かれていて、このリポが
    pixidex・sheaf・iosci のどれかなら、計画書 設計3.2 の1行を `.claude/settings.json` に足す。書かれていなければ足さない
-5. このリポ自身の AGENTS.md 等の規約（ブランチ名・PR の作法・コミット前の手順・DOC-ID の運用）に従う
+5. PR とは別に、計画書 設計4.3 に従って、このリポの `MEMORY.md`（このセッションのシステムプロンプトに書かれた memory の
+   ディレクトリ）を、方針文書の作法（設計4.2）で整える。触る前に複製を取り、記憶を消さない
+6. このリポ自身の AGENTS.md 等の規約（ブランチ名・PR の作法・コミット前の手順・DOC-ID の運用）に従う
 
 ## 検証方針
 
@@ -545,10 +584,11 @@ ocw が既に作業ブランチを作って checkout 済みなので、git fetch
 1. 計画書 設計3.1 に従い、`figma@synced` に `enabledPlugins` の上書きが効くかを、実 `$HOME` を書き換えずに確かめる。
    確かめ方と結果を文書（`docs/reference/` か ADR。DOC-ID を採番）に残す。
    **効かなければ、設定を入れずに司令官のペインへ結果を報告して止まる**（PR は検証結果の文書だけで出してよい）
-2. 効いたら、計画書 設計3.3 と人間の決定に従ってユーザー全体で止める設定を入れる。
-   - `claude/settings.json`（配布物）なら、この PR で `enabledPlugins` に `"figma@synced": false` を足す。
-     auto mode の分類器に止められたら回避せず、司令官のペインへ報告して止まる（司令官が権限モードを変えて起動し直す）
-   - `settings.machine.json` なら PR では設定を入れず、人間がやる手順を `claude/README.md` に書く
+2. 効いたら、計画書 設計3.3 に従い、ユーザー全体で止める手順を `claude/README.md` に書く。人間の決定で置き場は
+   `settings.machine.json`（このマシンだけ）なので、**配布物 `claude/settings.json` にも、実機の machine 設定にも
+   書き込まない**（machine 設定の編集とデプロイは人間が行う）。machine 設定の `enabledPlugins` が生成される
+   `~/.claude/settings.json` に正しくマージされるか（同じキーの深いマージになるか）は、`claude/deploy.sh` の生成の仕組みを
+   読み、必要なら `HOME` を差し替えたサンドボックスで確かめて書く
 3. リポ側で有効にする書き方（計画書 設計3.2）を、文書と `claude/README.md` に書く（他リポの変更はこの PR に含めない）
 4. 実機で止めるのは3リポの有効化のマージ後、という順序（設計3.3）を `claude/README.md` か文書に書く
 5. 検証結果（効いたか）を最終報告と司令官への報告に1行で入れる（司令官が進行記録に書き、孫3・5・6 に同乗させるか決める）
@@ -556,15 +596,14 @@ ocw が既に作業ブランチを作って checkout 済みなので、git fetch
 ## 検証方針
 
 - 設計3.1 の実測で、user で止めて project で戻せることが確かめられている（結果を文書に残す）
-- `claude/settings.json` を触った場合、デプロイで生成される `~/.claude/settings.json` が壊れていない（`tests/deploy_smoke.sh`）
+- machine 設定に書く `enabledPlugins` が、生成される `~/.claude/settings.json` に意図どおり入る（書いた手順が正しい）
 
-設定値1行の変更なので、新規テストは追加しない。
+文書だけの変更になる見込みなので、新規テストは追加しない。
 
 ## 実行すべき検証コマンド（省略しない）
 
 ```bash
 pre-commit run --all-files
-tests/deploy_smoke.sh   # claude/settings.json を触った場合
 ```
 
 ## 実装完了後の流れ（必須）
