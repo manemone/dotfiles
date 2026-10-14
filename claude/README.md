@@ -573,6 +573,51 @@ vim ~/.claude/CLAUDE.machine.md
 `claude/CLAUDE.md` のベース文言（`@~/.claude/CLAUDE.machine.md`）は「定義元を指す」
 import であり、`CLAUDE.machine.md` の内容をベース側へ連結・上書きすることはない。
 
+### 4.10 Figma プラグイン（`figma@synced`）をユーザー全体で止め、リポごとに有効にする
+
+claude.ai から同期された Figma プラグインは、何も書かなければ有効で、スキル一覧に14個分
+（約2.5k トークン）が毎回載る。Figma を使わないリポでは要らないので、ユーザー全体では止め、
+Figma を使うリポでだけ有効にできる。`enabledPlugins` の user / project / local の上書きが
+同期プラグインにも効くことは実測済み（検証の方法と結果は
+[DOC-2610150527](../docs/reference/DOC-2610150527_Figmaプラグインの有効範囲の検証.md)）。
+
+**ユーザー全体で止める（このマシンだけ。人間が行う）。** 配布物 `claude/settings.json` には入れず、
+`settings.machine.json` に書く:
+
+```json
+{
+  "enabledPlugins": {
+    "figma@synced": false
+  }
+}
+```
+
+```bash
+vim ~/.claude/settings.machine.json
+cd ~/.dotfiles && ./deploy-all.sh --only claude
+```
+
+deploy が `~/.claude/settings.json` を作り直して初めて反映される。ベース設定に `enabledPlugins` が
+無いので、machine 設定の値がそのまま入る（ベース側に同じキーが将来できても、machine 側の
+キーが足されるだけで他のプラグインは消えない）。
+
+**Figma を使うリポで有効にする。** そのリポの `.claude/settings.json`（コミットする）に書く:
+
+```json
+{
+  "enabledPlugins": {
+    "figma@synced": true
+  }
+}
+```
+
+既存のキーは壊さず、`enabledPlugins` だけを足す。`.claude/settings.local.json` でも効くが、
+作業ツリーごとのファイルで `ocw` が作る新しいワークツリーに引き継がれないため、リポ側は
+`.claude/settings.json` に書く。
+
+**順序。** 実機で止めるのは、Figma を使う全リポの有効化がそれぞれの既定ブランチに
+マージされてから。先に止めると、その間に Figma を使うリポでスキルが読まれなくなる。
+
 ## 5. Troubleshooting
 
 ### `~/.claude/settings.json` の変更を反映したい
