@@ -31,7 +31,7 @@ Claude Code の会話は、compact の直後でも毎回、ルール文書（各
 | 4 | modeldex | `fc-04-agents-md-split` | 孫1 の方針で `AGENTS.md` を分ける | ⬜ 待機中 |
 | 5 | sheaf | `fc-05-agents-md-split` | 孫1 の方針で `AGENTS.md` を分ける（孫7 の検証済みなら Figma の有効化の1行も同乗） | ⬜ 待機中 |
 | 6 | iosci | `fc-06-agents-md-split` | 孫1 の方針で `AGENTS.md` を分ける（孫7 の検証済みなら Figma の有効化の1行も同乗） | ⬜ 待機中 |
-| 7 | dotfiles | `fc-07-figma-scope` | `figma@synced` にリポごとの `enabledPlugins` の上書きが効くかを確かめ、machine 設定でユーザー全体を止める手順とリポ側で有効にする書き方を書く | 🔄 実装中 |
+| 7 | dotfiles | `fc-07-figma-scope` | `figma@synced` にリポごとの `enabledPlugins` の上書きが効くかを確かめ、machine 設定でユーザー全体を止める手順とリポ側で有効にする書き方を書く | ✅ PR #171 マージ済 |
 
 依存:
 
@@ -352,6 +352,7 @@ memory のディレクトリはワークツリーではなくリポ（メイン�
   (2) 各リポの `MEMORY.md` もこの傘で扱う（設計4 を足した。孫1 にも方針文書へ作法を足すよう伝えた）。(3) claude.ai 同期の
   スキルは、人間が重くないのではと見たので扱わない。司令官の目安でも、Figma の約 2.5k が週 $20〜25 なので 3.3k は週 $25〜35 程度で、
   `AGENTS.md`（dotfiles だけで 2 万字超）より一桁小さい。孫7 を spawn する
+- 2026-10-15: 孫7 の PR #171 を司令官がマージした。**孫7 の検証済み（Figma の有効化の1行を同乗させてよい）。** `figma@synced` は user で `false`・project の `.claude/settings.json` で `true` にすると戻る（local でも戻る）。結果は DOC-2610150527、止め方とリポ側の書き方は `claude/README.md` §4.10。孫3・5・6 は設計3.2 の1行を同乗させる。傘で `pre-commit run --all-files` が通った
 
 ## 孫1用プロンプト:
 
