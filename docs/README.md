@@ -11,6 +11,8 @@
 | このリポジトリのルールを知る | [../AGENTS.md](../AGENTS.md) | 最重要ルール・ディレクトリ構成・デプロイの仕組みなど |
 | PR を出す前に読む | [design/DOC-2608020715_プルリクエストの作法.md](design/DOC-2608020715_プルリクエストの作法.md) | 説明文の構成・コメントのプレフィクス・ブランチ構成 |
 | シェルを書く前に読む | [design/DOC-2608020715-a_シェルスクリプトコーディング方針.md](design/DOC-2608020715-a_シェルスクリプトコーディング方針.md) | POSIX sh / bash の使い分け、bashism の回避 |
+| `AGENTS.md` の芯と詳細の分け方を知る（分けた詳細の置き場を知る） | [design/DOC-2610150522_AGENTS.mdの芯と詳細の分け方.md](design/DOC-2610150522_AGENTS.mdの芯と詳細の分け方.md) | 芯に残す基準・参照の書き方・他リポへの適用手順 |
+| デプロイの仕組み（世代・状態ファイル・退避）を知る | [design/DOC-2610150520-b_デプロイの仕組み.md](design/DOC-2610150520-b_デプロイの仕組み.md) | `AGENTS.md` から移した詳細 |
 | デプロイを検証する | [design/DOC-2608020715-b_テスト方針.md](design/DOC-2608020715-b_テスト方針.md) | 実 HOME を汚さずに検証する4層の方法 |
 | なぜ配布方式を今の形にしたかを知る | [adr/DOC-2608040229_deploy-distribution-method.md](adr/DOC-2608040229_deploy-distribution-method.md) | 世代ディレクトリ + `current` を採用した理由と、却下した案 |
 | デプロイの運用手順（世代確認・ロールバック・dev モード等）を調べる | [reference/DOC-2608040805_配布実体運用ガイド.md](reference/DOC-2608040805_配布実体運用ガイド.md) | canonical prefix の構造・manifest 全フィールド・移行手順 |
@@ -38,6 +40,7 @@
 | LLM費用のベースラインを測る手順を知る | [reference/DOC-2608021229-b_LLM費用観測ベースライン計測手順.md](reference/DOC-2608021229-b_LLM費用観測ベースライン計測手順.md) | 実PR 5〜10本での計測手順 |
 | Claude の使用量を実ログから測る手順と、どこを削れるかの調査結果を知る | [reference/DOC-2610130216_使用量の測り方と削りどころの調査結果.md](reference/DOC-2610130216_使用量の測り方と削りどころの調査結果.md) | 集計スクリプト（`docs/adr/probes/usage-diet/`）の使い方・役割別の費用・キャッシュ切れ・文脈の太り方・compact の試算と、効かないとわかった案 |
 | 実装の孫の文脈が何で膨らむか（ツール結果の内訳・出力トークンの寄与）と、大きい出力の作法の根拠・置き場を知る | [reference/DOC-2610142335_実装の孫の文脈の内訳調査.md](reference/DOC-2610142335_実装の孫の文脈の内訳調査.md) | 集計スクリプト（`docs/adr/probes/context-bloat/` の `tools.py` / `share.py`）・Bash の先頭語別とサイズ別の分布・作法の中身と置き場・入れなかった場所 |
+| Figma プラグイン（`figma@synced`）をユーザー全体で止めてリポごとに有効にできるかの検証結果を知る | [reference/DOC-2610150527_Figmaプラグインの有効範囲の検証.md](reference/DOC-2610150527_Figmaプラグインの有効範囲の検証.md) | 設定の階層ごとの実測表・実 `$HOME` を触らない確かめ方・machine 設定のマージ結果・実機で止める順序 |
 | 傘ブランチの計画を確認する | [planning/](planning/) 配下の各計画書 | 進行中・完了した傘ブランチの計画書 |
 | このリポジトリの AI 支援基盤を他のリポジトリへ配布する | [../templates/repo-baseline/README.md](../templates/repo-baseline/README.md) | copier テンプレート。dotfiles 本体とは独立・自己完結 |
 
@@ -72,6 +75,11 @@
 | DOC-2608020715 | [プルリクエストの作法.md](design/DOC-2608020715_プルリクエストの作法.md) | PR説明文の構成・コメントのプレフィクス・ブランチ構成の規約 |
 | DOC-2608020715-a | [シェルスクリプトコーディング方針.md](design/DOC-2608020715-a_シェルスクリプトコーディング方針.md) | POSIX sh / bash の使い分け・bashism・エラーハンドリングの規約 |
 | DOC-2608020715-b | [テスト方針.md](design/DOC-2608020715-b_テスト方針.md) | 実 HOME を汚さずにデプロイを検証する方法の定義 |
+| DOC-2610150520 | [コミット前の必須ステップ.md](design/DOC-2610150520_コミット前の必須ステップ.md) | pre-commit フックの内訳・各スモークテストの対象と実行条件・DOC-ID 採番の手順 |
+| DOC-2610150520-a | [テストを足す判断基準.md](design/DOC-2610150520-a_テストを足す判断基準.md) | テストを足す・直す・レビューするときの risk-based な判断基準 |
+| DOC-2610150520-b | [デプロイの仕組み.md](design/DOC-2610150520-b_デプロイの仕組み.md) | 配布実体（世代 + `current`）・状態ファイル・symlink の退避・claude の例外・uninstall の後片付け |
+| DOC-2610150520-c | [実装時の注意.md](design/DOC-2610150520-c_実装時の注意.md) | 新ツール・スキル・配布先の追加時の追従箇所・DOC-ID 言及の規約・テスト方針3箇所の関係 |
+| DOC-2610150522 | [AGENTS.mdの芯と詳細の分け方.md](design/DOC-2610150522_AGENTS.mdの芯と詳細の分け方.md) | `AGENTS.md` を毎回要る芯と作業のときだけ読む詳細に分ける方針・他リポへの適用手順・効果の測り方 |
 
 ### adr/ — Architecture Decision Records
 
