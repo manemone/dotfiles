@@ -28,7 +28,7 @@
 
 | 孫 | リポ | ブランチ | 内容 | 状況 |
 |---|---|---|---|---|
-| 1 | dotfiles | `tl-01-reviewer-fresh-round` | `pr-review-loop` で再レビューのラウンドごとにレビュワーの会話を新しくし、レビュワーの読み方の作法をレビュー指示に足す。ADR を書く | 🔄 実装中 |
+| 1 | dotfiles | `tl-01-reviewer-fresh-round` | `pr-review-loop` で再レビューのラウンドごとにレビュワーの会話を新しくし、レビュワーの読み方の作法をレビュー指示に足す。ADR を書く | ✅ PR #175 マージ済 |
 | 2 | dotfiles | `tl-02-reminder-at-boundary` | `compact-reminder.sh` を、区切りに当たるツール呼び出しで閾値超えならリマインドを再掲する形にし、文面を「次のターンの冒頭で判断を1行書く」に変える。ADR DOC-2610142359 を追記する | ✅ PR #174 マージ済 |
 | 3 | lora-dataset-forge | `tl-03-threshold-trial` | 学習の会話の compact 閾値を、既定（300,000）を変えずに会話ごとに下げて試せる口と、compact の損益を会話ごとに測るスクリプトを入れる | 🔄 実装中 |
 | 4 | lora-dataset-forge | `tl-04-threshold-decide` | 人間が孫3 の口で1〜2本試したあと、孫3 のスクリプトで実測して閾値を決め、`context_check.py`・`waiting.md`・LDF 調査文書 §6 を直す | ⬜ 待機中 |
@@ -376,6 +376,7 @@ LDF の `main` へのマージは人間で、試行も人間が学習の会話�
 - 2026-10-20: 計画書を起草した。`review-tiering`（PR #164）との切り分けを確かめた（背景6）
 - 2026-10-20: 孫1・孫2・孫3 を並列で spawn した。孫4 は人間の合図（孫3 のマージと1〜2本の試行）を待つ
 - 2026-10-20: 孫2 の PR #174 を司令官がマージした。傘で `pre-commit run --all-files`・`tests/compact_reminder_test.sh`・`tests/deploy_smoke.sh` が通った
+- 2026-10-20: 孫1 の PR #175 は孫2 の後で `docs/README.md` の索引の行がぶつかったため、孫1 が傘へ rebase して再承認を得てから司令官がマージした。ADR は DOC-2610200218。傘で `pre-commit run --all-files` が通った
 
 ## 孫1用プロンプト:
 
