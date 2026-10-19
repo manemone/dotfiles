@@ -355,7 +355,10 @@ PostToolUse フック）は、**`OCW_ROLE=implementer` のペインでだけ**�
 **compact そのものは打たない。** それ以外の役割（司令官・レビュワー・未設定）には何も言わない。
 
 - 文脈は transcript の末尾 1 MiB だけを読んで測る（全体は読まない）
-- 間引き: 超えた最初の 1 回と、その後は前回の差し込みから 50,000 増えるごと。閾値以下に戻ると
+- **区切りのツール呼び出し**（Bash の `git commit` / `git push` / `gh pr create` / `herdr agent prompt`、
+  `SendMessage`）で閾値超えなら、50,000 の間引きとは別枠で差し込む。文面は「次のターンの冒頭で、compact するか
+  見送るかを1行書くこと」。同じ区切りで繰り返さないよう、コミット系（commit / push / PR 作成）と依頼系（`herdr agent prompt` / `SendMessage`）に分け、種類ごとに直前から 5 分は出さない。承認後の報告は文面で見送ってよいと伝える
+- 区切りでない呼び出しの間引き: 超えた最初の 1 回と、その後は前回の差し込みから 50,000 増えるごと。閾値以下に戻ると
   （compact した）状態を消す。状態は `${XDG_STATE_HOME:-~/.local/state}/dotfiles/compact-reminder/<session_id>`
 - 判定できない入力（python3 無し・transcript が読めない・壊れた JSON）は何も言わず、エージェントを止めない
 - テストは `tests/compact_reminder_test.sh`。**実機で `additionalContext` が孫の文脈に届くかは未検証**
