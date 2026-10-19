@@ -34,7 +34,11 @@ ensure_command nvim "Install NeoVim 0.10+: https://neovim.io" || exit 1
 if ! command -v rg >/dev/null 2>&1; then
   log_warn "'ripgrep' (rg) is not installed — required for Telescope live_grep."
   if is_macos; then
-    printf '       Install: brew install ripgrep\n' >&2
+    if command -v brew >/dev/null 2>&1; then
+      printf '       Install: brew install ripgrep\n' >&2
+    else
+      printf '       Install: mise use -g ripgrep  (or: sudo port install ripgrep)\n' >&2
+    fi
   elif is_linux; then
     printf '       Install: apt install ripgrep  or  brew install ripgrep\n' >&2
   fi
@@ -43,7 +47,11 @@ fi
 if ! command -v fd >/dev/null 2>&1; then
   log_warn "'fd' is not installed — recommended for Telescope find_files."
   if is_macos; then
-    printf '       Install: brew install fd\n' >&2
+    if command -v brew >/dev/null 2>&1; then
+      printf '       Install: brew install fd\n' >&2
+    else
+      printf '       Install: mise use -g fd  (or: sudo port install fd)\n' >&2
+    fi
   elif is_linux; then
     printf '       Install: apt install fd-find  or  brew install fd\n' >&2
   fi
