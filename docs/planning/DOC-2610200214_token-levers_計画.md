@@ -31,7 +31,7 @@
 | 1 | dotfiles | `tl-01-reviewer-fresh-round` | `pr-review-loop` で再レビューのラウンドごとにレビュワーの会話を新しくし、レビュワーの読み方の作法をレビュー指示に足す。ADR を書く | ✅ PR #175 マージ済 |
 | 2 | dotfiles | `tl-02-reminder-at-boundary` | `compact-reminder.sh` を、区切りに当たるツール呼び出しで閾値超えならリマインドを再掲する形にし、文面を「次のターンの冒頭で判断を1行書く」に変える。ADR DOC-2610142359 を追記する | ✅ PR #174 マージ済 |
 | 3 | lora-dataset-forge | `tl-03-threshold-trial` | 学習の会話の compact 閾値を、既定（300,000）を変えずに会話ごとに下げて試せる口と、compact の損益を会話ごとに測るスクリプトを入れる | ✅ PR lora-dataset-forge#506 マージ済 |
-| 4 | lora-dataset-forge | `tl-04-threshold-decide` | 孫3 のスクリプトで既存の会話を実測し、反実仮想で推定して閾値を決め、`context_check.py`・`waiting.md`・LDF 調査文書 §6 を直す | 🔄 実装中 |
+| 4 | lora-dataset-forge | `tl-04-threshold-decide` | 孫3 のスクリプトで既存の会話を実測し、反実仮想で推定して閾値を決め、`context_check.py`・`waiting.md`・LDF 調査文書 §6 を直す | ⏳ 人間のマージ待ち (PR lora-dataset-forge#509) |
 
 依存:
 
@@ -391,6 +391,8 @@ LDF の `main` へのマージは人間で、試行も人間が学習の会話�
   閾値を決める（設計4 を書き換えた）
 - 2026-10-20: `review-tiering`（PR #164）が `master` に入ったので、傘を `origin/master` へ rebase した（コンフリクトなし）。傘で
   `pre-commit run --all-files`・`tests/compact_reminder_test.sh`・`tests/deploy_smoke.sh` が通った
+- 2026-10-20: 孫4 の lora-dataset-forge#509 が承認された。結論は既定の閾値を 300,000 → 200,000 に下げる（既存の会話からの推定で
+  約2割減、compact 回数は約1.9倍）。試す口は残す。マージは人間
 
 ## 孫1用プロンプト:
 
