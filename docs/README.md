@@ -36,11 +36,13 @@
 | なぜ他人の PR 群のレビューと自分の PR 群のレビュー依頼を今のスキル構成にしたかを知る | [adr/DOC-2609270420_multi-repo-pr-review-skills.md](adr/DOC-2609270420_multi-repo-pr-review-skills.md) | `pr-group-review`（レビュワー用）と `pr-group-request`（依頼者用）の線引き・レビュー状態の置き場所・自己完結 HTML のまとめ・COMMENT のみの投稿と権限に止められたときの振る舞いの決定と、却下した案 |
 | なぜ複数リポにまたがる作業の入口と傘の進め方を今の形にしたかを知る | [adr/DOC-2610081412_cross-repo-task-intake.md](adr/DOC-2610081412_cross-repo-task-intake.md) | 入口スキル `task-intake` の判断の3軸と振り分け・司令官の置き場・リポ間の役割分担・軽いハンドオフ・複数リポの傘（他リポの孫は既定ブランチへ PR しマージは人間）の決定と、却下した案 |
 | なぜ孫の PR を承認後も孫がマージせず、傘の司令官がマージするようにしたかを知る | [adr/DOC-2610130212_commander-merges-grandchildren.md](adr/DOC-2610130212_commander-merges-grandchildren.md) | `pr-review-loop` がどの PR もマージしない形・司令官のマージ条件・巡回 cron を30分にした理由・ADR DOC-2609121719 との関係 |
+| なぜ孫ごとのレビューを省かず、nit では止めず、文書だけの PR は見る範囲を絞るようにしたかを知る | [adr/DOC-2610140228_tiered-review.md](adr/DOC-2610140228_tiered-review.md) | D2（nit）で変更要求にしない・文書だけの PR は B と D1 だけを見る決定・変えないもの・却下した案・効果の測り方（`by_unit.py`） |
 | `ocw-meter` のイベントスキーマを調べる | [reference/DOC-2608021229-c_ocw-meterイベントスキーマ.md](reference/DOC-2608021229-c_ocw-meterイベントスキーマ.md) | 全 event_type・全フィールド・費用計算式の一次情報源 |
 | LLM費用のベースラインを測る手順を知る | [reference/DOC-2608021229-b_LLM費用観測ベースライン計測手順.md](reference/DOC-2608021229-b_LLM費用観測ベースライン計測手順.md) | 実PR 5〜10本での計測手順 |
 | Claude の使用量を実ログから測る手順と、どこを削れるかの調査結果を知る | [reference/DOC-2610130216_使用量の測り方と削りどころの調査結果.md](reference/DOC-2610130216_使用量の測り方と削りどころの調査結果.md) | 集計スクリプト（`docs/adr/probes/usage-diet/`）の使い方・役割別の費用・キャッシュ切れ・文脈の太り方・compact の試算と、効かないとわかった案 |
 | 実装の孫の文脈が何で膨らむか（ツール結果の内訳・出力トークンの寄与）と、大きい出力の作法の根拠・置き場を知る | [reference/DOC-2610142335_実装の孫の文脈の内訳調査.md](reference/DOC-2610142335_実装の孫の文脈の内訳調査.md) | 集計スクリプト（`docs/adr/probes/context-bloat/` の `tools.py` / `share.py`）・Bash の先頭語別とサイズ別の分布・作法の中身と置き場・入れなかった場所 |
 | Figma プラグイン（`figma@synced`）をユーザー全体で止めてリポごとに有効にできるかの検証結果を知る | [reference/DOC-2610150527_Figmaプラグインの有効範囲の検証.md](reference/DOC-2610150527_Figmaプラグインの有効範囲の検証.md) | 設定の階層ごとの実測表・実 `$HOME` を触らない確かめ方・machine 設定のマージ結果・実機で止める順序 |
+| 孫 PR ごとのレビューが何を止めてきたか（PR の種類・実装役のモデル別）を知る | [reference/DOC-2610140007_孫PRレビューの過去データ分析.md](reference/DOC-2610140007_孫PRレビューの過去データ分析.md) | 指摘の分類基準（A/B/C/D1/D2）・抜き取りの方法・集計スクリプト（`docs/adr/probes/review-tiering/`）・再現実験の対象の傘・限界 |
 | 傘ブランチの計画を確認する | [planning/](planning/) 配下の各計画書 | 進行中・完了した傘ブランチの計画書 |
 | このリポジトリの AI 支援基盤を他のリポジトリへ配布する | [../templates/repo-baseline/README.md](../templates/repo-baseline/README.md) | copier テンプレート。dotfiles 本体とは独立・自己完結 |
 
@@ -101,6 +103,7 @@
 | DOC-2610130834 | [commander-self-compact.md](adr/DOC-2610130834_commander-self-compact.md) | 傘の司令官が自分自身の文脈を縮める手段の調査。自ペインへの `/compact` は herdr 経由でもコマンドとして実行され cron も残るが、auto mode の分類器（`[Tmux Self Drive]`）により AI 自身は送れず人間が打つ形になること、自動 compact の閾値の調整、`/clear` の机上比較、孫4 がスキルに書く要点をまとめた（状態: 調査完了） |
 | DOC-2610111939 | [ocw-session-name.md](adr/DOC-2610111939_ocw-session-name.md) | `ocw -H` が各ペインの claude を `--name "<ラベル> / <役割>"` で起動し Claude アプリの会話タイトルを herdr のラベルに揃えた決定。実測（日本語名の `SendMessage`・宛先解決）と却下した案を記録 |
 | DOC-2610130212 | [commander-merges-grandchildren.md](adr/DOC-2610130212_commander-merges-grandchildren.md) | 孫の PR は承認されてもマージせず傘の司令官がマージする決定。`pr-review-loop` はどの PR もマージしない・司令官のマージ条件・巡回 cron 30分・ADR DOC-2609121719 との関係 |
+| DOC-2610140228 | [tiered-review.md](adr/DOC-2610140228_tiered-review.md) | 孫ごとのレビューの見直し。D2（nit）だけを理由に変更要求にしない・文書だけの孫 PR は見る範囲を B と D1 に絞る。根拠は DOC-2610140007。土台・実装コード・小さい PR の厚さは変えない。効果の測り方を記録 |
 | DOC-2610130913 | [commander-auto-compact.md](adr/DOC-2610130913_commander-auto-compact.md) | 傘の司令官が区切りで専用コマンド `ocw self-compact`（自ペイン固定で `/compact` を送り、compact の完了後に続きを促す1通をバックグラウンドの監視が送る）により自分を compact する決定。`Bash(ocw self-compact *)` だけを許す allow ルール、毎回行い 150k 以下は除く閾値の見積もり、ADR DOC-2610130834 との関係、ルールが分類器に勝つかは未検証・監視による復帰は実機で1回確認済みであることとマージ後の確かめ方を記録 |
 | DOC-2610140044 | [commander-compact-carryover.md](adr/DOC-2610140044_commander-compact-carryover.md) | 司令官が自己 compact を見送ったとき、リポ外の保留の印を置いて cron の tick と人間の返答処理で再判断する決定。印を計画書に書かない理由と却下案を記録 |
 | DOC-2610131214 | [implementer-compact.md](adr/DOC-2610131214_implementer-compact.md) | 実装の孫がレビューを依頼した直後の区切り（PR 提出後・再レビュー依頼後）で `ocw self-compact` により自分を compact する決定。閾値 200,000（試算で純削減が最大）、実装の途中・承認後・レビュワーでは行わない、復帰メモはレビュー待ち（Phase 3）に戻す、使えないときは提案もせず何もしない（状態: 決定） |
@@ -127,6 +130,7 @@
 | DOC-2610110122 | [herdr-09-cli-migration_計画.md](planning/DOC-2610110122_herdr-09-cli-migration_計画.md) | 配布スキルを herdr 0.9.0 の CLI へ追随させる傘ブランチ計画書（傘 `herdr-09-cli-migration`）。消えた `herdr wait agent-status` の `herdr agent wait` への置き換え、AI間送信のフォールバックの `herdr agent prompt` への移行、孫から司令官への完了通知、レビュワー再起動の `herdr agent start` への移行の4本の孫へ分解したもの |
 | DOC-2610110211 | [ruby-defaults_計画.md](planning/DOC-2610110211_ruby-defaults_計画.md) | Ruby のリポジトリの既定（RSpec・厳しめの RuboCop）を repo-baseline テンプレートとスキルに持たせる傘ブランチ計画書（傘 `ruby-defaults`）。Ruby のときだけ生成する `.rubocop.yml`・RSpec の足場・`files:` 付きのフック、テンプレート自身の `tools/doc-id` を RuboCop に通すこと、道具のテストの形から規約を推測しないことを書くスキルの更新の3本の孫へ分解したもの |
 | DOC-2610110426 | [copier-update_計画.md](planning/DOC-2610110426_copier-update_計画.md) | repo-baseline テンプレートで `copier update` を使えるようにする傘ブランチ計画書（傘 `copier-update`）。dotfiles のルートへ `copier.yml` を移して `_subdirectory` でテンプレートの中身を指す入口の移動、スキルの update の手順の書き直し、既に撒いたリポジトリ（modeldex・pixidex・sheaf）の移行の手順書の3本の孫へ分解したもの |
+| DOC-2610140002 | [review-tiering_計画.md](planning/DOC-2610140002_review-tiering_計画.md) | 孫ごとのレビューの費用対効果を過去データと実験で検証し、レビュー運用を見直す傘ブランチ計画書（傘 `review-tiering`）。指摘の分類し直しと実装役のモデル別の集計、役割別の費用の測定の土台、「最後に1回だけレビュー」の再現実験、結果を受けた段階的レビューの反映の4本の孫へ分解したもの |
 
 ### reference/ — 運用リファレンス
 
@@ -136,6 +140,8 @@
 | DOC-2608021229-c | [ocw-meterイベントスキーマ.md](reference/DOC-2608021229-c_ocw-meterイベントスキーマ.md) | `ocw-meter` が書く全イベント型の恒久リファレンス。共通エンベロープの全フィールド、全 `event_type`、`idempotency_key` の生成規則、費用計算式、`completeness` の判定基準を実データで検証した上でまとめたもの（旧ID: `DOC-005`） |
 | DOC-2608040805 | [配布実体運用ガイド.md](reference/DOC-2608040805_配布実体運用ガイド.md) | 世代ディレクトリ + `current` 配布方式の日常運用手順。canonical prefix のディレクトリ構造・manifest の全フィールド・世代確認・ロールバック・dev モードの出入り・リンク切れ対処・旧方式からの移行手順 |
 | DOC-2610110507 | [repo-baseline旧形からの移行手順.md](reference/DOC-2610110507_repo-baseline旧形からの移行手順.md) | 旧形（`_commit` 無し・`_src_path` 伏せ）で撒いたリポジトリを `copier update` できる形へ移す手順書。橋渡しのコミット経由の共通手順、modeldex・pixidex・sheaf ごとの撒いた版（V）と根拠・`language` の答え方・衝突しやすいファイル・namecheck・移行の時期、複製での模擬の結果、持ち主の判断を仰ぐ点 |
+| DOC-2610130216 | [使用量の測り方と削りどころの調査結果.md](reference/DOC-2610130216_使用量の測り方と削りどころの調査結果.md) | Claude の使用量を実ログから測る手順・役割別の費用・キャッシュ切れ・文脈の太り方・compact の試算と、効かないとわかった案 |
+| DOC-2610140007 | [孫PRレビューの過去データ分析.md](reference/DOC-2610140007_孫PRレビューの過去データ分析.md) | 孫 PR ごとのレビューが何を止めてきたか（PR の種類・実装役のモデル別）。指摘の分類基準・抜き取りの方法・再現実験の結果 |
 
 ## 新規ファイル追加時のルール
 
