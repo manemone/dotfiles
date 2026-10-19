@@ -168,7 +168,7 @@ dfxfer_rsync_major() {
 # Set DFXFER_RSYNC_CMD to the rsync to run and DFXFER_RSYNC_MAJOR to its major
 # version (empty when unknown). Search order is 計画書 1.4: an explicit
 # DFXFER_RSYNC wins outright, otherwise the first 3.x found on PATH or in a
-# Homebrew prefix wins, otherwise whatever rsync exists at all.
+# Homebrew / MacPorts prefix wins, otherwise whatever rsync exists at all.
 #
 # macOS matters here: its bundled rsync is 2.6.9 (or openrsync), neither of
 # which has --iconv, while `brew install rsync` puts a 3.x alongside it.
@@ -204,7 +204,8 @@ dfxfer_resolve_rsync() {
   # at the expansion below. An empty array there would raise "unbound
   # variable" on macOS's bash 3.2 under `set -u` — the same trap that
   # dfxfer_host() above is written around.
-  candidates+=(/opt/homebrew/bin/rsync /usr/local/bin/rsync)
+  # /opt/local/bin is MacPorts, for Macs without Homebrew.
+  candidates+=(/opt/homebrew/bin/rsync /usr/local/bin/rsync /opt/local/bin/rsync)
 
   for candidate in "${candidates[@]}"; do
     [ -x "$candidate" ] || continue
@@ -219,7 +220,7 @@ dfxfer_resolve_rsync() {
   if [ -z "$fallback" ]; then
     dfxfer_die \
       "rsync not found." \
-      "Install it with your package manager (macOS: 'brew install rsync')."
+      "Install it with your package manager (macOS: 'brew install rsync' or 'sudo port install rsync')."
   fi
 
   DFXFER_RSYNC_CMD="$fallback"
@@ -261,7 +262,8 @@ dfxfer_build_opts() {
       log_warn "rsync at $DFXFER_RSYNC_CMD is not 3.x — transferring without --iconv."
       log_warn "Japanese (and other non-ASCII) filenames will arrive with their"
       log_warn "combining marks split apart. Install a 3.x rsync to fix this:"
-      log_warn "  brew install rsync"
+      log_warn "  brew install rsync   (Homebrew)"
+      log_warn "  sudo port install rsync   (MacPorts, if there is no Homebrew)"
     fi
   fi
 }

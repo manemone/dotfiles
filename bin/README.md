@@ -26,9 +26,9 @@
 | **`$EDITOR`** | `persona`（編集モード。`--regen` のみなら不要） | 通常のシェル環境変数として設定。引数付きでもよい（例: `export EDITOR=vim`、`export EDITOR="code --wait"`） |
 | **rsync** | `dfup` / `dfdown` のファイル転送 | macOS: 同梱（2.6.9 / openrsync）。Linux: `apt install rsync` |
 | **ssh** | `dfup` / `dfdown` の転送経路。宛先は `~/.ssh/config` の `Host` エイリアスで指定する | Built-in on most systems |
-| **rsync 3.x** (日本語ファイル名を扱うなら必須) | `--iconv` によるファイル名の正規化 | macOS: `brew install rsync` |
+| **rsync 3.x** (日本語ファイル名を扱うなら必須) | `--iconv` によるファイル名の正規化 | macOS: `brew install rsync`（Homebrew が無ければ `sudo port install rsync`。MacPorts） |
 
-> **日本語（非 ASCII）のファイル名を送受信するなら、macOS では `brew install rsync` を強く推奨します。**
+> **日本語（非 ASCII）のファイル名を送受信するなら、macOS では `brew install rsync`（Homebrew が無ければ `sudo port install rsync`）を強く推奨します。**
 > macOS が同梱する rsync は 2.6.9、新しめの macOS では openrsync で、どちらも **3.0 で入った
 > `--iconv` を持ちません**。`--iconv` 無しで転送すると、macOS 側の NFD（濁点・半濁点が
 > 別の符号位置に分かれた形）がそのまま Linux 側へ渡り、**見た目は同じなのに別名のファイル**
@@ -829,6 +829,8 @@ ASCII のファイル名なら実害はありません。日本語ファイル�
 
 ```bash
 brew install rsync
+# Homebrew が無い Mac（MacPorts）:
+sudo port install rsync
 ```
 
 インストール後は `dfup` が自動で 3.x の方を見つけます（`DFXFER_RSYNC` で明示することもできます）。

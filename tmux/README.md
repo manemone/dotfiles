@@ -15,6 +15,13 @@ Cross-platform tmux configuration with Vim-style keybindings and system clipboar
 brew install tmux reattach-to-user-namespace
 ```
 
+Without Homebrew (Homebrew no longer supports Intel Macs), use mise first, then MacPorts:
+```bash
+mise use -g tmux
+# or: sudo port install tmux
+```
+`tmux/deploy.sh` tries these in order (Homebrew → mise → MacPorts); if none is available it only warns and skips. Note `reattach-to-user-namespace` is installed only on the Homebrew path, and the mouse-drag copy binding in `tmux.conf` still calls it.
+
 `reattach-to-user-namespace` enables system clipboard access from tmux on macOS.
 
 The status bar displays Wi-Fi SSID and battery level on macOS via `#(wifi)` and `#(battery --tmux)`. These require additional Homebrew packages:
@@ -59,7 +66,7 @@ creating a new one).
 The deploy script:
 - Symlinks `tmux.conf` → `~/.tmux.conf`
 - Installs tmux if not present:
-  - macOS: `brew install tmux reattach-to-user-namespace`
+  - macOS: `brew install tmux reattach-to-user-namespace` (without Homebrew: `mise use -g tmux`, then `sudo port install tmux`; warns and skips if none works)
   - Linux: `sudo apt install tmux` (falls back to `brew install tmux` if apt unavailable)
 - On WSL, prints clipboard integration notes
 
@@ -227,7 +234,7 @@ tmux -V
 ```
 
 If older than 3.3:
-- **macOS**: `brew upgrade tmux`
+- **macOS**: `brew upgrade tmux` (mise: `mise upgrade tmux`, MacPorts: `sudo port upgrade tmux`)
 - **Linux**: `sudo apt update && sudo apt upgrade tmux` (or install via Homebrew for a newer version)
 
 ### Clipboard copy not working (macOS)

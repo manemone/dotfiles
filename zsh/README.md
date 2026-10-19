@@ -14,6 +14,7 @@
 ```bash
 brew install zsh
 ```
+(zsh ships with macOS, so this is optional. Without Homebrew, just use the bundled `/bin/zsh`.)
 
 **Linux (Ubuntu/Debian)**
 ```bash

@@ -317,6 +317,7 @@ class IconvTest(DfxferTestBase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertNotIn(self.ICONV, self._logged_args())
         self.assertIn("brew install rsync", proc.stderr)
+        self.assertIn("port install rsync", proc.stderr)
         self.assertIn("toybox:dfxfer/inbox/", self._logged_args())
 
     def test_linux_with_old_rsync_stays_quiet(self):

@@ -27,7 +27,7 @@
 **macOS**
 ```bash
 brew install ripgrep fd node python3
-# or use mise:
+# or use mise (the only option without Homebrew; MacPorts: sudo port install ripgrep fd):
 mise use ripgrep fd node@lts python@latest
 ```
 
@@ -293,7 +293,7 @@ Ensure `ripgrep` is installed:
 which rg
 # If missing:
 mise use ripgrep
-# or macOS: brew install ripgrep
+# or macOS: brew install ripgrep  (MacPorts: sudo port install ripgrep)
 # or Linux: sudo apt install ripgrep
 ```
 

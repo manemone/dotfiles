@@ -41,8 +41,11 @@ mise trust
 mise install
 
 # 3. Install platform-specific system packages
-# macOS:
+# macOS (Homebrew):
 brew bundle --file Brewfile
+# macOS without Homebrew (e.g. Intel Macs; zsh / git / curl ship with macOS,
+# so only tmux is missing — tmux/deploy.sh tries mise, then MacPorts, itself):
+mise use -g tmux        # or: sudo port install tmux
 
 # Linux / WSL:
 sudo apt update && sudo apt install $(cat apt-packages.txt)
@@ -122,7 +125,7 @@ for details. `bin/` changes should additionally be verified with
 ├── copier.yml                 # copier entry for templates/repo-baseline (at the root so `copier update` works)
 ├── deploy-all.sh              # Unified deployment orchestrator
 ├── uninstall.sh               # Clean removal of known symlinks, restores backups where available
-├── Brewfile                   # macOS Homebrew packages (zsh, tmux, git, curl)
+├── Brewfile                   # macOS Homebrew packages (zsh, tmux, git, curl). Optional: without Homebrew see Quick Start
 ├── apt-packages.txt           # Linux APT packages
 ├── .mise.toml                 # Runtime versions (python, node, ruby, rust, neovim, ripgrep, fd, lazygit)
 ├── .gitignore                 # Git ignore rules
