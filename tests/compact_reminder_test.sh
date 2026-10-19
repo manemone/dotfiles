@@ -139,19 +139,17 @@ write_transcript "$T" 218000
 assert_silent "同じ区切り（commit → push → PR 作成）では繰り返さない" "$(run_hook implementer $S "$T" push)$(run_hook implementer $S "$T" prcreate)"
 write_transcript "$T" 220000
 assert_silent "区切りでない呼び出しは 50k 未満なら黙る" "$(run_hook implementer $S "$T" ls)"
-# クールダウンを過去へずらして、次の区切りとみなす。
+# コミット系のクールダウン中でも、依頼系（再レビュー依頼）の区切りには届く。
+assert_speaks "コミットの直後でも、再レビュー依頼（herdr agent prompt）の直後には差し込む" "$(run_hook implementer $S "$T" prompt)"
+assert_silent "同じ依頼系の区切り（SendMessage）では繰り返さない" "$(run_hook implementer $S "$T" sendmsg)"
+# クールダウンを過去へずらして、次の区切りとみなす（2行目がコミット系、3行目が依頼系）。
 python3 - "$XDG_STATE_HOME/dotfiles/compact-reminder/$S" <<'PY'
 import sys
-ctx, _ = open(sys.argv[1]).read().split()
-open(sys.argv[1], "w").write("%s\n%f" % (ctx, 1.0))
+ctx = open(sys.argv[1]).read().split()[0]
+open(sys.argv[1], "w").write("%s\n%f\n%f" % (ctx, 1.0, 1.0))
 PY
-assert_speaks "次の区切り（SendMessage）では再び差し込む" "$(run_hook implementer $S "$T" sendmsg)"
-python3 - "$XDG_STATE_HOME/dotfiles/compact-reminder/$S" <<'PY'
-import sys
-ctx, _ = open(sys.argv[1]).read().split()
-open(sys.argv[1], "w").write("%s\n%f" % (ctx, 1.0))
-PY
-assert_speaks "herdr agent prompt も区切り" "$(run_hook implementer $S "$T" prompt)"
+assert_speaks "次のコミット系の区切りでは再び差し込む" "$(run_hook implementer $S "$T" commit)"
+assert_speaks "次の依頼系の区切り（SendMessage）でも再び差し込む" "$(run_hook implementer $S "$T" sendmsg)"
 write_transcript "$T" 190000
 assert_silent "区切りでも閾値以下なら黙る" "$(run_hook implementer s-bnd-low "$T" commit)"
 write_transcript "$T" 300000

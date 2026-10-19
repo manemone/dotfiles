@@ -46,15 +46,17 @@ THRESHOLD = 200000
 # 差し込んだあと、文脈がこれだけ増えるまでは再掲しない（毎回差し込むと
 # それ自体が文脈を太らせ、無視されるようにもなる）。
 STEP = 50000
-# 区切りのリマインドを出したあと、これだけ経つまでは次の区切りでも出さない。
-# git commit → git push → gh pr create のような一続きの操作を 1 つの区切りとして扱う。
+# 区切りのリマインドを出したあと、これだけ経つまでは同じ種類の区切りでは出さない。
+# 種類は 2 つで、互いのクールダウンを消費しない: コミット系（git commit → git push →
+# gh pr create の一続きを 1 区切りとする）と、依頼系（レビュー・再レビューの依頼や報告。
+# コミット系の直後 5 分以内に来る本命の区切りを黙らせないため）。
 BOUNDARY_COOLDOWN = 300
-BOUNDARY_RE = re.compile(
+COMMIT_RE = re.compile(
     r"\bgit\s+(?:-C\s+\S+\s+)?(?:commit|push)\b"
     r"|\bgh\s+pr\s+create\b"
-    r"|\bherdr\s+agent\s+prompt\b"
 )
-BOUNDARY_TOOLS = ("SendMessage",)
+REQUEST_RE = re.compile(r"\bherdr\s+agent\s+prompt\b")
+REQUEST_TOOLS = ("SendMessage",)
 # transcript は数十 MB になりうる。末尾だけを読む。1 行が大きい（ツール結果）
 # ことがあるので、直近の assistant 行が入る余裕を見て 1 MiB。
 TAIL_BYTES = 1024 * 1024
@@ -88,27 +90,36 @@ def context_size(path):
     return None
 
 
-def is_boundary(payload):
-    if payload.get("tool_name") in BOUNDARY_TOOLS:
-        return True
+def boundary_kind(payload):
+    """区切りの種類（"commit" / "request"）。区切りでなければ None。"""
+    if payload.get("tool_name") in REQUEST_TOOLS:
+        return "request"
     if payload.get("tool_name") != "Bash":
-        return False
+        return None
     tool_input = payload.get("tool_input")
     command = tool_input.get("command") if isinstance(tool_input, dict) else None
-    return isinstance(command, str) and BOUNDARY_RE.search(command) is not None
+    if not isinstance(command, str):
+        return None
+    if REQUEST_RE.search(command):
+        return "request"
+    if COMMIT_RE.search(command):
+        return "commit"
+    return None
 
 
 def read_state(path):
-    """(最後に差し込んだ文脈, 最後の区切りのリマインドの時刻)。無ければ None。"""
-    last = boundary_at = None
+    """(最後に差し込んだ文脈, {区切りの種類: 最後のリマインドの時刻})。無ければ None / 空。"""
+    last = None
+    at = {}
     try:
         with open(path) as f:
             lines = f.read().split()
         last = int(lines[0])
-        boundary_at = float(lines[1]) if len(lines) > 1 else None
+        for kind, raw in zip(("commit", "request"), lines[1:3]):
+            at[kind] = float(raw)
     except Exception:
         pass
-    return last, boundary_at
+    return last, at
 
 
 def main():
@@ -142,25 +153,29 @@ def main():
         return
 
     now = time.time()
-    boundary = is_boundary(payload)
+    boundary = boundary_kind(payload)
     if boundary:
-        if boundary_at is not None and now - boundary_at < BOUNDARY_COOLDOWN:
+        if now - boundary_at.get(boundary, 0) < BOUNDARY_COOLDOWN:
             return
     elif last is not None and ctx < last + STEP:
         return
 
     os.makedirs(STATE_ROOT, exist_ok=True)
     with open(state_file, "w") as f:
-        # 区切りでない差し込みは、直前の区切りの時刻を引き継ぐ。
-        stamp = now if boundary else boundary_at
-        f.write(str(ctx) if stamp is None else "%d\n%f" % (ctx, stamp))
+        # 区切りの時刻は種類ごとに持ち、ほかの差し込みでは引き継ぐ（無い種類は 0）。
+        if boundary:
+            boundary_at[boundary] = now
+        f.write(
+            "%d\n%f\n%f"
+            % (ctx, boundary_at.get("commit", 0), boundary_at.get("request", 0))
+        )
 
     if boundary:
         message = (
             "[compact-reminder] 文脈が約 %dk トークン（閾値 200k 超）で、いまは区切りのツール"
             "呼び出しの直後。**次のターンの冒頭で、`ocw self-compact` で compact するか見送るかを"
-            "1行書くこと（見送るなら理由も）。** WIP のコミットと指摘対応の修正の途中は区切りでない"
-            "ので見送ってよい。区切りなら compact する（手順は自動付与指示と pr-review-loop"
+            "1行書くこと（見送るなら理由も）。** WIP のコミット・指摘対応の修正の途中・承認後の"
+            "報告は区切りでないので見送ってよい。区切りなら compact する（手順は自動付与指示と pr-review-loop"
             "「区切りでの自己 compact」）。"
         ) % (ctx // 1000)
     else:
