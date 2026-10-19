@@ -54,7 +54,8 @@ PY
 }
 
 # run_hook <role> <session> <transcript> [extra-kind]
-# extra-kind: big（tool_response が 128 KiB 超）/ subagent（agent_id 付き）
+# extra-kind: big（tool_response が 128 KiB 超）/ subagent（agent_id 付き）/
+#   commit・push・prcreate・prompt（区切りの Bash）/ sendmsg（SendMessage）/ ls（区切りでない Bash）
 run_hook() {
   local role="$1" session="$2" transcript="$3" extra="${4:-}"
   local json
@@ -64,6 +65,14 @@ d = {"session_id": sys.argv[1], "transcript_path": sys.argv[2],
      "hook_event_name": "PostToolUse", "tool_name": "Bash"}
 if sys.argv[3] == "big":
     d["tool_response"] = {"stdout": "x" * 300000}
+cmds = {"commit": "git commit -m x", "push": "git push --force-with-lease",
+        "prcreate": "gh pr create --base token-levers", "prompt": "herdr agent prompt p1 hi",
+        "ls": "ls -la"}
+if sys.argv[3] in cmds:
+    d["tool_input"] = {"command": cmds[sys.argv[3]]}
+if sys.argv[3] == "sendmsg":
+    d["tool_name"] = "SendMessage"
+    d["tool_input"] = {"to": "x", "message": "hi"}
 if sys.argv[3] == "subagent":
     d["agent_id"] = "a1b2c3"
     d["agent_type"] = "Explore"
@@ -117,6 +126,52 @@ write_transcript "$T" 80000
 assert_silent "compact で閾値以下に戻ると黙る" "$(run_hook implementer $S "$T")"
 write_transcript "$T" 210000
 assert_speaks "戻ったあと再び超えたら最初の 1 回から差し込む" "$(run_hook implementer $S "$T")"
+
+log "--- 区切りのツール呼び出し（1区切り1回） ---"
+S=s-bnd
+write_transcript "$T" 210000
+assert_speaks "区切りでない呼び出しで閾値超えの最初の 1 回は差し込む" "$(run_hook implementer $S "$T" ls)"
+write_transcript "$T" 215000
+out=$(run_hook implementer $S "$T" commit)
+assert_speaks "50k 未満の増加でも、区切り（git commit）なら差し込む" "$out"
+case "$out" in *"1行書く"*) pass "区切りの文面は compact するか見送るかを1行書かせる" ;; *) fail "区切りの文面が想定と違う (got: $out)" ;; esac
+write_transcript "$T" 218000
+assert_silent "同じ区切り（commit → push → PR 作成）では繰り返さない" "$(run_hook implementer $S "$T" push)$(run_hook implementer $S "$T" prcreate)"
+write_transcript "$T" 220000
+assert_silent "区切りでない呼び出しは 50k 未満なら黙る" "$(run_hook implementer $S "$T" ls)"
+# クールダウンを過去へずらして、次の区切りとみなす。
+python3 - "$XDG_STATE_HOME/dotfiles/compact-reminder/$S" <<'PY'
+import sys
+ctx, _ = open(sys.argv[1]).read().split()
+open(sys.argv[1], "w").write("%s\n%f" % (ctx, 1.0))
+PY
+assert_speaks "次の区切り（SendMessage）では再び差し込む" "$(run_hook implementer $S "$T" sendmsg)"
+python3 - "$XDG_STATE_HOME/dotfiles/compact-reminder/$S" <<'PY'
+import sys
+ctx, _ = open(sys.argv[1]).read().split()
+open(sys.argv[1], "w").write("%s\n%f" % (ctx, 1.0))
+PY
+assert_speaks "herdr agent prompt も区切り" "$(run_hook implementer $S "$T" prompt)"
+write_transcript "$T" 190000
+assert_silent "区切りでも閾値以下なら黙る" "$(run_hook implementer s-bnd-low "$T" commit)"
+write_transcript "$T" 300000
+assert_silent "区切りでもサブエージェントなら黙る" "$(run_hook implementer s-bnd-sub "$T" subagent)"
+
+log "--- 対象外の役割で python3 を起動しない ---"
+# 全ツール呼び出しで走るので、区切りの判定を足しても対象外の役割は python3 を起動してはならない。
+FAKEBIN="$TMP/fakebin"
+mkdir -p "$FAKEBIN"
+printf '#!/bin/sh\necho called >>"%s/python-calls"\nexit 0\n' "$TMP" >"$FAKEBIN/python3"
+chmod +x "$FAKEBIN/python3"
+write_transcript "$T" 300000
+for r in commander reviewer ""; do
+  if [ -n "$r" ]; then
+    printf '{"tool_name":"Bash","tool_input":{"command":"git commit -m x"}}' | OCW_ROLE="$r" PATH="$FAKEBIN:$PATH" "$HOOK"
+  else
+    printf '{"tool_name":"Bash","tool_input":{"command":"git commit -m x"}}' | env -u OCW_ROLE PATH="$FAKEBIN:$PATH" "$HOOK"
+  fi
+done
+if [ ! -e "$TMP/python-calls" ]; then pass "commander・reviewer・未設定では python3 を起動しない"; else fail "対象外の役割で python3 が起動された"; fi
 
 log "--- 実入力の形（大きい tool_response・サブエージェント） ---"
 # PostToolUse は matcher なしで全ツールの出力を含む。引数渡しだと 128 KiB 超で exec が失敗し、

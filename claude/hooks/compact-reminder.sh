@@ -11,6 +11,11 @@
 # DOC-2610142337（実装途中の自己 compact）に合わせてあり、フック自身の決定は
 # ADR DOC-2610142359 を参照。
 #
+# 差し込みは2種類。(1) 区切りに当たるツール呼び出し（git commit / git push /
+# gh pr create / herdr agent prompt / SendMessage）で閾値超えなら、1区切り1回。
+# 区切りの近くに届けば判断が起きるため。(2) 区切りでない呼び出しでは、従来どおり
+# 閾値超えの最初の 1 回と、その後 50k 増えるごと。
+#
 # 何も言わない（exit 0・出力なし）条件:
 #   - OCW_ROLE が implementer でない（司令官・レビュワー・未設定）
 #   - 文脈が閾値以下 / transcript が読めない / 入力が壊れている / python3 が無い
@@ -32,13 +37,24 @@ PY_SRC="$(
   cat <<'PYEOF'
 import json
 import os
+import re
 import sys
+import time
 
 # 閾値は pr-review-loop の「区切りでの自己 compact」と同じ 200,000。
 THRESHOLD = 200000
 # 差し込んだあと、文脈がこれだけ増えるまでは再掲しない（毎回差し込むと
 # それ自体が文脈を太らせ、無視されるようにもなる）。
 STEP = 50000
+# 区切りのリマインドを出したあと、これだけ経つまでは次の区切りでも出さない。
+# git commit → git push → gh pr create のような一続きの操作を 1 つの区切りとして扱う。
+BOUNDARY_COOLDOWN = 300
+BOUNDARY_RE = re.compile(
+    r"\bgit\s+(?:-C\s+\S+\s+)?(?:commit|push)\b"
+    r"|\bgh\s+pr\s+create\b"
+    r"|\bherdr\s+agent\s+prompt\b"
+)
+BOUNDARY_TOOLS = ("SendMessage",)
 # transcript は数十 MB になりうる。末尾だけを読む。1 行が大きい（ツール結果）
 # ことがあるので、直近の assistant 行が入る余裕を見て 1 MiB。
 TAIL_BYTES = 1024 * 1024
@@ -72,6 +88,29 @@ def context_size(path):
     return None
 
 
+def is_boundary(payload):
+    if payload.get("tool_name") in BOUNDARY_TOOLS:
+        return True
+    if payload.get("tool_name") != "Bash":
+        return False
+    tool_input = payload.get("tool_input")
+    command = tool_input.get("command") if isinstance(tool_input, dict) else None
+    return isinstance(command, str) and BOUNDARY_RE.search(command) is not None
+
+
+def read_state(path):
+    """(最後に差し込んだ文脈, 最後の区切りのリマインドの時刻)。無ければ None。"""
+    last = boundary_at = None
+    try:
+        with open(path) as f:
+            lines = f.read().split()
+        last = int(lines[0])
+        boundary_at = float(lines[1]) if len(lines) > 1 else None
+    except Exception:
+        pass
+    return last, boundary_at
+
+
 def main():
     payload = json.load(sys.stdin)
     # サブエージェントのツール呼び出しでも、同じフックが発火して agent_id が入る。
@@ -91,12 +130,7 @@ def main():
         return
 
     state_file = os.path.join(STATE_ROOT, session_id)
-    last = None
-    try:
-        with open(state_file) as f:
-            last = int(f.read().strip())
-    except Exception:
-        pass
+    last, boundary_at = read_state(state_file)
 
     if ctx <= THRESHOLD:
         # compact で閾値以下に戻った。次に超えたとき最初の 1 回から差し込めるよう消す。
@@ -107,21 +141,37 @@ def main():
                 pass
         return
 
-    if last is not None and ctx < last + STEP:
+    now = time.time()
+    boundary = is_boundary(payload)
+    if boundary:
+        if boundary_at is not None and now - boundary_at < BOUNDARY_COOLDOWN:
+            return
+    elif last is not None and ctx < last + STEP:
         return
 
     os.makedirs(STATE_ROOT, exist_ok=True)
     with open(state_file, "w") as f:
-        f.write(str(ctx))
+        # 区切りでない差し込みは、直前の区切りの時刻を引き継ぐ。
+        stamp = now if boundary else boundary_at
+        f.write(str(ctx) if stamp is None else "%d\n%f" % (ctx, stamp))
 
-    message = (
+    if boundary:
+        message = (
+            "[compact-reminder] 文脈が約 %dk トークン（閾値 200k 超）で、いまは区切りのツール"
+            "呼び出しの直後。**次のターンの冒頭で、`ocw self-compact` で compact するか見送るかを"
+            "1行書くこと（見送るなら理由も）。** WIP のコミットと指摘対応の修正の途中は区切りでない"
+            "ので見送ってよい。区切りなら compact する（手順は自動付与指示と pr-review-loop"
+            "「区切りでの自己 compact」）。"
+        ) % (ctx // 1000)
+    else:
+        message = (
         "[compact-reminder] 文脈が約 %dk トークン（閾値 200k 超）。"
         "検証が通ってコミットした直後、またはレビュー（再レビュー）を依頼した直後の"
         "区切りなら、`ocw self-compact` で自分を compact するか判断すること"
         "（手順は自動付与指示と pr-review-loop「区切りでの自己 compact」。"
         "WIP のコミットと指摘対応の修正の途中は区切りでない）。"
         "区切りでなければ続けてよい。この通知は約 50k 増えるごとに再掲する。"
-    ) % (ctx // 1000)
+        ) % (ctx // 1000)
     out = {
         "hookSpecificOutput": {
             "hookEventName": "PostToolUse",
