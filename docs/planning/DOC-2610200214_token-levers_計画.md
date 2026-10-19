@@ -389,6 +389,8 @@ LDF の `main` へのマージは人間で、試行も人間が学習の会話�
 - 2026-10-20: 孫3 の lora-dataset-forge#506 は承認後に人間がマージした
 - 2026-10-20: 人間は閾値を下げた会話の試行に時間を割かないと決めた。孫4 は試行を待たず、既存の会話の実測から反実仮想で推定して
   閾値を決める（設計4 を書き換えた）
+- 2026-10-20: `review-tiering`（PR #164）が `master` に入ったので、傘を `origin/master` へ rebase した（コンフリクトなし）。傘で
+  `pre-commit run --all-files`・`tests/compact_reminder_test.sh`・`tests/deploy_smoke.sh` が通った
 
 ## 孫1用プロンプト:
 
