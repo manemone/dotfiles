@@ -106,6 +106,8 @@
 | DOC-2610131214 | [implementer-compact.md](adr/DOC-2610131214_implementer-compact.md) | 実装の孫がレビューを依頼した直後の区切り（PR 提出後・再レビュー依頼後）で `ocw self-compact` により自分を compact する決定。閾値 200,000（試算で純削減が最大）、実装の途中・承認後・レビュワーでは行わない、復帰メモはレビュー待ち（Phase 3）に戻す、使えないときは提案もせず何もしない（状態: 決定） |
 | DOC-2610142337 | [implementer-midway-compact.md](adr/DOC-2610142337_implementer-midway-compact.md) | 実装の孫が実装の途中（検証が通ってコミットした直後）でも、閾値 200,000 超なら自己 compact する決定。ADR DOC-2610131214 の「途中では行わない」のうち PR を出す前の実装だけを覆す。1 PR につき多くて 3 回、実装途中用の復帰メモ、レビューの投稿数・指摘数で品質低下を測る方法と再考の目安（状態: 決定） |
 | DOC-2610142359 | [implementer-compact-reminder-hook.md](adr/DOC-2610142359_implementer-compact-reminder-hook.md) | 実装の孫の文脈が 200k を超えたら、区切りでの `ocw self-compact` の判断を促す一文を差し込む PostToolUse フック（`claude/hooks/compact-reminder.sh`）の決定。`OCW_ROLE=implementer` だけに効かせ、compact は打たず、transcript の末尾だけを読み、超えた最初の 1 回と 50k 増えるごとに間引く（のち区切りのツール呼び出しで1区切り1回の再掲を追記）。判定できないときは黙る。実機で `additionalContext` が届くかは未検証として記録 |
+| DOC-2610142359 | [implementer-compact-reminder-hook.md](adr/DOC-2610142359_implementer-compact-reminder-hook.md) | 実装の孫の文脈が 200k を超えたら、区切りでの `ocw self-compact` の判断を促す一文を差し込む PostToolUse フック（`claude/hooks/compact-reminder.sh`）の決定。`OCW_ROLE=implementer` だけに効かせ、compact は打たず、transcript の末尾だけを読み、超えた最初の 1 回と 50k 増えるごとに間引く。判定できないときは黙る。実機で `additionalContext` が届くかは未検証として記録 |
+| DOC-2610200218 | [reviewer-fresh-each-round.md](adr/DOC-2610200218_reviewer-fresh-each-round.md) | 再レビューのたびにレビュワーの会話を新しくし、読み方の作法をレビュー指示に足す（`pr-review-loop`） |
 
 ### planning/ — ロードマップ・計画
 
