@@ -500,6 +500,12 @@ cat > "$REVIEW_REQUEST" << 'REVIEW_EOF'
 3. GitHubからPR説明・最新HEADの差分・既存コメント・既存レビューを取得
 4. 最新HEADでPRをレビュー
 
+## 読み方の作法（文脈を膨らませない）
+- 保存ファイルに逃がされた大きい出力（persisted-output）を Read で全文読み直さない。`grep` / `tail` / 行範囲で読む
+- 旧版の状態を `git show <sha>:<path> | cat -n` で取り直さない。`git diff <前回SHA>..HEAD -- <path>` で差分だけ読む
+- 規約文書は全文 cat せず、`grep -n '^#'` で見出しを引いて要る節だけ読む
+- ラウンド2以降は、最新のレビュー1件と未解決のスレッドだけ読む（`gh pr view --json reviews` の全件は読み直さない）
+
 ## 規約優先順位
 {{CONVENTION_DOCSがあれば}}: 指定されたdocがレビューコメント形式・投稿先・承認/変更要求マーカー・スレッド解決・再レビュー手順の情報源。docにない規約を自作しない。
 {{CONVENTION_DOCSがなければ}}: このレビュー依頼に記載された規約を情報源とすること。記載のない規約を自作しない。
@@ -1224,8 +1230,9 @@ command -v ocw-meter >/dev/null && ocw-meter event phase.end --phase reply --sou
 command -v ocw-meter >/dev/null && ocw-meter event phase.start --phase rereview_request --source pr-review-loop --round "$ROUND" || true
 ```
 
-4. **最小限の**再レビュー依頼を送信。修正内容を列挙するな。レビュワーはGitHubのコメントを読む。
-   ただし次の2つは必ず渡す:
+4. 先に下の「レビュワーの会話を新しくする」を実行する。そのあと**最小限の**再レビュー依頼を送信。
+   修正内容を列挙するな。レビュワーはGitHubのコメントを読む。
+   ただし次の3つは必ず渡す:
 
    - **レビュー指示ファイルの絶対パス**（Phase 2 Step 1 で作った `$REVIEW_REQUEST`）。
      finding の判定基準・テスト不足の判定基準・ラウンド別のテスト実行方針は**このファイルにしか
@@ -1243,6 +1250,8 @@ command -v ocw-meter >/dev/null && ocw-meter event phase.start --phase rereview_
      ```
    - **差分の起点となる前回レビュー対象SHA**（このラウンドの `$HEAD_SHA`）。レビュワーはこの
      区間の差分を分類してから検証範囲を決めるため、起点が無いと full suite を回し直すことになる
+   - **何ラウンド目の再レビューか**（`$NEXT_ROUND` = `$ROUND` + 1。手順6で繰り上げる前の値に1を足す）。新しくしたレビュワーは
+     過去のラウンドを知らず、「後続ラウンド（ラウンド2以降）の新規 finding 閾値」を効かせる根拠がこの数字だけになる
 
 送信は Phase 2 Step 3 と同じく `umbrella-orchestrator/SKILL.md` §5「AI間送信手順
 （二段構え）」に従う（自分が `SendMessage` を呼べる Claude Code セッションで、かつ
@@ -1254,7 +1263,8 @@ herdr agent prompt "$REVIEWER_PANE" "PR #$PR 再レビュー依頼。レビュ�
 ```
 
    フォールバック送信前に、Phase 2 Step 2 と同じ手順でレビュワーの状態を確認する。
-   **ラウンドの合間にエージェントが終了していることがあり**、そのまま送るとエージェントが
+   **ラウンドの合間にエージェントが終了していることがあり**（上の「レビュワーの会話を新しくする」で
+   自分から終了させた場合に限らない）、そのまま送るとエージェントが
    いないペインへの送信になって依頼が届かない（`herdr agent prompt` は
    エージェントのいないペインには使えない）。`idle` / `done` を確認してから送ること。
 
@@ -1271,6 +1281,49 @@ command -v ocw-meter >/dev/null && ocw-meter event phase.end --phase rereview_re
 6. 次のサイクルに入るため、`$ROUND` が指すサイクル数を1つ進める（次にPhase 1.5以降で `--round` を発行するときは、この進めた後の値をリテラルに使う）。あわせて、次のサイクルでは `$NEW_HEAD_SHA` が `$HEAD_SHA`（レビュー対象HEAD）になる。**この繰り上げは、次の手順7で compact する場合も先に済ませる**（復帰メモには繰り上げ後の値を書く）。
 7. 「区切りでの自己 compact（実装側のみ）」の判断をする（閾値以下・使えないなら飛ばす）。
 8. レビュワーの作業開始を待ち、Phase 3に戻る。
+
+### レビュワーの会話を新しくする
+
+再レビューのたびに、レビュワーのエージェントを終了して起動し直し、新しい会話で再レビューさせる（既定。ラウンド2以降の
+頭だけで、初回のレビューには要らない）。同じ会話を続けると、ラウンドごとに積み上がった文脈が毎回の呼び出しの
+cache read として払い直しになる。前ラウンドの指摘と返信は PR のコメントに残っているので、会話を捨てても失うものは少ない。
+理由・費用の見込み・却下案は ADR DOC-2610200218 を参照。
+
+1. レビュワーが `idle` / `done` であることを Step 2 の表で確かめる（`working` は待つ）
+2. 終了させる。`/exit` は Claude Code / Codex / OpenCode が共通で持つ終了コマンドなので、種別を問わずこれを送る:
+
+```bash
+herdr pane send-text "$REVIEWER_PANE" "/exit"
+herdr pane send-keys "$REVIEWER_PANE" Enter
+```
+
+   エージェントが消える（`herdr pane get` の `agent` が空になる）まで最大15秒、1秒間隔で見る:
+
+```bash
+for _ in $(seq 1 15); do
+  AGENT=$(herdr pane get "$REVIEWER_PANE" | python3 -c "import json,sys; print(json.load(sys.stdin)['result']['pane'].get('agent') or '')")
+  test -z "$AGENT" && break
+  sleep 1
+done
+```
+
+   **消えなかったら、作り直さず従来どおり同じ会話に再依頼する**（手順3をやらず、下の送信へ進む）。
+   強制的に閉じない（`herdr pane close` はペインごと消え、`reviewer` ラベルが失われる）
+3. 起動し直す。ペインはシェルだけになっているので、Phase 2 Step 2 の「`ocw agent` での起動」→
+   「起動コマンドの決定」→ 主経路 / フォールバックの順で起動し、末尾の `$REVIEWER_AGENT` の読み直しまで行う
+4. 新しいレビュワーへの最初の依頼は、**Step 3 と同じ文言で始め**、前回SHA・ラウンド・読み方を足す。
+   文言の頭を変えない理由: ocw-meter や使用量の集計（`by_unit.py` など）は、会話の最初の発話の
+   「PRレビューを実行してください」でレビュワーのセッションを見分けるので、「再レビュー依頼」で始めると
+   実装のセッションに数えられる。送信は Step 3 と同じ二段構え:
+
+```bash
+herdr agent prompt "$REVIEWER_PANE" "以下を読んでPRレビューを実行してください。レビュー指示: $REVIEW_REQUEST — PR #$PR のラウンド$NEXT_ROUND（再レビュー）。前回レビュー対象: $HEAD_SHA → 現HEAD: $NEW_HEAD_SHA。全指摘に対応コメント書きました。前ラウンドの指摘と返信は、最新のレビュー1件と未解決のスレッドだけ読むこと" --wait --timeout 10000
+```
+
+   `$NEXT_ROUND` は `$ROUND` + 1 の整数をリテラルに埋める（このプロンプトは手順6で `$ROUND` を繰り上げる前に送る）。
+
+起動し直せたとき、送信後の配信確認（手順5）も新しいレビュワーに対して行う。起動し直さなかったとき
+（消えなかった・Herdr 外で動いている等）の再依頼は、下の従来のフォールバック文言のままでよい。
 
 ### アンチパターン: 冗長な再レビュープロンプト
 
