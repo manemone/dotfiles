@@ -217,8 +217,6 @@ ocw-meter report --phase [--pr <n>] [--repo <owner>/<name>] [--no-ingest] [--jso
 ocw-meter report --model [--pr <n>] [--repo <owner>/<name>] [--no-ingest] [--json]
 
 # role（commander/implementer/reviewer/unknown）別のイベント数・トークン・推定費用
-# （注意: Herdr 外の会話は unknown になり、Claude の費用は null。傘・PR 単位の役割別の費用は
-#  docs/reference/DOC-2610130216 §4.5 の by_unit.py を使う）
 ocw-meter report --role [--pr <n>] [--repo <owner>/<name>] [--no-ingest] [--json]
 
 # 5時間窓（window_id）別のquota.sample集計。直接紐付き/時間範囲重複の
