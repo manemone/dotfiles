@@ -148,8 +148,9 @@ subcommands:
     Pass `--provider-total <model>=<tokens>` (repeatable) with a value
     read off the provider's own billing dashboard to get a coverage
     ratio. Always prints `cost_basis: estimated — not an invoice` and a
-    `known_gaps` line (plan §5.10: deepseek-v4-flash is 0% covered,
-    deepseek-v4-pro is ~89% covered) — this output is never meant to
+    `known_gaps` line (plan §5.10: background/subagent calls, formerly
+    deepseek-v4-flash, are 0% covered; the old main deepseek-v4-pro was
+    ~89% covered) — this output is never meant to
     read as "the complete picture".
 
   snapshot-quota
@@ -2710,8 +2711,10 @@ def _report_reconcile(paths, month, provider_totals, as_json, footer_freshness):
         "meter_error_diagnostics": count_meter_errors(paths),
         "malformed_unvalidated_lines": malformed,
         "known_gaps": (
-            "deepseek-v4-flash はtranscriptに一切記録されない（実測カバー率0%、計画書5.10）。"
-            "deepseek-v4-pro のtranscriptカバー率は実測で約89%（DOC-2608021229 §2.2）。"
+            "背景ユーティリティ呼び出しとサブエージェント分（旧構成の deepseek-v4-flash、現在は deepseek-flash）は"
+            "transcriptに一切記録されない（旧構成での実測カバー率0%、計画書5.10）。"
+            "メインセッションのモデルは記録される。旧構成のメイン deepseek-v4-pro の"
+            "transcriptカバー率は実測で約89%（DOC-2608021229 §2.2）。deepseek-flash をメインにした現構成での再測定はしていない。"
             "coverage_ratio は --provider-total を渡したmodelにのみ算出される。claude-* は "
             "定額契約のため cost_estimate_usd は常にnull（cost_basis: subscription）。"
             "月の区切りはUTC固定。provider管理画面の集計タイムゾーン（例: DeepSeek管理画面は"

@@ -307,7 +307,7 @@ PR番号はリポジトリ**内**でしか一意でない。`--pr`とstandalone�
   [DOC-2608081456](../docs/planning/DOC-2608081456_ocw-meter-accuracy_計画.md)【5】）。
   スキーマの詳細（`time_of_day_pricing`ブロックの書き方・タイムゾーンの扱い・境界の扱い）は
   [`bin/prices/README.md`](prices/README.md)を参照。現時点で実際に投入されている価格表
-  のうち `bin/prices/deepseek-2026-10-17.json` が DeepSeek の peak 窓（UTC 01:00–04:00・06:00–10:00）を
+  のうち `bin/prices/deepseek-2026-09-10.json` が DeepSeek の peak 窓（UTC 01:00–04:00・06:00–10:00）を
   このブロックで表している。ただし本来の peak は月〜金・中国の祝日を除くで、スキーマは曜日・祝日を
   表せないため、週末・祝日の該当時間帯は peak 単価で過大に見積もる（保守側の近似）。
   旧 `deepseek-2026-08-01.json` は時間帯ブロックを使わず、過去データの費用推定のために残している
@@ -520,13 +520,15 @@ GitHub token形式（`ghp_...` 等 / `github_pat_...`）に一致する値、キ
 この置換は保存物だけでなく、meterが出す例外・警告メッセージにも適用される。
 
 **既知の限界（カバレッジは「全部取れている」ものではない — 計画書5.10 / DOC-2608021229 §2.2 実測）**:
-- **Flash（旧 `deepseek-v4-flash`、現 `deepseek-flash`）はtranscriptに一切記録されない（実測カバー率 0%。
-  この実測は旧名の時期のもので、新名での再測定はしていない）。** タイトル生成・要約等の
-  背景ユーティリティ呼び出しやサブエージェント（`CLAUDE_CODE_SUBAGENT_MODEL=deepseek-flash`）分は
-  `~/.claude/projects/*.jsonl` に現れないため、`ingest` では原理的に取得できない
-- **`deepseek-v4-pro` のtranscriptカバー率は実測で約89%。** 残り約11%は他マシン・別期間・
-  streaming中断/retryで課金されたが記録されない分などが要因（正確な内訳は provider管理画面との
-  突合が必要 — `ocw-meter report --reconcile --provider-total <model>=<tokens>` を使うこと）
+- **背景ユーティリティ呼び出し（タイトル生成・要約等）とサブエージェント分はtranscriptに一切記録されない
+  （旧構成での実測カバー率 0%）。** 旧構成ではここにだけ `deepseek-v4-flash` を使っていたため
+  モデル単位で 0% に見えたが、原因は呼び出しの役割である。現在この分は `deepseek-flash`
+  （`CLAUDE_CODE_SUBAGENT_MODEL=deepseek-flash`）で、`ingest` では原理的に取得できない
+- **メインセッションのモデルはtranscriptに記録される。** 現構成のメインは `deepseek-flash[1m]`
+  （`deepseek-flash` として記録・計上される）。カバー率の実測は旧構成のメイン `deepseek-v4-pro` で
+  約89%（残り約11%は他マシン・別期間・streaming中断/retryで課金されたが記録されない分などが要因。
+  正確な内訳は provider管理画面との突合が必要 — `ocw-meter report --reconcile --provider-total <model>=<tokens>` を使うこと）。
+  `deepseek-flash` をメインにした現構成での再測定はしていない
 - `snapshot-quota`（Claude利用枠取得）は `claude-ds`（DeepSeek経由）セッションでは `rate_limits` を
   原理的に取得できない（Claude.aiサブスクリプションの利用枠であり、DeepSeek APIには適用されない）。
   また5時間枠に到達して待機した際の挙動は未観測（その状況が発生した際のログをまだ収集できていない）であり、`blocked`の検出は
