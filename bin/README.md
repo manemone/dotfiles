@@ -157,18 +157,26 @@ claude-ds
 # 実体:
 #   ANTHROPIC_BASE_URL="https://api.deepseek.com/anthropic"
 #   ANTHROPIC_AUTH_TOKEN="<キーファイルの中身>"
-#   ANTHROPIC_MODEL="deepseek-v4-pro[1m]"
-#   ANTHROPIC_DEFAULT_OPUS_MODEL="deepseek-v4-pro[1m]"
-#   ANTHROPIC_DEFAULT_SONNET_MODEL="deepseek-v4-pro[1m]"
-#   ANTHROPIC_DEFAULT_HAIKU_MODEL="deepseek-v4-flash"
-#   CLAUDE_CODE_SUBAGENT_MODEL="deepseek-v4-flash"
+#   ANTHROPIC_MODEL="deepseek-flash[1m]"
+#   ANTHROPIC_DEFAULT_OPUS_MODEL="deepseek-flash[1m]"
+#   ANTHROPIC_DEFAULT_SONNET_MODEL="deepseek-flash[1m]"
+#   ANTHROPIC_DEFAULT_HAIKU_MODEL="deepseek-flash"
+#   CLAUDE_CODE_SUBAGENT_MODEL="deepseek-flash"
+#   CLAUDE_CODE_EFFORT_LEVEL="max"
+#   CLAUDE_CODE_AUTO_COMPACT_WINDOW="786432"
 #   claude "$@"
 ```
 
 | モデル種別 | 固定値 |
 |---|---|
-| メイン / Opus / Sonnet | `deepseek-v4-pro[1m]` |
-| Haiku / subagent | `deepseek-v4-flash` |
+| メイン / Opus / Sonnet | `deepseek-flash[1m]` |
+| Haiku / subagent | `deepseek-flash` |
+
+モデルは DeepSeek 公式の Claude Code 連携ページの設定例（全部 Flash。`deepseek-flash` は 2026-10-17 から V4.1-Flash-1017）に合わせている。旧 `deepseek-v4-flash` は引退済みで互換転送されているだけなので使わない。`deepseek-v4-pro` は現役だが既定では使わない（使うなら `--model` で指定）。
+
+- `CLAUDE_CODE_EFFORT_LEVEL=max`: 公式推奨。環境変数は `effortLevel` 設定より優先されるため、配布物の `effortLevel` には負けない
+- `CLAUDE_CODE_AUTO_COMPACT_WINDOW=786432`: 公式推奨の自動 compact の上限（安全網）。`claude/hooks/compact-reminder.sh` の 200k や司令官の 150k / 300k は「区切りで自発的に compact する判断」の目安で役割が違い、衝突しない。DeepSeek はキャッシュヒットがミスの約1/50と安く、長い文脈のコストが響きにくいため公式値をそのまま採る
+- **`settings.machine.json` の `env` は、ここで固定した環境変数より優先される**（Claude Code は `env` の各エントリをプロセス環境へ書き込み、シェルから継承した値を置き換える）。たとえば `env` に `CLAUDE_CODE_SUBAGENT_MODEL: "sonnet"` があると、subagent は `ANTHROPIC_DEFAULT_SONNET_MODEL`（`deepseek-flash[1m]`）に読み替えられる。Flash で動く点は変わらず、1M 文脈版になるだけ
 
 API キーは `DEEPSEEK_API_KEY_FILE` 環境変数で指定可能（デフォルト: `~/.config/deepseek/api_key`）。
 
@@ -299,8 +307,11 @@ PR番号はリポジトリ**内**でしか一意でない。`--pr`とstandalone�
   [DOC-2608081456](../docs/planning/DOC-2608081456_ocw-meter-accuracy_計画.md)【5】）。
   スキーマの詳細（`time_of_day_pricing`ブロックの書き方・タイムゾーンの扱い・境界の扱い）は
   [`bin/prices/README.md`](prices/README.md)を参照。現時点で実際に投入されている価格表
-  （`bin/prices/deepseek-2026-08-01.json`）はこのブロックを使っていない（DeepSeekの時間帯課金は
-  発効日未定のため）
+  のうち `bin/prices/deepseek-2026-09-10.json` が DeepSeek の peak 窓（UTC 01:00–04:00・06:00–10:00）を
+  このブロックで表している。ただし本来の peak は月〜金・中国の祝日を除くで、スキーマは曜日・祝日を
+  表せないため、週末・祝日の該当時間帯は peak 単価で過大に見積もる（保守側の近似）。
+  旧 `deepseek-2026-08-01.json` は時間帯ブロックを使わず、2026-09-10 より前のデータの費用推定のために残している。
+  **ただし 2026-08-16〜09-09 は旧表が当たり、実際の単価と合わない**（時間帯課金が始まった 08-16 以降の `deepseek-v4-pro` は旧表より高く、過小計上になる。Flash の当時の単価は未確認のため表を足していない）。この期間の費用は信用せず、必要なら管理画面の値で突合する。根拠は `deepseek-2026-09-10.json` の notes
 - **該当する価格表が無い期間は黙って概算しない。** `select_price_table()`が対象日以前に有効な
   テーブルを1枚も見つけられないと、クラッシュせず最も古いテーブルにフォールバックするが、
   そのイベントの`price_effective_date`は実際のメッセージ日付より後になる。`report`のフッター
@@ -510,12 +521,15 @@ GitHub token形式（`ghp_...` 等 / `github_pat_...`）に一致する値、キ
 この置換は保存物だけでなく、meterが出す例外・警告メッセージにも適用される。
 
 **既知の限界（カバレッジは「全部取れている」ものではない — 計画書5.10 / DOC-2608021229 §2.2 実測）**:
-- **`deepseek-v4-flash` はtranscriptに一切記録されない（実測カバー率 0%）。** タイトル生成・要約等の
-  背景ユーティリティ呼び出しやサブエージェント（`CLAUDE_CODE_SUBAGENT_MODEL=deepseek-v4-flash`）分は
-  `~/.claude/projects/*.jsonl` に現れないため、`ingest` では原理的に取得できない
-- **`deepseek-v4-pro` のtranscriptカバー率は実測で約89%。** 残り約11%は他マシン・別期間・
-  streaming中断/retryで課金されたが記録されない分などが要因（正確な内訳は provider管理画面との
-  突合が必要 — `ocw-meter report --reconcile --provider-total <model>=<tokens>` を使うこと）
+- **背景ユーティリティ呼び出し（タイトル生成・要約等）とサブエージェント分はtranscriptに一切記録されない
+  （旧構成での実測カバー率 0%）。** 旧構成ではここにだけ `deepseek-v4-flash` を使っていたため
+  モデル単位で 0% に見えたが、原因は呼び出しの役割である。現在この分は `deepseek-flash`
+  （`CLAUDE_CODE_SUBAGENT_MODEL=deepseek-flash`）で、`ingest` では原理的に取得できない
+- **メインセッションのモデルはtranscriptに記録される。** 現構成のメインは `deepseek-flash[1m]`
+  （`deepseek-flash` として記録・計上される）。カバー率の実測は旧構成のメイン `deepseek-v4-pro` で
+  約89%（残り約11%は他マシン・別期間・streaming中断/retryで課金されたが記録されない分などが要因。
+  正確な内訳は provider管理画面との突合が必要 — `ocw-meter report --reconcile --provider-total <model>=<tokens>` を使うこと）。
+  `deepseek-flash` をメインにした現構成での再測定はしていない
 - `snapshot-quota`（Claude利用枠取得）は `claude-ds`（DeepSeek経由）セッションでは `rate_limits` を
   原理的に取得できない（Claude.aiサブスクリプションの利用枠であり、DeepSeek APIには適用されない）。
   また5時間枠に到達して待機した際の挙動は未観測（その状況が発生した際のログをまだ収集できていない）であり、`blocked`の検出は

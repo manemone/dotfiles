@@ -1,0 +1,37 @@
+{
+  "price_table_version": "deepseek-2026-09-10",
+  "effective_date": "2026-09-10",
+  "source": "https://api-docs.deepseek.com/quick_start/pricing/",
+  "fetched_at": "2026-10-21",
+  "currency": "USD",
+  "unit": "per_1m_tokens",
+  "models": {
+    "deepseek-flash":    { "cache_hit_in": 0.003, "cache_miss_in": 0.15, "out": 0.6 },
+    "deepseek-v4-flash": { "cache_hit_in": 0.003, "cache_miss_in": 0.15, "out": 0.6 },
+    "deepseek-v4-pro":   { "cache_hit_in": 0.022, "cache_miss_in": 0.66, "out": 1.98 }
+  },
+  "time_of_day_pricing": {
+    "tz_offset": "+00:00",
+    "tz_label": "UTC",
+    "boundary": "start_inclusive_end_exclusive",
+    "windows": [
+      {
+        "start": "01:00", "end": "04:00",
+        "models": {
+          "deepseek-flash":    { "cache_hit_in": 0.006, "cache_miss_in": 0.3,  "out": 1.2 },
+          "deepseek-v4-flash": { "cache_hit_in": 0.006, "cache_miss_in": 0.3,  "out": 1.2 },
+          "deepseek-v4-pro":   { "cache_hit_in": 0.044, "cache_miss_in": 1.32, "out": 3.96 }
+        }
+      },
+      {
+        "start": "06:00", "end": "10:00",
+        "models": {
+          "deepseek-flash":    { "cache_hit_in": 0.006, "cache_miss_in": 0.3,  "out": 1.2 },
+          "deepseek-v4-flash": { "cache_hit_in": 0.006, "cache_miss_in": 0.3,  "out": 1.2 },
+          "deepseek-v4-pro":   { "cache_hit_in": 0.044, "cache_miss_in": 1.32, "out": 3.96 }
+        }
+      }
+    ]
+  },
+  "notes": "Base prices are off-peak; windows are the peak rates (2x). Official peak is 01:00-04:00 and 06:00-10:00 UTC, Monday-Friday, excluding Chinese public holidays; the schema cannot express weekdays or holidays, so weekend and holiday hours in those windows are over-estimated at peak rates. Per the official changelog (https://api-docs.deepseek.com/updates), time-of-day pricing took effect 2026-08-16 16:00 UTC and the V4.1-Flash prices 2026-09-10 04:00 UTC; the 2026-10-17 model update left pricing unchanged. effective_date is 2026-09-10, the date from which all models here carry current prices (table selection is by date, so the hour offset is approximated). 2026-08-16 to 2026-09-09 is not covered: deepseek-v4-pro there had current prices but is priced by the older table, and the then-current Flash prices were not confirmed from text. deepseek-v4-flash is a retired legacy name billed at Flash prices."
+}
