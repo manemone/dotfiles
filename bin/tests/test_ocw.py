@@ -1875,8 +1875,8 @@ class HerdrPaneModeTests(HerdrOcwTestCase):
             shlex.split(lines["implementer"])[-1], "LDF :: widget-maker / 実装"
         )
 
-    def test_name_is_added_only_to_plain_claude_commands(self):
-        # 人間の OCW_*_COMMAND の上書きを壊さない: claude 以外 (Codex 等・
+    def test_name_is_added_only_to_claude_and_claude_ds_commands(self):
+        # 人間の OCW_*_COMMAND の上書きを壊さない: claude / claude-ds 以外 (Codex 等・
         # `env X=1 claude` のようなラッパー) は一切変えず、claude の追加引数や
         # パス付き・既に --name 付きのコマンドは壊さない。
         result = self.run_herdr_ocw(
@@ -1900,6 +1900,18 @@ class HerdrPaneModeTests(HerdrOcwTestCase):
             ["FOO=1", "/usr/bin/claude", "--permission-mode", "auto", "--name", "L / 実装"],
         )
         self.assertEqual(lines["reviewer"], "claude --name mine")
+
+        # claude-ds は引数を素通しするこのリポ自身のラッパーなので、claude と同じく付く。
+        self.herdr_log.unlink()
+        result = self.run_herdr_ocw(
+            ["-H", "--label", "L", "gizmo-maker"],
+            extra_env={"OCW_IMPLEMENTER_COMMAND": "claude-ds --permission-mode auto"},
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            shlex.split(self.agent_lines("gizmo-maker")["implementer"]),
+            ["claude-ds", "--permission-mode", "auto", "--name", "L / 実装"],
+        )
 
         self.herdr_log.unlink()
         result = self.run_herdr_ocw(
