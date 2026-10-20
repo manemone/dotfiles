@@ -38,7 +38,7 @@
 | なぜ孫の PR を承認後も孫がマージせず、傘の司令官がマージするようにしたかを知る | [adr/DOC-2610130212_commander-merges-grandchildren.md](adr/DOC-2610130212_commander-merges-grandchildren.md) | `pr-review-loop` がどの PR もマージしない形・司令官のマージ条件・巡回 cron を30分にした理由・ADR DOC-2609121719 との関係 |
 | `ocw-meter` のイベントスキーマを調べる | [reference/DOC-2608021229-c_ocw-meterイベントスキーマ.md](reference/DOC-2608021229-c_ocw-meterイベントスキーマ.md) | 全 event_type・全フィールド・費用計算式の一次情報源 |
 | LLM費用のベースラインを測る手順を知る | [reference/DOC-2608021229-b_LLM費用観測ベースライン計測手順.md](reference/DOC-2608021229-b_LLM費用観測ベースライン計測手順.md) | 実PR 5〜10本での計測手順 |
-| Claude の使用量を実ログから測る手順と、どこを削れるかの調査結果を知る | [reference/DOC-2610130216_使用量の測り方と削りどころの調査結果.md](reference/DOC-2610130216_使用量の測り方と削りどころの調査結果.md) | 集計スクリプト（`docs/adr/probes/usage-diet/`）の使い方・役割別の費用・キャッシュ切れ・文脈の太り方・compact の試算と、効かないとわかった案 |
+| Claude の使用量を実ログから測る手順と、どこを削れるかの調査結果を知る | [reference/DOC-2610130216_使用量の測り方と削りどころの調査結果.md](reference/DOC-2610130216_使用量の測り方と削りどころの調査結果.md) | 集計スクリプト（`docs/adr/probes/usage-diet/`）の使い方・役割別の費用・キャッシュ切れ・文脈の太り方・compact の試算と、効かないとわかった案、施策の前後比較（2026-10-21 の再測定） |
 | 実装の孫の文脈が何で膨らむか（ツール結果の内訳・出力トークンの寄与）と、大きい出力の作法の根拠・置き場を知る | [reference/DOC-2610142335_実装の孫の文脈の内訳調査.md](reference/DOC-2610142335_実装の孫の文脈の内訳調査.md) | 集計スクリプト（`docs/adr/probes/context-bloat/` の `tools.py` / `share.py`）・Bash の先頭語別とサイズ別の分布・作法の中身と置き場・入れなかった場所 |
 | Figma プラグイン（`figma@synced`）をユーザー全体で止めてリポごとに有効にできるかの検証結果を知る | [reference/DOC-2610150527_Figmaプラグインの有効範囲の検証.md](reference/DOC-2610150527_Figmaプラグインの有効範囲の検証.md) | 設定の階層ごとの実測表・実 `$HOME` を触らない確かめ方・machine 設定のマージ結果・実機で止める順序 |
 | 傘ブランチの計画を確認する | [planning/](planning/) 配下の各計画書 | 進行中・完了した傘ブランチの計画書 |
