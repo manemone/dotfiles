@@ -377,13 +377,14 @@ with a plain '/' separator). `--label <text>` replaces it (requires -H,
 like --no-commander); renaming afterwards with `herdr workspace rename`
 still works.
 
-session name: when a pane's command is claude (first word, ignoring
+session name: when a pane's command is claude or claude-ds (first word, ignoring
 leading VAR=value words and any directory part), ocw appends
 --name "<label> / <role>" so the Claude app / Remote Control
 conversation title matches the Herdr label and panes of one workspace
 never share a name. <role> is 司令官 / 実装 / レビュー for commander /
-implementer / reviewer. Commands that are not claude (Codex, OpenCode,
-wrappers such as `env X=1 claude`) and claude commands that already
+implementer / reviewer. claude-ds is this repo's own wrapper and passes its
+arguments straight through to claude. Commands that are not claude (Codex,
+OpenCode, wrappers such as `env X=1 claude`) and claude commands that already
 carry --name / -n are left untouched. It is also the SendMessage
 address of that session.
 
@@ -912,7 +913,8 @@ open_vscode() {
     warn "failed to open VS Code"
 }
 
-# Echo the command to run in a pane. When it is a claude command, append
+# Echo the command to run in a pane. When it is a claude (or claude-ds, this
+# repo's own wrapper that passes its arguments through) command, append
 # --name "<label> / <role>" so the Claude app / Remote Control conversation
 # title (and the SendMessage address) matches the Herdr workspace label.
 # Anything else (Codex, OpenCode, `env X=1 claude`, ...) and claude commands
@@ -942,10 +944,13 @@ pane_command_with_name() {
     esac
   done
 
-  if [ "$first" != "claude" ]; then
-    printf '%s' "$command_line"
-    return 0
-  fi
+  case "$first" in
+    claude | claude-ds) ;;
+    *)
+      printf '%s' "$command_line"
+      return 0
+      ;;
+  esac
 
   for word in "${words[@]}"; do
     case "$word" in
