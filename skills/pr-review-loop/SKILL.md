@@ -519,7 +519,7 @@ cat > "$REVIEW_REQUEST" << 'REVIEW_EOF'
 - 保存ファイルに逃がされた大きい出力（persisted-output）を Read で全文読み直さない。`grep` / `tail` / 行範囲で読む
 - 旧版の状態を `git show <sha>:<path> | cat -n` で取り直さない。`git diff <前回SHA>..HEAD -- <path>` で差分だけ読む
 - 規約文書は全文 cat せず、`grep -n '^#'` で見出しを引いて要る節だけ読む
-- ラウンド2以降は、最新のレビュー1件と未解決のスレッドだけ読む（`gh pr view --json reviews` の全件は読み直さない）
+- ラウンド2以降は、最新のレビュー1件と未解決のスレッド、および前回レビュー対象SHAより後の実装者の対応報告（`🤖💬` の会話コメント。異議の理由やSHA付きのテスト結果が入る）だけ読む（`gh pr view --json reviews` の全件は読み直さない）
 
 ## 規約優先順位
 {{CONVENTION_DOCSがあれば}}: 指定されたdocがレビューコメント形式・投稿先・承認/変更要求マーカー・スレッド解決・再レビュー手順の情報源。docにない規約を自作しない。
@@ -1337,7 +1337,7 @@ done
    実装のセッションに数えられる。送信は Step 3 と同じ二段構え:
 
 ```bash
-herdr agent prompt "$REVIEWER_PANE" "以下を読んでPRレビューを実行してください。レビュー指示: $REVIEW_REQUEST — PR #$PR のラウンド$NEXT_ROUND（再レビュー）。前回レビュー対象: $HEAD_SHA → 現HEAD: $NEW_HEAD_SHA。全指摘に対応コメント書きました。前ラウンドの指摘と返信は、最新のレビュー1件と未解決のスレッドだけ読むこと" --wait --timeout 10000
+herdr agent prompt "$REVIEWER_PANE" "以下を読んでPRレビューを実行してください。レビュー指示: $REVIEW_REQUEST — PR #$PR のラウンド$NEXT_ROUND（再レビュー）。前回レビュー対象: $HEAD_SHA → 現HEAD: $NEW_HEAD_SHA。全指摘に対応コメント書きました。前ラウンドの指摘と返信は、最新のレビュー1件と未解決のスレッド、および前回レビュー対象SHAより後の実装者の対応報告（会話コメント）だけ読むこと" --wait --timeout 10000
 ```
 
    `$NEXT_ROUND` は `$ROUND` + 1 の整数をリテラルに埋める（このプロンプトは手順6で `$ROUND` を繰り上げる前に送る）。
