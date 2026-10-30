@@ -25,7 +25,7 @@
 | 孫 | ブランチ | 内容 | 状況 |
 |---|---|---|---|
 | 1 | `msq-01-ingest-subagents` | `ingest` がサブエージェントの記録（`<session>/subagents/agent-*.jsonl`）を読み、親の会話・run_id・role へ結びつける。スキーマ文書を更新する | ✅ PR #181 マージ済 |
-| 2 | `msq-02-quota-per-model` | モデル系統ごとの「週の 1% あたりのトークン」を推定する report を足し、孫3 の範囲の report に推定 % を足す。推定方法を ADR に残す | ⬜ 待機中 |
+| 2 | `msq-02-quota-per-model` | モデル系統ごとの「週の 1% あたりのトークン」を推定する report を足し、孫3 の範囲の report に推定 % を足す。推定方法を ADR に残す | 🔄 実装中 |
 | 3 | `msq-03-range-report` | `report` に `--since` / `--until` の時間範囲を足し、その間のモデル別トークン（と費用）を出す | ✅ PR #182 マージ済 |
 
 依存:
