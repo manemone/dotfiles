@@ -204,7 +204,8 @@ ocw-meter event <event_type> [--key value ...]
 # PRの後付けbind（run_id → PR番号）
 ocw-meter bind-pr --run <run_id> --pr <n> [--url <url>]
 
-# ~/.claude/projects/*/*.jsonl を走査し usage.message イベントを生成（冪等・増分）
+# ~/.claude/projects/*/*.jsonl と、サブエージェントの記録 */*/subagents/agent-*.jsonl を走査し
+# usage.message イベントを生成（冪等・増分）。サブエージェントの分は親の session_id に結びつく
 ocw-meter ingest [--since <rfc3339-ts>]
 
 # 保存済みイベントのschema検証。壊れた行はquarantineへ隔離

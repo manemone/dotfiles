@@ -25,7 +25,7 @@
 | `ts` | string (RFC3339 UTC) | 必須 | 例 `2026-08-01T09:05:00.000Z`。**常にUTC**。日次ファイル名（`events/YYYY-MM-DD.jsonl`）もこの値のUTC日付で決まる（ローカル日付ではない） |
 | `ts_local_offset` | string | 必須 | イベントを記録したマシンのローカルoffset（例 `+09:00`）。集計には使わない参考情報 |
 | `source` | string | 必須（`unknown`許容） | `ocw` / `pr-review-loop` / `transcript` / `statusline` / `unknown`。呼び出し元を明示するが、**実際には多くの呼び出しでこのフラグは渡されずデフォルト値 `unknown` のまま**（下記の実例参照）。値が入っていない＝観測できていない、ではなく「呼び出し側がこのフィールドを渡さなかった」ことを意味する点に注意 |
-| `parser_version` | int \| null | `transcript`/`statusline`由来のみ必須 | 生データ解釈ロジックのバージョン。`usage.message`（ingest由来）は `INGEST_PARSER_VERSION`、`quota.sample`は `STATUSLINE_PARSER_VERSION`（いずれも現在`1`）。それ以外の型は常に `null`（生データの「解釈」を挟まない、CLI引数をそのまま保存するイベントのため） |
+| `parser_version` | int \| null | `transcript`/`statusline`由来のみ必須 | 生データ解釈ロジックのバージョン。`usage.message`（ingest由来）は `INGEST_PARSER_VERSION`、`quota.sample`は `STATUSLINE_PARSER_VERSION`（現在`INGEST_PARSER_VERSION`は`2`、`STATUSLINE_PARSER_VERSION`は`1`。`agent_id`の追加で`2`へ上げた。これ以前のingestで書いた`usage.message`は`1`のまま）。それ以外の型は常に `null`（生データの「解釈」を挟まない、CLI引数をそのまま保存するイベントのため） |
 | `completeness` | string | 必須 | `complete` / `partial` / `unknown`。**判定基準は §5参照** |
 | `run_id` | string \| null | — | 実行系列ID。`bin/ocw`がworktree作成時にULID風 `<epoch>-<rand>` で採番し `OCW_RUN_ID` 環境変数で各ペインに渡す。非Herdrモードや環境変数未exportの呼び出しでは `null` |
 | `repo` | string \| null | — | `owner/name`。`git remote`から解決 |
@@ -149,6 +149,7 @@ phase.start/phase.endとして発火されない**:
 | `output_tokens` | int \| null | |
 | `reasoning_tokens` | null（常に） | U5未確定（孫0 P2待ち）。フィールドとしては存在するが、実データは常に`null` — 0で埋めない |
 | `is_sidechain` | bool \| null | `isSidechain`（サブエージェント判定） |
+| `agent_id` | string \| null | `agentId`。サブエージェントの記録（`<session>/subagents/agent-*.jsonl`）由来の行だけ値を持ち、メインの会話の行は`null`。`session_id`は親の会話のものがそのまま入る。`meta.json`の`description`など会話の中身は読まない |
 | `effort` | string \| null | `high`等 |
 | `stop_reason` | string \| null | |
 | `cost_estimate_usd` | float \| null | §4の式で計算。Anthropicは常に`null` |

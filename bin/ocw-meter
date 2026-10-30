@@ -48,8 +48,9 @@ subcommands:
     Convenience wrapper around `event pr.bind`. Always exits 0.
 
   ingest
-    Scans ~/.claude/projects/*/*.jsonl (override with
-    OCW_METER_CLAUDE_PROJECTS_DIR) for `type: "assistant"` lines and
+    Scans ~/.claude/projects/*/*.jsonl and the sub-agent transcripts
+    ~/.claude/projects/*/*/subagents/agent-*.jsonl (override the root
+    with OCW_METER_CLAUDE_PROJECTS_DIR) for `type: "assistant"` lines and
     writes one `usage.message` event per distinct `message.id`
     (dedup — a single response is re-appended per content block, so
     the same message.id can appear many times; the LAST occurrence
@@ -249,7 +250,8 @@ environment:
 
   OCW_METER_CLAUDE_PROJECTS_DIR
     default: $HOME/.claude/projects
-    Where `ingest` looks for `<slug>/<session-id>.jsonl` transcripts.
+    Where `ingest` looks for `<slug>/<session-id>.jsonl` transcripts
+    and `<slug>/<session-id>/subagents/agent-*.jsonl` sub-agent transcripts.
 
   OCW_METER_PRICE_DIR
     default: <this script's directory>/prices
@@ -453,7 +455,7 @@ SCHEMA_VERSION = 1
 # Bumped whenever `ingest`'s transcript-line -> usage.message extraction
 # logic changes shape (plan §8.1 `parser_version`). Stored events keep
 # whatever version produced them; never rewritten retroactively.
-INGEST_PARSER_VERSION = 1
+INGEST_PARSER_VERSION = 2
 
 ENVELOPE_FIELDS = (
     "schema_version", "event_id", "idempotency_key", "event_type", "ts",
@@ -4022,6 +4024,7 @@ def extract_assistant_candidate(obj):
         "git_branch": obj.get("gitBranch"),
         "cwd": obj.get("cwd"),
         "is_sidechain": obj.get("isSidechain"),
+        "agent_id": obj.get("agentId"),
         "effort": obj.get("effort"),
     }
 
@@ -4503,6 +4506,7 @@ def build_usage_event(candidate, price_tables, today_str, role_map, binds, run_s
         "output_tokens": output_tokens if isinstance(output_tokens, (int, float)) else None,
         "reasoning_tokens": None,  # U5 / P2 未確定（孫0 P2待ち）— 推測しない
         "is_sidechain": candidate["is_sidechain"] if isinstance(candidate["is_sidechain"], bool) else None,
+        "agent_id": candidate["agent_id"] if isinstance(candidate["agent_id"], str) else None,
         "effort": candidate["effort"],
         "stop_reason": candidate["stop_reason"],
         "cost_estimate_usd": cost_estimate,
@@ -4673,7 +4677,14 @@ def perform_ingest(root, since_dt=None):
             "error": "could not determine the Claude projects directory (HOME is not set; set OCW_METER_CLAUDE_PROJECTS_DIR explicitly)",
         }
 
-    transcript_files = sorted(projects_dir.glob("*/*.jsonl")) if projects_dir.is_dir() else []
+    # Main conversations are `<slug>/<session>.jsonl`; sub-agents spawned
+    # via the Agent tool log to `<slug>/<session>/subagents/agent-*.jsonl`
+    # (their `sessionId` is the PARENT's, so they attribute through the
+    # same session_id paths as the main transcript).
+    transcript_files = (
+        sorted(projects_dir.glob("*/*.jsonl")) + sorted(projects_dir.glob("*/*/subagents/agent-*.jsonl"))
+        if projects_dir.is_dir() else []
+    )
 
     cursor = load_ingest_cursor(paths)
     cursor_files = cursor["files"]
