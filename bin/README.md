@@ -235,8 +235,17 @@ ocw-meter report --window [--pr <n>] [--repo <owner>/<name>] [--no-ingest] [--js
 # 時間範囲の使用量: ts が [since, until) の usage.message を provider+model 別に集計
 # （--since ちょうどは含み、--until ちょうどは含まない。--until 省略時は今）。
 # 書式は ingest --since と同じ RFC3339。範囲は読み出しの絞り込みだけで、自動 ingest には渡さない。
-# --role / --pr と併用できる。--phase / --window / --month / --reconcile とは併用不可
-ocw-meter report --since <rfc3339-ts> [--until <rfc3339-ts>] [--model|--role] [--pr <n>] [--no-ingest] [--json]
+# --role / --pr と併用できる（--model の表には推定 % が付く。下の --quota-per-pct 参照）。--phase / --window / --month / --reconcile とは併用不可
+ocw-meter report --since <rfc3339-ts> [--until <rfc3339-ts>] [--model|--role] [--pr <n>] [--periods <n>] [--no-ingest] [--json]
+
+# 週の上限の1%あたりのトークンの見積もり（モデル系統 opus/sonnet/haiku/fable ごと。claude-* のみ）。
+# quota.sample の seven_day_used_pct の増えを、3・6・12 時間の区切りごとの重み付きトークン
+# （input + 1.25×cache_creation + 0.1×cache_read + 5×output）に非負の最小二乗で当てる。
+# データが足りない・区切りでぶれる系統は数字を出さず「測れない」と理由を出す。--periods は使う 7 日の期間の数（既定 2）。
+# --since/--until のモデル別表には、推定できた系統だけ estimated_weekly_pct（週の上限に対する %）が付く（測れない系統は空欄）。
+# 見積もりであり、止める・モデルを替える制御には使わない。--pr / --phase / --model / --role / --window / --month /
+# --reconcile / --since / --until とは併用不可
+ocw-meter report --quota-per-pct [--periods <n>] [--no-ingest] [--json]
 
 # 月次: cash cost（従量API）/ capacity cost（Claudeサブスク枠）/
 # process efficiency（承認済みPRあたりの費用・ラウンド数等）を分離して表示

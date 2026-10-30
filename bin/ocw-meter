@@ -31,7 +31,8 @@ usage:
   ocw-meter report --model [--pr <n>] [--repo <owner>/<name>] [--no-ingest] [--json]
   ocw-meter report --role [--pr <n>] [--repo <owner>/<name>] [--no-ingest] [--json]
   ocw-meter report --window [--pr <n>] [--repo <owner>/<name>] [--no-ingest] [--json]
-  ocw-meter report --since <rfc3339-ts> [--until <rfc3339-ts>] [--model|--role] [--pr <n>] [--no-ingest] [--json]
+  ocw-meter report --since <rfc3339-ts> [--until <rfc3339-ts>] [--model|--role] [--pr <n>] [--periods <n>] [--no-ingest] [--json]
+  ocw-meter report --quota-per-pct [--periods <n>] [--no-ingest] [--json]
   ocw-meter report --month [YYYY-MM] [--repo <owner>/<name>] [--no-ingest] [--json]
   ocw-meter report --reconcile [--month <YYYY-MM>] [--provider-total <model>=<tokens> ...] [--no-ingest] [--json]
   ocw-meter help
@@ -126,6 +127,22 @@ subcommands:
     Grouped per provider+model unless `--role` is given; combinable
     with `--pr <n>`, not with `--phase` / `--window` / `--month` /
     `--reconcile`. Invalid or reversed timestamps are errors.
+
+  report --quota-per-pct [--periods <n>]
+    Estimates, per model family (opus/sonnet/haiku/fable; only claude-*
+    models), how many tokens equal 1% of the weekly limit: the rise of
+    quota.sample's seven_day_used_pct per 3/6/12-hour bucket within the
+    latest <n> weekly periods (default 2) is fitted by non-negative
+    least squares to each family's weighted tokens (input +
+    1.25*cache_creation + 0.1*cache_read + 5*output). A family with too
+    little data or values that swing with the bucket length prints
+    "測れない" and the reason instead of a number. An estimate, not a
+    measurement; never use it to stop or switch models automatically.
+    With --since/--until (model view), each row also shows
+    estimated_weekly_pct (blank when its family is unmeasurable);
+    --periods selects the periods used for that estimate too. Cannot be
+    combined with --pr/--phase/--model/--role/--window/--month/
+    --reconcile/--since/--until. See the ADR on quota-per-pct.
 
   report --month [YYYY-MM]
     Cash cost (metered API) / capacity cost (Claude subscription quota)
@@ -2257,6 +2274,241 @@ def report_by_model(usage_events):
     return out
 
 
+# ── report --quota-per-pct: tokens per 1% of the weekly limit ───────────
+# Method, thresholds and rejected alternatives: ADR
+# DOC-2610310237 (週の上限の1%あたりのトークンの推定).
+
+QUOTA_FAMILIES = ("opus", "sonnet", "haiku", "fable")
+QUOTA_BUCKET_HOURS = (3, 6, 12)
+QUOTA_DEFAULT_PERIODS = 2
+# A family is "unmeasurable" (not given a number) unless all hold:
+QUOTA_MIN_ACTIVE_BUCKETS = 6    # buckets with the family's usage, at the coarsest size
+QUOTA_MIN_ATTRIBUTED_PCT = 3.0  # weekly-% the fit attributes to the family, smallest size
+QUOTA_MAX_SPREAD = 1.5          # max/min of tokens-per-1% across bucket sizes
+
+
+def model_family(model):
+    """`claude-opus-5-5` -> `opus`. Non-`claude-*` models (DeepSeek via
+    claude-ds, `<synthetic>`) are None: they do not count toward the
+    weekly limit and must never take part in the estimate."""
+    if not isinstance(model, str) or not model.startswith("claude-"):
+        return None
+    for family in QUOTA_FAMILIES:
+        if family in model:
+            return family
+    return None
+
+
+def weighted_tokens(input_tokens, cache_creation, cache_read, output_tokens):
+    return input_tokens + 1.25 * cache_creation + 0.1 * cache_read + 5 * output_tokens
+
+
+def _solve_linear(matrix, rhs):
+    """Gaussian elimination with partial pivoting; None if singular."""
+    n = len(rhs)
+    a = [row[:] + [rhs[i]] for i, row in enumerate(matrix)]
+    for col in range(n):
+        pivot = max(range(col, n), key=lambda r: abs(a[r][col]))
+        if abs(a[pivot][col]) < 1e-12:
+            return None
+        a[col], a[pivot] = a[pivot], a[col]
+        for r in range(col + 1, n):
+            factor = a[r][col] / a[col][col]
+            for c in range(col, n + 1):
+                a[r][c] -= factor * a[col][c]
+    x = [0.0] * n
+    for r in range(n - 1, -1, -1):
+        x[r] = (a[r][n] - sum(a[r][c] * x[c] for c in range(r + 1, n))) / a[r][r]
+    return x
+
+
+def nnls(rows, targets, n_vars):
+    """Non-negative least squares for at most a handful of variables:
+    every subset of variables is solved unconstrained (normal
+    equations) and the feasible (all >= 0) solution with the smallest
+    residual wins. Exact, since the NNLS optimum is itself the
+    unconstrained fit of its own support."""
+    best, best_residual = [0.0] * n_vars, sum(t * t for t in targets)
+    for mask in range(1, 1 << n_vars):
+        support = [j for j in range(n_vars) if mask >> j & 1]
+        ata = [[sum(r[i] * r[j] for r in rows) for j in support] for i in support]
+        atb = [sum(r[i] * t for r, t in zip(rows, targets)) for i in support]
+        sol = _solve_linear(ata, atb)
+        if sol is None or any(v < 0 for v in sol):
+            continue
+        x = [0.0] * n_vars
+        for j, v in zip(support, sol):
+            x[j] = v
+        residual = sum((t - sum(r[j] * x[j] for j in support)) ** 2 for r, t in zip(rows, targets))
+        if residual < best_residual - 1e-12:
+            best, best_residual = x, residual
+    return best
+
+
+def quota_periods(valid_events, n_periods):
+    """The latest `n_periods` distinct `seven_day_resets_at` values with
+    their quota.sample time series [(epoch, seven_day_used_pct), ...].
+    The percentage is account-wide, so samples of every session merge."""
+    series = {}
+    for e in valid_events:
+        if e.get("event_type") != "quota.sample":
+            continue
+        pct, resets = e.get("seven_day_used_pct"), e.get("seven_day_resets_at")
+        ts = parse_ts(e.get("ts"))
+        if not isinstance(pct, (int, float)) or not isinstance(resets, int) or ts is None:
+            continue
+        if not -3600 <= resets - ts.timestamp() <= 7 * 86400 + 3600:
+            continue  # not a real 7-day period (stale or bogus resets_at)
+        series.setdefault(resets, []).append((ts.timestamp(), pct))
+    latest = sorted(series)[-n_periods:]
+    out = {}
+    for resets in latest:
+        # The percentage never falls within a period, but a session that
+        # has not called the API for a while writes the stale (smaller)
+        # value it last received; the running maximum drops those.
+        top, rows = 0, []
+        for t, pct in sorted(series[resets]):
+            top = max(top, pct)
+            rows.append((t, top))
+        out[resets] = rows
+    return out
+
+
+def _quota_bucket_rows(series, usage, hours):
+    """One (delta_pct, [weighted tokens per family]) row per bucket after
+    the first sampled one; the percentage at a bucket's end is the last
+    sample at or before it (carried forward)."""
+    width = hours * 3600
+    first, last = int(series[0][0] // width), int(series[-1][0] // width)
+    end_pct, si, current = {}, 0, None
+    for k in range(first, last + 1):
+        while si < len(series) and series[si][0] < (k + 1) * width:
+            current = series[si][1]
+            si += 1
+        end_pct[k] = current
+    tokens = {}
+    lo, hi = series[0][0], series[-1][0]
+    for t, family, weighted, _raw in usage:
+        if lo <= t <= hi:
+            vec = tokens.setdefault(int(t // width), [0.0] * len(QUOTA_FAMILIES))
+            vec[QUOTA_FAMILIES.index(family)] += weighted
+    rows = []
+    for k in range(first + 1, last + 1):
+        delta = end_pct[k] - end_pct[k - 1]
+        if delta < 0 or k not in tokens:
+            continue
+        rows.append((delta, tokens[k]))
+    return rows
+
+
+def estimate_quota_per_pct(valid_events, n_periods=QUOTA_DEFAULT_PERIODS):
+    """Per model family: weighted / raw tokens per 1% of the weekly
+    limit, or a reason it cannot be measured. See the ADR."""
+    periods = quota_periods(valid_events, n_periods)
+    usage = []
+    for e in valid_events:
+        if e.get("event_type") != "usage.message":
+            continue
+        family, ts = model_family(e.get("model")), parse_ts(e.get("ts"))
+        if family is None or ts is None:
+            continue
+        counts = [e.get(f) if isinstance(e.get(f), (int, float)) else 0 for f in (
+            "input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens", "output_tokens")]
+        usage.append((ts.timestamp(), family, weighted_tokens(*counts), sum(counts)))
+    usage.sort()
+
+    fits = {}  # hours -> (x per family [pct per million weighted], active buckets, attributed pct)
+    raw_ratio_sum = {f: [0.0, 0.0] for f in QUOTA_FAMILIES}
+    for hours in QUOTA_BUCKET_HOURS:
+        rows = []
+        for series in periods.values():
+            if len(series) >= 2:
+                rows += _quota_bucket_rows(series, usage, hours)
+        scaled = [[w / 1e6 for w in vec] for _, vec in rows]
+        x = nnls(scaled, [d for d, _ in rows], len(QUOTA_FAMILIES)) if rows else [0.0] * len(QUOTA_FAMILIES)
+        active = [sum(1 for vec in scaled if vec[j] > 0) for j in range(len(QUOTA_FAMILIES))]
+        attributed = [x[j] * sum(vec[j] for vec in scaled) for j in range(len(QUOTA_FAMILIES))]
+        fits[hours] = (x, active, attributed)
+    for series in periods.values():
+        for t, family, weighted, raw in usage:
+            if series and series[0][0] <= t <= series[-1][0]:
+                raw_ratio_sum[family][0] += raw
+                raw_ratio_sum[family][1] += weighted
+
+    out = {}
+    for j, family in enumerate(QUOTA_FAMILIES):
+        per_size = {}
+        for hours, (x, _active, _attr) in fits.items():
+            if x[j] > 0:
+                per_size[str(hours)] = round(1e6 / x[j])
+        coarse = max(QUOTA_BUCKET_HOURS)
+        active_coarse = fits[coarse][1][j]
+        min_attributed = min(fits[h][2][j] for h in QUOTA_BUCKET_HOURS)
+        reason = None
+        if active_coarse == 0:
+            reason = "この期間の記録にこの系統の使用がない"
+        elif active_coarse < QUOTA_MIN_ACTIVE_BUCKETS:
+            reason = f"使用のあった区切りが少ない（{coarse}時間区切りで{active_coarse}個 < {QUOTA_MIN_ACTIVE_BUCKETS}）"
+        elif len(per_size) < len(QUOTA_BUCKET_HOURS):
+            missing = [str(h) for h in QUOTA_BUCKET_HOURS if str(h) not in per_size]
+            reason = f"{'・'.join(missing)}時間区切りで推定が0になり、他の系統から分離できない"
+        elif min_attributed < QUOTA_MIN_ATTRIBUTED_PCT:
+            reason = f"この系統に帰属する週の%が小さい（最小で{min_attributed:.1f}% < {QUOTA_MIN_ATTRIBUTED_PCT}%）。%の刻みに埋もれる"
+        elif max(per_size.values()) / min(per_size.values()) > QUOTA_MAX_SPREAD:
+            reason = f"区切りの長さで値がぶれる（最大/最小 = {max(per_size.values()) / min(per_size.values()):.2f} > {QUOTA_MAX_SPREAD}）"
+        row = {"status": "estimated" if reason is None else "unmeasurable",
+               "weighted_tokens_per_pct_by_bucket_hours": per_size,
+               "active_buckets": {str(h): fits[h][1][j] for h in QUOTA_BUCKET_HOURS}}
+        if reason is None:
+            weighted_per_pct = sorted(per_size.values())[len(per_size) // 2]
+            raw_total, weighted_total = raw_ratio_sum[family]
+            row["weighted_tokens_per_pct"] = weighted_per_pct
+            row["raw_tokens_per_pct"] = round(weighted_per_pct * raw_total / weighted_total) if weighted_total else None
+        else:
+            row["reason"] = reason
+        out[family] = row
+    return {"families": out, "periods": [
+        {"seven_day_resets_at": resets, "samples": len(series)} for resets, series in periods.items()],
+        "bucket_hours": list(QUOTA_BUCKET_HOURS)}
+
+
+def annotate_estimated_weekly_pct(groups, estimate):
+    """Adds `estimated_weekly_pct` to each by-model row: its weighted
+    tokens over the family's weighted tokens per 1%. None (blank in the
+    text output) when the family could not be measured."""
+    for row in groups.values():
+        fam = estimate["families"].get(model_family(row.get("model")))
+        per_pct = fam.get("weighted_tokens_per_pct") if fam else None
+        if not per_pct:
+            row["estimated_weekly_pct"] = None
+            continue
+        w = weighted_tokens(row["input_tokens"], row["cache_creation_input_tokens"],
+                            row["cache_read_input_tokens"], row["output_tokens"])
+        row["estimated_weekly_pct"] = round(w / per_pct, 2)
+
+
+def print_quota_per_pct(estimate, as_json, footer_freshness):
+    if as_json:
+        print(json.dumps({**estimate, **footer_freshness}, ensure_ascii=False, indent=2, sort_keys=True))
+        return
+    print("週の上限の1%あたりのトークン（見積もり）:")
+    print(f"  periods: {len(estimate['periods'])} (seven_day_resets_at: "
+          f"{', '.join(str(p['seven_day_resets_at']) for p in estimate['periods']) or 'none'})")
+    for family, row in estimate["families"].items():
+        print(f"  {family}:")
+        if row["status"] == "estimated":
+            print(f"    weighted_tokens_per_pct: {row['weighted_tokens_per_pct']}")
+            print(f"    raw_tokens_per_pct: {row['raw_tokens_per_pct']}")
+        else:
+            print(f"    測れない: {row['reason']}")
+        print(f"    by_bucket_hours: {row['weighted_tokens_per_pct_by_bucket_hours']}")
+        print(f"    active_buckets: {row['active_buckets']}")
+    print("weighted = input + 1.25*cache_creation + 0.1*cache_read + 5*output。見積もりであり、止める・替える制御には使わない")
+    print(f"last_ingest_at_rfc3339: {footer_freshness['last_ingest_at_rfc3339'] or 'unknown'}")
+    print(f"ingest (this run): {footer_freshness['ingest_this_run']}")
+    print(f"ingest_freshness_warning: {footer_freshness['ingest_freshness_warning']}")
+
+
 def report_by_role(scoped_events):
     """孫5 §1 --role: usage.message token/cost totals AND total event
     count, grouped by envelope `role` (commander/implementer/reviewer/
@@ -2911,7 +3163,9 @@ def _print_grouped_report(title, group_label, groups, as_json, storage_root_str,
             # Printed once as a shared legend after the loop instead.
             if field in ("provider", "model", "list_price_equiv_note"):
                 continue
-            if field == "cost_estimate_usd":
+            if field == "estimated_weekly_pct":
+                value = "" if value is None else f"{value}%"
+            elif field == "cost_estimate_usd":
                 value = f"${value:.4f}" if isinstance(value, (int, float)) else "null"
             elif field == "list_price_equiv_usd":
                 value = f"${value:.2f}+ (下限 / list price相当)" if isinstance(value, (int, float)) else "null"
@@ -3072,10 +3326,27 @@ def cmd_report(args):
     provider_totals = {}
     no_ingest = False
     since_str = until_str = None
+    quota_per_pct = False
+    periods = None
     i = 0
     while i < len(args):
         token = args[i]
-        if token in ("--since", "--until"):
+        if token == "--quota-per-pct":
+            quota_per_pct = True
+            i += 1
+        elif token == "--periods":
+            if i + 1 >= len(args):
+                print("error: --periods requires a value (positive integer)", file=sys.stderr)
+                return 1
+            try:
+                periods = int(args[i + 1])
+            except ValueError:
+                periods = 0
+            if periods < 1:
+                print(f"error: --periods expects a positive integer, got '{args[i + 1]}'", file=sys.stderr)
+                return 1
+            i += 2
+        elif token in ("--since", "--until"):
             if i + 1 >= len(args):
                 print(f"error: {token} requires a value (RFC3339 timestamp)", file=sys.stderr)
                 return 1
@@ -3169,6 +3440,16 @@ def cmd_report(args):
             return 1
         if view is None:
             view = "model"
+    if quota_per_pct:
+        conflict = next((flag for flag, on in (
+            ("--reconcile", reconcile), ("--month", month_flag_present), ("--pr", filter_pr is not None),
+            ("--since/--until", range_given), (f"--{view}", view is not None)) if on), None)
+        if conflict:
+            print(f"error: --quota-per-pct cannot be combined with {conflict}", file=sys.stderr)
+            return 1
+    elif periods is not None and not (range_given and view == "model"):
+        print("error: --periods only applies to --quota-per-pct or --since/--until (model view)", file=sys.stderr)
+        return 1
     if month_flag_present and not reconcile and view is not None:
         print(f"error: --month cannot be combined with --{view} (it can be combined with --reconcile, or used standalone)", file=sys.stderr)
         return 1
@@ -3203,6 +3484,7 @@ def cmd_report(args):
     # live ingest (writing events/cursor) first. All pure input/context
     # validation now happens before `root`/`paths` are even touched.
     #
+    # (--quota-per-pct needs no repo: the weekly % is account-wide.)
     # Round-2 review finding 10 (regression introduced by round-1's own
     # fix for finding 1): `events_for_pr`'s repo scoping only works if a
     # repo is actually resolved. `report` can be run from ANYWHERE
@@ -3281,6 +3563,10 @@ def cmd_report(args):
         else:
             valid_events.append(obj)
 
+    if quota_per_pct:
+        print_quota_per_pct(estimate_quota_per_pct(valid_events, periods or QUOTA_DEFAULT_PERIODS), as_json, footer_freshness)
+        return 0
+
     # 孫5プロンプト §2 (A: report側join, 計画書「【2】【3】の鍵」): built
     # ONCE here, from the full unscoped `valid_events` (a session's
     # quota.sample history must not be cut down to whatever subset a
@@ -3313,6 +3599,9 @@ def cmd_report(args):
             extra_top = {**extra_top, "since": iso_utc(range_since) if range_since else None, "until": iso_utc(range_until)}
         if view == "model":
             groups = report_by_model(usage_events)
+            if range_given:
+                # estimated from the full store, never the range's slice
+                annotate_estimated_weekly_pct(groups, estimate_quota_per_pct(valid_events, periods or QUOTA_DEFAULT_PERIODS))
         elif view == "role":
             groups = report_by_role(filtered)
         elif view == "phase":

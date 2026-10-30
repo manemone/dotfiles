@@ -3682,6 +3682,67 @@ class ReportGroupedViewsTests(OcwMeterTestCase):
         self.assertEqual(plain["total_events"], 4)
         self.assertNotIn("since", plain)
 
+    # -- --quota-per-pct --
+
+    def test_quota_per_pct_recovers_known_rates_and_refuses_unmeasurable_families(self):
+        # Known truth: 1% of the weekly limit = 10M weighted opus tokens or
+        # 20M sonnet ones; the seven_day_used_pct series is built from it.
+        base = 1786000000 // 43200 * 43200
+        events, pct, state = [], 0.0, 12345
+        def add(event_type, ts, **fields):
+            stamp = datetime.fromtimestamp(ts, timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+            events.append({"event_type": event_type, "schema_version": 1, "ts": stamp,
+                           "idempotency_key": f"{event_type}-{ts}-{fields.get('model')}", "event_id": f"id-{len(events)}",
+                           "completeness": "complete", **fields})
+        def usage(ts, model, tokens, provider="anthropic"):
+            add("usage.message", ts, model=model, provider=provider, message_id=f"m-{ts}-{model}", input_tokens=tokens,
+                cache_read_input_tokens=0, cache_creation_input_tokens=0, output_tokens=0)
+        for slot in range(192):
+            state = state * 1103515245 % 2**31
+            opus = (state % 7) * 1_000_000
+            state = state * 1103515245 % 2**31
+            sonnet = (state % 5) * 1_000_000
+            start = base + slot * 1800
+            usage(start + 60, "claude-opus-5-5", opus)
+            usage(start + 61, "claude-sonnet-5-5", sonnet)
+            usage(start + 62, "deepseek-v4-pro", 900_000_000, provider="deepseek")
+            pct += opus / 10_000_000 + sonnet / 20_000_000
+            add("quota.sample", start + 1740, plan_source="statusline", seven_day_used_pct=pct,
+                seven_day_resets_at=base + 7 * 86400)
+            if slot % 6 == 5:  # another session writes the stale (much lower) % it last saw
+                add("quota.sample", start + 1741, plan_source="statusline", seven_day_used_pct=max(pct - 15, 0),
+                    seven_day_resets_at=base + 7 * 86400, session_id="stale")
+        usage(base + 3600 * 30, "claude-haiku-5-5", 50_000_000)  # one bucket only
+        events_dir = pathlib.Path(self.home) / "events"
+        events_dir.mkdir(parents=True, exist_ok=True)
+        (events_dir / "2026-08-01.jsonl").write_text("".join(json.dumps(e) + "\n" for e in events), encoding="utf-8")
+
+        families = json.loads(run_meter(["report", "--quota-per-pct", "--no-ingest", "--json"], self.home).stdout)["families"]
+        self.assertEqual(families["opus"]["status"], "estimated")
+        self.assertAlmostEqual(families["opus"]["weighted_tokens_per_pct"] / 10_000_000, 1.0, delta=0.02)
+        self.assertAlmostEqual(families["sonnet"]["weighted_tokens_per_pct"] / 20_000_000, 1.0, delta=0.02)
+        # Too little data: a reason, never a number. DeepSeek is not a family at all.
+        for family in ("haiku", "fable"):
+            self.assertEqual(families[family]["status"], "unmeasurable")
+            self.assertNotIn("weighted_tokens_per_pct", families[family])
+            self.assertTrue(families[family]["reason"])
+
+        # The range report carries the estimate; blank where unmeasurable.
+        rows = json.loads(run_meter(["report", "--no-ingest", "--json", "--since", "2026-07-01T00:00:00Z"],
+                                    self.home).stdout)["by_model"]
+        opus_tokens = rows["anthropic/claude-opus-5-5"]["input_tokens"]
+        self.assertAlmostEqual(rows["anthropic/claude-opus-5-5"]["estimated_weekly_pct"],
+                               opus_tokens / families["opus"]["weighted_tokens_per_pct"], places=1)
+        self.assertIsNone(rows["anthropic/claude-haiku-5-5"]["estimated_weekly_pct"])
+        self.assertIsNone(rows["deepseek/deepseek-v4-pro"]["estimated_weekly_pct"])
+        text = run_meter(["report", "--no-ingest", "--since", "2026-07-01T00:00:00Z"], self.home).stdout
+        self.assertIn("estimated_weekly_pct: \n", text)
+
+        for bad in (["--quota-per-pct", "--pr", "1"], ["--quota-per-pct", "--model"], ["--periods", "2"],
+                    ["--since", "2026-07-01T00:00:00Z", "--role", "--periods", "2"],
+                    ["--quota-per-pct", "--periods", "0"]):
+            self.assertNotEqual(run_meter(["report", "--no-ingest", *bad], self.home).returncode, 0, bad)
+
     # -- --model --
 
     def test_model_view_groups_by_provider_and_model(self):
