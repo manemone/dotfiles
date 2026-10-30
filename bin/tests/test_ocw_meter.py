@@ -3587,6 +3587,44 @@ class ReportGroupedViewsTests(OcwMeterTestCase):
             for field in ("coverage", "completeness", "quarantined_lines", "price_table", "cost_basis"):
                 self.assertIn(field, data, f"{view_args} --json missing {field!r}")
 
+    # -- --since / --until (time range) --
+
+    def test_range_report_boundaries_bad_input_and_unchanged_default(self):
+        def usage(key, ts, model, tokens):
+            run_meter(["event", "usage.message", "--idempotency-key", key, "--run-id", "run-range",
+                       "--message-id", key, "--model", model, "--provider", "anthropic",
+                       "--input-tokens", str(tokens), "--cache-read-input-tokens", "0",
+                       "--cache-creation-input-tokens", "0", "--output-tokens", "0",
+                       "--cost-basis", "estimated", "--role", "implementer", "--ts", ts], self.home)
+        usage("before", "2026-08-01T08:59:59.999Z", "claude-opus-x", 1)
+        usage("at-since", "2026-08-01T09:00:00.000Z", "claude-opus-x", 10)
+        usage("inside", "2026-08-01T10:00:00.000Z", "claude-haiku-x", 100)
+        usage("at-until", "2026-08-01T11:00:00.000Z", "claude-opus-x", 1000)
+
+        args = ["report", "--no-ingest", "--json", "--since", "2026-08-01T09:00:00Z", "--until", "2026-08-01T11:00:00Z"]
+        data = json.loads(run_meter(args, self.home).stdout)
+        rows = data["by_model"]
+        # --since exactly is in, --until exactly and anything outside are out.
+        self.assertEqual(rows["anthropic/claude-opus-x"]["input_tokens"], 10)
+        self.assertEqual(rows["anthropic/claude-haiku-x"]["input_tokens"], 100)
+        self.assertEqual(data["since"], "2026-08-01T09:00:00.000Z")
+        self.assertEqual(data["until"], "2026-08-01T11:00:00.000Z")
+
+        # --until defaults to now; --role combines with the range.
+        by_role = json.loads(run_meter(["report", "--no-ingest", "--json", "--role", "--since", "2026-08-01T10:00:00Z"], self.home).stdout)
+        self.assertEqual(by_role["by_role"]["implementer"]["input_tokens"], 1100)
+
+        for bad in (["--since", "yesterday"], ["--since", "2026-08-01T11:00:00Z", "--until", "2026-08-01T09:00:00Z"],
+                    ["--until"], ["--since", "2026-08-01T09:00:00Z", "--window"]):
+            result = run_meter(["report", "--no-ingest", *bad], self.home)
+            self.assertNotEqual(result.returncode, 0, bad)
+            self.assertIn("error:", result.stderr)
+
+        # Without a range the default report is unchanged (no range keys, all events counted).
+        plain = json.loads(run_meter(["report", "--no-ingest", "--json"], self.home).stdout)
+        self.assertEqual(plain["total_events"], 4)
+        self.assertNotIn("since", plain)
+
     # -- --model --
 
     def test_model_view_groups_by_provider_and_model(self):

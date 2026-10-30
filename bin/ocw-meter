@@ -31,6 +31,7 @@ usage:
   ocw-meter report --model [--pr <n>] [--repo <owner>/<name>] [--no-ingest] [--json]
   ocw-meter report --role [--pr <n>] [--repo <owner>/<name>] [--no-ingest] [--json]
   ocw-meter report --window [--pr <n>] [--repo <owner>/<name>] [--no-ingest] [--json]
+  ocw-meter report --since <rfc3339-ts> [--until <rfc3339-ts>] [--model|--role] [--pr <n>] [--no-ingest] [--json]
   ocw-meter report --month [YYYY-MM] [--repo <owner>/<name>] [--no-ingest] [--json]
   ocw-meter report --reconcile [--month <YYYY-MM>] [--provider-total <model>=<tokens> ...] [--no-ingest] [--json]
   ocw-meter help
@@ -115,6 +116,15 @@ subcommands:
     commander/implementer/reviewer/unknown), `--window` (quota.sample
     grouped by 5-hour window_id, with directly-linked and time-overlap-
     inferred PRs kept in separate fields).
+
+  report --since <rfc3339-ts> [--until <rfc3339-ts>]
+    Token/cost totals of the usage.message events whose ts is in
+    [since, until): `--since` exactly is included, `--until` exactly
+    is not (default: now). Same RFC3339 as `ingest --since`, but a
+    pure read-side filter: it is never passed to the automatic ingest.
+    Grouped per provider+model unless `--role` is given; combinable
+    with `--pr <n>`, not with `--phase` / `--window` / `--month` /
+    `--reconcile`. Invalid or reversed timestamps are errors.
 
   report --month [YYYY-MM]
     Cash cost (metered API) / capacity cost (Claude subscription quota)
@@ -2189,6 +2199,42 @@ def finalize_token_bucket(bucket):
     return out
 
 
+def parse_report_range(since_str, until_str):
+    """`report --since/--until`: returns (since_dt, until_dt, error).
+    The same RFC3339 `parse_ts` accepts as `ingest --since`, but this
+    range only narrows what `report` reads — it is never handed to the
+    auto-ingest. `--until` defaults to now; `--since` to unbounded."""
+    since_dt = until_dt = None
+    for flag, raw in (("--since", since_str), ("--until", until_str)):
+        if raw is None:
+            continue
+        dt = parse_ts(raw)
+        if dt is None:
+            return None, None, f"error: {flag} is not a valid RFC3339 timestamp: {raw!r}"
+        if flag == "--since":
+            since_dt = dt
+        else:
+            until_dt = dt
+    if until_dt is None:
+        until_dt = datetime.now(timezone.utc)
+    if since_dt is not None and since_dt >= until_dt:
+        return None, None, "error: --since must be earlier than --until"
+    return since_dt, until_dt, None
+
+
+def events_in_range(events, since_dt, until_dt):
+    """Events whose `ts` is in [since_dt, until_dt): `--since` exactly is
+    included, `--until` exactly is not, so adjacent ranges never count a
+    message twice. An event with a missing/unparseable `ts` is excluded."""
+    out = []
+    for e in events:
+        ts = parse_ts(e.get("ts"))
+        if ts is None or (since_dt is not None and ts < since_dt) or ts >= until_dt:
+            continue
+        out.append(e)
+    return out
+
+
 def report_by_model(usage_events):
     """孫5 §1 --model: token/cost totals grouped by (provider, model),
     scoped to whatever `filtered` the caller already resolved (the
@@ -3020,10 +3066,20 @@ def cmd_report(args):
     explicit_repo = None
     provider_totals = {}
     no_ingest = False
+    since_str = until_str = None
     i = 0
     while i < len(args):
         token = args[i]
-        if token == "--pr":
+        if token in ("--since", "--until"):
+            if i + 1 >= len(args):
+                print(f"error: {token} requires a value (RFC3339 timestamp)", file=sys.stderr)
+                return 1
+            if token == "--since":
+                since_str = args[i + 1]
+            else:
+                until_str = args[i + 1]
+            i += 2
+        elif token == "--pr":
             if i + 1 >= len(args):
                 print("error: --pr requires a value", file=sys.stderr)
                 return 1
@@ -3093,6 +3149,21 @@ def cmd_report(args):
     if reconcile and view is not None:
         print(f"error: --reconcile cannot be combined with --{view}", file=sys.stderr)
         return 1
+    range_since, range_until, err = parse_report_range(since_str, until_str)
+    if err:
+        print(err, file=sys.stderr)
+        return 1
+    range_given = since_str is not None or until_str is not None
+    if range_given:
+        # A range is a read-side filter on stored usage events. --phase
+        # and --window derive their rows from event pairs / quota
+        # samples, which a ts cut would split, so they are not offered.
+        incompatible = "--reconcile" if reconcile else ("--month" if month_flag_present else (f"--{view}" if view in ("phase", "window") else None))
+        if incompatible:
+            print(f"error: --since/--until cannot be combined with {incompatible}", file=sys.stderr)
+            return 1
+        if view is None:
+            view = "model"
     if month_flag_present and not reconcile and view is not None:
         print(f"error: --month cannot be combined with --{view} (it can be combined with --reconcile, or used standalone)", file=sys.stderr)
         return 1
@@ -3224,6 +3295,8 @@ def cmd_report(args):
         filtered = events_for_pr(valid_events, filter_pr, repo)
     else:
         filtered = valid_events
+    if range_given:
+        filtered = events_in_range(filtered, range_since, range_until)
 
     usage_events = [e for e in filtered if e.get("event_type") == "usage.message"]
 
@@ -3231,6 +3304,8 @@ def cmd_report(args):
         footer_completeness = completeness_footer(paths, filtered, malformed)
         footer_cost = usage_cost_footer(usage_events)
         extra_top = {"filter_pr": filter_pr, "repo": repo} if filter_pr is not None else ({"repo": repo} if view == "window" and repo else {})
+        if range_given:
+            extra_top = {**extra_top, "since": iso_utc(range_since) if range_since else None, "until": iso_utc(range_until)}
         if view == "model":
             groups = report_by_model(usage_events)
         elif view == "role":
