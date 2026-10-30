@@ -29,7 +29,7 @@ Claude Code の auto mode の分類器（soft_deny の「External System Writes�
 
 | 孫 | リポ | ブランチ | 内容 | 状況 |
 |---|---|---|---|---|
-| 1 | dotfiles | `rpc-01-post-procedure` | `pr-review-loop` の GitHub への書き込み手順を決め（ファイル書き込みツール + 単体コマンド）、gh の許可ルールを配布物 `claude/settings.json` へ移し、スレッド解決の扱いを決める。ADR を書く | 🔄 実装中 |
+| 1 | dotfiles | `rpc-01-post-procedure` | `pr-review-loop` の GitHub への書き込み手順を決め（ファイル書き込みツール + 単体コマンド）、gh の許可ルールを配布物 `claude/settings.json` へ移し、スレッド解決の扱いを決める。ADR を書く | ✅ PR #185 マージ済 |
 | 2 | dotfiles | `rpc-02-automode-allow` | 配布物 `claude/settings.json` に `autoMode`（`"$defaults"` 付きの `allow`）を足し、machine 設定とのマージでの扱いを決める。`claude auto-mode critique` に通す | ⬜ 待機中 |
 | 3 | pixidex | `rpc-03-post-rules` | 設計3 の判定で要ると決まったときだけ | ⬜ 待機中（要否判定待ち） |
 | 4 | modeldex | `rpc-04-post-rules` | 同上 | ⬜ 待機中（要否判定待ち） |
@@ -392,6 +392,7 @@ pixidex・modeldex・iosci・sheaf は `.claude/pr-review.yml`（`convention_doc
 
 - 2026-10-31: 計画書を起草。未確認だった前提を公式ドキュメントとローカルの `claude auto-mode` で確かめた（背景5）
 - 2026-10-31: 孫1 を spawn
+- 2026-10-31: 孫1 PR #185 をマージ（ADR DOC-2610310315）。スレッドの解決は手順から外した（設計1.3 の (a)）。配布物の `permissions.allow` に投稿の3形を足し、`permissions.ask` に `gh api` の PUT・DELETE・PATCH・`--method`・`merge` を含む形を足した。**ask はユーザー設定として全リポに効くので、設計3 の判定では各リポの AI が使っている `gh api --method …` 等が新たに確認を出さないかも見る**
 
 ## 孫1用プロンプト:
 
