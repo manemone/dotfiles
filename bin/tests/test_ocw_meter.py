@@ -1196,6 +1196,63 @@ class IngestTests(OcwMeterTestCase):
         self.projects_dir = pathlib.Path(self.tmpdir.name) / "claude-projects"
         self.projects_dir.mkdir(parents=True, exist_ok=True)
 
+    def test_ingest_counts_subagent_transcripts_under_the_parent_session(self):
+        # The umbrella's origin: sub-agent transcripts live at
+        # `<slug>/<session>/subagents/agent-*.jsonl`, carry the PARENT's
+        # sessionId, and were silently never ingested.
+        write_transcript(self.projects_dir, "proj", "sess-parent", [assistant_line("sess-parent", "m-main")])
+        sub_dir = self.projects_dir / "proj" / "sess-parent" / "subagents"
+        sub_dir.mkdir(parents=True)
+        sub_line = assistant_line("sess-parent", "m-sub", model="claude-haiku-4-5", is_sidechain=True)
+        sub_line["agentId"] = "abc123"
+        sub_line["message"]["content"] = [{"type": "text", "text": "SUBAGENT-SECRET-CONTENT"}]
+        (sub_dir / "agent-abc123.jsonl").write_text(json.dumps(sub_line) + "\n", encoding="utf-8")
+        (sub_dir / "agent-abc123.meta.json").write_text(
+            json.dumps({"agentType": "general-purpose", "model": "haiku", "description": "SUBAGENT-SECRET-DESCRIPTION"}),
+            encoding="utf-8")
+
+        for _ in range(2):  # second run: cursor + message.id dedup keep it at one
+            result = run_ingest(self.home, self.projects_dir)
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+        by_id = {e["message_id"]: e for e in read_events(self.home) if e["event_type"] == "usage.message"}
+        self.assertEqual(sorted(by_id), ["m-main", "m-sub"])
+        self.assertEqual(by_id["m-sub"]["session_id"], "sess-parent")
+        self.assertEqual(by_id["m-sub"]["agent_id"], "abc123")
+        self.assertIs(by_id["m-sub"]["is_sidechain"], True)
+        self.assertIsNone(by_id["m-main"]["agent_id"])
+        for path in pathlib.Path(self.home).rglob("*"):
+            if path.is_file():
+                text = path.read_text(encoding="utf-8", errors="replace")
+                self.assertNotIn("SUBAGENT-SECRET", text)
+
+    def test_ingest_fork_subagent_copy_never_overwrites_the_parent_message(self):
+        # Fork-type sub-agent transcripts contain a (mid-stream) copy of
+        # the parent's last assistant line, same message.id, agentId set.
+        sub_dir = self.projects_dir / "proj" / "sess-fork" / "subagents"
+        sub_dir.mkdir(parents=True)
+        copy = assistant_line("sess-fork", "m-spawn", output_tokens=6, is_sidechain=True, stop_reason=None)
+        copy["agentId"] = "forkA"
+
+        def parent_row():
+            rows = [e for e in read_events(self.home) if e["message_id"] == "m-spawn"]
+            self.assertEqual(len(rows), 1)
+            return rows[0]
+
+        # (1) parent stored by an earlier run, fork copy arrives later
+        write_transcript(self.projects_dir, "proj", "sess-fork", [assistant_line("sess-fork", "m-spawn", output_tokens=1682, stop_reason="tool_use")])
+        self.assertEqual(run_ingest(self.home, self.projects_dir).returncode, 0)
+        (sub_dir / "agent-forkA.jsonl").write_text(json.dumps(copy) + "\n", encoding="utf-8")
+        self.assertEqual(run_ingest(self.home, self.projects_dir).returncode, 0)
+        self.assertEqual(parent_row()["output_tokens"], 1682)
+        self.assertIsNone(parent_row()["agent_id"])
+
+        # (2) both read in the same run (fresh storage): main still wins
+        other_home = pathlib.Path(self.tmpdir.name) / "home2"
+        self.assertEqual(run_ingest(other_home, self.projects_dir).returncode, 0)
+        rows = [e for e in read_events(other_home) if e["message_id"] == "m-spawn"]
+        self.assertEqual([(r["output_tokens"], r["agent_id"]) for r in rows], [(1682, None)])
+
     def test_ingest_dedupes_content_block_split_lines_via_real_fixture(self):
         # T04/T12, driven through the actual `ingest` scan path (not the
         # `event` primitive directly, unlike TranscriptFixtureDedupTests
