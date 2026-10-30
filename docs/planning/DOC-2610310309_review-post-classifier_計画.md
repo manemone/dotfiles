@@ -30,7 +30,7 @@ Claude Code の auto mode の分類器（soft_deny の「External System Writes�
 | 孫 | リポ | ブランチ | 内容 | 状況 |
 |---|---|---|---|---|
 | 1 | dotfiles | `rpc-01-post-procedure` | `pr-review-loop` の GitHub への書き込み手順を決め（ファイル書き込みツール + 単体コマンド）、gh の許可ルールを配布物 `claude/settings.json` へ移し、スレッド解決の扱いを決める。ADR を書く | ✅ PR #185 マージ済 |
-| 2 | dotfiles | `rpc-02-automode-allow` | 配布物 `claude/settings.json` に `autoMode`（`"$defaults"` 付きの `allow`）を足し、machine 設定とのマージでの扱いを決める。`claude auto-mode critique` に通す | 🔄 実装中 |
+| 2 | dotfiles | `rpc-02-automode-allow` | 配布物 `claude/settings.json` に `autoMode`（`"$defaults"` 付きの `allow`）を足し、machine 設定とのマージでの扱いを決める。`claude auto-mode critique` に通す | 🔄 実装中（コミットが分類器に止められ、人間の判断待ち。通知済み） |
 | 3 | pixidex | `rpc-03-post-rules` | 設計3 の判定で要ると決まったときだけ | ⬜ 待機中（要否判定待ち） |
 | 4 | modeldex | `rpc-04-post-rules` | 同上 | ⬜ 待機中（要否判定待ち） |
 | 5 | iosci | `rpc-05-post-rules` | 同上 | ⬜ 待機中（要否判定待ち） |
