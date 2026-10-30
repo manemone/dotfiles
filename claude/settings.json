@@ -47,6 +47,7 @@
       "Bash(gh api *-X*DELETE*)",
       "Bash(gh api *-X*PATCH*)",
       "Bash(gh api *--method*)",
+      "Bash(gh pr comment *--edit-last*)",
       "Bash(git reset --hard*)",
       "Bash(git reset *--hard*)",
       "Bash(git clean *)",
