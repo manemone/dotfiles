@@ -28,8 +28,16 @@
 2. **許可ルールを配布物 `claude/settings.json` の `permissions.allow` に入れる。** 許可ルールに当たった
    コマンドは分類器を通らないので、依頼の届き方に関係なく投稿が通る。対象は `manemone/*` に絞り、
    `--input` / `--body-file` まで前置に含めて形を固定する。`gh pr review`・`gh pr comment *`
-   のような広いルール（`--approve` や他の形まで通る）は足さない。`permissions.ask` / `deny` と
-   git-guard フック（ADR DOC-2609121719）には触れず、`gh pr merge` とも交わらない。
+   のような広いルール（`--approve` や他の形まで通る）は足さない。
+   ただし許可ルールの `*` は空白や `/` も含む任意の文字列に当たるため、前置が合うだけで形が
+   固定されるわけではない（例: 前置の後ろに別の API パスや `-X PUT` を連ねた単体コマンドも
+   当たる）。そこで `permissions.ask` に `gh api` のマージ API（`*merge*`）と、
+   `-X PUT` / `DELETE` / `PATCH`・`--method` を足し、許可より優先して確認が出るようにした
+   （ask は allow に勝つ）。git-guard フック（ADR DOC-2609121719）は変えず、`gh pr merge` の
+   判定とは別に、`gh api` 経由のマージも確認に落とす。
+   **`event` の値は JSON の中身で、コマンド文字列に現れないため、ルールでは `APPROVE` /
+   `REQUEST_CHANGES` を防げない。** 承認 review を出さないことは、手順（`event` は `COMMENT`
+   固定）と「レビュワーに代わって承認マーカーを投稿しない」という既存の安全制約が受け持つ。
 3. **スレッドの解決は手順から外す。** `resolveReviewThread` は分類器の既定規則で PR 作業の範囲の外と
    名指しされている。絞ったルールで通す案（(b)）は、デプロイ前の実機で分類器を通ることを確かめられない
    ため採らなかった。対応は返信とコミット SHA で示し、レビュー AI はスレッドの解決状態ではなく、

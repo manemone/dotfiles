@@ -1373,7 +1373,7 @@ done
    実装のセッションに数えられる。送信は Step 3 と同じ二段構え:
 
 ```bash
-herdr agent prompt "$REVIEWER_PANE" "以下を読んでPRレビューを実行してください。レビュー指示: $REVIEW_REQUEST — PR #$PR のラウンド$NEXT_ROUND（再レビュー）。前回レビュー対象: $HEAD_SHA → 現HEAD: $NEW_HEAD_SHA。全指摘に対応コメント書きました。前ラウンドの指摘と返信は、最新のレビュー1件と未解決のスレッド、および前回レビュー対象SHAより後の実装者の対応報告（会話コメント）だけ読むこと" --wait --timeout 10000
+herdr agent prompt "$REVIEWER_PANE" "以下を読んでPRレビューを実行してください。レビュー指示: $REVIEW_REQUEST — PR #$PR のラウンド$NEXT_ROUND（再レビュー）。前回レビュー対象: $HEAD_SHA → 現HEAD: $NEW_HEAD_SHA。全指摘に対応コメント書きました。前ラウンドの指摘と返信は、最新のレビュー1件と、前回レビュー対象SHAより後の実装者の返信（インラインコメントへの返信と会話コメント）だけ読むこと。スレッドの解決状態は見ない" --wait --timeout 10000
 ```
 
    `$NEXT_ROUND` は `$ROUND` + 1 の整数をリテラルに埋める（このプロンプトは手順6で `$ROUND` を繰り上げる前に送る）。
