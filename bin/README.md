@@ -231,6 +231,12 @@ ocw-meter report --role [--pr <n>] [--repo <owner>/<name>] [--no-ingest] [--json
 # PRを別フィールドで提示
 ocw-meter report --window [--pr <n>] [--repo <owner>/<name>] [--no-ingest] [--json]
 
+# 時間範囲の使用量: ts が [since, until) の usage.message を provider+model 別に集計
+# （--since ちょうどは含み、--until ちょうどは含まない。--until 省略時は今）。
+# 書式は ingest --since と同じ RFC3339。範囲は読み出しの絞り込みだけで、自動 ingest には渡さない。
+# --role / --pr と併用できる。--phase / --window / --month / --reconcile とは併用不可
+ocw-meter report --since <rfc3339-ts> [--until <rfc3339-ts>] [--model|--role] [--pr <n>] [--no-ingest] [--json]
+
 # 月次: cash cost（従量API）/ capacity cost（Claudeサブスク枠）/
 # process efficiency（承認済みPRあたりの費用・ラウンド数等）を分離して表示
 # --reconcile とは別物（こちらは突合をしない）
