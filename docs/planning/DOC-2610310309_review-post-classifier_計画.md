@@ -31,11 +31,11 @@ Claude Code の auto mode の分類器（soft_deny の「External System Writes�
 |---|---|---|---|---|
 | 1 | dotfiles | `rpc-01-post-procedure` | `pr-review-loop` の GitHub への書き込み手順を決め（ファイル書き込みツール + 単体コマンド）、gh の許可ルールを配布物 `claude/settings.json` へ移し、スレッド解決の扱いを決める。ADR を書く | ✅ PR #185 マージ済 |
 | 2 | dotfiles | `rpc-02-automode-allow` | 配布物 `claude/settings.json` に `autoMode`（`"$defaults"` 付きの `allow`）を足し、machine 設定とのマージでの扱いを決める。`claude auto-mode critique` に通す | ✅ PR #186 マージ済（人間が採用） |
-| 3 | pixidex | `rpc-03-post-rules` | 設計3 の判定で要ると決まったときだけ | ⬜ 待機中（要否判定待ち） |
-| 4 | modeldex | `rpc-04-post-rules` | 同上 | ⬜ 待機中（要否判定待ち） |
-| 5 | iosci | `rpc-05-post-rules` | 同上 | ⬜ 待機中（要否判定待ち） |
-| 6 | lora-dataset-forge | `rpc-06-post-rules` | 同上 | ⬜ 待機中（要否判定待ち） |
-| 7 | sheaf | `rpc-07-post-rules` | 同上 | ⬜ 待機中（要否判定待ち） |
+| 3 | pixidex | `rpc-03-post-rules` | 設計3 の判定で要ると決まったときだけ | ➖ 不要（設計3 の4項目に当たらない。ask/deny に孫1 の形に当たるもの無し・投稿手順やスレッド解決の決まり無し・`gh api` の書き込みの形の使用無し） |
+| 4 | modeldex | `rpc-04-post-rules` | 同上 | ➖ 不要（設計3 の4項目に当たらない。ask/deny に孫1 の形に当たるもの無し・投稿手順やスレッド解決の決まり無し・`gh api` の書き込みの形の使用無し） |
+| 5 | iosci | `rpc-05-post-rules` | 同上 | ➖ 不要（設計3 の4項目に当たらない。ask/deny に孫1 の形に当たるもの無し・投稿手順やスレッド解決の決まり無し・`gh api` の書き込みの形の使用無し。規約の `gh pr comment --attach` は実装 AI がスクリーンショットを貼る別用途で、孫1 の allow にも ask にも当たらない） |
+| 6 | lora-dataset-forge | `rpc-06-post-rules` | 同上 | ➖ 不要（設計3 の4項目に当たらない。ask/deny に孫1 の形に当たるもの無し・投稿手順やスレッド解決の決まり無し・`gh api` の書き込みの形の使用無し） |
+| 7 | sheaf | `rpc-07-post-rules` | 同上 | ➖ 不要（設計3 の4項目に当たらない。ask/deny に孫1 の形に当たるもの無し・投稿手順やスレッド解決の決まり無し・`gh api` の書き込みの形の使用無し） |
 
 状況値の追加: 要らないと判定した孫は `➖ 不要（<理由>）` と書き、spawn しない。
 
@@ -396,6 +396,7 @@ pixidex・modeldex・iosci・sheaf は `.claude/pr-review.yml`（`convention_doc
 - 2026-10-31: 孫2 を spawn
 - 2026-10-31: 孫2 の `autoMode.allow` を含むコミットが分類器（Self-Modification）に止められた。孫2 は回避せず停止し、人間の対応のあと PR #186 を作成
 - 2026-10-31: 孫2 PR #186 を人間が採用し、マージ。傘で pre-commit・doc-id verify・deploy_smoke を通した。次は設計3 の判定（孫3〜7）
+- 2026-10-31: 設計3 の判定を5リポの `origin/main` で読み取りだけで行い、孫3〜7 を全部 ➖ 不要にした。どのリポも `permissions.ask` / `deny` に `gh` の行が無く、`gh api` の PUT・PATCH・DELETE・`--method`・merge の形を使う箇所も無いので、孫1 の ask で新たに確認が出る用途は見当たらない。投稿手順・スレッド解決・一時ファイルの置き場所の決まりも孫1 の形と食い違わない。リポ側の `Bash(gh api:*)` / `Bash(gh pr:*)` は、孫1 の ADR が置き換えを勧めていないので触らない。iosci の規約にある `gh pr comment --attach` は、実装 AI が自分の PR にスクリーンショットを貼る別の用途で、孫1 の allow にも ask にも当たらない
 
 ## 孫1用プロンプト:
 
