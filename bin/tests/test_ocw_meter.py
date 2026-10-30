@@ -3601,7 +3601,7 @@ class ReportGroupedViewsTests(OcwMeterTestCase):
         usage("inside", "2026-08-01T10:00:00.000Z", "claude-haiku-x", 100)
         usage("at-until", "2026-08-01T11:00:00.000Z", "claude-opus-x", 1000)
 
-        args = ["report", "--no-ingest", "--json", "--since", "2026-08-01T09:00:00Z", "--until", "2026-08-01T11:00:00Z"]
+        args = ["report", "--no-ingest", "--json", "--since", "2026-08-01T18:00:00+09:00", "--until", "2026-08-01T11:00:00Z"]
         data = json.loads(run_meter(args, self.home).stdout)
         rows = data["by_model"]
         # --since exactly is in, --until exactly and anything outside are out.

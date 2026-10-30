@@ -2211,6 +2211,9 @@ def parse_report_range(since_str, until_str):
         dt = parse_ts(raw)
         if dt is None:
             return None, None, f"error: {flag} is not a valid RFC3339 timestamp: {raw!r}"
+        # `iso_utc` formats the wall-clock fields as-is, so an offset
+        # (e.g. +09:00) must be converted to UTC before it is echoed.
+        dt = dt.astimezone(timezone.utc)
         if flag == "--since":
             since_dt = dt
         else:
