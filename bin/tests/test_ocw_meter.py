@@ -1226,6 +1226,33 @@ class IngestTests(OcwMeterTestCase):
                 text = path.read_text(encoding="utf-8", errors="replace")
                 self.assertNotIn("SUBAGENT-SECRET", text)
 
+    def test_ingest_fork_subagent_copy_never_overwrites_the_parent_message(self):
+        # Fork-type sub-agent transcripts contain a (mid-stream) copy of
+        # the parent's last assistant line, same message.id, agentId set.
+        sub_dir = self.projects_dir / "proj" / "sess-fork" / "subagents"
+        sub_dir.mkdir(parents=True)
+        copy = assistant_line("sess-fork", "m-spawn", output_tokens=6, is_sidechain=True, stop_reason=None)
+        copy["agentId"] = "forkA"
+
+        def parent_row():
+            rows = [e for e in read_events(self.home) if e["message_id"] == "m-spawn"]
+            self.assertEqual(len(rows), 1)
+            return rows[0]
+
+        # (1) parent stored by an earlier run, fork copy arrives later
+        write_transcript(self.projects_dir, "proj", "sess-fork", [assistant_line("sess-fork", "m-spawn", output_tokens=1682, stop_reason="tool_use")])
+        self.assertEqual(run_ingest(self.home, self.projects_dir).returncode, 0)
+        (sub_dir / "agent-forkA.jsonl").write_text(json.dumps(copy) + "\n", encoding="utf-8")
+        self.assertEqual(run_ingest(self.home, self.projects_dir).returncode, 0)
+        self.assertEqual(parent_row()["output_tokens"], 1682)
+        self.assertIsNone(parent_row()["agent_id"])
+
+        # (2) both read in the same run (fresh storage): main still wins
+        other_home = pathlib.Path(self.tmpdir.name) / "home2"
+        self.assertEqual(run_ingest(other_home, self.projects_dir).returncode, 0)
+        rows = [e for e in read_events(other_home) if e["message_id"] == "m-spawn"]
+        self.assertEqual([(r["output_tokens"], r["agent_id"]) for r in rows], [(1682, None)])
+
     def test_ingest_dedupes_content_block_split_lines_via_real_fixture(self):
         # T04/T12, driven through the actual `ingest` scan path (not the
         # `event` primitive directly, unlike TranscriptFixtureDedupTests

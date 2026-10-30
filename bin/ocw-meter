@@ -4563,6 +4563,7 @@ def bulk_write_events(paths, events):
                         existing_lines = existing_lines[:-1]
 
             existing_by_key = {}
+            existing_agent_by_key = {}
             for idx, line in enumerate(existing_lines):
                 if not line.strip():
                     continue
@@ -4573,6 +4574,7 @@ def bulk_write_events(paths, events):
                 key = obj.get("idempotency_key")
                 if key:
                     existing_by_key[key] = idx
+                    existing_agent_by_key[key] = obj.get("agent_id")
 
             new_seen_keys = []
             file_changed = False
@@ -4580,6 +4582,11 @@ def bulk_write_events(paths, events):
                 key = event["idempotency_key"]
                 new_line = json.dumps(event, ensure_ascii=False, sort_keys=True, allow_nan=False)
                 if key in existing_by_key:
+                    if event.get("agent_id") is not None and existing_agent_by_key.get(key) is None:
+                        # A sub-agent transcript's copy of a parent
+                        # message must not overwrite the stored main row.
+                        counts["replaced"] += 1
+                        continue
                     existing_lines[existing_by_key[key]] = new_line
                     counts["replaced"] += 1
                     file_changed = True
@@ -4681,10 +4688,10 @@ def perform_ingest(root, since_dt=None):
     # via the Agent tool log to `<slug>/<session>/subagents/agent-*.jsonl`
     # (their `sessionId` is the PARENT's, so they attribute through the
     # same session_id paths as the main transcript).
-    transcript_files = (
-        sorted(projects_dir.glob("*/*.jsonl")) + sorted(projects_dir.glob("*/*/subagents/agent-*.jsonl"))
-        if projects_dir.is_dir() else []
-    )
+    main_files = sorted(projects_dir.glob("*/*.jsonl")) if projects_dir.is_dir() else []
+    subagent_files = sorted(projects_dir.glob("*/*/subagents/agent-*.jsonl")) if projects_dir.is_dir() else []
+    transcript_files = main_files + subagent_files
+    subagent_file_set = set(subagent_files)
 
     cursor = load_ingest_cursor(paths)
     cursor_files = cursor["files"]
@@ -4740,6 +4747,15 @@ def perform_ingest(root, since_dt=None):
                 # LAST line for a given message.id carries the complete
                 # usage/stop_reason — see
                 # tests/fixtures/transcript_duplicate_message_id.jsonl).
+                #
+                # Fork-type sub-agent transcripts carry a (possibly
+                # mid-stream) copy of the PARENT's last assistant line;
+                # the main transcript's row for a message.id always wins
+                # over a sub-agent copy (here, and at write time in
+                # `bulk_write_events` for rows stored by earlier runs).
+                existing = candidates.get(candidate["message_id"])
+                if file_path in subagent_file_set and existing is not None and existing["agent_id"] is None:
+                    continue
                 candidates[candidate["message_id"]] = candidate
             elif obj_type == "pr-link":
                 extracted = extract_pr_link(obj)
