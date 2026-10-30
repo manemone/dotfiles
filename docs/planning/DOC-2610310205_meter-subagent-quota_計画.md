@@ -24,9 +24,9 @@
 
 | 孫 | ブランチ | 内容 | 状況 |
 |---|---|---|---|
-| 1 | `msq-01-ingest-subagents` | `ingest` がサブエージェントの記録（`<session>/subagents/agent-*.jsonl`）を読み、親の会話・run_id・role へ結びつける。スキーマ文書を更新する | ⬜ 待機中 |
+| 1 | `msq-01-ingest-subagents` | `ingest` がサブエージェントの記録（`<session>/subagents/agent-*.jsonl`）を読み、親の会話・run_id・role へ結びつける。スキーマ文書を更新する | 🔄 実装中 |
 | 2 | `msq-02-quota-per-model` | モデル系統ごとの「週の 1% あたりのトークン」を推定する report を足し、孫3 の範囲の report に推定 % を足す。推定方法を ADR に残す | ⬜ 待機中 |
-| 3 | `msq-03-range-report` | `report` に `--since` / `--until` の時間範囲を足し、その間のモデル別トークン（と費用）を出す | ⬜ 待機中 |
+| 3 | `msq-03-range-report` | `report` に `--since` / `--until` の時間範囲を足し、その間のモデル別トークン（と費用）を出す | 🔄 実装中 |
 
 依存:
 
@@ -209,7 +209,7 @@ report は孫1 に依存しない（`usage.message` を読むだけ）ので先�
 
 （司令官が運用中に分かったこと・人間の決定をここに追記する）
 
-- 2026-10-31: 計画書を起草した。傘を `origin/master`（5226074）へ追随させた。孫1・孫3 を並列で spawn する
+- 2026-10-31: 計画書を起草した。傘を `origin/master`（5226074）へ追随させた。孫1・孫3 を並列で spawn した。孫2 は孫1・孫3 のマージ後
 
 ## 孫1用プロンプト:
 
