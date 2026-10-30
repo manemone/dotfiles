@@ -98,8 +98,10 @@ pixidex の傘（生成ページの使い勝手）の司令官の会話で、持
 - `agent-*.meta.json` は `agentType`（例 `general-purpose`）・`model`（例 `haiku`）・`spawnDepth`・`description`（親が書いた作業の
   説明文）などを持つ。**`description` は会話の中身に当たるので ocw-meter に記録しない**
 - この 58 本の `message.id` ごとの集計（重複は最後の行）: Haiku 309 件（入力 618・キャッシュ作成 487 万・キャッシュ読み 2,015 万・
-  出力 214 万）、**Opus 568 件**（キャッシュ読み 1.17 億ほか）、Sonnet 18 件。モデルの指定なしの汎用のサブエージェントは親と同じ
-  Opus で動くので、Haiku だけでなく Opus の分も抜けていた
+  出力 214 万）、**Opus 568 件**（キャッシュ読み 1.17 億ほか）、Sonnet 18 件。内訳は `meta.json` の `model` で分かれる:
+  LoRA の読み取り（10/30 16:15〜16:52）は `haiku` 指定の 49 本で全部 Haiku。Opus の分は、親が `opus` を明示して立てた別の作業
+  （PR の画面の文言の点検や QA。10/29〜10/30）の 8 本。モデルの指定なしの 1 本は、`~/.claude/settings.json` の
+  `CLAUDE_CODE_SUBAGENT_MODEL=sonnet` により Sonnet で動いた。どのモデルの分も今は数えられていない
 - マシン全体では `~/.claude/projects/*/*/subagents/agent-*.jsonl` が 321 本ある。同じ深さのほかのディレクトリは `tool-results/`
   （`.jsonl` を含まない）だけだった
 
