@@ -2361,7 +2361,17 @@ def quota_periods(valid_events, n_periods):
             continue  # not a real 7-day period (stale or bogus resets_at)
         series.setdefault(resets, []).append((ts.timestamp(), pct))
     latest = sorted(series)[-n_periods:]
-    return {resets: sorted(series[resets]) for resets in latest}
+    out = {}
+    for resets in latest:
+        # The percentage never falls within a period, but a session that
+        # has not called the API for a while writes the stale (smaller)
+        # value it last received; the running maximum drops those.
+        top, rows = 0, []
+        for t, pct in sorted(series[resets]):
+            top = max(top, pct)
+            rows.append((t, top))
+        out[resets] = rows
+    return out
 
 
 def _quota_bucket_rows(series, usage, hours):
@@ -3437,8 +3447,8 @@ def cmd_report(args):
         if conflict:
             print(f"error: --quota-per-pct cannot be combined with {conflict}", file=sys.stderr)
             return 1
-    elif periods is not None and not range_given:
-        print("error: --periods only applies to --quota-per-pct or --since/--until", file=sys.stderr)
+    elif periods is not None and not (range_given and view == "model"):
+        print("error: --periods only applies to --quota-per-pct or --since/--until (model view)", file=sys.stderr)
         return 1
     if month_flag_present and not reconcile and view is not None:
         print(f"error: --month cannot be combined with --{view} (it can be combined with --reconcile, or used standalone)", file=sys.stderr)

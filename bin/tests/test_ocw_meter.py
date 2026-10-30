@@ -3709,6 +3709,9 @@ class ReportGroupedViewsTests(OcwMeterTestCase):
             pct += opus / 10_000_000 + sonnet / 20_000_000
             add("quota.sample", start + 1740, plan_source="statusline", seven_day_used_pct=pct,
                 seven_day_resets_at=base + 7 * 86400)
+            if slot % 6 == 5:  # another session writes the stale (much lower) % it last saw
+                add("quota.sample", start + 1741, plan_source="statusline", seven_day_used_pct=max(pct - 15, 0),
+                    seven_day_resets_at=base + 7 * 86400, session_id="stale")
         usage(base + 3600 * 30, "claude-haiku-5-5", 50_000_000)  # one bucket only
         events_dir = pathlib.Path(self.home) / "events"
         events_dir.mkdir(parents=True, exist_ok=True)
@@ -3736,6 +3739,7 @@ class ReportGroupedViewsTests(OcwMeterTestCase):
         self.assertIn("estimated_weekly_pct: \n", text)
 
         for bad in (["--quota-per-pct", "--pr", "1"], ["--quota-per-pct", "--model"], ["--periods", "2"],
+                    ["--since", "2026-07-01T00:00:00Z", "--role", "--periods", "2"],
                     ["--quota-per-pct", "--periods", "0"]):
             self.assertNotEqual(run_meter(["report", "--no-ingest", *bad], self.home).returncode, 0, bad)
 
