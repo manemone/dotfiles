@@ -909,7 +909,10 @@ scenario_claude_settings_machine_merge() {
   # (設計6、計画書 DOC-2609121700)。
   cat >"$copy_dir/claude/settings.machine.json" <<'JSONEOF'
 {
-  "smokeTestMarker": "smoke-test-value"
+  "smokeTestMarker": "smoke-test-value",
+  "autoMode": {
+    "allow": ["smoke-machine-allow-sentence"]
+  }
 }
 JSONEOF
 
@@ -925,6 +928,18 @@ JSONEOF
     pass "旧パスの settings.machine.json が固定パスへ移行され、マージ結果が settings.json に反映される"
   else
     fail "旧パスの settings.machine.json が固定パスへ移行され、マージ結果が settings.json に反映される"
+  fi
+
+  # autoMode.allow は machine 側が配布物を置き換えず連結される。
+  # 先頭の "$defaults"(既定の allow を残す印)が消えないことが要。
+  if python3 - "$sbx/.claude/settings.json" <<'PYEOF'; then
+import json, sys
+a = json.load(open(sys.argv[1]))["autoMode"]["allow"]
+sys.exit(0 if a[0] == "$defaults" and "smoke-machine-allow-sentence" in a and len(a) == 3 else 1)
+PYEOF
+    pass "machine 側の autoMode.allow が配布物の \$defaults 付き allow に連結される"
+  else
+    fail "machine 側の autoMode.allow が配布物の \$defaults 付き allow に連結される"
   fi
 
   # smokeTestMarker の有無だけでは、settings.machine.json を「マージ」でなく

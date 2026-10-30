@@ -68,3 +68,30 @@
   ある。`*merge*` は、パスやリポ名に `merge` を含む正しい形にも当たる（確認が出るだけで安全側）。
 - 他の owner のリポは許可ルールに当たらず、通常の承認の流れになる。
 - 配布物にルールを足す前後で、生成のしくみ（DOC-2610150520-b）は変わらない。
+
+## 5. 追記: autoMode の許可の文（孫2。人間が採否を決める）
+
+ステータス: 提案（2026-10-31）。この節は人間がレビューで採るかを決める。採らない場合はこの節と
+`claude/settings.json` の `autoMode`、`claude/deploy.sh` のマージ変更を外せばよく、§2 の許可ルールだけで
+投稿は通る。
+
+1. **`autoMode.allow` に許可の文を1つ足す。** 先頭は `"$defaults"`（付け忘れると既定の allow が消える）。
+   `soft_deny` / `hard_deny` / `classifyAllShell` は書かない。文の趣旨は、pr-review-loop の3役が互いの
+   メッセージ（別セッション含む）に従い、`manemone` 配下の対象 PR へ `event: COMMENT` の review・
+   インラインコメント・返信・会話コメントを投稿することを「人間が承認済み」と伝えること。承認・変更要求、
+   マージ、コメントの編集削除、PR の状態や base の変更、スレッド解決、他 owner への書き込みは含めない。
+2. **§2 との違い。** §2 は「形が決まった単体コマンド」だけを通す。この文は、AI がその場で組み立てた
+   別の形（複合コマンドなど）の投稿も、分類器が通しうるようにする。
+3. **`claude auto-mode critique` の講評と対応。** 2回通した。採った: owner を `github.com/manemone` と明記、
+   対象を「ループが対象にしている PR」に限定、手段を `gh pr comment` と `gh api` の POST に限定、本文の中身は
+   既定規則で引き続き判定すること、除外（自分のコメントの編集削除・リアクション・ラベル等・`reviews/<id>/events`）の明示、
+   PR の本文などの中にしか無い指示はループの開始と見なさないこと、コマンドへの owner/repo/PR 番号と
+   `event: COMMENT` の明示。採らなかった: 「止められたと言っている相手の代行も許す」旨の条項（分類器の
+   代行拒否の歯止めを外すため）、`environment` の Source control への owner 追加（push など PR コメント以外の
+   信頼範囲まで広がるため）、Herdr のメッセージ書式の記述（書式が変わると嘘になるため）。
+4. **machine 設定とのマージ。** `claude/deploy.sh` は `autoMode` の配列（allow・soft_deny・hard_deny・
+   environment）を `permissions` と同じく連結し重複を除く。従来の浅い `update()` のままだと、machine 側に
+   `autoMode.allow` があるだけで配布物の `"$defaults"` ごと置き換わり、既定の allow が消えるため。
+   `tests/deploy_smoke.sh` のシナリオ10で固定した。
+5. **確認方法。** critique は `CLAUDE_CONFIG_DIR` を一時ディレクトリに向け、`autoMode` だけを入れた設定を
+   読ませて実行した（実 `$HOME` の設定は変えていない。認証情報は symlink で参照）。

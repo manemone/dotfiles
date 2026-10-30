@@ -220,8 +220,9 @@ SETTINGS_DST="$CLAUDE_DIR/settings.json"
 # Writes the merged JSON to <output> and prints the number of
 # permissions.allow entries carried over from <existing> to stdout.
 # List-valued keys within "permissions" (allow, deny, ask) from <machine>
-# are concatenated onto <base>; every other key uses shallow .update()
-# semantics (machine wins). <existing>'s permissions.allow is then merged in
+# are concatenated onto <base>, and so are those of "autoMode" (allow,
+# soft_deny, hard_deny, environment; "$defaults" stays first); every other
+# key uses shallow .update() semantics (machine wins). <existing>'s permissions.allow is then merged in
 # on top of that (deduplicated, order-preserving) — this is the only thing
 # read from <existing>.
 merge_claude_settings() {
@@ -238,12 +239,23 @@ if machine_path:
         machine = json.load(f)
 
     LIST_KEYS = {'allow', 'deny', 'ask'}
+    AUTOMODE_LIST_KEYS = {'allow', 'soft_deny', 'hard_deny', 'environment'}
 
     for key in machine:
         if key == 'permissions' and isinstance(merged.get(key), dict) and isinstance(machine[key], dict):
             for subkey in machine[key]:
                 if subkey in LIST_KEYS and isinstance(merged[key].get(subkey), list) and isinstance(machine[key][subkey], list):
                     # Concatenate lists (deduplicate preserving order)
+                    seen = set(merged[key][subkey])
+                    for item in machine[key][subkey]:
+                        if item not in seen:
+                            merged[key][subkey].append(item)
+                            seen.add(item)
+                else:
+                    merged[key][subkey] = machine[key][subkey]
+        elif key == 'autoMode' and isinstance(merged.get(key), dict) and isinstance(machine[key], dict):
+            for subkey in machine[key]:
+                if subkey in AUTOMODE_LIST_KEYS and isinstance(merged[key].get(subkey), list) and isinstance(machine[key][subkey], list):
                     seen = set(merged[key][subkey])
                     for item in machine[key][subkey]:
                         if item not in seen:
