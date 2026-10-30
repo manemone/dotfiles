@@ -1196,6 +1196,63 @@ class IngestTests(OcwMeterTestCase):
         self.projects_dir = pathlib.Path(self.tmpdir.name) / "claude-projects"
         self.projects_dir.mkdir(parents=True, exist_ok=True)
 
+    def test_ingest_counts_subagent_transcripts_under_the_parent_session(self):
+        # The umbrella's origin: sub-agent transcripts live at
+        # `<slug>/<session>/subagents/agent-*.jsonl`, carry the PARENT's
+        # sessionId, and were silently never ingested.
+        write_transcript(self.projects_dir, "proj", "sess-parent", [assistant_line("sess-parent", "m-main")])
+        sub_dir = self.projects_dir / "proj" / "sess-parent" / "subagents"
+        sub_dir.mkdir(parents=True)
+        sub_line = assistant_line("sess-parent", "m-sub", model="claude-haiku-4-5", is_sidechain=True)
+        sub_line["agentId"] = "abc123"
+        sub_line["message"]["content"] = [{"type": "text", "text": "SUBAGENT-SECRET-CONTENT"}]
+        (sub_dir / "agent-abc123.jsonl").write_text(json.dumps(sub_line) + "\n", encoding="utf-8")
+        (sub_dir / "agent-abc123.meta.json").write_text(
+            json.dumps({"agentType": "general-purpose", "model": "haiku", "description": "SUBAGENT-SECRET-DESCRIPTION"}),
+            encoding="utf-8")
+
+        for _ in range(2):  # second run: cursor + message.id dedup keep it at one
+            result = run_ingest(self.home, self.projects_dir)
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+        by_id = {e["message_id"]: e for e in read_events(self.home) if e["event_type"] == "usage.message"}
+        self.assertEqual(sorted(by_id), ["m-main", "m-sub"])
+        self.assertEqual(by_id["m-sub"]["session_id"], "sess-parent")
+        self.assertEqual(by_id["m-sub"]["agent_id"], "abc123")
+        self.assertIs(by_id["m-sub"]["is_sidechain"], True)
+        self.assertIsNone(by_id["m-main"]["agent_id"])
+        for path in pathlib.Path(self.home).rglob("*"):
+            if path.is_file():
+                text = path.read_text(encoding="utf-8", errors="replace")
+                self.assertNotIn("SUBAGENT-SECRET", text)
+
+    def test_ingest_fork_subagent_copy_never_overwrites_the_parent_message(self):
+        # Fork-type sub-agent transcripts contain a (mid-stream) copy of
+        # the parent's last assistant line, same message.id, agentId set.
+        sub_dir = self.projects_dir / "proj" / "sess-fork" / "subagents"
+        sub_dir.mkdir(parents=True)
+        copy = assistant_line("sess-fork", "m-spawn", output_tokens=6, is_sidechain=True, stop_reason=None)
+        copy["agentId"] = "forkA"
+
+        def parent_row():
+            rows = [e for e in read_events(self.home) if e["message_id"] == "m-spawn"]
+            self.assertEqual(len(rows), 1)
+            return rows[0]
+
+        # (1) parent stored by an earlier run, fork copy arrives later
+        write_transcript(self.projects_dir, "proj", "sess-fork", [assistant_line("sess-fork", "m-spawn", output_tokens=1682, stop_reason="tool_use")])
+        self.assertEqual(run_ingest(self.home, self.projects_dir).returncode, 0)
+        (sub_dir / "agent-forkA.jsonl").write_text(json.dumps(copy) + "\n", encoding="utf-8")
+        self.assertEqual(run_ingest(self.home, self.projects_dir).returncode, 0)
+        self.assertEqual(parent_row()["output_tokens"], 1682)
+        self.assertIsNone(parent_row()["agent_id"])
+
+        # (2) both read in the same run (fresh storage): main still wins
+        other_home = pathlib.Path(self.tmpdir.name) / "home2"
+        self.assertEqual(run_ingest(other_home, self.projects_dir).returncode, 0)
+        rows = [e for e in read_events(other_home) if e["message_id"] == "m-spawn"]
+        self.assertEqual([(r["output_tokens"], r["agent_id"]) for r in rows], [(1682, None)])
+
     def test_ingest_dedupes_content_block_split_lines_via_real_fixture(self):
         # T04/T12, driven through the actual `ingest` scan path (not the
         # `event` primitive directly, unlike TranscriptFixtureDedupTests
@@ -3586,6 +3643,105 @@ class ReportGroupedViewsTests(OcwMeterTestCase):
             data = json.loads(result_json.stdout)
             for field in ("coverage", "completeness", "quarantined_lines", "price_table", "cost_basis"):
                 self.assertIn(field, data, f"{view_args} --json missing {field!r}")
+
+    # -- --since / --until (time range) --
+
+    def test_range_report_boundaries_bad_input_and_unchanged_default(self):
+        def usage(key, ts, model, tokens):
+            run_meter(["event", "usage.message", "--idempotency-key", key, "--run-id", "run-range",
+                       "--message-id", key, "--model", model, "--provider", "anthropic",
+                       "--input-tokens", str(tokens), "--cache-read-input-tokens", "0",
+                       "--cache-creation-input-tokens", "0", "--output-tokens", "0",
+                       "--cost-basis", "estimated", "--role", "implementer", "--ts", ts], self.home)
+        usage("before", "2026-08-01T08:59:59.999Z", "claude-opus-x", 1)
+        usage("at-since", "2026-08-01T09:00:00.000Z", "claude-opus-x", 10)
+        usage("inside", "2026-08-01T10:00:00.000Z", "claude-haiku-x", 100)
+        usage("at-until", "2026-08-01T11:00:00.000Z", "claude-opus-x", 1000)
+
+        args = ["report", "--no-ingest", "--json", "--since", "2026-08-01T18:00:00+09:00", "--until", "2026-08-01T11:00:00Z"]
+        data = json.loads(run_meter(args, self.home).stdout)
+        rows = data["by_model"]
+        # --since exactly is in, --until exactly and anything outside are out.
+        self.assertEqual(rows["anthropic/claude-opus-x"]["input_tokens"], 10)
+        self.assertEqual(rows["anthropic/claude-haiku-x"]["input_tokens"], 100)
+        self.assertEqual(data["since"], "2026-08-01T09:00:00.000Z")
+        self.assertEqual(data["until"], "2026-08-01T11:00:00.000Z")
+
+        # --until defaults to now; --role combines with the range.
+        by_role = json.loads(run_meter(["report", "--no-ingest", "--json", "--role", "--since", "2026-08-01T10:00:00Z"], self.home).stdout)
+        self.assertEqual(by_role["by_role"]["implementer"]["input_tokens"], 1100)
+
+        for bad in (["--since", "yesterday"], ["--since", "2026-08-01T11:00:00Z", "--until", "2026-08-01T09:00:00Z"],
+                    ["--until"], ["--since", "2026-08-01T09:00:00Z", "--window"]):
+            result = run_meter(["report", "--no-ingest", *bad], self.home)
+            self.assertNotEqual(result.returncode, 0, bad)
+            self.assertIn("error:", result.stderr)
+
+        # Without a range the default report is unchanged (no range keys, all events counted).
+        plain = json.loads(run_meter(["report", "--no-ingest", "--json"], self.home).stdout)
+        self.assertEqual(plain["total_events"], 4)
+        self.assertNotIn("since", plain)
+
+    # -- --quota-per-pct --
+
+    def test_quota_per_pct_recovers_known_rates_and_refuses_unmeasurable_families(self):
+        # Known truth: 1% of the weekly limit = 10M weighted opus tokens or
+        # 20M sonnet ones; the seven_day_used_pct series is built from it.
+        base = 1786000000 // 43200 * 43200
+        events, pct, state = [], 0.0, 12345
+        def add(event_type, ts, **fields):
+            stamp = datetime.fromtimestamp(ts, timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+            events.append({"event_type": event_type, "schema_version": 1, "ts": stamp,
+                           "idempotency_key": f"{event_type}-{ts}-{fields.get('model')}", "event_id": f"id-{len(events)}",
+                           "completeness": "complete", **fields})
+        def usage(ts, model, tokens, provider="anthropic"):
+            add("usage.message", ts, model=model, provider=provider, message_id=f"m-{ts}-{model}", input_tokens=tokens,
+                cache_read_input_tokens=0, cache_creation_input_tokens=0, output_tokens=0)
+        for slot in range(192):
+            state = state * 1103515245 % 2**31
+            opus = (state % 7) * 1_000_000
+            state = state * 1103515245 % 2**31
+            sonnet = (state % 5) * 1_000_000
+            start = base + slot * 1800
+            usage(start + 60, "claude-opus-5-5", opus)
+            usage(start + 61, "claude-sonnet-5-5", sonnet)
+            usage(start + 62, "deepseek-v4-pro", 900_000_000, provider="deepseek")
+            pct += opus / 10_000_000 + sonnet / 20_000_000
+            add("quota.sample", start + 1740, plan_source="statusline", seven_day_used_pct=pct,
+                seven_day_resets_at=base + 7 * 86400)
+            if slot % 6 == 5:  # another session writes the stale (much lower) % it last saw
+                add("quota.sample", start + 1741, plan_source="statusline", seven_day_used_pct=max(pct - 15, 0),
+                    seven_day_resets_at=base + 7 * 86400, session_id="stale")
+        usage(base + 3600 * 30, "claude-haiku-5-5", 50_000_000)  # one bucket only
+        events_dir = pathlib.Path(self.home) / "events"
+        events_dir.mkdir(parents=True, exist_ok=True)
+        (events_dir / "2026-08-01.jsonl").write_text("".join(json.dumps(e) + "\n" for e in events), encoding="utf-8")
+
+        families = json.loads(run_meter(["report", "--quota-per-pct", "--no-ingest", "--json"], self.home).stdout)["families"]
+        self.assertEqual(families["opus"]["status"], "estimated")
+        self.assertAlmostEqual(families["opus"]["weighted_tokens_per_pct"] / 10_000_000, 1.0, delta=0.02)
+        self.assertAlmostEqual(families["sonnet"]["weighted_tokens_per_pct"] / 20_000_000, 1.0, delta=0.02)
+        # Too little data: a reason, never a number. DeepSeek is not a family at all.
+        for family in ("haiku", "fable"):
+            self.assertEqual(families[family]["status"], "unmeasurable")
+            self.assertNotIn("weighted_tokens_per_pct", families[family])
+            self.assertTrue(families[family]["reason"])
+
+        # The range report carries the estimate; blank where unmeasurable.
+        rows = json.loads(run_meter(["report", "--no-ingest", "--json", "--since", "2026-07-01T00:00:00Z"],
+                                    self.home).stdout)["by_model"]
+        opus_tokens = rows["anthropic/claude-opus-5-5"]["input_tokens"]
+        self.assertAlmostEqual(rows["anthropic/claude-opus-5-5"]["estimated_weekly_pct"],
+                               opus_tokens / families["opus"]["weighted_tokens_per_pct"], places=1)
+        self.assertIsNone(rows["anthropic/claude-haiku-5-5"]["estimated_weekly_pct"])
+        self.assertIsNone(rows["deepseek/deepseek-v4-pro"]["estimated_weekly_pct"])
+        text = run_meter(["report", "--no-ingest", "--since", "2026-07-01T00:00:00Z"], self.home).stdout
+        self.assertIn("estimated_weekly_pct: \n", text)
+
+        for bad in (["--quota-per-pct", "--pr", "1"], ["--quota-per-pct", "--model"], ["--periods", "2"],
+                    ["--since", "2026-07-01T00:00:00Z", "--role", "--periods", "2"],
+                    ["--quota-per-pct", "--periods", "0"]):
+            self.assertNotEqual(run_meter(["report", "--no-ingest", *bad], self.home).returncode, 0, bad)
 
     # -- --model --
 
