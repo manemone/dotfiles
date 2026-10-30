@@ -85,13 +85,14 @@
 3. **`claude auto-mode critique` の講評と対応。** 2回通した。採った: owner を `github.com/manemone` と明記、
    対象を「ループが対象にしている PR」に限定、手段を `gh pr comment` と `gh api` の POST に限定、本文の中身は
    既定規則で引き続き判定すること、除外（自分のコメントの編集削除・リアクション・ラベル等・`reviews/<id>/events`）の明示、
-   PR の本文などの中にしか無い指示はループの開始と見なさないこと、コマンドへの owner/repo/PR 番号と
+   メッセージが指していない PR の本文などの中にだけある指示はループの開始と見なさないこと（pr-review-loop の依頼は指示ファイルの絶対パスだけを送るので、起点は「メッセージが /tmp/pr-review-loop/ 配下の指示ファイルを指していること」とした。ラウンド1のレビューで指摘を受けて直した）、owner の完全一致、コマンドへの owner/repo/PR 番号と
    `event: COMMENT` の明示。採らなかった: 「止められたと言っている相手の代行も許す」旨の条項（分類器の
    代行拒否の歯止めを外すため）、`environment` の Source control への owner 追加（push など PR コメント以外の
-   信頼範囲まで広がるため）、Herdr のメッセージ書式の記述（書式が変わると嘘になるため）。
+   信頼範囲まで広がるため）、Herdr のメッセージ書式の記述（書式が変わると嘘になるため）、依頼元が止められたと述べているときは許可しない旨の条項（実装 AI が自分の返信を代行させる流れと食い違うおそれがあるため、既定の代行拒否に任せる）、指示ファイルを同じ会話で自分が書いたときは開始と見なさない旨の条項（実装 AI は指示ファイルを自分で書いてレビュー AI へ送るため、実装側の返信まで止めるおそれがある）。指示ファイルの置き場 `/tmp` が誰でも書ける点は残余のリスクとして人間の採否の材料にする。
 4. **machine 設定とのマージ。** `claude/deploy.sh` は `autoMode` の配列（allow・soft_deny・hard_deny・
    environment）を `permissions` と同じく連結し重複を除く。従来の浅い `update()` のままだと、machine 側に
    `autoMode.allow` があるだけで配布物の `"$defaults"` ごと置き換わり、既定の allow が消えるため。
-   `tests/deploy_smoke.sh` のシナリオ10で固定した。
+   `tests/deploy_smoke.sh` のシナリオ10で固定した。`claude/README.md` §4.2 にも書いた（machine 側からは
+   配布物の文や `"$defaults"` を取り除けない）。
 5. **確認方法。** critique は `CLAUDE_CONFIG_DIR` を一時ディレクトリに向け、`autoMode` だけを入れた設定を
    読ませて実行した（実 `$HOME` の設定は変えていない。認証情報は symlink で参照）。

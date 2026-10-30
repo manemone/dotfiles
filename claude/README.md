@@ -449,6 +449,7 @@ cd ~/.dotfiles && ./deploy-all.sh --only claude
 マージの仕組み:
 - `settings.json`（ベース）の上に `settings.machine.json` を shallow merge
 - `permissions` 内のリストキー（`allow`, `deny`, `ask`）は**結合**（重複除去、machine 側の項目が末尾に追加）
+- `autoMode` 内のリストキー（`allow`, `soft_deny`, `hard_deny`, `environment`）も**結合**（重複除去、machine 側の項目が末尾に追加）。machine 側からは、配布物の許可の文や先頭の `"$defaults"` を取り除けない（外したいときは `~/.claude/settings.json` の生成物を直接編集する）
 - それ以外のキーは machine 側の値で上書き
 
 > **⚠️ ここで足した `allow` は、後で `settings.machine.json` から行を削除しても取り消せない。**
