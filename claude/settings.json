@@ -43,9 +43,9 @@
     ],
     "ask": [
       "Bash(gh api *merge*)",
-      "Bash(gh api *-X PUT*)",
-      "Bash(gh api *-X DELETE*)",
-      "Bash(gh api *-X PATCH*)",
+      "Bash(gh api *-X*PUT*)",
+      "Bash(gh api *-X*DELETE*)",
+      "Bash(gh api *-X*PATCH*)",
       "Bash(gh api *--method*)",
       "Bash(git reset --hard*)",
       "Bash(git reset *--hard*)",
