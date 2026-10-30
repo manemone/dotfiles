@@ -297,7 +297,7 @@ PR ごとに、投稿の直前に次を確かめる。
 ### 6.5 投稿する（COMMENT のみ）
 
 ```sh
-gh api -X POST "repos/<owner>/<repo>/pulls/<N>/reviews" --input payload.json
+gh api -X POST repos/<owner>/<repo>/pulls/<N>/reviews --input <payload.json の絶対パス>
 ```
 
 `payload.json` は `{ "commit_id": "<head_sha>", "event": "COMMENT", "body": "…", "comments": [ { "path": "…", "line": 42, "side": "RIGHT", "body": "…" } ] }`。
@@ -306,7 +306,7 @@ gh api -X POST "repos/<owner>/<repo>/pulls/<N>/reviews" --input payload.json
 既存のスレッドへの返信（§6.3）は次で投稿する（これも了承を得た下書きの分だけ）。
 
 ```sh
-gh api -X POST "repos/<owner>/<repo>/pulls/<N>/comments/<スレッドの先頭コメントの ID>/replies" -f body="…"
+gh api -X POST repos/<owner>/<repo>/pulls/<N>/comments/<スレッドの先頭コメントの ID>/replies --input <{"body": "…"} の JSON の絶対パス>
 ```
 
 `<スレッドの先頭コメントの ID>` には、指摘の `thread.kind` が `review_comment` のときの `thread.id`

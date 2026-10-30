@@ -5,6 +5,9 @@
       "Bash(mkdir -p *)",
       "Bash(chmod +x *)",
       "Bash(ocw self-compact *)",
+      "Bash(gh api -X POST repos/manemone/*/pulls/*/reviews --input *)",
+      "Bash(gh api -X POST repos/manemone/*/pulls/*/comments/*/replies --input *)",
+      "Bash(gh pr comment * -R manemone/* --body-file *)",
       "Bash(rm -r /tmp/tmp.*)",
       "Bash(rm -rf /tmp/tmp.*)",
       "Bash(rm -fr /tmp/tmp.*)",
@@ -39,6 +42,11 @@
       "Edit(~/.netrc)"
     ],
     "ask": [
+      "Bash(gh api *merge*)",
+      "Bash(gh api *-X*PUT*)",
+      "Bash(gh api *-X*DELETE*)",
+      "Bash(gh api *-X*PATCH*)",
+      "Bash(gh api *--method*)",
       "Bash(git reset --hard*)",
       "Bash(git reset *--hard*)",
       "Bash(git clean *)",
