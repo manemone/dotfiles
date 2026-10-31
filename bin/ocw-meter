@@ -227,7 +227,9 @@ subcommands:
     same as `report --reconcile --month ...` below.
 
   dash [--watch [<seconds>]] [--no-ingest]
-    One-screen dashboard for humans: the week-quota chart (with the
+    One-screen dashboard for humans, laid out as framed panels (a header
+    of number tiles, then the charts, then the notes) with the vertical
+    axes on one column: the week-quota chart (with the
     average of recent weeks), the per-day stacked columns by model and the
     consumption heatmap, stacked vertically, drawn by the same code as
     `report --quota-progress` / `--daily` / `--heatmap`. Like `report`, it
@@ -3217,12 +3219,13 @@ def _daily_segments(day, top, has_other):
     return segs
 
 
-def daily_columns(daily, top, styles, has_other, height, width):
+def daily_columns(daily, top, styles, has_other, height, width, label_w=0):
     """日ごとの縦の積み上げ棒 (横軸が日付、縦軸が重み付きトークン)。孫7 のダッシュボードも呼ぶ部品で、
     高さ (棒の行数) と全体の幅 (桁数) を渡すと、行のリストと省いた日数を返す。-> (lines, dropped)
     1日1本。幅に入らなければ棒の幅を詰め (3→1 桁、日の間の隙間 1 桁→0)、それでも入らなければ古い日から
     削る (dropped)。下の積み上げが先頭の系列。縦軸の目盛りは最大・中央・0 (fmt_tokens)。
-    横軸は月曜に ┴ と MM/DD (先頭の日も、月曜が近くなければ MM/DD を出す)。"""
+    横軸は月曜に ┴ と MM/DD (先頭の日も、月曜が近くなければ MM/DD を出す)。
+    label_w は縦軸の目盛りの欄の最小幅 (dash が全グラフの軸の線の列をそろえる)。"""
     height = max(2, height)
     totals = [d["weighted_tokens"] for d in daily]
     max_total = max(totals + [0])
@@ -3230,7 +3233,7 @@ def daily_columns(daily, top, styles, has_other, height, width):
     mid = height - int(round(height / 2))  # ちょうど半分の値の棒のてっぺんの行 (_daily_bar_cells の丸めと同じ)
     if 0 < mid < height - 1:
         ticks[mid] = fmt_tokens(max_total / 2)
-    y_w = max(len(t) for t in ticks.values())
+    y_w = max([label_w] + [len(t) for t in ticks.values()])
     avail = max(1, width - y_w - 1)
     if len(daily) * 2 <= avail:
         gap = 1
@@ -3509,12 +3512,13 @@ def _quota_projection_summary(proj):
     return "すでに 100% に届いている"
 
 
-def render_quota_chart(rows, proj, resets, now, avg=None, height=QUOTA_PROGRESS_ROWS, width=None):
+def render_quota_chart(rows, proj, resets, now, avg=None, height=QUOTA_PROGRESS_ROWS, width=None, label_w=4):
     """The week as a character grid: time across (reset-7d .. reset), 0-100%
     up. `●` actual, `·` the projection at the recent pace, `○` the average of
     past weeks (`avg`: its point series), `▲` now. Returns lines. `height`
     (grid rows, 孫7 の dash が詰める) and `width` (plot columns) default to
-    the 11 rows and the terminal width."""
+    the 11 rows and the terminal width. `label_w` is the width of the %-label
+    column (孫8 の dash が全グラフの縦軸の線を同じ列にそろえるため広げる)."""
     span, start = 7 * 86400, resets - 7 * 86400
     width = max(28, min(term_width() - 8, 112)) if width is None else max(10, width)
     height = max(3, height)
@@ -3570,7 +3574,7 @@ def render_quota_chart(rows, proj, resets, now, avg=None, height=QUOTA_PROGRESS_
     for i in range(height):
         label = f"{round(100 * (height - 1 - i) / (height - 1))}%" if i in label_rows else ""
         body = "".join(paint(ch, color) if color else ch for ch, color in grid[i])
-        lines.append((pad(label, 4, "r") + " " + ("┤" if label else "│") + body).rstrip())
+        lines.append((pad(label, label_w, "r") + " " + ("┤" if label else "│") + body).rstrip())
     axis = ["─"] * width
     labels = [" "] * (width + 2)
     last_end = -2
@@ -3585,8 +3589,8 @@ def render_quota_chart(rows, proj, resets, now, avg=None, height=QUOTA_PROGRESS_
             last_end = pos + len(text)
         midnight += timedelta(days=1)
     axis_cells = [paint("▲", "bold") if c == now_col else ch for c, ch in enumerate(axis)]
-    lines.append(pad("", 4) + " └" + "".join(axis_cells))
-    lines.append(" " * 6 + "".join(labels).rstrip())
+    lines.append(pad("", label_w) + " └" + "".join(axis_cells))
+    lines.append(" " * (label_w + 2) + "".join(labels).rstrip())
     return lines
 
 
@@ -3806,9 +3810,29 @@ def _heatmap_month_line(report):
     return out
 
 
-def heatmap_lines(report):
+def _heatmap_panel_lines(report, label_w):
+    """dash 用のマス目: 曜日のラベルを label_w 桁の欄に右寄せし、その右に軸の線 │ を置く (ほかのグラフと同じ列)。"""
+    indent = " " * (label_w + 2)
+    lines = [indent + _heatmap_month_line(report)]
+    grid = {}
+    start = datetime.strptime(report["start"], "%Y-%m-%d").date()
+    for d in report["days"]:
+        col = (datetime.strptime(d["date"], "%Y-%m-%d").date() - start).days // 7
+        grid[(d["weekday"], col)] = d["level"]
+    for wd in range(7):
+        label = _WEEKDAY_JA[wd] if wd % 2 == 0 else ""
+        cells = "".join(_heatmap_cell(grid[(wd, c)]) for c in range(report["weeks"]) if (wd, c) in grid)
+        lines.append(pad(label, label_w, "r") + " " + paint("│", "dim") + cells)
+    lines.append(indent + "少 " + "".join(_heatmap_cell(i) for i in range(5)) + " 多")
+    return lines
+
+
+def heatmap_lines(report, label_w=None):
     """マス目の部分 (月のラベルの行 + 曜日 7 行 + 凡例の行 = 9 行)。孫7 のダッシュボードも呼ぶ部品で、
-    幅は report の週数 (heatmap_max_weeks_for_width で決める) が決める。"""
+    幅は report の週数 (heatmap_max_weeks_for_width で決める) が決める。
+    label_w を渡すと (dash)、インデント無しで曜日を label_w 桁の欄に右寄せし、軸の線 │ を置く。"""
+    if label_w is not None:
+        return _heatmap_panel_lines(report, label_w)
     lines = ["  " + " " * _HEATMAP_LABEL_WIDTH + _heatmap_month_line(report)]
     grid = {}
     start = datetime.strptime(report["start"], "%Y-%m-%d").date()
@@ -3876,8 +3900,10 @@ def print_heatmap(report, weeks_requested, as_json, footer_completeness, footer_
 DASH_WATCH_DEFAULT_SECONDS = 300
 DASH_QUOTA_ROWS = (5, QUOTA_PROGRESS_ROWS)      # 週の上限のグラフの行数 (最小, 最大)
 DASH_DAILY_ROWS = (4, DAILY_COLUMNS_HEIGHT)     # 日ごとの縦棒の行数 (最小, 最大)
-DASH_HEATMAP_LINES = 10                         # 見出し 1 + マス目 9 (heatmap_lines)
-DASH_HEADER_LINES = 2
+DASH_HEATMAP_LINES = 9                          # マス目 (heatmap_lines: 月 1 + 曜日 7 + 凡例 1)
+DASH_HEADER_LINES = 4                           # 見出しのパネル (枠 2 + タイルの 2 段)
+DASH_MIN_LABEL_W = 4                            # 縦軸のラベルの欄の最小幅 ("100%")
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 
 
 def term_height():
@@ -3891,7 +3917,7 @@ def term_height():
 
 def _clip(text, width):
     """表示幅 width に収める (超えたら末尾を … にする)。色コードがあれば、超えた行は色を落として切る。"""
-    plain = re.sub(r"\x1b\[[0-9;]*m", "", text)
+    plain = _ANSI_RE.sub("", text)
     if disp_width(plain) <= width:
         return text
     text = plain
@@ -3904,17 +3930,117 @@ def _clip(text, width):
     return out + "…"
 
 
+def _vis_width(text):
+    return disp_width(_ANSI_RE.sub("", text))
+
+
+def _vis_pad(text, width, align="l"):
+    """色コードを数えずに表示幅 width へ揃える (l / r / c)。"""
+    gap = max(0, width - _vis_width(text))
+    if align == "r":
+        return " " * gap + text
+    if align == "c":
+        return " " * (gap // 2) + text + " " * (gap - gap // 2)
+    return text + " " * gap
+
+
+# -- パネルの部品: 枠 (角の丸い罫線)・タイトルと補足を埋め込んだ上の罫線・数字のタイル --
+
+def panel_top(title, aside, width):
+    """上の罫線 ╭─ タイトル ─────── 補足 ─╮ (幅 width)。補足が入らなければ省き、タイトルが入らなければ切る。"""
+    def edge(s):
+        return paint(s, "dim")
+    aside = aside or ""
+    fill = width - 8 - disp_width(title) - _vis_width(aside)
+    if aside and fill >= 1:
+        return edge("╭─ ") + paint(title, "bold") + edge(" " + "─" * fill + " ") + aside + edge(" ─╮")
+    title = _clip(title, max(1, width - 6))
+    return edge("╭─ ") + paint(title, "bold") + edge(" " + "─" * max(1, width - 5 - disp_width(title)) + "╮")
+
+
+def panel(title, aside, body, width):
+    """タイトル入りの枠で body (行のリスト) を囲む。各行の表示幅はちょうど width。"""
+    cw = width - 4
+    bar = paint("│", "dim")
+    lines = [panel_top(title, aside, width)]
+    lines.extend(bar + " " + _vis_pad(_clip(ln, cw), cw) + " " + bar for ln in body)
+    lines.append(paint("╰" + "─" * (width - 2) + "╯", "dim"))
+    return lines
+
+
+def _fit_aside(title, candidates, width):
+    """上の罫線に入る最初の補足 (長い順に並べた候補から)。どれも入らなければ None。"""
+    for cand in candidates:
+        if disp_width(title) + _vis_width(cand) + 8 + 1 <= width:
+            return cand
+    return None
+
+
+def _pct_color(pct):
+    return "green" if pct < 70 else ("yellow" if pct < 90 else "red")
+
+
+def dash_tiles(tiles, width):
+    """数字のタイル (2 段: ラベル / 値)。tiles は優先順位の高い順の (key, ラベル, 値)。等幅で割り付け、
+    収まらなければ優先順位の低いものから外す (値は途中で切らない)。表示は key の _DASH_TILE_ORDER の順。"""
+    tiles = list(tiles)
+    while len(tiles) > 1 and len(tiles) * (max(max(disp_width(t[1]), _vis_width(t[2])) for t in tiles) + 2) > width:
+        tiles.pop()
+    tiles.sort(key=lambda t: _DASH_TILE_ORDER.index(t[0]))
+    each, extra = divmod(width, len(tiles))
+    labels, values = [], []
+    for i, (_key, label, value) in enumerate(tiles):
+        w = each + (extra if i == len(tiles) - 1 else 0)
+        labels.append(_vis_pad(paint(label, "dim"), w, "c"))
+        values.append(_vis_pad(value, w, "c"))
+    return ["".join(labels), "".join(values)]
+
+
+_DASH_TILE_ORDER = ("pct", "reset", "diff", "projection")
+
+
+def _quota_projection_short(proj):
+    """タイルに入る短い見込み (文は _quota_projection_summary)。"""
+    s = proj["status"]
+    if s == "reaches":
+        return "記録が古く当てにならない" if proj.get("already_past") else f"{_local_md_hm(proj['reaches_100_at'])} ごろ"
+    if s == "not_this_week":
+        return f"届かない (リセット時 約 {fmt_pct(proj['pct_at_reset'])})"
+    if s == "no_progress":
+        return "増えていない"
+    if s == "stale":
+        return "最近の記録なし"
+    if s == "too_short":
+        return "記録が足りない"
+    return "到達済み"
+
+
+def _dash_header_tiles(result, now):
+    if result["status"] != "ok":
+        return [("pct", "今週の使用率", paint("—", "dim"))]
+    pct = result["current_pct"]
+    tiles = [("pct", "今週の使用率", paint(fmt_pct(pct), "bold", _pct_color(pct))),
+             ("reset", "リセットまで", paint(fmt_duration(result["seven_day_resets_at"] - now), "bold")),
+             ("projection", "100% への見込み", paint(_quota_projection_short(result["projection"]), "bold"))]
+    wa = result.get("weekly_average")
+    if wa and wa["status"] == "ok" and wa["at_now"]["avg_pct"] is not None:
+        diff = round(pct - wa["at_now"]["avg_pct"], 1)
+        tiles.append(("diff", f"直近 {wa['weeks_used']} 週平均との差",
+                      paint(f"{'+' if diff >= 0 else '−'}{abs(diff):g}pt", "bold")))
+    return tiles
+
+
 def dash_layout(budget, quota_ok, notes_lines):
-    """高さ budget (行数。None なら詰めない) への配分。
+    """高さ budget (行数。None なら詰めない) への配分。パネルごとに枠の 2 行がかかる。
     まずグラフの高さを最小まで詰め、それでも入らなければヒートマップ → 日ごとの縦棒の順に省く。
     -> {"quota_rows", "daily_rows", "daily", "heatmap", "omitted", "overflow"}"""
     q_min, q_max = DASH_QUOTA_ROWS if quota_ok else (0, 0)
     d_min, d_max = DASH_DAILY_ROWS
-    quota_fixed = 4 if quota_ok else 2  # 見出し + 軸 2 + 凡例 / 見出し + メッセージ
+    quota_fixed = 2 + (2 if quota_ok else 1)  # 枠 + 軸 2 行 / 枠 + メッセージ
     plans = [(True, True, []), (True, False, ["ヒートマップ"]), (False, False, ["ヒートマップ", "日ごとの縦棒"])]
     for daily, heatmap, omitted in plans:
-        need = (DASH_HEADER_LINES + notes_lines + quota_fixed + q_min + (d_min + 4 if daily else 0)
-                + (DASH_HEATMAP_LINES if heatmap else 0) + (1 if omitted else 0))
+        need = (DASH_HEADER_LINES + (1 if omitted else 0) + (2 + notes_lines) + quota_fixed + q_min
+                + (2 + d_min + 3 if daily else 0) + (2 + DASH_HEATMAP_LINES if heatmap else 0))
         if budget is None or need <= budget or (daily, heatmap) == (False, False):
             overflow = budget is not None and need > budget
             break
@@ -3933,7 +4059,7 @@ def _dash_daily_legend(report, width):
     """日ごとの縦棒の凡例を 1 行に (入らない分は … で省く)。"""
     top, styles, has_other = daily_series(report)
     names = [n.split("/", 1)[-1] if "/" in n else n for n in top] + (["その他"] if has_other else [])
-    out, used = [], 2
+    out, used = [], 0
     for name, (sym, color) in zip(names, styles):
         w = 2 + 1 + disp_width(name) + 2
         if used + w > width:
@@ -3941,55 +4067,61 @@ def _dash_daily_legend(report, width):
             break
         out.append(paint(sym * 2, color) + " " + name)
         used += w
-    return "  " + "  ".join(out)
+    return "  ".join(out)
 
 
 def dash_lines(valid_events, footer_completeness, footer_freshness, now, height, width, watch=None):
-    """ダッシュボードの全行 (色付き)。height は端末の高さ (None なら詰めない)。"""
+    """ダッシュボードの全行 (色付き)。height は端末の高さ (None なら詰めない)。
+    見出し・週の上限・日ごと・ヒートマップ・注記を、幅 width いっぱいの枠付きパネルで縦に並べる。"""
     usage_events = [e for e in valid_events if e.get("event_type") == "usage.message"]
     result, rows = quota_progress(valid_events, now, {"families": {}}, QUOTA_COMPARE_WEEKS)
     quota_ok = result["status"] == "ok"
     notes = _notes_lines(footer_completeness, footer_freshness)
     layout = dash_layout(None if height is None else height - 1, quota_ok, len(notes))
+    cw = width - 4  # パネルの中身の幅
 
-    head = paint("ocw-meter dash", "bold") + paint(f"  {datetime.fromtimestamp(now).strftime('%m-%d %H:%M:%S')} 現在", "dim")
+    # 縦軸のラベルの欄の幅は全グラフで共通 (軸の線が同じ列に来る)。最大幅は日ごとの縦棒の最大値のラベル
+    daily_report = report_daily(usage_events, DAILY_DEFAULT_DAYS)
+    label_w = max(DASH_MIN_LABEL_W, len(fmt_tokens(max([d["weighted_tokens"] for d in daily_report["daily"]] + [0]))))
+
+    stamp = paint(datetime.fromtimestamp(now).strftime("%m-%d %H:%M:%S") + " 現在", "dim")
     if watch:
-        head += paint(f"  {watch} 秒ごとに自動更新 (Ctrl-C で終了)", "dim")
-    lines = [head]
-    if quota_ok:
-        resets = result["seven_day_resets_at"]
-        lines.append("  " + _clip(f"今の週 {fmt_pct(result['current_pct'])} / リセットまで {fmt_duration(resets - now)} / "
-                                  f"100% への見込み: {_quota_projection_summary(result['projection'])}", width - 2))
-    else:
-        lines.append("  " + paint("今の週: —", "dim"))
+        stamp += paint(f" · {watch} 秒ごとに自動更新 (Ctrl-C で終了)", "dim")
+    title = "ocw-meter dash"
+    head_body = dash_tiles(_dash_header_tiles(result, now), cw)
+    if layout["omitted"]:
+        head_body.append(paint(f"⚠ 端末の高さ ({height} 行) が足りないため省略: " + "、".join(layout["omitted"]), "yellow"))
+    lines = panel(title, _fit_aside(title, [stamp], width), head_body, width)
 
-    lines.append(section("週の上限が 100% に届くまでの推移 (見積もり)"))
+    title = "週の上限の推移 (見積もり)"
     if quota_ok:
         avg = result.get("weekly_average")
         avg = avg if avg and avg["status"] == "ok" else None
-        lines.extend(render_quota_chart(rows, result["projection"], resets, now, avg, height=layout["quota_rows"],
-                                        width=min(width - 8, 112)))
-        lines.append("  " + _quota_legend(result["projection"], avg, short=width < 100))
+        proj = result["projection"]
+        body = render_quota_chart(rows, proj, result["seven_day_resets_at"], now, avg, height=layout["quota_rows"],
+                                  width=max(10, cw - label_w - 2), label_w=label_w)
+        aside = _fit_aside(title, [_quota_legend(proj, avg), _quota_legend(proj, avg, short=True)], width)
     else:
-        lines.append("  " + paint(result["message"], "yellow"))
+        body, aside = [paint(result["message"], "yellow")], None
+    lines.extend(panel(title, aside, body, width))
 
     if layout["daily"]:
-        report = report_daily(usage_events, DAILY_DEFAULT_DAYS)
-        top, styles, has_other = daily_series(report)
-        grid, dropped = daily_columns(report["daily"], top, styles, has_other, layout["daily_rows"], width - 2)
-        title = f"日ごとのモデル別使用量 (直近 {report['days']} 日 / 重み付きトークン)"
-        lines.append(section(title) + (paint(f"  古い {dropped} 日を省略", "yellow") if dropped else ""))
-        lines.extend("  " + ln for ln in grid)
-        lines.append(_dash_daily_legend(report, width))
+        top, styles, has_other = daily_series(daily_report)
+        grid, dropped = daily_columns(daily_report["daily"], top, styles, has_other, layout["daily_rows"], cw, label_w=label_w + 1)  # +1: 他は ラベル 空白 軸の線 の並びで、縦棒は空白が無い
+        title = "日ごとのモデル別使用量"
+        aside = f"直近 {daily_report['days']} 日 / 重み付きトークン"
+        if dropped:
+            aside = paint(f"古い {dropped} 日を省略", "yellow") + paint(" · " + aside, "dim")
+        else:
+            aside = paint(aside, "dim")
+        lines.extend(panel(title, _fit_aside(title, [aside], width), grid + [" " * (label_w + 2) + _dash_daily_legend(daily_report, cw - label_w - 2)], width))
     if layout["heatmap"]:
-        weeks = heatmap_max_weeks_for_width(width)
-        lines.append(section(f"日ごとの消費量 (直近 {weeks} 週 / 重み付きトークン)"))
-        lines.extend(heatmap_lines(report_heatmap(usage_events, weeks)))
-    if layout["omitted"]:
-        lines.append("  " + paint(f"⚠ 端末の高さ ({height} 行) が足りないため省略: "
-                                  + "、".join(layout["omitted"]), "yellow"))
-    lines.extend(notes)
-    return [_clip(ln, width) for ln in lines]
+        weeks = max(1, min(HEATMAP_MAX_WEEKS, (cw - label_w - 2) // _HEATMAP_CELL_WIDTH))
+        title = "日ごとの消費量"
+        lines.extend(panel(title, _fit_aside(title, [paint(f"直近 {weeks} 週 / 重み付きトークン", "dim")], width),
+                           heatmap_lines(report_heatmap(usage_events, weeks), label_w=label_w), width))
+    lines.extend(panel("注記", None, [ln[2:] if ln.startswith("  ") else ln for ln in notes], width))
+    return lines
 
 
 def cmd_dash(args):
