@@ -271,7 +271,7 @@ ocw-meter report --quota-progress [--periods <n>] [--no-ingest] [--json|--plain]
 # 日の境目はローカル時刻（UTC ではない）。量は重み付きトークン（--quota-per-pct と同じ式）。
 # 期間内で量の多い上位 5 モデルを別々に、残りは「その他」にまとめる。使用の無い日も行を出す。
 # --json / --plain は、グラフの元の数値（日 × モデルの重み付きと素の内訳）を出す。
-# --pr / --phase / --model / --role / --window / --month / --reconcile / --since / --until / --quota-per-pct / --quota-progress とは併用不可
+# --pr / --phase / --model / --role / --window / --month / --reconcile / --since / --until / --quota-per-pct / --quota-progress / --heatmap とは併用不可
 ocw-meter report --daily [--days <n>] [--no-ingest] [--json|--plain]
 
 # 日ごとの消費量のヒートマップ（GitHub の草）: 週を列（月曜始まり）、曜日を行にして、消費の多い日ほど濃く塗る。
