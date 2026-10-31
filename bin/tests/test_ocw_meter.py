@@ -3792,6 +3792,70 @@ class ReportGroupedViewsTests(OcwMeterTestCase):
             self.assertNotEqual(result.returncode, 0, bad)
             self.assertIn("error:", result.stderr)
 
+    # -- --quota-progress --
+
+    def _seed_quota_samples(self, hours_ago_to_pct, resets_in_hours=72):
+        """Writes quota.sample events (hours before now -> seven_day_used_pct)."""
+        now = time.time()
+        events = []
+        for hours_ago, pct in hours_ago_to_pct:
+            ts = now - hours_ago * 3600
+            events.append({"event_type": "quota.sample", "schema_version": 1, "completeness": "complete",
+                           "ts": datetime.fromtimestamp(ts, timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z"),
+                           "idempotency_key": f"qp-{ts}", "event_id": f"qp-{ts}", "plan_source": "statusline",
+                           "seven_day_used_pct": pct, "seven_day_resets_at": int(now + resets_in_hours * 3600)})
+        events_dir = pathlib.Path(self.home) / "events"
+        events_dir.mkdir(parents=True, exist_ok=True)
+        (events_dir / "2026-08-01.jsonl").write_text("".join(json.dumps(e) + "\n" for e in events), encoding="utf-8")
+        return now
+
+    def _quota_progress_json(self):
+        out = run_meter(["report", "--quota-progress", "--no-ingest", "--json"], self.home)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        return json.loads(out.stdout)
+
+    def test_quota_progress_projects_when_the_week_reaches_100_and_degrades_without_data(self):
+        # 1%/hour over the last 30h: 40% now, 60h to 100%, the week resets in 72h.
+        now = self._seed_quota_samples([(h, 10 + (30 - h)) for h in range(30, 0, -1)])
+        data = self._quota_progress_json()
+        proj = data["projection"]
+        self.assertEqual(data["status"], "ok")
+        self.assertAlmostEqual(data["current_pct"], 39, delta=1)
+        self.assertEqual(proj["status"], "reaches")
+        eta = datetime.strptime(proj["reaches_100_at"], "%Y-%m-%dT%H:%M:%S.%fZ").replace(tzinfo=timezone.utc)
+        self.assertAlmostEqual((eta.timestamp() - now) / 3600, 61, delta=3)
+        self.assertLessEqual(len(data["points"]), 30)  # only where the % changes
+        # No usage in the store: every family says why, none gets a made-up number.
+        for family, row in data["remaining_tokens"].items():
+            self.assertEqual(row["status"], "unmeasurable", family)
+            self.assertNotIn("weighted_tokens", row)
+            self.assertTrue(row["reason"])
+        text = run_meter(["report", "--quota-progress", "--no-ingest"], self.home).stdout
+        self.assertIn("100% に届く見込み", text)
+        self.assertIn("—", text)
+        self.assertNotIn("\x1b[", text)
+
+        # Slow: 0.2%/hour cannot reach 100% before the reset.
+        self._seed_quota_samples([(h, 10 + 0.2 * (30 - h)) for h in range(30, 0, -1)])
+        proj = self._quota_progress_json()["projection"]
+        self.assertEqual(proj["status"], "not_this_week")
+        self.assertAlmostEqual(proj["pct_at_reset"], 10 + 0.2 * 29 + 0.2 * 72, delta=1.5)
+
+        # Not growing: no outlook, no division by a zero pace.
+        self._seed_quota_samples([(h, 50) for h in range(30, 0, -1)])
+        self.assertEqual(self._quota_progress_json()["projection"]["status"], "no_progress")
+
+        # One sample in the current week, or none at all: said in words, exit 0.
+        self._seed_quota_samples([(1, 20)])
+        self.assertEqual(self._quota_progress_json()["status"], "insufficient")
+        self.assertIn("1件", run_meter(["report", "--quota-progress", "--no-ingest"], self.home).stdout)
+        self._seed_quota_samples([])
+        self.assertEqual(self._quota_progress_json()["status"], "no_week")
+        self.assertEqual(run_meter(["report", "--quota-progress", "--no-ingest", "--plain"], self.home).returncode, 0)
+
+        for bad in (["--pr", "1"], ["--model"], ["--quota-per-pct"], ["--since", "2026-07-01T00:00:00Z"], ["--month"], ["--daily"]):
+            self.assertNotEqual(run_meter(["report", "--quota-progress", "--no-ingest", *bad], self.home).returncode, 0, bad)
+
     # -- --model --
 
     def test_model_view_groups_by_provider_and_model(self):

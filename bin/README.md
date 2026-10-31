@@ -257,11 +257,21 @@ ocw-meter report --since <rfc3339-ts> [--until <rfc3339-ts>] [--model|--role] [-
 # --reconcile / --since / --until とは併用不可
 ocw-meter report --quota-per-pct [--periods <n>] [--no-ingest] [--json|--plain]
 
+# 今の週（最新の seven_day_resets_at の、リセットの7日前〜リセット）の seven_day_used_pct の推移を文字のグラフで描く
+# （縦 0〜100%、横は日付の目盛り、▲ が今）。直近 24 時間の増える速さで延ばして 100% に届く見込みの時刻を出し
+# （リセットまでに届かないなら「この週のうちには届かない見込み」。グラフには · の線で描く）、残りの % を
+# --quota-per-pct の見積もりで系統ごとの重み付きトークンに換算する（測れない系統は — と理由）。
+# 今の週の quota.sample が無い・1件しか無いときは、描かずにその旨を出す（エラーにしない）。
+# --json は % が変わった点の列・見込み・換算、--plain は同じ数値の key: value。--periods は換算に使う見積もりの期間数。
+# 見積もりであり、止める・モデルを替える制御には使わない（ADR DOC-2610310237 §5）。
+# --pr / --phase / --model / --role / --window / --month / --reconcile / --since / --until / --quota-per-pct とは併用不可
+ocw-meter report --quota-progress [--periods <n>] [--no-ingest] [--json|--plain]
+
 # 日ごとのモデル別使用量: 直近 N 日（既定 14、今日を含む）を、1日1行の横向きの積み上げ棒で描く。
 # 日の境目はローカル時刻（UTC ではない）。量は重み付きトークン（--quota-per-pct と同じ式）。
 # 期間内で量の多い上位 5 モデルを別々に、残りは「その他」にまとめる。使用の無い日も行を出す。
 # --json / --plain は、グラフの元の数値（日 × モデルの重み付きと素の内訳）を出す。
-# --pr / --phase / --model / --role / --window / --month / --reconcile / --since / --until / --quota-per-pct とは併用不可
+# --pr / --phase / --model / --role / --window / --month / --reconcile / --since / --until / --quota-per-pct / --quota-progress とは併用不可
 ocw-meter report --daily [--days <n>] [--no-ingest] [--json|--plain]
 
 # 月次: cash cost（従量API）/ capacity cost（Claudeサブスク枠）/
