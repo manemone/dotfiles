@@ -3763,7 +3763,8 @@ class ReportGroupedViewsTests(OcwMeterTestCase):
             usage(today - timedelta(days=2) + timedelta(hours=12), f"claude-sonnet-x{n}", input_tokens=10 * (n + 1))
         events_dir = pathlib.Path(self.home) / "events"
         events_dir.mkdir(parents=True, exist_ok=True)
-        (events_dir / "2026-08-01.jsonl").write_text("".join(json.dumps(e) + "\n" for e in events), encoding="utf-8")
+        (events_dir / "2026-08-01.jsonl").write_text(
+            "".join(json.dumps(e) + "\n" for e in events) + '{"event_type":"usage.message", broken\n', encoding="utf-8")
         env = {"TZ": "JST-9", "NO_COLOR": "1"}
 
         report = json.loads(run_meter(["report", "--daily", "--days", "4", "--no-ingest", "--json"], self.home, env).stdout)
@@ -3779,6 +3780,8 @@ class ReportGroupedViewsTests(OcwMeterTestCase):
 
         text = run_meter(["report", "--daily", "--days", "4", "--no-ingest"], self.home, env).stdout
         self.assertIn("その他", text)
+        self.assertIn("⚠ 不正行 1 行", text)  # 数え漏れの警告は注記に残る
+        self.assertEqual(report["malformed_unvalidated_lines"], 1)
         self.assertNotIn("\x1b[", text)
         plain = run_meter(["report", "--daily", "--days", "4", "--no-ingest", "--plain"], self.home, env).stdout
         self.assertIn(f"{today.strftime('%Y-%m-%d')}:\n    weighted_tokens: 2500", plain)

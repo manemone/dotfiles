@@ -3103,7 +3103,7 @@ def _daily_bar_cells(segments, max_total, width):
     return cells
 
 
-def _pretty_daily(report, footer_freshness):
+def _pretty_daily(report, footer_completeness, footer_freshness):
     daily, totals = report["daily"], report["model_totals"]
     top = [t["model"] for t in totals[:DAILY_TOP_MODELS]]
     has_other = len(totals) > DAILY_TOP_MODELS
@@ -3142,17 +3142,22 @@ def _pretty_daily(report, footer_freshness):
         print("  " + paint("⚠ ingest の鮮度: " + str(fresh), "red", "bold"))
     if str(footer_freshness["ingest_this_run"]).startswith("failed"):
         print("  " + paint("⚠ ingest が失敗: " + str(footer_freshness["ingest_this_run"]), "red", "bold"))
+    # 数え漏れの警告 (pretty_footer と同じ文言・色。落とさない)
+    if footer_completeness["malformed_unvalidated_lines"]:
+        print("  " + paint(f"⚠ 不正行 {fmt_int(footer_completeness['malformed_unvalidated_lines'])} 行 (未隔離)。'ocw-meter validate' を実行", "yellow", "bold"))
+    if footer_completeness["quarantined_lines"]:
+        print("  " + paint(f"⚠ 隔離済みの行 {fmt_int(footer_completeness['quarantined_lines'])} 行 (このメーターが書いたイベント)", "yellow", "bold"))
     print("\n".join(render_kv([
         ("ingest", f"{footer_freshness['ingest_this_run']} / 最終 {footer_freshness['last_ingest_at_rfc3339'] or 'unknown'}"),
     ])))
 
 
-def print_daily(report, as_json, footer_freshness):
+def print_daily(report, as_json, footer_completeness, footer_freshness):
     if as_json:
-        print(json.dumps({**report, **footer_freshness}, ensure_ascii=False, indent=2, sort_keys=True))
+        print(json.dumps({**report, **footer_completeness, **footer_freshness}, ensure_ascii=False, indent=2, sort_keys=True))
         return
     if not REPORT_PLAIN:
-        _pretty_daily(report, footer_freshness)
+        _pretty_daily(report, footer_completeness, footer_freshness)
         return
     print(f"日ごとのモデル別使用量（直近 {report['days']} 日 / ローカル時刻）:")
     print(f"  weighted_tokens = {report['weighted_formula']}")
@@ -3167,6 +3172,8 @@ def print_daily(report, as_json, footer_freshness):
                   f"input_tokens={r['input_tokens']} cache_creation_input_tokens={r['cache_creation_input_tokens']} "
                   f"cache_read_input_tokens={r['cache_read_input_tokens']} output_tokens={r['output_tokens']} "
                   f"cost_estimate_usd={r['cost_estimate_usd']}")
+    print(f"quarantined_lines: {footer_completeness['quarantined_lines']}")
+    print(f"malformed_unvalidated_lines: {footer_completeness['malformed_unvalidated_lines']}")
     print(f"last_ingest_at_rfc3339: {footer_freshness['last_ingest_at_rfc3339'] or 'unknown'}")
     print(f"ingest (this run): {footer_freshness['ingest_this_run']}")
     print(f"ingest_freshness_warning: {footer_freshness['ingest_freshness_warning']}")
@@ -4273,7 +4280,8 @@ def cmd_report(args):
 
     if daily:
         usage_events = [e for e in valid_events if e.get("event_type") == "usage.message"]
-        print_daily(report_daily(usage_events, days or DAILY_DEFAULT_DAYS), as_json, footer_freshness)
+        print_daily(report_daily(usage_events, days or DAILY_DEFAULT_DAYS), as_json,
+                    completeness_footer(paths, usage_events, malformed), footer_freshness)
         return 0
 
     if quota_per_pct:
