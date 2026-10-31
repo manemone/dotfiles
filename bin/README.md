@@ -272,12 +272,14 @@ ocw-meter report --quota-per-pct [--periods <n>] [--no-ingest] [--json|--plain]
 # --pr / --phase / --model / --role / --window / --month / --reconcile / --since / --until / --quota-per-pct とは併用不可
 ocw-meter report --quota-progress [--periods <n>] [--compare-weeks <n>] [--no-ingest] [--json|--plain]
 
-# 日ごとのモデル別使用量: 直近 N 日（既定 14、今日を含む）を、1日1行の横向きの積み上げ棒で描く。
+# 日ごとのモデル別使用量: 直近 N 日（既定 14、今日を含む）を、日付を横軸にした縦の積み上げ棒で描く（古い日が左、月曜に印と MM/DD）。
 # 日の境目はローカル時刻（UTC ではない）。量は重み付きトークン（--quota-per-pct と同じ式）。
-# 期間内で量の多い上位 5 モデルを別々に、残りは「その他」にまとめる。使用の無い日も行を出す。
-# --json / --plain は、グラフの元の数値（日 × モデルの重み付きと素の内訳）を出す。
+# 期間内で量の多い上位 5 モデルを別々に、残りは「その他」にまとめる。使用の無い日も空の列を出す。
+# 端末幅に入らない日数は、棒を細くし、それでも入らなければ古い日から削って、削った日数を警告に出す。
+# --rows は従来の横棒（1日1行、行末に日ごとの合計の数値）。--daily 以外とは併用不可。
+# --json / --plain は、グラフの元の数値（日 × モデルの重み付きと素の内訳）を出す（描き方に依らず同じ）。
 # --pr / --phase / --model / --role / --window / --month / --reconcile / --since / --until / --quota-per-pct / --quota-progress / --heatmap とは併用不可
-ocw-meter report --daily [--days <n>] [--no-ingest] [--json|--plain]
+ocw-meter report --daily [--days <n>] [--rows] [--no-ingest] [--json|--plain]
 
 # 日ごとの消費量のヒートマップ（GitHub の草）: 週を列（月曜始まり）、曜日を行にして、消費の多い日ほど濃く塗る。
 # 量は日ごとの重み付きトークンの全モデル合計（--daily と同じ式）、日の境目はローカル時刻。

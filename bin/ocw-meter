@@ -34,7 +34,7 @@ usage:
   ocw-meter report --since <rfc3339-ts> [--until <rfc3339-ts>] [--model|--role] [--pr <n>] [--periods <n>] [--no-ingest] [--json|--plain]
   ocw-meter report --quota-per-pct [--periods <n>] [--no-ingest] [--json|--plain]
   ocw-meter report --quota-progress [--periods <n>] [--compare-weeks <n>] [--no-ingest] [--json|--plain]
-  ocw-meter report --daily [--days <n>] [--no-ingest] [--json|--plain]
+  ocw-meter report --daily [--days <n>] [--rows] [--no-ingest] [--json|--plain]
   ocw-meter report --heatmap [--weeks <n>] [--no-ingest] [--json|--plain]
   ocw-meter report --month [YYYY-MM] [--repo <owner>/<name>] [--no-ingest] [--json|--plain]
   ocw-meter report --reconcile [--month <YYYY-MM>] [--provider-total <model>=<tokens> ...] [--no-ingest] [--json|--plain]
@@ -188,17 +188,21 @@ subcommands:
     with --pr/--phase/--model/--role/--window/--month/--reconcile/
     --since/--until/--quota-per-pct. See the ADR on quota-per-pct.
 
-  report --daily [--days <n>]
+  report --daily [--days <n>] [--rows]
     Per-day usage by model for the last <n> days (default 14, today
     included), days split at LOCAL midnight (not UTC). The graph is one
-    stacked horizontal bar per day, measured in weighted tokens (the same
+    vertical stacked bar per day (date on the horizontal axis, oldest at
+    left; Mondays marked), measured in weighted tokens (the same
     formula as --quota-per-pct: input + 1.25*cache_creation +
     0.1*cache_read + 5*output): the top 5 models of the period are drawn
-    separately, the rest as "その他"; days without usage still get a row.
+    separately, the rest as "その他"; days without usage still get an empty
+    column. Days that do not fit the terminal width are dropped oldest
+    first (a warning line says how many). --rows draws the previous layout
+    instead: one horizontal bar per day with the day's total at the end.
     --json / --plain give the numbers behind the graph (weighted and raw
     token breakdown per day x model). Cannot be combined with
     --pr/--phase/--model/--role/--window/--month/--reconcile/--since/
-    --until/--quota-per-pct/--quota-progress/--heatmap. --days only applies to --daily.
+    --until/--quota-per-pct/--quota-progress/--heatmap. --days and --rows only apply to --daily.
 
   report --heatmap [--weeks <n>]
     Per-day consumption as a GitHub-style grid: one column per week
@@ -3066,6 +3070,7 @@ def print_quota_per_pct(estimate, as_json, footer_freshness):
 
 DAILY_DEFAULT_DAYS = 14
 DAILY_TOP_MODELS = 5
+DAILY_COLUMNS_HEIGHT = 11
 _DAILY_SERIES_STYLE = (("█", "magenta"), ("▓", "cyan"), ("▒", "green"), ("░", "yellow"), ("▚", "blue"))
 _DAILY_OTHER_STYLE = ("·", "dim")
 _WEEKDAY_JA = "月火水木金土日"
@@ -3166,26 +3171,105 @@ def _pretty_notes(footer_completeness, footer_freshness):
     ])))
 
 
-def _pretty_daily(report, footer_completeness, footer_freshness):
-    daily, totals = report["daily"], report["model_totals"]
+def daily_series(report):
+    """日ごとのグラフの系列。-> (top, styles, has_other)。top は個別に描くモデル (期間内の量の多い順)、
+    styles は top の各 (記号, 色) の後ろに「その他」(has_other のとき) を足したもの。
+    横棒 (--rows)・縦棒 (daily_columns)・凡例・孫7 のダッシュボードが共有する。"""
+    totals = report["model_totals"]
     top = [t["model"] for t in totals[:DAILY_TOP_MODELS]]
     has_other = len(totals) > DAILY_TOP_MODELS
-    styles = list(_DAILY_SERIES_STYLE[:len(top)]) + ([_DAILY_OTHER_STYLE] if has_other else [])
+    return top, list(_DAILY_SERIES_STYLE[:len(top)]) + ([_DAILY_OTHER_STYLE] if has_other else []), has_other
+
+
+def _daily_segments(day, top, has_other):
+    """1日分の積み上げの区間の量 (top の順、has_other なら末尾に「その他」)。"""
+    segs = [day["by_model"][m]["weighted_tokens"] if m in day["by_model"] else 0 for m in top]
+    if has_other:
+        segs.append(sum(r["weighted_tokens"] for k, r in day["by_model"].items() if k not in top))
+    return segs
+
+
+def daily_columns(daily, top, styles, has_other, height, width):
+    """日ごとの縦の積み上げ棒 (横軸が日付、縦軸が重み付きトークン)。孫7 のダッシュボードも呼ぶ部品で、
+    高さ (棒の行数) と全体の幅 (桁数) を渡すと、行のリストと省いた日数を返す。-> (lines, dropped)
+    1日1本。幅に入らなければ棒の幅を詰め (3→1 桁、日の間の隙間 1 桁→0)、それでも入らなければ古い日から
+    削る (dropped)。下の積み上げが先頭の系列。縦軸の目盛りは最大・中央・0 (fmt_tokens)。
+    横軸は月曜に ┴ と MM/DD (先頭の日も、月曜が近くなければ MM/DD を出す)。"""
+    height = max(2, height)
+    totals = [d["weighted_tokens"] for d in daily]
+    max_total = max(totals + [0])
+    ticks = {0: fmt_tokens(max_total), (height - 1) // 2: fmt_tokens(max_total / 2), height - 1: "0"}
+    y_w = max(len(t) for t in ticks.values())
+    avail = max(1, width - y_w - 1)
+    if len(daily) * 2 <= avail:
+        gap = 1
+        bw = min(3, avail // len(daily) - gap)
+    else:
+        gap, bw = 0, 1
+    shown = daily[-(avail // (bw + gap)):]
+    dropped = len(daily) - len(shown)
+    cols = []
+    for d in shown:
+        cells = _daily_bar_cells(_daily_segments(d, top, has_other), max_total, height)
+        bounds, acc = [], 0
+        for c in cells:
+            acc += c
+            bounds.append(acc)
+        cols.append(bounds)
+    lines = []
+    for r in range(height):
+        k = height - 1 - r  # 下から数えた行
+        out = []
+        for bounds in cols:
+            idx = next((i for i, b in enumerate(bounds) if k < b), None)
+            if idx is None:
+                cell = " " * bw
+            else:
+                sym, color = styles[idx]
+                cell = paint(sym * bw, color)
+            out.append(cell + " " * gap)
+        lines.append(pad(ticks.get(r, ""), y_w, "r") + paint("│", "dim") + "".join(out))
+    pitch = bw + gap
+    monday = [datetime.strptime(d["date"], "%Y-%m-%d").weekday() == 0 for d in shown]
+    axis = "".join(("┴" if m else "─") + "─" * (pitch - 1) for m in monday)
+    lines.append(" " * y_w + paint("└" + axis, "dim"))
+    label_at = [i for i, m in enumerate(monday) if m]
+    if shown and (not label_at or label_at[0] >= 6):
+        label_at.insert(0, 0)
+    label_row, pos = "", 0
+    for i in label_at:
+        text = shown[i]["date"][5:].replace("-", "/")
+        start = 1 + i * pitch  # 軸の └ の分だけ 1 桁ずれる
+        if start < pos or start + len(text) > avail + 1:
+            continue
+        label_row += " " * (start - pos) + text
+        pos = start + len(text)
+    lines.append(" " * y_w + label_row)
+    return lines, dropped
+
+
+def _pretty_daily(report, footer_completeness, footer_freshness, rows=False):
+    daily, totals = report["daily"], report["model_totals"]
+    top, styles, has_other = daily_series(report)
     print(section(f"日ごとのモデル別使用量 (直近 {report['days']} 日 / ローカル時刻 / 重み付きトークン)"))
     if not totals:
         print("  (この期間に使用なし)")
-    labels = [d["date"][5:] + " " + _WEEKDAY_JA[datetime.strptime(d["date"], "%Y-%m-%d").weekday()] for d in daily]
-    sums = [fmt_tokens(d["weighted_tokens"]) for d in daily]
-    label_w, sum_w = max(disp_width(x) for x in labels), max(disp_width(x) for x in sums)
-    bar_w = max(10, term_width() - 2 - label_w - 2 - sum_w - 2)
-    max_total = max([d["weighted_tokens"] for d in daily] + [0])
-    for d, label, total_text in zip(daily, labels, sums):
-        segs = [d["by_model"][m]["weighted_tokens"] if m in d["by_model"] else 0 for m in top]
-        if has_other:
-            segs.append(sum(r["weighted_tokens"] for k, r in d["by_model"].items() if k not in top))
-        cells = _daily_bar_cells(segs, max_total, bar_w)
-        bar = "".join(paint(sym * n, color) for (sym, color), n in zip(styles, cells) if n)
-        print("  " + pad(label, label_w) + "  " + bar + " " * (bar_w - sum(cells)) + "  " + pad(total_text, sum_w, "r"))
+    if not rows:
+        lines, dropped = daily_columns(daily, top, styles, has_other, DAILY_COLUMNS_HEIGHT, term_width() - 2)
+        for line in lines:
+            print("  " + line)
+        if dropped:
+            print("  " + paint(f"⚠ 端末幅に入らないため古い {dropped} 日を省略 (--days を減らすか --rows で横棒)", "yellow"))
+    else:
+        labels = [d["date"][5:] + " " + _WEEKDAY_JA[datetime.strptime(d["date"], "%Y-%m-%d").weekday()] for d in daily]
+        sums = [fmt_tokens(d["weighted_tokens"]) for d in daily]
+        label_w, sum_w = max(disp_width(x) for x in labels), max(disp_width(x) for x in sums)
+        bar_w = max(10, term_width() - 2 - label_w - 2 - sum_w - 2)
+        max_total = max([d["weighted_tokens"] for d in daily] + [0])
+        for d, label, total_text in zip(daily, labels, sums):
+            cells = _daily_bar_cells(_daily_segments(d, top, has_other), max_total, bar_w)
+            bar = "".join(paint(sym * n, color) for (sym, color), n in zip(styles, cells) if n)
+            print("  " + pad(label, label_w) + "  " + bar + " " * (bar_w - sum(cells)) + "  " + pad(total_text, sum_w, "r"))
     if totals:
         print(section("凡例 (期間内の合計)"))
         grand = sum(t["weighted_tokens"] for t in totals) or 1
@@ -3202,12 +3286,12 @@ def _pretty_daily(report, footer_completeness, footer_freshness):
     _pretty_notes(footer_completeness, footer_freshness)
 
 
-def print_daily(report, as_json, footer_completeness, footer_freshness):
+def print_daily(report, as_json, footer_completeness, footer_freshness, rows=False):
     if as_json:
         print(json.dumps({**report, **footer_completeness, **footer_freshness}, ensure_ascii=False, indent=2, sort_keys=True))
         return
     if not REPORT_PLAIN:
-        _pretty_daily(report, footer_completeness, footer_freshness)
+        _pretty_daily(report, footer_completeness, footer_freshness, rows)
         return
     print(f"日ごとのモデル別使用量（直近 {report['days']} 日 / ローカル時刻）:")
     print(f"  weighted_tokens = {report['weighted_formula']}")
@@ -4581,6 +4665,7 @@ def cmd_report(args):
     periods = None
     daily = False
     days = None
+    rows = False
     heatmap = False
     weeks = None
     i = 0
@@ -4591,6 +4676,9 @@ def cmd_report(args):
             i += 1
         elif token == "--heatmap":
             heatmap = True
+            i += 1
+        elif token == "--rows":
+            rows = True
             i += 1
         elif token == "--weeks":
             if i + 1 >= len(args):
@@ -4743,6 +4831,9 @@ def cmd_report(args):
             return 1
     elif days is not None:
         print("error: --days only applies to --daily", file=sys.stderr)
+        return 1
+    elif rows:
+        print("error: --rows only applies to --daily", file=sys.stderr)
         return 1
     if heatmap and not daily:
         conflict = next((flag for flag, on in (
@@ -4908,7 +4999,7 @@ def cmd_report(args):
     if daily:
         usage_events = [e for e in valid_events if e.get("event_type") == "usage.message"]
         print_daily(report_daily(usage_events, days or DAILY_DEFAULT_DAYS), as_json,
-                    completeness_footer(paths, usage_events, malformed), footer_freshness)
+                    completeness_footer(paths, usage_events, malformed), footer_freshness, rows)
         return 0
 
     if quota_progress_flag:
