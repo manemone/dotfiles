@@ -46,12 +46,14 @@ import json
 import os
 import pathlib
 import pty
+import re
 import shutil
 import stat
 import subprocess
 import sys
 import tempfile
 import time
+import unicodedata
 import unittest
 from datetime import datetime, timedelta, timezone
 
@@ -125,6 +127,29 @@ def run_meter(args, home, extra_env=None, timeout=30, cwd=None):
         text=True,
         timeout=timeout,
     )
+
+
+def run_meter_on_pty(args, home, extra_env=None):
+    """stdout だけを疑似端末にして ocw-meter を走らせ、出力を返す (色の出る経路を通す)。"""
+    master, slave = pty.openpty()
+    env = dict(os.environ, OCW_METER_HOME=str(home), HOME=str(pathlib.Path(home).parent))
+    env.pop("NO_COLOR", None)
+    env.update(extra_env or {})
+    proc = subprocess.Popen([str(OCW_METER), *args], cwd=str(REPO_ROOT),
+                            env=env, stdout=slave, stderr=subprocess.DEVNULL)
+    os.close(slave)
+    chunks = []
+    while True:
+        try:
+            data = os.read(master, 4096)
+        except OSError:
+            break
+        if not data:
+            break
+        chunks.append(data)
+    os.close(master)
+    proc.wait(timeout=30)
+    return b"".join(chunks).decode("utf-8", "replace")
 
 
 def run_snapshot_quota(stdin_text, home, extra_env=None, timeout=30):
@@ -553,7 +578,7 @@ class ValidateTests(OcwMeterTestCase):
 class ReportTests(OcwMeterTestCase):
     def test_report_on_empty_storage_does_not_fail(self):
         # T20
-        result = run_meter(["report"], self.home)
+        result = run_meter(["report", "--plain"], self.home)
         self.assertEqual(result.returncode, 0)
         self.assertIn("total events:  0", result.stdout)
         self.assertIn("coverage:", result.stdout)
@@ -2330,7 +2355,7 @@ class PriceTableFallbackWarningTests(OcwMeterTestCase):
         self.assertEqual(data["price_table_fallback_count"], 1)
         # Text output must say "2件中1件" (partial), not claim the whole
         # month (2件) is a fallback.
-        text_result = run_report(self.home, self.projects_dir, args=["--month", "2026-08"], price_dir=price_dir)
+        text_result = run_report(self.home, self.projects_dir, args=["--month", "2026-08", "--plain"], price_dir=price_dir)
         self.assertIn("2件中1件", text_result.stdout)
 
     def test_month_report_text_output_shows_the_fallback_marker(self):
@@ -2341,7 +2366,7 @@ class PriceTableFallbackWarningTests(OcwMeterTestCase):
         write_transcript(self.projects_dir, "proj", "sess-july3", [
             assistant_line("sess-july3", "m1", model="deepseek-v4-pro", timestamp="2026-07-15T10:00:00.000Z"),
         ])
-        result = run_report(self.home, self.projects_dir, args=["--month", "2026-07"], price_dir=self.price_dir)
+        result = run_report(self.home, self.projects_dir, args=["--month", "2026-07", "--plain"], price_dir=self.price_dir)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("price_tables_applied:", result.stdout)
         self.assertIn("deepseek-2026-08-01 (effective 2026-08-01)", result.stdout)
@@ -2381,7 +2406,7 @@ class ReportAutoIngestTests(OcwMeterTestCase):
 
     def test_no_ingest_flag_skips_the_automatic_ingest(self):
         write_transcript(self.projects_dir, "proj", "sess-skip", [assistant_line("sess-skip", "m1")])
-        result = run_report(self.home, self.projects_dir, args=["--no-ingest"])
+        result = run_report(self.home, self.projects_dir, args=["--no-ingest", "--plain"])
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(read_events(self.home), [])
         self.assertIn("ingest (this run): skipped (--no-ingest)", result.stdout)
@@ -2394,7 +2419,7 @@ class ReportAutoIngestTests(OcwMeterTestCase):
         self.assertNotIn("ingest already ran automatically", result.stdout)
         self.assertIn("no usage.message events found in transcripts", result.stdout)
 
-        reconcile_result = run_report(self.home, self.projects_dir, args=["--reconcile", "--no-ingest"])
+        reconcile_result = run_report(self.home, self.projects_dir, args=["--reconcile", "--no-ingest", "--plain"])
         self.assertEqual(reconcile_result.returncode, 0, reconcile_result.stderr)
         self.assertNotIn("ingest already ran automatically", reconcile_result.stdout)
 
@@ -2438,7 +2463,7 @@ class ReportAutoIngestTests(OcwMeterTestCase):
         # storage root (report's own top-level worktree guard would
         # short-circuit before auto-ingest ever runs for that case).
         run_meter(["event", "run.start", "--idempotency-key", "k1"], self.home)
-        result = run_meter(["report"], self.home, extra_env={"HOME": ""})
+        result = run_meter(["report", "--plain"], self.home, extra_env={"HOME": ""})
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("total events:  1", result.stdout)
         self.assertIn("ingest (this run): failed: could not determine the Claude projects directory", result.stdout)
@@ -2452,7 +2477,7 @@ class ReportAutoIngestTests(OcwMeterTestCase):
 
     def test_footer_shows_last_ingest_timestamp_after_a_successful_run(self):
         write_transcript(self.projects_dir, "proj", "sess-fresh", [assistant_line("sess-fresh", "m1")])
-        result = run_report(self.home, self.projects_dir)
+        result = run_report(self.home, self.projects_dir, args=["--plain"])
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertNotIn("last_ingest_at: unknown", result.stdout)
         cursor = json.loads((self.home / "state" / "ingest-cursor.json").read_text(encoding="utf-8"))
@@ -2466,7 +2491,7 @@ class ReportAutoIngestTests(OcwMeterTestCase):
         state_dir = self.home / "state"
         state_dir.mkdir(parents=True, exist_ok=True)
         (state_dir / "ingest-cursor.json").write_text(json.dumps({"files": {}}), encoding="utf-8")
-        result = run_meter(["report", "--no-ingest"], self.home)
+        result = run_meter(["report", "--no-ingest", "--plain"], self.home)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("last_ingest_at: unknown", result.stdout)
         self.assertIn("last_ingest_at_rfc3339: unknown", result.stdout)
@@ -2496,7 +2521,7 @@ class ReportAutoIngestTests(OcwMeterTestCase):
             (state_dir / "ingest-cursor.json").write_text(
                 json.dumps({"files": {}, "last_ingest_at": ts}), encoding="utf-8",
             )
-            return run_meter(["report", "--no-ingest"], self.home)
+            return run_meter(["report", "--no-ingest", "--plain"], self.home)
 
         fresh_result = cursor_at_age(minutes=5)
         self.assertEqual(fresh_result.returncode, 0, fresh_result.stderr)
@@ -3632,7 +3657,7 @@ class ReportGroupedViewsTests(OcwMeterTestCase):
 
     def test_phase_model_role_window_month_on_empty_storage_do_not_fail(self):
         for view_args in (["--phase"], ["--model"], ["--role"], ["--window"], ["--month"]):
-            result = run_meter(["report", *view_args], self.home)
+            result = run_meter(["report", *view_args, "--plain"], self.home)
             self.assertEqual(result.returncode, 0, f"{view_args} failed: {result.stderr}")
             self.assertIn("coverage:", result.stdout)
             self.assertIn("completeness:", result.stdout)
@@ -3735,13 +3760,379 @@ class ReportGroupedViewsTests(OcwMeterTestCase):
                                opus_tokens / families["opus"]["weighted_tokens_per_pct"], places=1)
         self.assertIsNone(rows["anthropic/claude-haiku-5-5"]["estimated_weekly_pct"])
         self.assertIsNone(rows["deepseek/deepseek-v4-pro"]["estimated_weekly_pct"])
-        text = run_meter(["report", "--no-ingest", "--since", "2026-07-01T00:00:00Z"], self.home).stdout
+        text = run_meter(["report", "--no-ingest", "--since", "2026-07-01T00:00:00Z", "--plain"], self.home).stdout
         self.assertIn("estimated_weekly_pct: \n", text)
 
         for bad in (["--quota-per-pct", "--pr", "1"], ["--quota-per-pct", "--model"], ["--periods", "2"],
                     ["--since", "2026-07-01T00:00:00Z", "--role", "--periods", "2"],
                     ["--quota-per-pct", "--periods", "0"]):
             self.assertNotEqual(run_meter(["report", "--no-ingest", *bad], self.home).returncode, 0, bad)
+
+    # -- --daily --
+
+    def test_daily_splits_days_at_local_midnight_groups_other_and_rejects_bad_combinations(self):
+        jst = timezone(timedelta(hours=9))
+        today = datetime.now(jst).replace(hour=0, minute=0, second=0, microsecond=0)
+        events = []
+        def usage(local_dt, model, **tokens):
+            stamp = local_dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+            events.append({"event_type": "usage.message", "schema_version": 1, "ts": stamp,
+                           "idempotency_key": f"k-{len(events)}", "event_id": f"id-{len(events)}",
+                           "completeness": "complete", "provider": "anthropic", "model": model,
+                           "message_id": f"m-{len(events)}", "input_tokens": 0, "cache_read_input_tokens": 0,
+                           "cache_creation_input_tokens": 0, "output_tokens": 0, **tokens})
+        # 00:30 JST today is still yesterday in UTC; 23:30 JST yesterday likewise is not today.
+        usage(today + timedelta(minutes=30), "claude-opus-5-5", input_tokens=1000, cache_read_input_tokens=10000, output_tokens=100)
+        usage(today - timedelta(minutes=30), "claude-opus-5-5", input_tokens=100)
+        for n in range(6):  # six models on one day: the smallest ones fold into "その他"
+            usage(today - timedelta(days=2) + timedelta(hours=12), f"claude-sonnet-x{n}", input_tokens=10 * (n + 1))
+        events_dir = pathlib.Path(self.home) / "events"
+        events_dir.mkdir(parents=True, exist_ok=True)
+        (events_dir / "2026-08-01.jsonl").write_text(
+            "".join(json.dumps(e) + "\n" for e in events) + '{"event_type":"usage.message", broken\n', encoding="utf-8")
+        env = {"TZ": "JST-9", "NO_COLOR": "1"}
+
+        report = json.loads(run_meter(["report", "--daily", "--days", "4", "--no-ingest", "--json"], self.home, env).stdout)
+        by_date = {d["date"]: d for d in report["daily"]}
+        self.assertEqual(len(report["daily"]), 4)  # the unused day (3 days ago) still has a row
+        self.assertEqual(report["daily"][0]["weighted_tokens"], 0)
+        today_row = by_date[today.strftime("%Y-%m-%d")]
+        yesterday_row = by_date[(today - timedelta(days=1)).strftime("%Y-%m-%d")]
+        # Same formula as --quota-per-pct: input + 1.25*cache_creation + 0.1*cache_read + 5*output.
+        self.assertEqual(today_row["weighted_tokens"], 1000 + 0.1 * 10000 + 5 * 100)
+        self.assertEqual(today_row["messages"], 1)
+        self.assertEqual(yesterday_row["weighted_tokens"], 100)
+
+        text = run_meter(["report", "--daily", "--days", "4", "--no-ingest"], self.home, env).stdout
+        self.assertIn("その他", text)
+        self.assertIn("⚠ 不正行 1 行", text)  # 数え漏れの警告は注記に残る
+        self.assertEqual(report["malformed_unvalidated_lines"], 1)
+        self.assertNotIn("\x1b[", text)
+        plain = run_meter(["report", "--daily", "--days", "4", "--no-ingest", "--plain"], self.home, env).stdout
+        self.assertIn(f"{today.strftime('%Y-%m-%d')}:\n    weighted_tokens: 2500", plain)
+
+        # 既定は縦の積み上げ棒: 最大の日 (今日) は全段、少ない日は低い。幅が足りなければ古い日から削って知らせる。
+        lines = text.splitlines()
+        chart = [l.split("│", 1)[1] for l in lines if "│" in l]
+        self.assertEqual(len(chart), 11)
+        pitch = 4  # 3 桁の棒 + 隙間 1
+        column_height = [sum(1 for row in chart if row[i * pitch:i * pitch + 3].strip()) for i in range(4)]
+        self.assertEqual(column_height[3], 11)
+        self.assertEqual(column_height[0], 0)  # 使用の無い日は空の列
+        self.assertTrue(0 < column_height[1] < column_height[3] and 0 < column_height[2] < column_height[3])
+        self.assertNotIn("省略", text)
+        narrow = run_meter(["report", "--daily", "--days", "40", "--no-ingest"], self.home, {**env, "COLUMNS": "40"}).stdout
+        self.assertRegex(narrow, r"古い \d+ 日を省略")
+        # --rows で横棒 (1日1行、行末に合計)。縦棒の軸は出ない。
+        rows_text = run_meter(["report", "--daily", "--days", "4", "--rows", "--no-ingest"], self.home, env).stdout
+        self.assertIn("2.5K", rows_text)
+        self.assertNotIn("└", rows_text)
+        self.assertEqual(json.loads(run_meter(["report", "--daily", "--days", "4", "--rows", "--no-ingest", "--json"],
+                                              self.home, env).stdout)["daily"], report["daily"])
+
+        for bad in (["--daily", "--model"], ["--daily", "--quota-per-pct"], ["--daily", "--pr", "1"],
+                    ["--daily", "--since", "2026-07-01T00:00:00Z"], ["--daily", "--days", "0"], ["--days", "3"],
+                    ["--rows"], ["--model", "--rows"]):
+            result = run_meter(["report", "--no-ingest", *bad], self.home, env)
+            self.assertNotEqual(result.returncode, 0, bad)
+            self.assertIn("error:", result.stderr)
+
+    # -- --quota-progress --
+
+    def _seed_quota_samples(self, hours_ago_to_pct, resets_in_hours=72):
+        """Writes quota.sample events (hours before now -> seven_day_used_pct)."""
+        now = time.time()
+        events = []
+        for hours_ago, pct in hours_ago_to_pct:
+            ts = now - hours_ago * 3600
+            events.append({"event_type": "quota.sample", "schema_version": 1, "completeness": "complete",
+                           "ts": datetime.fromtimestamp(ts, timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z"),
+                           "idempotency_key": f"qp-{ts}", "event_id": f"qp-{ts}", "plan_source": "statusline",
+                           "seven_day_used_pct": pct, "seven_day_resets_at": int(now + resets_in_hours * 3600)})
+        events_dir = pathlib.Path(self.home) / "events"
+        events_dir.mkdir(parents=True, exist_ok=True)
+        (events_dir / "2026-08-01.jsonl").write_text("".join(json.dumps(e) + "\n" for e in events), encoding="utf-8")
+        return now
+
+    def _quota_progress_json_args(self, extra):
+        out = run_meter(["report", "--quota-progress", "--no-ingest", "--json", *extra], self.home)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        return json.loads(out.stdout)
+
+    def _quota_progress_json(self):
+        return self._quota_progress_json_args([])
+
+    def test_quota_progress_projects_when_the_week_reaches_100_and_degrades_without_data(self):
+        # 1%/hour over the last 30h: 40% now, 60h to 100%, the week resets in 72h.
+        now = self._seed_quota_samples([(h, 10 + (30 - h)) for h in range(30, 0, -1)])
+        data = self._quota_progress_json()
+        proj = data["projection"]
+        self.assertEqual(data["status"], "ok")
+        self.assertAlmostEqual(data["current_pct"], 39, delta=1)
+        self.assertEqual(proj["status"], "reaches")
+        eta = datetime.strptime(proj["reaches_100_at"], "%Y-%m-%dT%H:%M:%S.%fZ").replace(tzinfo=timezone.utc)
+        self.assertAlmostEqual((eta.timestamp() - now) / 3600, 61, delta=3)
+        self.assertLessEqual(len(data["points"]), 30)  # only where the % changes
+        # No usage in the store: every family says why, none gets a made-up number.
+        for family, row in data["remaining_tokens"].items():
+            self.assertEqual(row["status"], "unmeasurable", family)
+            self.assertNotIn("weighted_tokens", row)
+            self.assertTrue(row["reason"])
+        text = run_meter(["report", "--quota-progress", "--no-ingest"], self.home).stdout
+        self.assertIn("100% に届く見込み", text)
+        self.assertIn("—", text)
+        self.assertNotIn("\x1b[", text)
+
+        # Slow: 0.2%/hour cannot reach 100% before the reset.
+        self._seed_quota_samples([(h, 10 + 0.2 * (30 - h)) for h in range(30, 0, -1)])
+        proj = self._quota_progress_json()["projection"]
+        self.assertEqual(proj["status"], "not_this_week")
+        self.assertAlmostEqual(proj["pct_at_reset"], 10 + 0.2 * 29 + 0.2 * 72, delta=1.5)
+
+        # Not growing: no outlook, no division by a zero pace.
+        self._seed_quota_samples([(h, 50) for h in range(30, 0, -1)])
+        self.assertEqual(self._quota_progress_json()["projection"]["status"], "no_progress")
+
+        # One sample in the current week, or none at all: said in words, exit 0.
+        self._seed_quota_samples([(1, 20)])
+        self.assertEqual(self._quota_progress_json()["status"], "insufficient")
+        self.assertIn("1件", run_meter(["report", "--quota-progress", "--no-ingest"], self.home).stdout)
+        self._seed_quota_samples([])
+        self.assertEqual(self._quota_progress_json()["status"], "no_week")
+        self.assertEqual(run_meter(["report", "--quota-progress", "--no-ingest", "--plain"], self.home).returncode, 0)
+
+        for bad in (["--pr", "1"], ["--model"], ["--quota-per-pct"], ["--since", "2026-07-01T00:00:00Z"], ["--month"], ["--daily"]):
+            self.assertNotEqual(run_meter(["report", "--quota-progress", "--no-ingest", *bad], self.home).returncode, 0, bad)
+
+    def _seed_weeks(self, weeks):
+        """Writes quota.sample events for past weeks and the current one.
+        `weeks`: {weeks_ago: [(hours since that week's start, pct)]}; the
+        current week (0) resets 72h from now."""
+        now = time.time()
+        events = []
+        for ago, samples in weeks.items():
+            resets = int(now + 72 * 3600) - ago * 7 * 86400
+            start = resets - 7 * 86400
+            for h, pct in samples:
+                ts = start + h * 3600
+                events.append({"event_type": "quota.sample", "schema_version": 1, "completeness": "complete",
+                               "ts": datetime.fromtimestamp(ts, timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z"),
+                               "idempotency_key": f"qw-{ago}-{h}", "event_id": f"qw-{ago}-{h}", "plan_source": "statusline",
+                               "seven_day_used_pct": pct, "seven_day_resets_at": resets})
+        events_dir = pathlib.Path(self.home) / "events"
+        events_dir.mkdir(parents=True, exist_ok=True)
+        (events_dir / "2026-08-01.jsonl").write_text("".join(json.dumps(e) + "\n" for e in events), encoding="utf-8")
+
+    def test_quota_progress_compares_with_the_average_of_past_weeks(self):
+        cur = [(h, h / 4) for h in range(0, 97, 8)]  # 96h into the week, 24%
+        # Two finished weeks, aligned by time since their start: at 50h the
+        # last sample at or before is the 48h one (10 / 30), not an interpolation.
+        self._seed_weeks({0: cur, 1: [(0, 0), (48, 10), (167, 20)], 2: [(0, 0), (48, 30), (167, 60)]})
+        wa = self._quota_progress_json()["weekly_average"]
+        self.assertEqual((wa["status"], wa["weeks_requested"], wa["weeks_used"]), ("ok", 4, 2))  # fewer than asked: as many as exist
+        by_hour = {p["elapsed_hours"]: p for p in wa["points"]}
+        self.assertEqual(by_hour[50]["avg_pct"], 20.0)
+        self.assertEqual(by_hour[50]["weeks"], 2)
+        self.assertEqual(wa["at_reset"]["avg_pct"], 40.0)  # last samples at 167h: 20 and 60
+        self.assertEqual(self._quota_progress_json_args(["--compare-weeks", "1"])["weekly_average"]["weeks"][0]["final_pct"], 20)
+        self.assertIn("直近 2 週の平均", run_meter(["report", "--quota-progress", "--no-ingest"], self.home).stdout)
+
+        # A week that starts recording midway only counts where it has a value.
+        self._seed_weeks({0: cur, 1: [(0, 0), (48, 10)], 2: [(100, 50), (167, 60)]})
+        wa = self._quota_progress_json()["weekly_average"]
+        by_hour = {p["elapsed_hours"]: p for p in wa["points"]}
+        self.assertEqual((by_hour[50]["avg_pct"], by_hour[50]["weeks"]), (10.0, 1))
+        self.assertEqual((by_hour[100]["avg_pct"], by_hour[100]["weeks"]), (30.0, 2))
+
+        # No finished week: said in words, not an error.
+        self._seed_weeks({0: cur})
+        self.assertEqual(self._quota_progress_json()["weekly_average"]["status"], "no_past_weeks")
+        out = run_meter(["report", "--quota-progress", "--no-ingest"], self.home)
+        self.assertEqual(out.returncode, 0)
+        self.assertIn("平均は重ねられない", out.stdout)
+
+        # 0 is the previous output; the flag belongs to --quota-progress only.
+        self._seed_weeks({0: cur, 1: [(0, 0), (48, 10)]})
+        self.assertNotIn("weekly_average", self._quota_progress_json_args(["--compare-weeks", "0"]))
+        self.assertNotIn("○", run_meter(["report", "--quota-progress", "--no-ingest", "--compare-weeks", "0"], self.home).stdout)
+        for bad in (["--compare-weeks", "-1"], ["--compare-weeks", "x"]):
+            self.assertNotEqual(run_meter(["report", "--quota-progress", "--no-ingest", *bad], self.home).returncode, 0, bad)
+        for view in (["--daily"], ["--heatmap"], ["--model"], ["--quota-per-pct"], []):
+            self.assertNotEqual(run_meter(["report", "--no-ingest", *view, "--compare-weeks", "4"], self.home).returncode, 0, view)
+
+    # -- --heatmap --
+
+    def test_heatmap_levels_by_quartile_local_weekday_width_and_rejects_bad_combinations(self):
+        import unicodedata
+        jst = timezone(timedelta(hours=9))
+        today = datetime.now(jst).replace(hour=0, minute=0, second=0, microsecond=0)
+        events = []
+        def usage(local_dt, input_tokens):
+            stamp = local_dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+            events.append({"event_type": "usage.message", "schema_version": 1, "ts": stamp,
+                           "idempotency_key": f"k-{len(events)}", "event_id": f"id-{len(events)}",
+                           "completeness": "complete", "provider": "anthropic", "model": "claude-opus-5-5",
+                           "message_id": f"m-{len(events)}", "input_tokens": input_tokens, "cache_read_input_tokens": 0,
+                           "cache_creation_input_tokens": 0, "output_tokens": 0})
+        # 1 日だけ桁違いの外れ値があっても、他の日の段階はそれに引っ張られない。
+        usage(today - timedelta(days=1) + timedelta(minutes=30), 10)   # 00:30 JST は UTC では前日
+        usage(today - timedelta(days=1) - timedelta(minutes=30), 20)   # 23:30 JST (前々日) もその日に数える
+        usage(today - timedelta(days=3, hours=-12), 30)
+        usage(today - timedelta(days=4, hours=-12), 40)
+        usage(today - timedelta(days=5, hours=-12), 10000)
+        events_dir = pathlib.Path(self.home) / "events"
+        events_dir.mkdir(parents=True, exist_ok=True)
+        (events_dir / "2026-08-01.jsonl").write_text("".join(json.dumps(e) + "\n" for e in events), encoding="utf-8")
+        env = {"TZ": "JST-9", "NO_COLOR": "1"}
+
+        report = json.loads(run_meter(["report", "--heatmap", "--weeks", "3", "--no-ingest", "--json"], self.home, env).stdout)
+        days = report["days"]
+        self.assertEqual(days[0]["weekday"], 0)  # 月曜始まり
+        self.assertEqual(days[-1]["date"], today.strftime("%Y-%m-%d"))  # 今日より先のマスは無い
+        self.assertEqual(len(days), 14 + today.weekday() + 1)
+        for d in days:
+            self.assertEqual(d["weekday"], datetime.strptime(d["date"], "%Y-%m-%d").weekday())
+        by_date = {d["date"]: d for d in days}
+        def level(offset):
+            return by_date[(today - timedelta(days=offset)).strftime("%Y-%m-%d")]["level"]
+        self.assertEqual(by_date[(today - timedelta(days=1)).strftime("%Y-%m-%d")]["weighted_tokens"], 10)
+        self.assertEqual(by_date[(today - timedelta(days=2)).strftime("%Y-%m-%d")]["weighted_tokens"], 20)
+        self.assertEqual([level(n) for n in (1, 2, 3, 4, 5)], [1, 1, 2, 3, 4])
+        self.assertEqual(report["thresholds"], [20, 30, 40])
+        self.assertEqual(report["busiest"]["weighted_tokens"], 10000)
+        self.assertEqual(report["active_days"], 5)
+
+        # 端末幅が狭いと週数を減らし、マス目の行は端末幅に収まる (--weeks 52 を頼んでも)。
+        narrow = run_meter(["report", "--heatmap", "--weeks", "52", "--no-ingest"], self.home, {**env, "COLUMNS": "40"}).stdout
+        self.assertIn("直近 17 週", narrow)
+        self.assertNotIn("\x1b[", narrow)
+        lines = narrow.splitlines()
+        first = next(i for i, ln in enumerate(lines) if "端末幅に合わせて" in ln)
+        grid_lines = lines[first + 1:first + 9]  # 月のラベルの行 + 曜日の 7 行
+        self.assertTrue(grid_lines[1].lstrip().startswith("月"))
+        for line in grid_lines:
+            width = sum(2 if unicodedata.east_asian_width(c) in ("W", "F") else 1 for c in line)
+            self.assertLessEqual(width, 40, line)
+
+        plain = run_meter(["report", "--heatmap", "--weeks", "3", "--no-ingest", "--plain"], self.home, env).stdout
+        self.assertIn("level_thresholds: [20.0, 30.0, 40.0]", plain)
+
+        for bad in (["--heatmap", "--daily"], ["--heatmap", "--model"], ["--heatmap", "--quota-per-pct"], ["--heatmap", "--quota-progress"],
+                    ["--heatmap", "--pr", "1"], ["--heatmap", "--since", "2026-07-01T00:00:00Z"],
+                    ["--heatmap", "--weeks", "0"], ["--heatmap", "--weeks", "53"], ["--heatmap", "--days", "3"],
+                    ["--weeks", "3"]):
+            result = run_meter(["report", "--no-ingest", *bad], self.home, env)
+            self.assertNotEqual(result.returncode, 0, bad)
+            self.assertIn("error:", result.stderr)
+
+    # -- dash --
+
+    def test_dash_drops_parts_in_order_when_the_terminal_is_short_and_fails_open(self):
+        self._seed_quota_samples([(h, h / 4) for h in range(0, 97, 8)])
+        env = {"TZ": "JST-9", "COLUMNS": "100"}
+
+        def dash(lines, extra=None, args=("--no-ingest",)):
+            result = run_meter(["dash", *args], self.home, {**env, "LINES": str(lines), **(extra or {})})
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertNotIn("\x1b[", result.stdout)  # パイプでは色が混ざらない
+            self.assertLessEqual(len(result.stdout.splitlines()), lines - 1, result.stdout)  # 崩れず画面に収まる
+            return result.stdout
+
+        full = dash(80)
+        for title in ("週の上限の推移", "日ごとのモデル別使用量", "日ごとの消費量", "注記"):
+            self.assertIn(title, full)
+        self.assertNotIn("省略:", full)
+        # 高さが足りなければ、まずヒートマップ、次に日ごとの縦棒を省き、省いたことを出す。
+        no_heat = dash(30)
+        self.assertIn("日ごとのモデル別使用量", no_heat)
+        self.assertNotIn("日ごとの消費量", no_heat)
+        self.assertIn("省略: ヒートマップ", no_heat)
+        quota_only = dash(24)
+        self.assertIn("週の上限の推移", quota_only)
+        self.assertNotIn("日ごとのモデル別使用量", quota_only)
+        self.assertIn("省略: ヒートマップ、日ごとの縦棒", quota_only)
+
+        # 各パネルの行は端末幅ちょうどで枠の右端が揃い、すべてのグラフの縦軸の線が同じ列に来る。
+        def width(line):
+            return sum(2 if unicodedata.east_asian_width(c) in ("W", "F") else 1 for c in line)
+        self.assertEqual({width(ln) for ln in full.splitlines()}, {100})
+        axis_cols = set()
+        for ln in full.splitlines():
+            pos = 0
+            for ch in ln:
+                if ch in "┤└" or (ch == "│" and 1 < pos < 12):
+                    axis_cols.add(pos)
+                pos += width(ch)
+        self.assertEqual(len(axis_cols), 1, axis_cols)
+
+        # 狭い端末でも、上の罫線に入らない補足 (時刻・グラフの凡例) は本文の 1 行に回り、落ちない。幅も端末幅ちょうど。
+        for cols in ("60", "40"):
+            narrow = run_meter(["dash", "--no-ingest"], self.home, {**env, "COLUMNS": cols, "LINES": "80"}).stdout
+            self.assertIn("現在", narrow)
+            self.assertIn("● 実績", narrow)
+            self.assertEqual({width(ln) for ln in narrow.splitlines()}, {int(cols)})
+
+        # 端末 (色あり) でも、色コードの途中で切れず、色を除いた各行の幅が端末幅に収まる。
+        colored = run_meter_on_pty(["dash", "--no-ingest"], self.home, {**env, "LINES": "80"})
+        self.assertNotRegex(colored, r"\x1b(?!\[[0-9;]*m)")
+        self.assertNotRegex(colored, r"\x1b\[[0-9;]*(?![0-9;m])")
+        # 色を除いた各行の表示幅は、パイプで描いたもの (記号) と同じで、端末幅に収まる (枠の右端がずれない)。
+        stripped = re.sub(r"\x1b\[[0-9;]*m", "", colored).replace("\r", "").splitlines()
+        self.assertEqual(len(stripped), len(full.splitlines()))
+        self.assertEqual([width(ln) for ln in stripped], [width(ln) for ln in full.splitlines()])
+        self.assertTrue(all(width(ln) <= 100 for ln in stripped))
+        self.assertEqual(colored.count("\x1b[0m"), len(re.findall(r"\x1b\[(?!0m)[0-9;]*m", colored)))  # 開いた色は全部閉じる
+
+        # ingest が失敗しても止まらず、保存済みの集計で描き、注記に出る (HOME が空 = projects dir を決められない)。
+        failed = dash(80, {"HOME": ""}, args=())
+        self.assertIn("週の上限の推移", failed)
+        self.assertIn("ingest が失敗", failed)
+
+    def test_dash_axis_lines_align_when_the_daily_max_is_between_1m_and_2m(self):
+        # 最大が 1.5M だと中央の目盛りは 750.0K (6 桁) で最大 (4 桁) より長い。ラベル幅を最大だけで決めると縦棒の軸だけ 1 列ずれる。
+        import unicodedata
+        self._seed_quota_samples([(h, h / 4) for h in range(0, 97, 8)])
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+        run_meter(["event", "usage.message", "--idempotency-key", "axis1", "--message-id", "axis1",
+                   "--model", "claude-opus-x", "--provider", "anthropic", "--cost-basis", "estimated",
+                   "--input-tokens", "1500000", "--ts", now], self.home)
+        out = run_meter(["dash", "--no-ingest"], self.home, {"TZ": "JST-9", "COLUMNS": "100", "LINES": "80"}).stdout
+        self.assertIn("1.5M", out)
+        axis_cols = set()
+        for ln in out.splitlines():
+            pos = 0
+            for ch in ln:
+                if ch in "┤└" or (ch == "│" and 1 < pos < 12):
+                    axis_cols.add(pos)
+                pos += 2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1
+        self.assertEqual(len(axis_cols), 1, axis_cols)
+
+    def test_dash_daily_panel_fills_the_width_while_report_daily_keeps_14_days(self):
+        import re
+        self._seed_quota_samples([(h, h / 4) for h in range(0, 97, 8)])
+        for ago in (200, 60, 0):
+            ts = (datetime.now(timezone.utc) - timedelta(days=ago)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+            run_meter(["event", "usage.message", "--idempotency-key", f"fill{ago}", "--message-id", f"fill{ago}",
+                       "--model", "claude-opus-x", "--provider", "anthropic", "--cost-basis", "estimated",
+                       "--input-tokens", "1000", "--ts", ts], self.home)
+
+        def days_at(cols):
+            out = run_meter(["dash", "--no-ingest"], self.home, {"TZ": "JST-9", "COLUMNS": str(cols), "LINES": "80"}).stdout
+            return int(re.search(r"直近 (\d+) 日", out).group(1))
+
+        narrow, wide = days_at(100), days_at(140)
+        self.assertGreater(narrow, 14)
+        self.assertGreater(wide, narrow)
+        daily = json.loads(run_meter(["report", "--daily", "--no-ingest", "--json"], self.home).stdout)
+        self.assertEqual(len(daily["daily"]), 14)
+
+    def test_dash_rejects_json_plain_unknown_flags_and_watch_without_a_terminal(self):
+        for bad in (["--json"], ["--plain"], ["--bogus"], ["--watch", "0"], ["--watch", "x"],
+                    ["--watch", "--no-ingest"], ["--watch", "5"]):
+            result = run_meter(["dash", "--no-ingest", *bad], self.home)
+            self.assertNotEqual(result.returncode, 0, bad)
+            self.assertIn("error:", result.stderr)
+            self.assertEqual(result.stdout, "")
 
     # -- --model --
 
@@ -4123,6 +4514,48 @@ class ReportGroupedViewsTests(OcwMeterTestCase):
         self.assertEqual(data["pr_detail"]["five_hour_used_pct_max"], 20)
 
 
+class ReportPrettyDisplayTests(OcwMeterTestCase):
+    """傘 ocw-meter-pretty-charts 孫1: `report` の既定は pretty、`--plain` は
+    従来の key: value。描画の結果は丸ごと固定せず、振る舞いだけを守る
+    （色コードの混入・端末での色・数値の丸め・モード指定のエラー）。"""
+
+    def _seed_usage(self):
+        # 25.1B / 999,960 (丸めで 1000.0K にならず 1.0M になる) / 12,345 を一度に確かめる
+        run_meter(["event", "usage.message", "--idempotency-key", "pretty1", "--message-id", "pretty1",
+                   "--model", "claude-opus-x", "--provider", "anthropic", "--cost-basis", "estimated",
+                   "--input-tokens", "999960", "--cache-read-input-tokens", "25100000000",
+                   "--cache-creation-input-tokens", "12345", "--output-tokens", "7",
+                   "--ts", "2026-08-05T10:00:00.000Z"], self.home)
+
+    def _report_on_pty(self, args, extra_env=None):
+        """stdout だけを疑似端末にして report を走らせ、出力を返す。"""
+        return run_meter_on_pty(["report", "--no-ingest", *args], self.home, extra_env)
+
+    def test_color_only_on_a_terminal_without_no_color_and_numbers_are_rounded(self):
+        self._seed_usage()
+        piped = run_meter(["report", "--no-ingest", "--model"], self.home)
+        self.assertEqual(piped.returncode, 0)
+        # パイプ（ファイルへのリダイレクトも同じ）は pretty のまま、色コードだけが無い
+        self.assertNotIn("\x1b[", piped.stdout)
+        self.assertIn("注記", piped.stdout)
+        for rounded in ("25.1B", "1.0M", "12.3K"):
+            self.assertIn(rounded, piped.stdout)
+        self.assertNotIn("1000.0K", piped.stdout)
+        # 端末なら色が付き、NO_COLOR が空でない値で立っていれば付かない（空文字は「立っていない」）
+        self.assertIn("\x1b[", self._report_on_pty(["--model"]))
+        self.assertIn("\x1b[", self._report_on_pty(["--model"], {"NO_COLOR": ""}))
+        self.assertNotIn("\x1b[", self._report_on_pty(["--model"], {"NO_COLOR": "1"}))
+        # --plain は端末でも従来の key: value のまま（正確な値）で、色も付かない
+        plain = self._report_on_pty(["--model", "--plain"])
+        self.assertIn("input_tokens: 999960", plain)
+        self.assertNotIn("\x1b[", plain)
+
+    def test_plain_and_json_cannot_be_combined(self):
+        result = run_meter(["report", "--no-ingest", "--plain", "--json"], self.home)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("--plain cannot be combined with --json", result.stderr)
+
+
 class ReportMonthStandaloneTests(OcwMeterTestCase):
     """孫5プロンプト §1 --month (NOT --reconcile): cash cost / capacity
     cost / process efficiency."""
@@ -4176,7 +4609,7 @@ class ReportMonthStandaloneTests(OcwMeterTestCase):
         self.assertEqual(august["cash_cost"]["usage_message_count"], 0)
 
     def test_month_defaults_to_current_utc_month_when_value_omitted(self):
-        result = run_meter(["report", "--month"], self.home)
+        result = run_meter(["report", "--month", "--plain"], self.home)
         self.assertEqual(result.returncode, 0)
         self.assertIn("month:", result.stdout)
 
@@ -4365,7 +4798,7 @@ class ReportListPriceEquivTests(OcwMeterTestCase):
                    "--plan-source", "statusline", "--provider", "anthropic",
                    "--session-cost-usd", "5.0", "--run-id", "run-400", "--pr-number", "400",
                    "--ts", "2026-08-05T09:05:00.000Z"], self.home)
-        result = run_meter(["report", "--pr", "400"], self.home)
+        result = run_meter(["report", "--pr", "400", "--plain"], self.home)
         self.assertEqual(result.returncode, 0)
         self.assertIn("list_price_equiv_excluded_no_session_id_count:", result.stdout)
         self.assertIn("list_price_equiv_excluded_null_cost_count:", result.stdout)
@@ -4377,7 +4810,7 @@ class ReportListPriceEquivTests(OcwMeterTestCase):
     def test_window_text_output_prints_the_note_once_not_per_row(self):
         self._quota_sample("q1", "sess-win-a", 1.0, "2026-08-05T09:00:00.000Z", extra=["--window-id", "winA"])
         self._quota_sample("q2", "sess-win-b", 2.0, "2026-08-05T10:00:00.000Z", extra=["--window-id", "winB"])
-        result = run_meter(["report", "--window"], self.home)
+        result = run_meter(["report", "--window", "--plain"], self.home)
         self.assertEqual(result.returncode, 0)
         self.assertEqual(result.stdout.count("list_price_equiv_note:"), 1)
 
@@ -5159,7 +5592,7 @@ class SessionAttributionTests(OcwMeterTestCase):
         data = json.loads(run_meter(["report", "--json"], self.home).stdout)
         self.assertIn("quota.sampleの記録が始まるより前の期間は", data["attribution_known_limits"])
         self.assertNotIn("2026-08-01", data["attribution_known_limits"])
-        text = run_meter(["report"], self.home).stdout
+        text = run_meter(["report", "--plain"], self.home).stdout
         self.assertIn("attribution_known_limits:", text)
 
     def test_attribution_footer_counts_direct_session_and_unresolved_and_sums_to_total(self):
@@ -5192,7 +5625,7 @@ class SessionAttributionTests(OcwMeterTestCase):
         role_counts = data["attribution_role_counts"]
         self.assertEqual(role_counts, {"direct": 0, "session_id": 1, "unresolved": 2})
 
-        text = run_meter(["report"], self.home).stdout
+        text = run_meter(["report", "--plain"], self.home).stdout
         self.assertIn("attribution (run_id):", text)
         self.assertIn("attribution (role):", text)
 

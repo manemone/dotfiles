@@ -218,27 +218,37 @@ ocw-meter validate [--file <path>]
 # 同一5時間窓完走可否・そのPRのcash cost内訳も併せて出す
 # 実行のたびに ingest を自動実行してから集計する（--no-ingest で無効化可）。
 # 最終ingest時刻・鮮度警告はどのビューでもフッターに出る
-ocw-meter report [--pr <n>] [--repo <owner>/<name>] [--no-ingest] [--json]
+#
+# 出力は3モード（どのビューも同じ）:
+#   既定     人間向けの pretty 表示（表・桁区切り・K/M/B の丸め・棒。診断行は末尾の「注記」欄にまとめ、
+#            警告〔ingest の鮮度・失敗、不正行、価格表のフォールバック〕は落とさず色付きで先頭に出す）
+#   --plain  従来の key: value のテキスト（AI・スクリプト・ファイルへ残して後から読み比べる用途）
+#   --json   JSON（変えていない）
+# 方針と却下した案は ADR DOC-2610312031_ocw-meter-pretty-display。
+# --plain と --json は併用不可。パイプ・ファイルへ出しても pretty のまま（色だけ落ちる）。
+# 色は「標準出力が端末で、かつ環境変数 NO_COLOR が空でない値で立っていない」ときだけ。色を強制するフラグは無い。
+# 端末幅は $COLUMNS（取れなければ 80）。入りきらない列は右端から省き、--plain で全部見られる旨を添える
+ocw-meter report [--pr <n>] [--repo <owner>/<name>] [--no-ingest] [--json|--plain]
 
 # 工程別（phase.start/endの時間ペアとusage.messageの時刻範囲による
 # ベストエフォート対応）のトークン・費用・所要時間
-ocw-meter report --phase [--pr <n>] [--repo <owner>/<name>] [--no-ingest] [--json]
+ocw-meter report --phase [--pr <n>] [--repo <owner>/<name>] [--no-ingest] [--json|--plain]
 
 # provider+model別のトークン・推定費用
-ocw-meter report --model [--pr <n>] [--repo <owner>/<name>] [--no-ingest] [--json]
+ocw-meter report --model [--pr <n>] [--repo <owner>/<name>] [--no-ingest] [--json|--plain]
 
 # role（commander/implementer/reviewer/unknown）別のイベント数・トークン・推定費用
-ocw-meter report --role [--pr <n>] [--repo <owner>/<name>] [--no-ingest] [--json]
+ocw-meter report --role [--pr <n>] [--repo <owner>/<name>] [--no-ingest] [--json|--plain]
 
 # 5時間窓（window_id）別のquota.sample集計。直接紐付き/時間範囲重複の
 # PRを別フィールドで提示
-ocw-meter report --window [--pr <n>] [--repo <owner>/<name>] [--no-ingest] [--json]
+ocw-meter report --window [--pr <n>] [--repo <owner>/<name>] [--no-ingest] [--json|--plain]
 
 # 時間範囲の使用量: ts が [since, until) の usage.message を provider+model 別に集計
 # （--since ちょうどは含み、--until ちょうどは含まない。--until 省略時は今）。
 # 書式は ingest --since と同じ RFC3339。範囲は読み出しの絞り込みだけで、自動 ingest には渡さない。
 # --role / --pr と併用できる（--model の表には推定 % が付く。下の --quota-per-pct 参照）。--phase / --window / --month / --reconcile とは併用不可
-ocw-meter report --since <rfc3339-ts> [--until <rfc3339-ts>] [--model|--role] [--pr <n>] [--periods <n>] [--no-ingest] [--json]
+ocw-meter report --since <rfc3339-ts> [--until <rfc3339-ts>] [--model|--role] [--pr <n>] [--periods <n>] [--no-ingest] [--json|--plain]
 
 # 週の上限の1%あたりのトークンの見積もり（モデル系統 opus/sonnet/haiku/fable ごと。claude-* のみ）。
 # quota.sample の seven_day_used_pct の増えを、3・6・12 時間の区切りごとの重み付きトークン
@@ -247,15 +257,57 @@ ocw-meter report --since <rfc3339-ts> [--until <rfc3339-ts>] [--model|--role] [-
 # --since/--until のモデル別表には、推定できた系統だけ estimated_weekly_pct（週の上限に対する %）が付く（測れない系統は空欄）。
 # 見積もりであり、止める・モデルを替える制御には使わない。--pr / --phase / --model / --role / --window / --month /
 # --reconcile / --since / --until とは併用不可
-ocw-meter report --quota-per-pct [--periods <n>] [--no-ingest] [--json]
+ocw-meter report --quota-per-pct [--periods <n>] [--no-ingest] [--json|--plain]
+
+# 今の週（最新の seven_day_resets_at の、リセットの7日前〜リセット）の seven_day_used_pct の推移を文字のグラフで描く
+# （縦 0〜100%、横は日付の目盛り、▲ が今）。直近 24 時間の増える速さで延ばして 100% に届く見込みの時刻を出し
+# （リセットまでに届かないなら「この週のうちには届かない見込み」。グラフには · の線で描く）、残りの % を
+# --quota-per-pct の見積もりで系統ごとの重み付きトークンに換算する（測れない系統は — と理由）。
+# 今の週の quota.sample が無い・1件しか無いときは、描かずにその旨を出す（エラーにしない）。
+# グラフには ○ の線で「直近 4 週（今の週より前で区切りの終わった週）の平均」も重ねる。各週を週の始まりからの経過時間で揃え、
+# その経過時間までの最後の記録の値（補間しない）を、その位置で値のある週だけで平均する。--compare-weeks <n> で週の数を変え、
+# 0 なら重ねない。区切りの終わった週が足りなければある分で平均して凡例に週数を書き、1週も無ければ線を描かずにその旨を出す。
+# 「今の時点」の行には、平均の同じ時点の値との差と、平均の週末（リセット時点）の値を添える。--compare-weeks は --quota-progress とだけ併用できる。
+# --json は % が変わった点の列・見込み・換算（--compare-weeks 0 でなければ weekly_average: 平均の点列・使った週・週数も）、
+# --plain は同じ数値の key: value。--periods は換算に使う見積もりの期間数。
+# 見積もりであり、止める・モデルを替える制御には使わない（ADR DOC-2610310237 §5）。
+# --pr / --phase / --model / --role / --window / --month / --reconcile / --since / --until / --quota-per-pct とは併用不可
+ocw-meter report --quota-progress [--periods <n>] [--compare-weeks <n>] [--no-ingest] [--json|--plain]
+
+# 日ごとのモデル別使用量: 直近 N 日（既定 14、今日を含む）を、日付を横軸にした縦の積み上げ棒で描く（古い日が左、月曜に印と MM/DD）。
+# 日の境目はローカル時刻（UTC ではない）。量は重み付きトークン（--quota-per-pct と同じ式）。
+# 期間内で量の多い上位 5 モデルを別々に、残りは「その他」にまとめる。使用の無い日も空の列を出す。
+# 端末幅に入らない日数は、棒を細くし、それでも入らなければ古い日から削って、削った日数を警告に出す。
+# --rows は従来の横棒（1日1行、行末に日ごとの合計の数値）。--daily 以外とは併用不可。
+# --json / --plain は、グラフの元の数値（日 × モデルの重み付きと素の内訳）を出す（描き方に依らず同じ）。
+# --pr / --phase / --model / --role / --window / --month / --reconcile / --since / --until / --quota-per-pct / --quota-progress / --heatmap とは併用不可
+ocw-meter report --daily [--days <n>] [--rows] [--no-ingest] [--json|--plain]
+
+# 日ごとの消費量のヒートマップ（GitHub の草）: 週を列（月曜始まり）、曜日を行にして、消費の多い日ほど濃く塗る。
+# 量は日ごとの重み付きトークンの全モデル合計（--daily と同じ式）、日の境目はローカル時刻。
+# 濃さは 0（使用なし）と、使用のあった日を量の 4 分位で分けた 4 段階の計 5 段階（外れ値の 1 日に引っ張られない）。
+# 色があれば 256 色の緑、無ければ " ░▒▓█"。既定は端末幅に入るだけの週数（最大 52）、--weeks で減らせる（1〜52）。
+# 下に凡例・期間の合計・いちばん多かった日を出す。--json / --plain は日ごとの値・段階・段階の境目を出す。
+# --pr / --phase / --model / --role / --window / --month / --reconcile / --since / --until / --quota-per-pct / --quota-progress / --daily とは併用不可
+ocw-meter report --heatmap [--weeks <n>] [--no-ingest] [--json|--plain]
+
+# 一画面のダッシュボード（人間向け）: 週の上限の推移（直近 4 週の平均の線つき）・日ごとのモデル別の縦棒・消費のヒートマップを縦に並べる。
+# 各グラフは report --quota-progress / --daily / --heatmap と同じ描画で、端末の高さ・幅に合わせる。
+# 高さが足りないときはグラフの高さを詰め、それでも足りなければヒートマップ → 日ごとの縦棒の順に省いて、省いたことを 1 行出す
+# （パイプ・ファイルなど高さが取れないときは詰めない）。report と同じく先頭で ingest し（--no-ingest で飛ばせる）、失敗しても止まらず注記に出る。
+# --watch [秒] は既定 300 秒ごとに ingest して描き直す（ANSI のエスケープで画面を消す。描き終わってから数えるので ingest が長くても重ならない。
+# 失敗しても保存済みの集計で描く）。端末でないときの --watch はエラー、Ctrl-C は終了コード 0。
+# 日ごとの縦棒は端末の幅に入るだけの日数を描く（記録の最初の日より前と 52 週より前は描かない。report --daily の既定 14 日は変わらない）。
+# --json / --plain は付けられない（エラー。機械が読むなら個別の report のビューを使う）。理由は ADR DOC-2610312031 の決定 9
+ocw-meter dash [--watch [<seconds>]] [--no-ingest]
 
 # 月次: cash cost（従量API）/ capacity cost（Claudeサブスク枠）/
 # process efficiency（承認済みPRあたりの費用・ラウンド数等）を分離して表示
 # --reconcile とは別物（こちらは突合をしない）
-ocw-meter report --month [YYYY-MM] [--repo <owner>/<name>] [--no-ingest] [--json]
+ocw-meter report --month [YYYY-MM] [--repo <owner>/<name>] [--no-ingest] [--json|--plain]
 
 # model別トークン集計・推定費用・provider管理画面との突合（coverage比率）
-ocw-meter report --reconcile [--month <YYYY-MM>] [--provider-total <model>=<tokens> ...] [--no-ingest] [--json]
+ocw-meter report --reconcile [--month <YYYY-MM>] [--provider-total <model>=<tokens> ...] [--no-ingest] [--json|--plain]
 
 # statusLineコマンドとして呼ばれ、stdinのJSONからquota.sampleを1行append、表示文字列をstdoutへ返す
 ocw-meter snapshot-quota
