@@ -3809,10 +3809,13 @@ class ReportGroupedViewsTests(OcwMeterTestCase):
         (events_dir / "2026-08-01.jsonl").write_text("".join(json.dumps(e) + "\n" for e in events), encoding="utf-8")
         return now
 
-    def _quota_progress_json(self):
-        out = run_meter(["report", "--quota-progress", "--no-ingest", "--json"], self.home)
+    def _quota_progress_json_args(self, extra):
+        out = run_meter(["report", "--quota-progress", "--no-ingest", "--json", *extra], self.home)
         self.assertEqual(out.returncode, 0, out.stderr)
         return json.loads(out.stdout)
+
+    def _quota_progress_json(self):
+        return self._quota_progress_json_args([])
 
     def test_quota_progress_projects_when_the_week_reaches_100_and_degrades_without_data(self):
         # 1%/hour over the last 30h: 40% now, 60h to 100%, the week resets in 72h.
@@ -3855,6 +3858,62 @@ class ReportGroupedViewsTests(OcwMeterTestCase):
 
         for bad in (["--pr", "1"], ["--model"], ["--quota-per-pct"], ["--since", "2026-07-01T00:00:00Z"], ["--month"], ["--daily"]):
             self.assertNotEqual(run_meter(["report", "--quota-progress", "--no-ingest", *bad], self.home).returncode, 0, bad)
+
+    def _seed_weeks(self, weeks):
+        """Writes quota.sample events for past weeks and the current one.
+        `weeks`: {weeks_ago: [(hours since that week's start, pct)]}; the
+        current week (0) resets 72h from now."""
+        now = time.time()
+        events = []
+        for ago, samples in weeks.items():
+            resets = int(now + 72 * 3600) - ago * 7 * 86400
+            start = resets - 7 * 86400
+            for h, pct in samples:
+                ts = start + h * 3600
+                events.append({"event_type": "quota.sample", "schema_version": 1, "completeness": "complete",
+                               "ts": datetime.fromtimestamp(ts, timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z"),
+                               "idempotency_key": f"qw-{ago}-{h}", "event_id": f"qw-{ago}-{h}", "plan_source": "statusline",
+                               "seven_day_used_pct": pct, "seven_day_resets_at": resets})
+        events_dir = pathlib.Path(self.home) / "events"
+        events_dir.mkdir(parents=True, exist_ok=True)
+        (events_dir / "2026-08-01.jsonl").write_text("".join(json.dumps(e) + "\n" for e in events), encoding="utf-8")
+
+    def test_quota_progress_compares_with_the_average_of_past_weeks(self):
+        cur = [(h, h / 4) for h in range(0, 97, 8)]  # 96h into the week, 24%
+        # Two finished weeks, aligned by time since their start: at 50h the
+        # last sample at or before is the 48h one (10 / 30), not an interpolation.
+        self._seed_weeks({0: cur, 1: [(0, 0), (48, 10), (167, 20)], 2: [(0, 0), (48, 30), (167, 60)]})
+        wa = self._quota_progress_json()["weekly_average"]
+        self.assertEqual((wa["status"], wa["weeks_requested"], wa["weeks_used"]), ("ok", 4, 2))  # fewer than asked: as many as exist
+        by_hour = {p["elapsed_hours"]: p for p in wa["points"]}
+        self.assertEqual(by_hour[50]["avg_pct"], 20.0)
+        self.assertEqual(by_hour[50]["weeks"], 2)
+        self.assertEqual(wa["at_reset"]["avg_pct"], 40.0)  # last samples at 167h: 20 and 60
+        self.assertEqual(self._quota_progress_json_args(["--compare-weeks", "1"])["weekly_average"]["weeks"][0]["final_pct"], 20)
+        self.assertIn("直近 2 週の平均", run_meter(["report", "--quota-progress", "--no-ingest"], self.home).stdout)
+
+        # A week that starts recording midway only counts where it has a value.
+        self._seed_weeks({0: cur, 1: [(0, 0), (48, 10)], 2: [(100, 50), (167, 60)]})
+        wa = self._quota_progress_json()["weekly_average"]
+        by_hour = {p["elapsed_hours"]: p for p in wa["points"]}
+        self.assertEqual((by_hour[50]["avg_pct"], by_hour[50]["weeks"]), (10.0, 1))
+        self.assertEqual((by_hour[100]["avg_pct"], by_hour[100]["weeks"]), (30.0, 2))
+
+        # No finished week: said in words, not an error.
+        self._seed_weeks({0: cur})
+        self.assertEqual(self._quota_progress_json()["weekly_average"]["status"], "no_past_weeks")
+        out = run_meter(["report", "--quota-progress", "--no-ingest"], self.home)
+        self.assertEqual(out.returncode, 0)
+        self.assertIn("平均は重ねられない", out.stdout)
+
+        # 0 is the previous output; the flag belongs to --quota-progress only.
+        self._seed_weeks({0: cur, 1: [(0, 0), (48, 10)]})
+        self.assertNotIn("weekly_average", self._quota_progress_json_args(["--compare-weeks", "0"]))
+        self.assertNotIn("○", run_meter(["report", "--quota-progress", "--no-ingest", "--compare-weeks", "0"], self.home).stdout)
+        for bad in (["--compare-weeks", "-1"], ["--compare-weeks", "x"]):
+            self.assertNotEqual(run_meter(["report", "--quota-progress", "--no-ingest", *bad], self.home).returncode, 0, bad)
+        for view in (["--daily"], ["--heatmap"], ["--model"], ["--quota-per-pct"], []):
+            self.assertNotEqual(run_meter(["report", "--no-ingest", *view, "--compare-weeks", "4"], self.home).returncode, 0, view)
 
     # -- --heatmap --
 

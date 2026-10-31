@@ -33,7 +33,7 @@ usage:
   ocw-meter report --window [--pr <n>] [--repo <owner>/<name>] [--no-ingest] [--json|--plain]
   ocw-meter report --since <rfc3339-ts> [--until <rfc3339-ts>] [--model|--role] [--pr <n>] [--periods <n>] [--no-ingest] [--json|--plain]
   ocw-meter report --quota-per-pct [--periods <n>] [--no-ingest] [--json|--plain]
-  ocw-meter report --quota-progress [--periods <n>] [--no-ingest] [--json|--plain]
+  ocw-meter report --quota-progress [--periods <n>] [--compare-weeks <n>] [--no-ingest] [--json|--plain]
   ocw-meter report --daily [--days <n>] [--no-ingest] [--json|--plain]
   ocw-meter report --heatmap [--weeks <n>] [--no-ingest] [--json|--plain]
   ocw-meter report --month [YYYY-MM] [--repo <owner>/<name>] [--no-ingest] [--json|--plain]
@@ -159,7 +159,7 @@ subcommands:
     combined with --pr/--phase/--model/--role/--window/--month/
     --reconcile/--since/--until. See the ADR on quota-per-pct.
 
-  report --quota-progress [--periods <n>]
+  report --quota-progress [--periods <n>] [--compare-weeks <n>]
     This week's weekly-limit % over time: seven_day_used_pct of the
     latest seven_day_resets_at period (reset-7d .. reset) as a
     character chart (0/50/100% and date ticks, "▲" = now), with an
@@ -172,8 +172,18 @@ subcommands:
     (unmeasurable families show "—" and the reason; --periods picks
     the periods of that estimate). With no sample, or one sample, in
     the current week it says so instead of drawing (not an error).
+    The chart also overlays "○", the average of the latest <n> finished
+    weeks (default 4; 0 = off, as before): each week is aligned by time
+    since its start (the last sample at or before that point, never
+    interpolated) and averaged over the weeks that have a value there.
+    Fewer finished weeks than <n> are averaged as they are (the legend
+    says how many); none draws no line and says so. The "now" rows add
+    the average at the same point and at the reset. --compare-weeks only
+    applies to --quota-progress.
     --json carries the points where the % changed, the outlook and the
-    token conversion; --plain the same as key: value. An estimate,
+    token conversion (plus "weekly_average": the average's points, the
+    weeks used and the count, unless --compare-weeks 0); --plain the
+    same as key: value. An estimate,
     never to stop or switch models automatically. Cannot be combined
     with --pr/--phase/--model/--role/--window/--month/--reconcile/
     --since/--until/--quota-per-pct. See the ADR on quota-per-pct.
@@ -3270,10 +3280,57 @@ def _quota_projection(rows, resets, now):
             "hours_before_reset": round((resets - eta) / 3600, 1), "already_past": eta < now}
 
 
-def quota_progress(valid_events, now, estimate):
+QUOTA_COMPARE_WEEKS = 4             # past weeks averaged into the comparison line
+QUOTA_AVG_STEP_HOURS = 2            # spacing of the average's point series
+
+
+def _pct_at_elapsed(rows, start, elapsed):
+    """The week's % at `elapsed` seconds after its start: the last sample at
+    or before then (never interpolated); None before the first sample."""
+    i = bisect.bisect_right([r[0] for r in rows], start + elapsed) - 1
+    return rows[i][1] if i >= 0 else None
+
+
+def _weekly_average_at(weeks, elapsed):
+    """(average %, number of weeks with a value) at `elapsed` seconds into
+    the week. Weeks with no sample yet at that point do not count."""
+    vals = [v for resets, rows in weeks
+            if (v := _pct_at_elapsed(rows, resets - 7 * 86400, elapsed)) is not None]
+    return (round(sum(vals) / len(vals), 1), len(vals)) if vals else (None, 0)
+
+
+def quota_weekly_average(valid_events, current_resets, now, n_weeks):
+    """The comparison against past weeks: the average, on a common
+    time-since-week-start axis, of the latest `n_weeks` finished weeks
+    before the current one. Fewer weeks than asked are averaged as they
+    are; none gives status "no_past_weeks" (not an error)."""
+    out = {"weeks_requested": n_weeks, "step_hours": QUOTA_AVG_STEP_HOURS}
+    periods = quota_periods(valid_events, n_weeks + 1)
+    weeks = [(r, rows) for r, rows in periods.items() if r < current_resets and r <= now][-n_weeks:]
+    out["weeks_used"] = len(weeks)
+    out["weeks"] = [{"seven_day_resets_at": r, "week_start": _iso_epoch(r - 7 * 86400),
+                     "week_end": _iso_epoch(r), "samples": len(rows), "final_pct": rows[-1][1]}
+                    for r, rows in weeks]
+    if not weeks:
+        return {**out, "status": "no_past_weeks", "points": []}
+    points = []
+    for h in range(0, 7 * 24 + 1, QUOTA_AVG_STEP_HOURS):
+        avg, count = _weekly_average_at(weeks, h * 3600)
+        if avg is not None:
+            points.append({"elapsed_hours": h, "avg_pct": avg, "weeks": count})
+    elapsed_now = min(7 * 86400, max(0, now - (current_resets - 7 * 86400)))
+    at_now, count_now = _weekly_average_at(weeks, elapsed_now)
+    at_reset, count_reset = _weekly_average_at(weeks, 7 * 86400)
+    return {**out, "status": "ok", "points": points,
+            "at_now": {"elapsed_hours": round(elapsed_now / 3600, 1), "avg_pct": at_now, "weeks": count_now},
+            "at_reset": {"avg_pct": at_reset, "weeks": count_reset}}
+
+
+def quota_progress(valid_events, now, estimate, compare_weeks=0):
     """(result, rows): the latest weekly period's % series, the 100% outlook
     and the remaining % in weighted tokens per family. `rows` (every sample,
-    running max) is for the chart only; `result` is what --json prints."""
+    running max) is for the chart only; `result` is what --json prints.
+    `compare_weeks` > 0 adds "weekly_average" (see quota_weekly_average)."""
     periods = quota_periods(valid_events, 1)
     if not periods:
         return {"status": "no_week", "message": "quota.sample が無い（statusLine の記録がまだ無い）"}, []
@@ -3303,10 +3360,13 @@ def quota_progress(valid_events, now, estimate):
                               "raw_tokens": round(remaining * raw) if raw else None}
         else:
             tokens[family] = {"status": "unmeasurable", "reason": row["reason"]}
-    return {"status": "ok", **week, "now": _iso_epoch(now), "current_pct": p_last,
-            "last_sample_at": _iso_epoch(t_last), "points": points,
-            "projection": _quota_projection(rows, resets, now),
-            "remaining_pct": remaining, "remaining_tokens": tokens}, rows
+    result = {"status": "ok", **week, "now": _iso_epoch(now), "current_pct": p_last,
+              "last_sample_at": _iso_epoch(t_last), "points": points,
+              "projection": _quota_projection(rows, resets, now),
+              "remaining_pct": remaining, "remaining_tokens": tokens}
+    if compare_weeks > 0:
+        result["weekly_average"] = quota_weekly_average(valid_events, resets, now, compare_weeks)
+    return result, rows
 
 
 def _pace_label(proj):
@@ -3334,10 +3394,11 @@ def _quota_projection_summary(proj):
     return "すでに 100% に届いている"
 
 
-def render_quota_chart(rows, proj, resets, now):
+def render_quota_chart(rows, proj, resets, now, avg=None):
     """The week as a character grid: time across (reset-7d .. reset), 0-100%
-    up. `●` actual, `·` the projection at the recent pace, `▲` now. Returns
-    lines; the width follows the terminal."""
+    up. `●` actual, `·` the projection at the recent pace, `○` the average of
+    past weeks (`avg`: its point series), `▲` now. Returns lines; the width
+    follows the terminal."""
     span, start = 7 * 86400, resets - 7 * 86400
     width = max(28, min(term_width() - 8, 112))
     height = QUOTA_PROGRESS_ROWS
@@ -3353,6 +3414,19 @@ def render_quota_chart(rows, proj, resets, now):
 
     grid = [[(" ", None)] * width for _ in range(height)]
     now_col = col_of(now)
+    if avg:  # drawn first so the actual line wins where they meet
+        by_hour = {p["elapsed_hours"]: p["avg_pct"] for p in avg["points"]}
+        step, aprev = avg["step_hours"], None
+        for c in range(width):
+            hour = int((c + 1) / width * span / 3600 // step * step)
+            if hour not in by_hour:
+                continue
+            r = row_of(by_hour[hour])
+            if aprev is not None:
+                for rr in range(min(aprev, r) + 1, max(aprev, r)):
+                    grid[rr][c] = ("│", "magenta")
+            grid[r][c] = ("○", "magenta")
+            aprev = r
     prev, done = None, False
     for c in range(width):
         if c <= now_col:
@@ -3399,6 +3473,21 @@ def render_quota_chart(rows, proj, resets, now):
     return lines
 
 
+def _weekly_average_none_message(wa):
+    return f"区切りの終わった過去の週の quota.sample が無く、直近 {wa['weeks_requested']} 週の平均は重ねられない"
+
+
+def _weekly_average_summary(wa, current_pct):
+    """今の時点の行: the average at the same point of the week, the gap to
+    the current %, and the average at the reset."""
+    now, end = wa["at_now"], wa["at_reset"]
+    text = f"直近 {wa['weeks_used']} 週の平均の同じ時点は {fmt_pct(now['avg_pct'])}"
+    if now["avg_pct"] is not None:
+        diff = round(current_pct - now["avg_pct"], 1)
+        text += f"（今週は {'+' if diff >= 0 else '−'}{abs(diff):g}pt）"
+    return text + f"。平均の週末（リセット時点）は {fmt_pct(end['avg_pct'])}"
+
+
 def _pretty_quota_progress(result, rows, footer_freshness):
     print(section("週の上限が 100% に届くまでの推移 (見積もり)"))
     if result["status"] != "ok":
@@ -3407,8 +3496,12 @@ def _pretty_quota_progress(result, rows, footer_freshness):
         proj, resets = result["projection"], result["seven_day_resets_at"]
         now = parse_ts(result["now"]).timestamp()
         print("  " + f"今の週: {_local_md_hm(resets - 7 * 86400)} 〜 {_local_md_hm(resets)}（リセット）")
-        print("\n".join(render_quota_chart(rows, proj, resets, now)))
+        avg = result.get("weekly_average")
+        avg = avg if avg and avg["status"] == "ok" else None
+        print("\n".join(render_quota_chart(rows, proj, resets, now, avg)))
         legend = [paint("●", "cyan") + " 実績", paint("▲", "bold") + " 今"]
+        if avg:
+            legend.insert(1, paint("○", "magenta") + f" 直近 {avg['weeks_used']} 週の平均")
         if proj["status"] in ("reaches", "not_this_week"):
             legend.insert(1, paint("·", "yellow") + f" 見込み（直近 {_pace_label(proj)} 時間の速さで延長）")
         print("  " + "   ".join(legend))
@@ -3417,7 +3510,15 @@ def _pretty_quota_progress(result, rows, footer_freshness):
         if "rate_pct_per_hour" in proj and proj["rate_pct_per_hour"] > 0:
             pairs.insert(1, ("直近の速さ", f"+{proj['rate_pct_per_hour'] * 24:.1f}%/日"
                              f"（直近 {_pace_label(proj)} 時間: {fmt_pct(proj['base_pct'])} → {fmt_pct(result['current_pct'])}）"))
+        if avg:
+            pairs.insert(1, ("直近の週の平均", _weekly_average_summary(avg, result["current_pct"])))
         print("\n".join(render_kv(pairs)))
+        wa = result.get("weekly_average")
+        if wa and wa["status"] != "ok":
+            print("  " + paint(_weekly_average_none_message(wa), "yellow"))
+        elif avg and avg["weeks_used"] < avg["weeks_requested"]:
+            print("  " + paint(f"区切りの終わった週が {avg['weeks_used']} 週しか無く、その分での平均"
+                              f"（{avg['weeks_requested']} 週を指定）", "dim"))
         print(section(f"残り {fmt_pct(result['remaining_pct'])} をトークンに直すと (見積もり)"))
         table_rows, notes = [], []
         for family, row in result["remaining_tokens"].items():
@@ -3471,6 +3572,22 @@ def print_quota_progress(result, rows, as_json, footer_freshness):
             if key in proj:
                 print(f"    {key}: {proj[key]}")
         print(f"    summary: {_quota_projection_summary(proj)}")
+        wa = result.get("weekly_average")
+        if wa:
+            print(f"  weekly_average: {wa['status']}")
+            print(f"    weeks_requested: {wa['weeks_requested']}")
+            print(f"    weeks_used: {wa['weeks_used']}")
+            for w in wa["weeks"]:
+                print(f"    week: {w['week_start']} .. {w['week_end']} samples={w['samples']} final_pct={w['final_pct']}")
+            if wa["status"] == "ok":
+                print(f"    at_now: elapsed_hours={wa['at_now']['elapsed_hours']} avg_pct={wa['at_now']['avg_pct']} weeks={wa['at_now']['weeks']}")
+                print(f"    at_reset: avg_pct={wa['at_reset']['avg_pct']} weeks={wa['at_reset']['weeks']}")
+                print(f"    summary: {_weekly_average_summary(wa, result['current_pct'])}")
+                print("    points (elapsed_hours: avg_pct, weeks):")
+                for p in wa["points"]:
+                    print(f"      {p['elapsed_hours']}: {p['avg_pct']} ({p['weeks']})")
+            else:
+                print(f"    summary: {_weekly_average_none_message(wa)}")
         print(f"  remaining_pct: {result['remaining_pct']}")
         print("  remaining_tokens:")
         for family, row in result["remaining_tokens"].items():
@@ -4460,6 +4577,7 @@ def cmd_report(args):
     since_str = until_str = None
     quota_per_pct = False
     quota_progress_flag = False
+    compare_weeks = None
     periods = None
     daily = False
     days = None
@@ -4504,6 +4622,18 @@ def cmd_report(args):
         elif token == "--quota-progress":
             quota_progress_flag = True
             i += 1
+        elif token == "--compare-weeks":
+            if i + 1 >= len(args):
+                print("error: --compare-weeks requires a value (integer, 0 = off)", file=sys.stderr)
+                return 1
+            try:
+                compare_weeks = int(args[i + 1])
+            except ValueError:
+                compare_weeks = -1
+            if compare_weeks < 0:
+                print(f"error: --compare-weeks expects an integer of 0 or more, got '{args[i + 1]}'", file=sys.stderr)
+                return 1
+            i += 2
         elif token == "--periods":
             if i + 1 >= len(args):
                 print("error: --periods requires a value (positive integer)", file=sys.stderr)
@@ -4599,6 +4729,9 @@ def cmd_report(args):
         print("error: --plain cannot be combined with --json (--plain is the legacy key: value text; --json is the machine format)", file=sys.stderr)
         return 1
     REPORT_PLAIN = plain
+    if compare_weeks is not None and not quota_progress_flag:
+        print("error: --compare-weeks only applies to --quota-progress", file=sys.stderr)
+        return 1
     if daily:
         conflict = next((flag for flag, on in (
             ("--reconcile", reconcile), ("--month", month_flag_present), ("--pr", filter_pr is not None),
@@ -4780,7 +4913,8 @@ def cmd_report(args):
 
     if quota_progress_flag:
         result, rows = quota_progress(valid_events, time.time(),
-                                      estimate_quota_per_pct(valid_events, periods or QUOTA_DEFAULT_PERIODS))
+                                      estimate_quota_per_pct(valid_events, periods or QUOTA_DEFAULT_PERIODS),
+                                      QUOTA_COMPARE_WEEKS if compare_weeks is None else compare_weeks)
         print_quota_progress(result, rows, as_json, footer_freshness)
         return 0
 
