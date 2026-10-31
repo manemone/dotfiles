@@ -257,6 +257,13 @@ ocw-meter report --since <rfc3339-ts> [--until <rfc3339-ts>] [--model|--role] [-
 # --reconcile / --since / --until とは併用不可
 ocw-meter report --quota-per-pct [--periods <n>] [--no-ingest] [--json|--plain]
 
+# 日ごとのモデル別使用量: 直近 N 日（既定 14、今日を含む）を、1日1行の横向きの積み上げ棒で描く。
+# 日の境目はローカル時刻（UTC ではない）。量は重み付きトークン（--quota-per-pct と同じ式）。
+# 期間内で量の多い上位 5 モデルを別々に、残りは「その他」にまとめる。使用の無い日も行を出す。
+# --json / --plain は、グラフの元の数値（日 × モデルの重み付きと素の内訳）を出す。
+# --pr / --phase / --model / --role / --window / --month / --reconcile / --since / --until / --quota-per-pct とは併用不可
+ocw-meter report --daily [--days <n>] [--no-ingest] [--json|--plain]
+
 # 月次: cash cost（従量API）/ capacity cost（Claudeサブスク枠）/
 # process efficiency（承認済みPRあたりの費用・ラウンド数等）を分離して表示
 # --reconcile とは別物（こちらは突合をしない）
