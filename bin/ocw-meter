@@ -2185,6 +2185,27 @@ def _fmt_field(field, value):
     return str(value)
 
 
+def _ingest_warnings(footer_freshness):
+    """ingest の鮮度・失敗の警告 [(色, 文)]。注記欄を持つ全ビューが共有する (判定はここだけ)。"""
+    out = []
+    fresh = footer_freshness["ingest_freshness_warning"]
+    if not str(fresh).startswith("(none"):
+        out.append(("red", f"ingest の鮮度: {fresh}"))
+    if str(footer_freshness["ingest_this_run"]).startswith("failed"):
+        out.append(("red", f"ingest が失敗: {footer_freshness['ingest_this_run']}"))
+    return out
+
+
+def _count_warnings(footer_completeness):
+    """数え漏れ (未隔離の不正行・隔離済みの行) の警告 [(色, 文)]。"""
+    out = []
+    if footer_completeness["malformed_unvalidated_lines"]:
+        out.append(("yellow", f"不正行 {fmt_int(footer_completeness['malformed_unvalidated_lines'])} 行 (未隔離)。'ocw-meter validate' を実行"))
+    if footer_completeness["quarantined_lines"]:
+        out.append(("yellow", f"隔離済みの行 {fmt_int(footer_completeness['quarantined_lines'])} 行 (このメーターが書いたイベント)"))
+    return out
+
+
 def pretty_footer(footer_completeness, footer_cost, footer_freshness, total, *, attribution=True):
     """末尾の「注記」欄。警告 (ingest の鮮度・失敗・不正行・隔離・価格表の
     フォールバック) は色付きで先頭に出し、落とさない。詳細は --plain。"""
@@ -2193,15 +2214,8 @@ def pretty_footer(footer_completeness, footer_cost, footer_freshness, total, *, 
 
     lines = []
     warnings = []
-    fresh = footer_freshness["ingest_freshness_warning"]
-    if not str(fresh).startswith("(none"):
-        warnings.append(("red", f"ingest の鮮度: {fresh}"))
-    if str(footer_freshness["ingest_this_run"]).startswith("failed"):
-        warnings.append(("red", f"ingest が失敗: {footer_freshness['ingest_this_run']}"))
-    if footer_completeness["malformed_unvalidated_lines"]:
-        warnings.append(("yellow", f"不正行 {fmt_int(footer_completeness['malformed_unvalidated_lines'])} 行 (未隔離)。'ocw-meter validate' を実行"))
-    if footer_completeness["quarantined_lines"]:
-        warnings.append(("yellow", f"隔離済みの行 {fmt_int(footer_completeness['quarantined_lines'])} 行 (このメーターが書いたイベント)"))
+    warnings.extend(_ingest_warnings(footer_freshness))
+    warnings.extend(_count_warnings(footer_completeness))
     fb = footer_cost.get("price_table_fallback_count")
     if fb:
         warnings.append(("yellow", f"価格表のフォールバック {fmt_int(fb)} 件 (発効前の価格表で見積もった概算)"))
@@ -2299,16 +2313,8 @@ def _pretty_quota_per_pct(estimate, footer_freshness):
         print("  " + paint(f"({'・'.join(dropped)} は幅が足りず省略。--plain で全部)", "dim"))
     for n in notes:
         print("  " + paint(n, "yellow"))
-    print("  " + paint("weighted = input + 1.25*cache_creation + 0.1*cache_read + 5*output。見積もりであり、止める・替える制御には使わない", "dim"))
-    fresh = footer_freshness["ingest_freshness_warning"]
-    print(section("注記"))
-    if not str(fresh).startswith("(none"):
-        print("  " + paint("⚠ ingest の鮮度: " + str(fresh), "red", "bold"))
-    if str(footer_freshness["ingest_this_run"]).startswith("failed"):
-        print("  " + paint("⚠ ingest が失敗: " + str(footer_freshness["ingest_this_run"]), "red", "bold"))
-    print("\n".join(render_kv([
-        ("ingest", f"{footer_freshness['ingest_this_run']} / 最終 {footer_freshness['last_ingest_at_rfc3339'] or 'unknown'}"),
-    ])))
+    print("  " + paint(f"weighted = {WEIGHTED_FORMULA}。見積もりであり、止める・替える制御には使わない", "dim"))
+    _pretty_notes(None, footer_freshness)
     print("  " + paint("by_bucket_hours などの詳細は --plain で見られます。", "dim"))
 
 
@@ -2861,6 +2867,10 @@ def model_family(model):
     return None
 
 
+# 重み付きトークンの式の説明文。係数を変えるときは weighted_tokens と一緒にここを直す (表示と --json はこの定数から作る)
+WEIGHTED_FORMULA = "input + 1.25*cache_creation + 0.1*cache_read + 5*output"
+
+
 def weighted_tokens(input_tokens, cache_creation, cache_read, output_tokens):
     return input_tokens + 1.25 * cache_creation + 0.1 * cache_read + 5 * output_tokens
 
@@ -3074,7 +3084,7 @@ def print_quota_per_pct(estimate, as_json, footer_freshness):
             print(f"    測れない: {row['reason']}")
         print(f"    by_bucket_hours: {row['weighted_tokens_per_pct_by_bucket_hours']}")
         print(f"    active_buckets: {row['active_buckets']}")
-    print("weighted = input + 1.25*cache_creation + 0.1*cache_read + 5*output。見積もりであり、止める・替える制御には使わない")
+    print(f"weighted = {WEIGHTED_FORMULA}。見積もりであり、止める・替える制御には使わない")
     print(f"last_ingest_at_rfc3339: {footer_freshness['last_ingest_at_rfc3339'] or 'unknown'}")
     print(f"ingest (this run): {footer_freshness['ingest_this_run']}")
     print(f"ingest_freshness_warning: {footer_freshness['ingest_freshness_warning']}")
@@ -3150,7 +3160,7 @@ def report_daily(usage_events, days=DAILY_DEFAULT_DAYS, today=None):
         for key, r in by_model.items():
             totals[key] = totals.get(key, 0) + r["weighted_tokens"]
     model_totals = [{"model": k, "weighted_tokens": v} for k, v in sorted(totals.items(), key=lambda kv: (-kv[1], kv[0])) if v > 0]
-    return {"days": days, "weighted_formula": "input + 1.25*cache_creation + 0.1*cache_read + 5*output",
+    return {"days": days, "weighted_formula": WEIGHTED_FORMULA,
             "daily": daily, "model_totals": model_totals}
 
 
@@ -3177,18 +3187,12 @@ def _pretty_notes(footer_completeness, footer_freshness):
 
 
 def _notes_lines(footer_completeness, footer_freshness):
-    """注記欄の中身 (警告 + ingest の1行)。dash も使う。"""
-    lines = []
-    fresh = footer_freshness["ingest_freshness_warning"]
-    if not str(fresh).startswith("(none"):
-        lines.append("  " + paint("⚠ ingest の鮮度: " + str(fresh), "red", "bold"))
-    if str(footer_freshness["ingest_this_run"]).startswith("failed"):
-        lines.append("  " + paint("⚠ ingest が失敗: " + str(footer_freshness["ingest_this_run"]), "red", "bold"))
-    # 数え漏れの警告 (pretty_footer と同じ文言・色。落とさない)
-    if footer_completeness["malformed_unvalidated_lines"]:
-        lines.append("  " + paint(f"⚠ 不正行 {fmt_int(footer_completeness['malformed_unvalidated_lines'])} 行 (未隔離)。'ocw-meter validate' を実行", "yellow", "bold"))
-    if footer_completeness["quarantined_lines"]:
-        lines.append("  " + paint(f"⚠ 隔離済みの行 {fmt_int(footer_completeness['quarantined_lines'])} 行 (このメーターが書いたイベント)", "yellow", "bold"))
+    """注記欄の中身 (警告 + ingest の1行)。dash も使う。
+    footer_completeness を持たないビュー (--quota-per-pct / --quota-progress) は None を渡し、数え漏れの警告を省く。"""
+    warnings = _ingest_warnings(footer_freshness)
+    if footer_completeness is not None:
+        warnings = warnings + _count_warnings(footer_completeness)
+    lines = ["  " + paint("⚠ " + text, color, "bold") for color, text in warnings]
     lines.extend(render_kv([
         ("ingest", f"{footer_freshness['ingest_this_run']} / 最終 {footer_freshness['last_ingest_at_rfc3339'] or 'unknown'}"),
     ]))
@@ -3309,7 +3313,7 @@ def _pretty_daily(report, footer_completeness, footer_freshness, rows=False):
             shown = name.split("/", 1)[-1] if "/" in name else name
             print("  " + paint(sym * 2, color) + " " + pad(shown, name_w) + "  " + pad(fmt_tokens(value), 7, "r")
                   + f"  {100.0 * value / grand:4.1f}%")
-    print("  " + paint("重み付き = input + 1.25*cache_creation + 0.1*cache_read + 5*output (--quota-per-pct と同じ式)。素のトークン・費用は --plain / --json", "dim"))
+    print("  " + paint(f"重み付き = {WEIGHTED_FORMULA} (--quota-per-pct と同じ式)。素のトークン・費用は --plain / --json", "dim"))
     _pretty_notes(footer_completeness, footer_freshness)
 
 
@@ -3652,16 +3656,8 @@ def _pretty_quota_progress(result, rows, footer_freshness):
             print("  " + paint(f"({'・'.join(dropped)} は幅が足りず省略。--plain で全部)", "dim"))
         for n in notes:
             print("  " + paint(n, "yellow"))
-    print("  " + paint("見積もりであり、止める・替える制御には使わない。weighted = input + 1.25*cache_creation + 0.1*cache_read + 5*output", "dim"))
-    print(section("注記"))
-    fresh = footer_freshness["ingest_freshness_warning"]
-    if not str(fresh).startswith("(none"):
-        print("  " + paint("⚠ ingest の鮮度: " + str(fresh), "red", "bold"))
-    if str(footer_freshness["ingest_this_run"]).startswith("failed"):
-        print("  " + paint("⚠ ingest が失敗: " + str(footer_freshness["ingest_this_run"]), "red", "bold"))
-    print("\n".join(render_kv([
-        ("ingest", f"{footer_freshness['ingest_this_run']} / 最終 {footer_freshness['last_ingest_at_rfc3339'] or 'unknown'}"),
-    ])))
+    print("  " + paint(f"見積もりであり、止める・替える制御には使わない。weighted = {WEIGHTED_FORMULA}", "dim"))
+    _pretty_notes(None, footer_freshness)
     print("  " + paint("点列などの数値は --plain / --json で見られます。", "dim"))
 
 
@@ -3715,7 +3711,7 @@ def print_quota_progress(result, rows, as_json, footer_freshness):
         print("  points:")
         for p in result["points"]:
             print(f"    {p['ts']}: {p['seven_day_used_pct']}")
-    print("見積もりであり、止める・替える制御には使わない。weighted = input + 1.25*cache_creation + 0.1*cache_read + 5*output")
+    print(f"見積もりであり、止める・替える制御には使わない。weighted = {WEIGHTED_FORMULA}")
 
 
 # ── report --heatmap: 日ごとの消費量のヒートマップ (傘 ocw-meter-pretty-charts 孫4) ──
@@ -3770,7 +3766,7 @@ def report_heatmap(usage_events, weeks, today=None):
         d["level"] = heatmap_level(d["weighted_tokens"], thresholds)
     used = [d for d in days if d["weighted_tokens"] > 0]
     busiest = max(used, key=lambda d: (d["weighted_tokens"], d["date"])) if used else None
-    return {"weeks": weeks, "weighted_formula": "input + 1.25*cache_creation + 0.1*cache_read + 5*output",
+    return {"weeks": weeks, "weighted_formula": WEIGHTED_FORMULA,
             "start": days[0]["date"], "end": days[-1]["date"], "days": days, "thresholds": thresholds,
             "total_weighted_tokens": sum(d["weighted_tokens"] for d in days), "active_days": len(used),
             "busiest": {"date": busiest["date"], "weighted_tokens": busiest["weighted_tokens"]} if busiest else None}
