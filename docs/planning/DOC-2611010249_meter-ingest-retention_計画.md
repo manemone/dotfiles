@@ -25,7 +25,7 @@
 
 | 孫 | ブランチ | 内容 | 状況 |
 |---|---|---|---|
-| 1 | `mir-01-transcript-retention` | `claude/settings.json` に `cleanupPeriodDays` を足し、値（ディスク使用量の実測から決める）と理由を ADR に残す | 🔄 実装中 |
+| 1 | `mir-01-transcript-retention` | `claude/settings.json` に `cleanupPeriodDays` を足し、値（ディスク使用量の実測から決める）と理由を ADR に残す | ✅ PR #199 マージ済 |
 | 2 | `mir-02-background-ingest` | statusLine の `snapshot-quota` から、間引き・バックグラウンド・ロック付きで ingest を自動起動する。方式の比較と選択を ADR に残す | 🔄 実装中 |
 | 3 | `mir-03-statusline-stale-warning` | 取り込みが一定時間以上止まっている・自動の取り込みが失敗し続けていることを statusLine に短く出す | ⬜ 待機中 |
 
@@ -237,6 +237,7 @@
 （司令官が運用中に分かったこと・人間の決定をここに追記する）
 
 - 2026-11-01: 計画書を起草した。傘は `origin/master`（8875ec4）から切られている。孫1・孫2 を並列で spawn する。孫3 は孫2 のマージ後
+- 2026-11-01: 孫1 の PR #199 を司令官がマージした。`cleanupPeriodDays` は 90（ADR DOC-2611010251）。傘で unittest（442件）・`pre-commit run --all-files`・`doc-id verify` が通った。配布は人間の `deploy-all.sh` で効く。孫2 は実装中
 
 ## 孫1用プロンプト:
 
