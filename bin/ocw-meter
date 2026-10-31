@@ -7888,6 +7888,14 @@ def cmd_snapshot_quota(args):
     with contextlib.suppress(Exception):
         maybe_start_auto_ingest()
 
+    # Stage 5 (own guard, after stage 4 so the "attempt just made" state is
+    # visible): append a short warning only when the automatic ingest is
+    # stale or failing. Silent otherwise, so the line is unchanged.
+    with contextlib.suppress(Exception):
+        warning = auto_ingest_warning()
+        if warning:
+            display = f"{display} {warning}" if display else warning
+
     print(display)
     return 0
 
@@ -7983,6 +7991,55 @@ def maybe_start_auto_ingest():
             emit_meter_error(root, "auto_ingest_spawn_failed", exc)
         return False
     return True
+
+
+# Warning thresholds for the statusLine (傘 meter-ingest-retention 孫3).
+# Stale: no successful auto-ingest for max(24h, 3 x interval). 24h matches
+# `report`'s INGEST_STALE_THRESHOLD_SECONDS; with the default 1h interval
+# that is 24 missed runs, so a normal day away from Claude Code never trips
+# it, while a broken auto-ingest shows up long before transcripts expire.
+# Failing: 3 consecutive failures (about 3 hours at the default interval).
+AUTO_INGEST_STALE_INTERVAL_MULTIPLIER = 3
+AUTO_INGEST_FAILURE_WARN_COUNT = 3
+# An attempt this recent (and not failed) is probably still running; the
+# first statusLine call after a long break starts the ingest that fixes
+# the staleness, so don't flash a warning for it.
+AUTO_INGEST_IN_FLIGHT_SECONDS = 10 * 60
+
+
+def auto_ingest_warning(now=None):
+    """Returns a short ASCII-led warning ("⚠ ingest 3d", "⚠ ingest
+    fail×3") when the automatic ingest looks stale or keeps failing, else
+    "". Reads only state/auto-ingest.json. A missing or unreadable state
+    file, a disabled auto-ingest or a storage-less machine yields ""."""
+    if not auto_ingest_enabled():
+        return ""
+    root = storage_root()
+    if not root:
+        return ""
+    state = load_auto_ingest_state(Paths(root))
+    if not state:
+        return ""
+    now = now or datetime.now(timezone.utc)
+    parts = []
+    last_success = parse_ts(state.get("last_success_at"))
+    attempt = parse_ts(state.get("last_attempt_at"))
+    in_flight = (
+        attempt is not None
+        and 0 <= (now - attempt).total_seconds() < AUTO_INGEST_IN_FLIGHT_SECONDS
+        and state.get("last_result") != "failed"
+    )
+    threshold = max(INGEST_STALE_THRESHOLD_SECONDS,
+                    AUTO_INGEST_STALE_INTERVAL_MULTIPLIER * auto_ingest_interval_seconds())
+    if last_success is not None and not in_flight:
+        age = (now - last_success).total_seconds()
+        if age >= threshold:
+            hours = int(age // 3600)
+            parts.append(f"{hours}h" if hours < 48 else f"{hours // 24}d")
+    failures = state.get("consecutive_failures")
+    if isinstance(failures, int) and failures >= AUTO_INGEST_FAILURE_WARN_COUNT:
+        parts.append(f"fail×{failures}")
+    return "⚠ ingest " + " ".join(parts) if parts else ""
 
 
 def cmd_auto_ingest(args):

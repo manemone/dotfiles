@@ -37,6 +37,21 @@
    `last_attempt_at`（最後に試みた時刻）・`last_finished_at`・`last_result`（`running` / `ok` / `failed`）・`last_success_at`・
    `last_error`・`consecutive_failures`・`version`（=1）。時刻は UTC の RFC3339
 
+### 2.1 追記: statusLine の警告の閾値（孫3）
+
+`state/auto-ingest.json` だけを読み、`snapshot-quota` の表示の1行に短い警告（`⚠ ingest 3d` / `⚠ ingest fail×3`）を足す。
+閾値は次のとおり。
+
+- **遅れ**: `last_success_at` から `max(24 時間, 間隔の 3 倍)` 以上。24 時間は `report` の鮮度の警告
+  （`INGEST_STALE_THRESHOLD_SECONDS`）と揃えた。既定の 1 時間間隔なら 24 回分の取り損ないで、普通の日・半日の離席では
+  出ず、止まったときは transcript が消える（保持期間は 90 日）よりずっと前に気づける。間隔を長くしたマシンでも誤報しないよう
+  間隔の 3 倍を下限にする
+- **失敗**: 連続 3 回（既定の間隔で約 3 時間）。1 回の一過性の失敗では出さない
+- **起動直後は出さない**: 長い休みのあとの最初の呼び出しは遅れの状態のまま取り込みを起動するため、最後の試行から 10 分以内で
+  失敗でなければ遅れの警告は出さない（取り込みが終われば解消する）
+- 状態ファイルが無い・壊れている、または自動の取り込みを無効にしているときは出さない（fail-open。使わない人に警告しない）
+- 「最古の未取り込み transcript が保持期限に近い」検知は作らない。状態ファイルだけで足りる（transcript の一覧を毎回なめない）
+
 ## 3. 方式の比較
 
 | 方式 | 判断 | 理由 |
