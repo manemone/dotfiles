@@ -26,15 +26,15 @@ usage:
   ocw-meter snapshot-quota
   ocw-meter prune-diagnostics [--older-than <days>] [--apply]
   ocw-meter validate [--file <path>]
-  ocw-meter report [--pr <n>] [--repo <owner>/<name>] [--no-ingest] [--json]
-  ocw-meter report --phase [--pr <n>] [--repo <owner>/<name>] [--no-ingest] [--json]
-  ocw-meter report --model [--pr <n>] [--repo <owner>/<name>] [--no-ingest] [--json]
-  ocw-meter report --role [--pr <n>] [--repo <owner>/<name>] [--no-ingest] [--json]
-  ocw-meter report --window [--pr <n>] [--repo <owner>/<name>] [--no-ingest] [--json]
-  ocw-meter report --since <rfc3339-ts> [--until <rfc3339-ts>] [--model|--role] [--pr <n>] [--periods <n>] [--no-ingest] [--json]
-  ocw-meter report --quota-per-pct [--periods <n>] [--no-ingest] [--json]
-  ocw-meter report --month [YYYY-MM] [--repo <owner>/<name>] [--no-ingest] [--json]
-  ocw-meter report --reconcile [--month <YYYY-MM>] [--provider-total <model>=<tokens> ...] [--no-ingest] [--json]
+  ocw-meter report [--pr <n>] [--repo <owner>/<name>] [--no-ingest] [--json|--plain]
+  ocw-meter report --phase [--pr <n>] [--repo <owner>/<name>] [--no-ingest] [--json|--plain]
+  ocw-meter report --model [--pr <n>] [--repo <owner>/<name>] [--no-ingest] [--json|--plain]
+  ocw-meter report --role [--pr <n>] [--repo <owner>/<name>] [--no-ingest] [--json|--plain]
+  ocw-meter report --window [--pr <n>] [--repo <owner>/<name>] [--no-ingest] [--json|--plain]
+  ocw-meter report --since <rfc3339-ts> [--until <rfc3339-ts>] [--model|--role] [--pr <n>] [--periods <n>] [--no-ingest] [--json|--plain]
+  ocw-meter report --quota-per-pct [--periods <n>] [--no-ingest] [--json|--plain]
+  ocw-meter report --month [YYYY-MM] [--repo <owner>/<name>] [--no-ingest] [--json|--plain]
+  ocw-meter report --reconcile [--month <YYYY-MM>] [--provider-total <model>=<tokens> ...] [--no-ingest] [--json|--plain]
   ocw-meter help
 
 subcommands:
@@ -101,6 +101,18 @@ subcommands:
     shows up as a footer line. The footer also always includes the
     last successful ingest's timestamp, this run's own ingest outcome,
     and a staleness warning once that timestamp is 24h old or older.
+
+    OUTPUT MODES (every view): the default is a human-oriented pretty
+    layout (tables, thousands separators, K/M/B token rounding, bars;
+    diagnostics gathered into a short "注記" block, with warnings kept
+    and highlighted). `--plain` prints the legacy key: value text
+    (for AI/scripts and for text kept in files); `--json` prints JSON.
+    `--plain` and `--json` cannot be combined. Pretty stays pretty when
+    stdout is not a terminal (pipe/file) — only the color is dropped.
+    Color is used only when stdout is a terminal AND the NO_COLOR
+    environment variable is not set to a non-empty value (no flag
+    forces it). Width follows $COLUMNS (80 when unknown); columns that
+    do not fit are dropped from the right, never wrapped.
 
     Otherwise prints an event-count / completeness / coverage summary,
     including total estimated cost and which price_table_version(s)/
@@ -475,6 +487,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import unicodedata
 import uuid
 from datetime import datetime, timedelta, timezone
 
@@ -1863,6 +1876,454 @@ def ingest_freshness_footer(cursor, ingest_run):
     }
 
 
+# `report` の表示モード。cmd_report が --plain で True にする (既定は pretty)。
+REPORT_PLAIN = False
+
+
+# ── pretty 表示の部品 (傘 ocw-meter-pretty-charts 孫1) ────────────────
+#
+# `report` の既定の出力 (人間向け)。`--plain` は下の `print_*_text` 系
+# (旧形式) をそのまま使い、`--json` はこの区画に触れない。標準ライブラリだけで
+# 描く (ADR DOC-2610312031_ocw-meter-pretty-display)。孫2〜4 はここの部品を使う。
+#
+# 使い方 (関数名と引数):
+#   fmt_int(281234)              -> "281,234"      件数 (桁区切り)
+#   fmt_tokens(25_100_000_000)   -> "25.1B"        トークン (K / M / B。1,000 未満はそのまま)
+#   fmt_usd(1.5)                 -> "$1.50"        費用 (None は "—")
+#   fmt_duration(3725)           -> "1h02m"        秒数
+#   disp_width(s) / pad(s, w, align)               東アジア文字幅 (全角=2) で揃える
+#   paint(text, "red")           -> 色が無効なら text のまま。色名は _ANSI 参照
+#   render_table(headers, rows, aligns=None, max_width=None)
+#       -> (lines, dropped_headers)  rows の各セルは str か (str, 色名)。
+#          幅が足りなければ右端の列から落として dropped_headers で返す
+#   render_kv(pairs, indent=2)   -> lines          揃えた key: value
+#   hbar(value, max_value, width) -> "███▌"        横棒 (1/8 刻み)
+#   section(title)               -> 見出し行
+#   term_width()                 -> 端末幅 (COLUMNS を尊重。取れなければ 80)
+#   color_enabled()              -> 標準出力が端末 かつ NO_COLOR が空でない値で立っていない
+
+_ANSI = {
+    "bold": "1", "dim": "2", "red": "31", "green": "32", "yellow": "33",
+    "blue": "34", "magenta": "35", "cyan": "36",
+}
+_MODEL_FAMILY_COLOR = {"opus": "magenta", "sonnet": "cyan", "haiku": "green", "fable": "yellow"}
+_BAR_EIGHTHS = " ▏▎▍▌▋▊▉"
+
+
+def color_enabled():
+    """no-color.org の約束: NO_COLOR が空でない値で立っていれば色なし。
+    端末 (isatty) でなければ色なし。--color のような強制フラグは無い。"""
+    if os.environ.get("NO_COLOR"):
+        return False
+    try:
+        return sys.stdout.isatty()
+    except (AttributeError, ValueError):
+        return False
+
+
+def paint(text, *styles):
+    if not styles or not color_enabled():
+        return text
+    codes = ";".join(_ANSI[s] for s in styles if s in _ANSI)
+    return f"\x1b[{codes}m{text}\x1b[0m" if codes else text
+
+
+def term_width():
+    try:
+        return max(40, shutil.get_terminal_size((80, 24)).columns)
+    except (ValueError, OSError):
+        return 80
+
+
+def disp_width(s):
+    return sum(
+        0 if unicodedata.combining(c) else (2 if unicodedata.east_asian_width(c) in ("W", "F") else 1)
+        for c in s
+    )
+
+
+def pad(s, width, align="l"):
+    gap = max(0, width - disp_width(s))
+    return " " * gap + s if align == "r" else s + " " * gap
+
+
+def fmt_int(n):
+    if n is None:
+        return "—"
+    return f"{int(n):,}"
+
+
+def fmt_tokens(n):
+    if n is None:
+        return "—"
+    a = abs(float(n))
+    sign = "-" if n < 0 else ""
+    if a < 1000:
+        return f"{sign}{int(a)}"
+    v, units = a / 1e3, ["K", "M", "B"]
+    unit = units.pop(0)
+    # 999.96K のような繰り上がりは次の単位へ送る (1000.0K と出さない)
+    while round(v, 1) >= 1000 and units:
+        v /= 1000
+        unit = units.pop(0)
+    return f"{sign}{v:.1f}{unit}"
+
+
+def fmt_usd(v, plus=False):
+    if not isinstance(v, (int, float)) or isinstance(v, bool):
+        return "—"
+    return f"${v:,.2f}" + ("+" if plus else "")
+
+
+def fmt_duration(seconds):
+    if not isinstance(seconds, (int, float)):
+        return "—"
+    s = int(round(seconds))
+    h, rem = divmod(s, 3600)
+    m, sec = divmod(rem, 60)
+    if h:
+        return f"{h}h{m:02d}m"
+    return f"{m}m{sec:02d}s" if m else f"{sec}s"
+
+
+def hbar(value, max_value, width):
+    """value/max_value を width 桁の横棒にする (1/8 刻み)。色は付けない
+    (呼び出し側が paint する)。max_value<=0 や value<=0 は空文字。"""
+    if not max_value or max_value <= 0 or not value or value <= 0 or width <= 0:
+        return ""
+    eighths = int(round(min(1.0, value / max_value) * width * 8))
+    full, rest = divmod(eighths, 8)
+    return "█" * full + (_BAR_EIGHTHS[rest] if rest else "")
+
+
+def section(title):
+    return paint(title, "bold")
+
+
+def _cell(c):
+    return c if isinstance(c, tuple) else (c, None)
+
+
+def render_table(headers, rows, aligns=None, max_width=None):
+    """表を行のリストで返す。aligns は "l"/"r" の列挙 (既定は先頭列 l、他 r)。
+    セルは str か (str, 色名)。max_width を超えるときは右端の列から落とし、
+    落とした見出しを返す (先頭 2 列は残す)。"""
+    max_width = max_width or term_width()
+    aligns = list(aligns or (["l"] + ["r"] * (len(headers) - 1)))
+    ncol = len(headers)
+    widths = [max([disp_width(headers[j])] + [disp_width(_cell(r[j])[0]) for r in rows]) for j in range(ncol)]
+
+    def total(n):
+        return 2 + sum(widths[:n]) + 2 * (n - 1)
+
+    keep = ncol
+    while keep > 2 and total(keep) > max_width:
+        keep -= 1
+    lines = ["  " + "  ".join(paint(pad(headers[j], widths[j], aligns[j]), "bold") for j in range(keep))]
+    lines.append("  " + paint("  ".join("─" * widths[j] for j in range(keep)), "dim"))
+    for r in rows:
+        parts = []
+        for j in range(keep):
+            text, color = _cell(r[j])
+            parts.append(paint(pad(text, widths[j], aligns[j]), color) if color else pad(text, widths[j], aligns[j]))
+        lines.append("  " + "  ".join(parts))
+    return [ln.rstrip() for ln in lines], list(headers[keep:])
+
+
+def render_kv(pairs, indent=2):
+    """[(key, value)] を key の幅で揃える。value は str か (str, 色名)。"""
+    if not pairs:
+        return []
+    kw = max(disp_width(k) for k, _ in pairs)
+    out = []
+    for k, v in pairs:
+        text, color = _cell(v)
+        out.append(" " * indent + paint(pad(k, kw), "dim") + "  " + (paint(text, color) if color else text))
+    return out
+
+
+def _nz(v):
+    return "—" if v is None else str(v)
+
+
+def _family_color(model_key):
+    return _MODEL_FAMILY_COLOR.get(model_family(model_key.split("/", 1)[-1])) if isinstance(model_key, str) else None
+
+
+# ── pretty: ビューごとの描画 ──────────────────────────────────────────
+
+_FIELD_LABEL = {
+    "messages": "messages", "total_events": "events", "input_tokens": "input",
+    "cache_read_input_tokens": "cache read", "cache_creation_input_tokens": "cache write",
+    "output_tokens": "output", "cost_estimate_usd": "cost", "estimated_weekly_pct": "週%",
+    "total_duration_seconds": "所要", "window_count": "windows", "samples": "samples",
+    "five_hour_used_pct_max": "5h max%", "seven_day_used_pct_max": "7d max%",
+    "list_price_equiv_usd": "list price", "list_price_equiv_session_count": "sessions",
+}
+_COUNT_FIELDS = {"messages", "total_events", "window_count", "samples", "list_price_equiv_session_count"}
+# 表にしない列 (説明文・除外件数・PR 紐付けの詳細は --plain / --json で見る)
+_SKIP_FIELD_PREFIXES = ("list_price_equiv_excluded_",)
+_SKIP_FIELDS = {"provider", "model", "list_price_equiv_note", "list_price_equiv_is_lower_bound",
+                "blocked_note", "blocked_seconds", "first_sample_ts", "last_sample_ts",
+                "prs_direct_link", "prs_time_overlap", "window_id"}
+
+
+def _fmt_field(field, value):
+    if value is None:
+        return "—"
+    if field in _COUNT_FIELDS:
+        return fmt_int(value)
+    if field.endswith("_tokens"):
+        return fmt_tokens(value)
+    if field == "cost_estimate_usd":
+        return fmt_usd(value)
+    if field == "list_price_equiv_usd":
+        return fmt_usd(value, plus=True)
+    if field == "total_duration_seconds":
+        return fmt_duration(value)
+    if field in ("estimated_weekly_pct", "five_hour_used_pct_max", "seven_day_used_pct_max"):
+        return f"{value}%"
+    return str(value)
+
+
+def pretty_footer(footer_completeness, footer_cost, footer_freshness, total, *, attribution=True):
+    """末尾の「注記」欄。警告 (ingest の鮮度・失敗・不正行・隔離・価格表の
+    フォールバック) は色付きで先頭に出し、落とさない。詳細は --plain。"""
+    def pct(n):
+        return (100.0 * n / total) if total else 0.0
+
+    lines = []
+    warnings = []
+    fresh = footer_freshness["ingest_freshness_warning"]
+    if not str(fresh).startswith("(none"):
+        warnings.append(("red", f"ingest の鮮度: {fresh}"))
+    if str(footer_freshness["ingest_this_run"]).startswith("failed"):
+        warnings.append(("red", f"ingest が失敗: {footer_freshness['ingest_this_run']}"))
+    if footer_completeness["malformed_unvalidated_lines"]:
+        warnings.append(("yellow", f"不正行 {fmt_int(footer_completeness['malformed_unvalidated_lines'])} 行 (未隔離)。'ocw-meter validate' を実行"))
+    if footer_completeness["quarantined_lines"]:
+        warnings.append(("yellow", f"隔離済みの行 {fmt_int(footer_completeness['quarantined_lines'])} 行 (このメーターが書いたイベント)"))
+    fb = footer_cost.get("price_table_fallback_count")
+    if fb:
+        warnings.append(("yellow", f"価格表のフォールバック {fmt_int(fb)} 件 (発効前の価格表で見積もった概算)"))
+    lines.append(section("注記"))
+    for color, text in warnings:
+        lines.append("  " + paint("⚠ " + text, color, "bold"))
+    cc = footer_completeness["completeness"]
+    pairs = [
+        ("completeness", f"complete {pct(cc['complete']):.1f}% / partial {pct(cc['partial']):.1f}% / unknown {pct(cc['unknown']):.1f}%"),
+        ("coverage", str(footer_cost["coverage"])),
+        ("cost", f"{footer_cost['cost_estimate_usd']} / basis: {footer_cost['cost_basis']}"),
+    ]
+    if attribution:
+        pairs.append(("attribution", f"run_id {footer_cost['attribution_run_id']} | role {footer_cost['attribution_role']}"))
+    pairs.append(("診断", f"transcript 隔離 {fmt_int(footer_completeness['transcript_lines_quarantined'])} 行 / "
+                          f"meter.error {fmt_int(footer_completeness['meter_error_diagnostics'])} 行"))
+    pairs.append(("ingest", f"{footer_freshness['ingest_this_run']} / 最終 {footer_freshness['last_ingest_at']}"))
+    lines.extend(render_kv(pairs))
+    lines.append("  " + paint("価格表・数え漏れの条件などの全文は --plain で見られます。", "dim"))
+    print("\n".join(lines))
+
+
+def _pretty_grouped_report(title, groups, storage_root_str, footer_completeness, footer_cost, footer_freshness, total, extra_top):
+    print(paint("storage root", "dim") + f"  {storage_root_str}")
+    text_label = {"filter_pr": "pr"}
+    for key, value in (extra_top or {}).items():
+        print(paint("filter", "dim") + f"  {text_label.get(key, key)}={value}")
+    print(section(title))
+    if not groups:
+        print("  (no data)")
+    else:
+        view = title.split()[-1]
+        if view == "window":
+            # 週の窓は数百行になりうる。新しい順に 30 行まで (全部は --plain / --json)
+            keys = sorted(groups, key=lambda k: int(k) if str(k).isdigit() else 0)
+            hidden = max(0, len(keys) - 30)
+            keys = keys[-30:]
+        else:
+            keys = sorted(groups, key=str)
+            hidden = 0
+        fields = []
+        for k in keys:
+            for f, v in groups[k].items():
+                if f in _SKIP_FIELDS or f.startswith(_SKIP_FIELD_PREFIXES) or isinstance(v, (dict, list)):
+                    continue
+                if f not in fields:
+                    fields.append(f)
+        if view == "window":
+            fields = [f for f in ("samples", "five_hour_used_pct_max", "seven_day_used_pct_max", "list_price_equiv_usd",
+                                  "list_price_equiv_session_count") if f in fields]
+        headers = [view] + [_FIELD_LABEL.get(f, f) for f in fields]
+        rows = []
+        for k in keys:
+            row = groups[k]
+            label = str(k)
+            if view == "window" and label.isdigit():
+                label = datetime.fromtimestamp(int(label)).strftime("%m-%d %H:%M") + " 〆"
+            color = _family_color(k) if view == "model" else None
+            rows.append([(label, color) if color else label] + [_fmt_field(f, row.get(f)) for f in fields])
+        lines, dropped = render_table(headers, rows)
+        print("\n".join(lines))
+        if dropped:
+            print("  " + paint(f"({'・'.join(dropped)} は幅が足りず省略。--plain で全部)", "dim"))
+        if hidden:
+            print("  " + paint(f"(古い {hidden} 行は省略。--plain / --json で全部)", "dim"))
+        if any("list_price_equiv_usd" in groups[k] for k in keys):
+            print("  " + paint("list price = 請求書ではない下限値 (説明の全文は --plain)", "dim"))
+    pretty_footer(footer_completeness, footer_cost, footer_freshness, total)
+
+
+def _pretty_quota_per_pct(estimate, footer_freshness):
+    print(section("週の上限の 1% あたりのトークン (見積もり)"))
+    resets = []
+    for p in estimate["periods"]:
+        ts = p["seven_day_resets_at"]
+        try:
+            resets.append(datetime.fromtimestamp(int(ts)).strftime("%m-%d %H:%M"))
+        except (TypeError, ValueError, OverflowError, OSError):
+            resets.append(str(ts))
+    print("  " + f"periods: {len(estimate['periods'])} (週のリセット: {', '.join(resets) or 'なし'})")
+    rows = []
+    notes = []
+    for family, row in estimate["families"].items():
+        color = _MODEL_FAMILY_COLOR.get(family)
+        if row["status"] == "estimated":
+            rows.append([(family, color) if color else family,
+                         fmt_tokens(row["weighted_tokens_per_pct"]), fmt_tokens(row["raw_tokens_per_pct"]),
+                         str(row["active_buckets"].get("12", "—"))])
+        else:
+            rows.append([(family, color) if color else family, "—", "—", "—"])
+            notes.append(f"{family}: 測れない — {row['reason']}")
+    lines, _ = render_table(["系統", "weighted/1%", "raw/1%", "区切り数(12h)"], rows)
+    print("\n".join(lines))
+    for n in notes:
+        print("  " + paint(n, "yellow"))
+    print("  " + paint("weighted = input + 1.25*cache_creation + 0.1*cache_read + 5*output。見積もりであり、止める・替える制御には使わない", "dim"))
+    fresh = footer_freshness["ingest_freshness_warning"]
+    print(section("注記"))
+    if not str(fresh).startswith("(none"):
+        print("  " + paint("⚠ ingest の鮮度: " + str(fresh), "red", "bold"))
+    if str(footer_freshness["ingest_this_run"]).startswith("failed"):
+        print("  " + paint("⚠ ingest が失敗: " + str(footer_freshness["ingest_this_run"]), "red", "bold"))
+    print("\n".join(render_kv([
+        ("ingest", f"{footer_freshness['ingest_this_run']} / 最終 {footer_freshness['last_ingest_at_rfc3339'] or 'unknown'}"),
+    ])))
+    print("  " + paint("by_bucket_hours などの詳細は --plain で見られます。", "dim"))
+
+
+def _pretty_default_report(summary, filter_pr, repo, by_type, footer_completeness, footer_cost, footer_freshness, total):
+    print(paint("storage root", "dim") + f"  {summary['storage_root']}")
+    if filter_pr is not None:
+        print(paint("filter", "dim") + f"  pr={filter_pr} (repo={repo})")
+    print(section(f"events: {fmt_int(total)} 件"))
+    mx = max(by_type.values()) if by_type else 0
+    rows = [[(t or "(none)"), fmt_int(n), paint(hbar(n, mx, 24), "cyan")]
+            for t, n in sorted(by_type.items(), key=lambda kv: (kv[0] or ""))]
+    if rows:
+        lines, _ = render_table(["event_type", "件数", ""], rows, aligns=["l", "r", "l"])
+        print("\n".join(lines))
+    pretty_footer(footer_completeness, footer_cost, footer_freshness, total)
+    if filter_pr is None:
+        return
+    d = summary["pr_detail"]
+    print(section(f"PR #{filter_pr} の詳細"))
+    cash = fmt_usd(d["cash_cost_usd"]) if isinstance(d["cash_cost_usd"], (int, float)) else "—"
+    pairs = [
+        ("final_result", str(d["final_result"])),
+        ("承認までの所要", fmt_duration(d["duration_seconds"]) + ("" if d["duration_seconds"] is not None else " (未承認)")),
+        ("イベントの時刻スパン", fmt_duration(d["total_span_seconds"])),
+        ("review rounds", f"{d['review_round_count']} 回 / 人の介入 {d['human_intervention_count']} 回"),
+        ("5h window 完了", f"{summary['five_hour_window_completion']} (window_ids: {', '.join(summary['five_hour_window_ids_seen']) or 'なし'})"),
+        ("5h / 7d 使用率 max", f"{d['five_hour_used_pct_max']}% / {d['seven_day_used_pct_max']}%"),
+        ("cash cost", cash),
+        ("capacity messages", f"{fmt_int(d['capacity_message_count'])} (subscription。ドル建てなし)"),
+        ("list price 相当", f"{fmt_usd(d['list_price_equiv_usd'], plus=True)} (下限・請求書ではない・cash と合算不可) / {fmt_int(d['list_price_equiv_session_count'])} sessions"),
+    ]
+    print("\n".join(render_kv(pairs)))
+    for r in d["review_rounds"]:
+        print("    " + f"round {r['round']}: verdict={r['verdict']} findings={r['findings_count']}")
+    excl = [("session_id なし", d["list_price_equiv_excluded_no_session_id_count"]),
+            ("費用 null", d["list_price_equiv_excluded_null_cost_count"]),
+            ("DeepSeek", d["list_price_equiv_excluded_deepseek_count"]),
+            ("その他 provider", d["list_price_equiv_excluded_other_provider_count"])]
+    if any(n for _, n in excl):
+        print("  " + paint("list price から除外: " + " / ".join(f"{k} {fmt_int(n)}" for k, n in excl if n), "yellow"))
+
+
+def _pretty_month_report(summary, month, footer_completeness, footer_cost, footer_freshness, total):
+    print(section(f"{month} の月次") + paint(f"  (process efficiency の repo: {summary['repo']})", "dim"))
+    cc = summary["cash_cost"]
+    print(section("cash cost (従量課金 API — 今は DeepSeek のみ)"))
+    pairs = [("usage.message", fmt_int(cc["usage_message_count"])),
+             ("cash cost", fmt_usd(cc["cash_cost_usd"]) + " (見積もり。請求書ではない)")]
+    print("\n".join(render_kv(pairs)))
+    for pt in cc["price_tables_applied"]:
+        n, tn = pt["fallback_event_count"], pt["event_count"]
+        mark = "" if n == 0 else paint(f"  ⚠ フォールバック {fmt_int(n)}/{fmt_int(tn)} 件 (発効前の価格表。概算)", "yellow")
+        print("    " + f"{pt['price_table_version']} (effective {pt['effective_date']})" + mark)
+    cap = summary["capacity"]
+    print(section("capacity cost (Claude の契約枠 — cash と合算しない)"))
+    pairs = [
+        ("capacity messages", fmt_int(cap["capacity_message_count"])),
+        ("quota.sample", fmt_int(cap["quota_sample_count"])),
+        ("5h / 7d 使用率 max", f"{cap['five_hour_used_pct_max']}% / {cap['seven_day_used_pct_max']}%"),
+        ("5h windows", fmt_int(cap["distinct_five_hour_windows"])),
+        ("list price 相当", f"{fmt_usd(cap['list_price_equiv_usd'], plus=True)} (下限・請求書ではない) / {fmt_int(cap['list_price_equiv_session_count'])} sessions"),
+    ]
+    print("\n".join(render_kv(pairs)))
+    excl = [("session_id なし", cap["list_price_equiv_excluded_no_session_id_count"]),
+            ("費用 null", cap["list_price_equiv_excluded_null_cost_count"]),
+            ("DeepSeek", cap["list_price_equiv_excluded_deepseek_count"]),
+            ("その他 provider", cap["list_price_equiv_excluded_other_provider_count"])]
+    if any(n for _, n in excl):
+        print("  " + paint("list price から除外: " + " / ".join(f"{k} {fmt_int(n)}" for k, n in excl if n), "yellow"))
+    pe = summary["process_efficiency"]
+    print(section(f"process efficiency (承認済み PR, {month})"))
+    pairs = [
+        ("approved PRs", fmt_int(pe["approved_pr_count"])),
+        ("平均 cash cost", fmt_usd(pe["avg_cash_cost_usd"])),
+        ("平均 review rounds", _nz(pe["avg_review_round_count"])),
+        ("平均 人の介入", _nz(pe["avg_human_intervention_count"])),
+        ("平均 所要", fmt_duration(pe["avg_duration_seconds"])),
+        ("5h window 完了の内訳", str(pe["five_hour_window_completion_breakdown"])),
+    ]
+    print("\n".join(render_kv(pairs)))
+    print("  " + paint("quality guardrail: 未計測 (第一段階では収集項目が無い)", "dim"))
+    pretty_footer(footer_completeness, footer_cost, footer_freshness, total)
+
+
+def _pretty_reconcile_report(summary, models_out, footer_completeness, footer_cost, footer_freshness, total_messages):
+    print(section(f"{summary['month']} の突き合わせ (reconcile)") + paint(f"  cost_basis: {summary['cost_basis']}", "dim"))
+    if not models_out:
+        print("  (この月の transcript に usage.message が見つからない)")
+    else:
+        with_provider = any(m["provider_total_tokens"] is not None for m in models_out.values())
+        rows = []
+        for model in sorted(models_out):
+            m = models_out[model]
+            color = _family_color(model)
+            row = [(model, color) if color else model, fmt_int(m["messages"]), fmt_tokens(m["input_tokens"]),
+                   fmt_tokens(m["cache_read_input_tokens"]), fmt_tokens(m["cache_creation_input_tokens"]),
+                   fmt_tokens(m["output_tokens"]), fmt_usd(m["cost_estimate_usd"])]
+            if with_provider:
+                # 幅が足りないとき右端から落ちるので、突き合わせの本題の列を左へ寄せる
+                has = m["provider_total_tokens"] is not None
+                row = row[:2] + [fmt_tokens(m["provider_total_tokens"]) if has else "—",
+                                 f"{m['coverage_ratio'] * 100:.1f}%" if has else "—"] + row[2:]
+            rows.append(row)
+        headers = ["model", "messages", "input", "cache read", "cache write", "output", "cost"]
+        if with_provider:
+            headers = headers[:2] + ["provider計", "coverage"] + headers[2:]
+        lines, dropped = render_table(headers, rows)
+        print("\n".join(lines))
+        if dropped:
+            print("  " + paint(f"({'・'.join(dropped)} は幅が足りず省略。--plain で全部)", "dim"))
+        if not with_provider:
+            print("  " + paint("--provider-total <model>=<tokens> を渡すと provider 側の合計との coverage が出ます", "dim"))
+    pretty_footer(footer_completeness, footer_cost, footer_freshness, total_messages, attribution=False)
+    print("  " + paint("known_gaps: " + str(summary["known_gaps"]), "dim"))
+
+
 def print_footer_text(footer_completeness, footer_cost, footer_freshness, total, *, attribution=True):
     """レビュー指摘4: `attribution`はキーワード専用の明示フラグ
     (既定True) — 以前は`footer_cost.get('attribution_run_id', 'n/a ...')`
@@ -2491,6 +2952,9 @@ def print_quota_per_pct(estimate, as_json, footer_freshness):
     if as_json:
         print(json.dumps({**estimate, **footer_freshness}, ensure_ascii=False, indent=2, sort_keys=True))
         return
+    if not REPORT_PLAIN:
+        _pretty_quota_per_pct(estimate, footer_freshness)
+        return
     print("週の上限の1%あたりのトークン（見積もり）:")
     print(f"  periods: {len(estimate['periods'])} (seven_day_resets_at: "
           f"{', '.join(str(p['seven_day_resets_at']) for p in estimate['periods']) or 'none'})")
@@ -3032,26 +3496,7 @@ def _report_reconcile(paths, month, provider_totals, as_json, footer_freshness):
         print(json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True))
         return 0
 
-    print(f"month:         {summary['month']}")
-    print(f"cost_basis:    {summary['cost_basis']}")
-    if not models_out:
-        print("models:        (no usage.message events found in transcripts for this month)")
-    for model, m in sorted(models_out.items()):
-        print(f"  {model}:")
-        print(f"    messages:             {m['messages']}")
-        print(f"    input_tokens (miss):  {m['input_tokens']}")
-        print(f"    cache_read (hit):     {m['cache_read_input_tokens']}")
-        print(f"    cache_creation:       {m['cache_creation_input_tokens']}")
-        print(f"    output_tokens:        {m['output_tokens']}")
-        cost_str = f"${m['cost_estimate_usd']:.2f}" if m["cost_estimate_usd"] is not None else "null"
-        print(f"    cost_estimate_usd:    {cost_str}")
-        if m["provider_total_tokens"] is not None:
-            print(f"    provider_total:       {m['provider_total_tokens']}")
-            print(f"    coverage:             {m['coverage_ratio'] * 100:.1f}%")
-        else:
-            print("    provider_total:       (not supplied — pass --provider-total <model>=<tokens>)")
-            print("    coverage:             unknown")
-    print_footer_text(
+    recon_footer = (
         {
             "completeness": month_completeness,
             "quarantined_lines": summary["quarantined_lines"],
@@ -3076,8 +3521,31 @@ def _report_reconcile(paths, month, provider_totals, as_json, footer_freshness):
         # テキスト・--json両方で徹底する — 欠落キーに"n/a"のフォールバック
         # 文字列を充てると、attributionを計算し忘れた将来のビューが
         # あっても気づけないまま同じ"n/a"が出続けてしまう。
-        attribution=False,
     )
+    if not REPORT_PLAIN:
+        _pretty_reconcile_report(summary, models_out, *recon_footer)
+        return 0
+
+    print(f"month:         {summary['month']}")
+    print(f"cost_basis:    {summary['cost_basis']}")
+    if not models_out:
+        print("models:        (no usage.message events found in transcripts for this month)")
+    for model, m in sorted(models_out.items()):
+        print(f"  {model}:")
+        print(f"    messages:             {m['messages']}")
+        print(f"    input_tokens (miss):  {m['input_tokens']}")
+        print(f"    cache_read (hit):     {m['cache_read_input_tokens']}")
+        print(f"    cache_creation:       {m['cache_creation_input_tokens']}")
+        print(f"    output_tokens:        {m['output_tokens']}")
+        cost_str = f"${m['cost_estimate_usd']:.2f}" if m["cost_estimate_usd"] is not None else "null"
+        print(f"    cost_estimate_usd:    {cost_str}")
+        if m["provider_total_tokens"] is not None:
+            print(f"    provider_total:       {m['provider_total_tokens']}")
+            print(f"    coverage:             {m['coverage_ratio'] * 100:.1f}%")
+        else:
+            print("    provider_total:       (not supplied — pass --provider-total <model>=<tokens>)")
+            print("    coverage:             unknown")
+    print_footer_text(*recon_footer, attribution=False)
     print(f"known_gaps:    {summary['known_gaps']}")
     return 0
 
@@ -3137,6 +3605,9 @@ def _print_grouped_report(title, group_label, groups, as_json, storage_root_str,
     }
     if as_json:
         print(json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True))
+        return 0
+    if not REPORT_PLAIN:
+        _pretty_grouped_report(title, groups, storage_root_str, footer_completeness, footer_cost, footer_freshness, total, extra_top)
         return 0
     print(f"storage root:  {storage_root_str}")
     # Round-1 review finding 8: text mode used to print the raw JSON key
@@ -3316,8 +3787,10 @@ def backfill_run_id_and_role_via_session(usage_events, session_attrs, binds):
 
 
 def cmd_report(args):
+    global REPORT_PLAIN
     filter_pr = None
     as_json = False
+    plain = False
     reconcile = False
     month = None
     month_flag_present = False
@@ -3384,6 +3857,9 @@ def cmd_report(args):
         elif token == "--json":
             as_json = True
             i += 1
+        elif token == "--plain":
+            plain = True
+            i += 1
         elif token == "--reconcile":
             reconcile = True
             i += 1
@@ -3422,6 +3898,10 @@ def cmd_report(args):
             print(f"error: unknown report flag: {token}", file=sys.stderr)
             return 1
 
+    if plain and as_json:
+        print("error: --plain cannot be combined with --json (--plain is the legacy key: value text; --json is the machine format)", file=sys.stderr)
+        return 1
+    REPORT_PLAIN = plain
     if reconcile and view is not None:
         print(f"error: --reconcile cannot be combined with --{view}", file=sys.stderr)
         return 1
@@ -3666,6 +4146,8 @@ def cmd_report(args):
 
     if as_json:
         print(json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True))
+    elif not REPORT_PLAIN:
+        _pretty_default_report(summary, filter_pr, repo, by_type, footer_completeness, footer_cost, footer_freshness, total)
     else:
         print(f"storage root:  {summary['storage_root']}")
         if filter_pr is not None:
@@ -3784,6 +4266,10 @@ def _report_month_standalone(paths, valid_events, malformed, month, repo, as_jso
 
     if as_json:
         print(json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True))
+        return 0
+
+    if not REPORT_PLAIN:
+        _pretty_month_report(summary, month, footer_completeness, footer_cost, footer_freshness, len(month_events))
         return 0
 
     print(f"month:         {summary['month']}")
