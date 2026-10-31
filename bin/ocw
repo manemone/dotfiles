@@ -352,7 +352,9 @@ whose agent is already running: the text would be sent to that agent.
 self-compact: `ocw self-compact "<instruction>"` sends "/compact <instruction>"
 to the pane this shell runs in ($HERDR_PANE_ID) and to no other pane, and a
 background watcher sends a fixed "resume" prompt once compact has finished;
-with $HERDR_PANE_ID empty (outside Herdr) it sends nothing and fails. Meant for a commander (umbrella-orchestrator
+with $HERDR_PANE_ID empty (outside Herdr) it sends nothing and fails. `-h` /
+`--help` print the usage and send nothing; any other argument starting with
+"-" is rejected, never sent as an instruction. Meant for a commander (umbrella-orchestrator
 skill, section 3.7) or an implementer (pr-review-loop skill) compacting itself
 at a natural break; it exists so a
 narrow permission rule (`Bash(ocw self-compact *)`) can allow it. End the
@@ -2074,6 +2076,19 @@ self_compact_resume_watcher() {
 }
 
 self_compact() {
+  # An argument starting with "-" is never an instruction: sending it would
+  # queue a real /compact (e.g. "/compact --help") from a mere help request.
+  case "${1:-}" in
+    -h | --help)
+      echo "usage: ocw self-compact <instruction>"
+      echo "(see \`ocw help herdr\` for details; sends nothing)"
+      return 0
+      ;;
+    -*)
+      die "usage: ocw self-compact <instruction> (an instruction cannot start with \"-\"; see \`ocw help herdr\`)"
+      ;;
+  esac
+
   [ "$#" -eq 1 ] && [ -n "$1" ] ||
     die "usage: ocw self-compact <instruction>"
 

@@ -2225,6 +2225,21 @@ class SelfCompactTests(HerdrOcwTestCase):
                 self.assertNotEqual(result.returncode, 0)
                 self.assertEqual(self.herdr_calls(), [])
 
+    def test_help_and_dash_arguments_send_nothing(self):
+        # `ocw self-compact --help` once queued a real "/compact --help".
+        for flag in ["-h", "--help"]:
+            with self.subTest(flag):
+                result = self.run_self_compact([flag], "wXX:p1")
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn("usage:", result.stdout)
+                self.assertEqual(self.herdr_calls(), [])
+        for arg in ["--foo", "-x", "-"]:
+            with self.subTest(arg):
+                result = self.run_self_compact([arg], "wXX:p1")
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("usage:", result.stderr)
+                self.assertEqual(self.herdr_calls(), [])
+
     def test_allow_rule_is_scoped_to_this_command_only(self):
         # The rule exists to get past the auto-mode classifier ([Tmux Self
         # Drive]); allowing `herdr agent prompt` in general would let the AI
