@@ -4039,7 +4039,7 @@ class ReportGroupedViewsTests(OcwMeterTestCase):
             return result.stdout
 
         full = dash(80)
-        for title in ("週の上限が 100% に届くまでの推移", "日ごとのモデル別使用量", "日ごとの消費量"):
+        for title in ("週の上限の推移", "日ごとのモデル別使用量", "日ごとの消費量", "注記"):
             self.assertIn(title, full)
         self.assertNotIn("省略:", full)
         # 高さが足りなければ、まずヒートマップ、次に日ごとの縦棒を省き、省いたことを出す。
@@ -4047,27 +4047,45 @@ class ReportGroupedViewsTests(OcwMeterTestCase):
         self.assertIn("日ごとのモデル別使用量", no_heat)
         self.assertNotIn("日ごとの消費量", no_heat)
         self.assertIn("省略: ヒートマップ", no_heat)
-        quota_only = dash(14)
-        self.assertIn("週の上限が 100% に届くまでの推移", quota_only)
+        quota_only = dash(24)
+        self.assertIn("週の上限の推移", quota_only)
         self.assertNotIn("日ごとのモデル別使用量", quota_only)
         self.assertIn("省略: ヒートマップ、日ごとの縦棒", quota_only)
+
+        # 各パネルの行は端末幅ちょうどで枠の右端が揃い、すべてのグラフの縦軸の線が同じ列に来る。
+        def width(line):
+            return sum(2 if unicodedata.east_asian_width(c) in ("W", "F") else 1 for c in line)
+        self.assertEqual({width(ln) for ln in full.splitlines()}, {100})
+        axis_cols = set()
+        for ln in full.splitlines():
+            pos = 0
+            for ch in ln:
+                if ch in "┤└" or (ch == "│" and 1 < pos < 12):
+                    axis_cols.add(pos)
+                pos += width(ch)
+        self.assertEqual(len(axis_cols), 1, axis_cols)
+
+        # 狭い端末でも、上の罫線に入らない補足 (時刻・グラフの凡例) は本文の 1 行に回り、落ちない。幅も端末幅ちょうど。
+        for cols in ("60", "40"):
+            narrow = run_meter(["dash", "--no-ingest"], self.home, {**env, "COLUMNS": cols, "LINES": "80"}).stdout
+            self.assertIn("現在", narrow)
+            self.assertIn("● 実績", narrow)
+            self.assertEqual({width(ln) for ln in narrow.splitlines()}, {int(cols)})
 
         # 端末 (色あり) でも、色コードの途中で切れず、色を除いた各行の幅が端末幅に収まる。
         colored = run_meter_on_pty(["dash", "--no-ingest"], self.home, {**env, "LINES": "80"})
         self.assertNotRegex(colored, r"\x1b(?!\[[0-9;]*m)")
         self.assertNotRegex(colored, r"\x1b\[[0-9;]*(?![0-9;m])")
-        # 色を除いた各行の表示幅は、パイプで描いたもの (記号) と同じで、端末幅に収まる (ヒートマップの行が途中で終わらない)。
-        def width(line):
-            return sum(2 if unicodedata.east_asian_width(c) in ("W", "F") else 1 for c in line)
+        # 色を除いた各行の表示幅は、パイプで描いたもの (記号) と同じで、端末幅に収まる (枠の右端がずれない)。
         stripped = re.sub(r"\x1b\[[0-9;]*m", "", colored).replace("\r", "").splitlines()
         self.assertEqual(len(stripped), len(full.splitlines()))
-        self.assertEqual([width(ln) for ln in stripped[2:]], [width(ln) for ln in full.splitlines()[2:]])
+        self.assertEqual([width(ln) for ln in stripped], [width(ln) for ln in full.splitlines()])
         self.assertTrue(all(width(ln) <= 100 for ln in stripped))
         self.assertEqual(colored.count("\x1b[0m"), len(re.findall(r"\x1b\[(?!0m)[0-9;]*m", colored)))  # 開いた色は全部閉じる
 
         # ingest が失敗しても止まらず、保存済みの集計で描き、注記に出る (HOME が空 = projects dir を決められない)。
         failed = dash(80, {"HOME": ""}, args=())
-        self.assertIn("週の上限が 100% に届くまでの推移", failed)
+        self.assertIn("週の上限の推移", failed)
         self.assertIn("ingest が失敗", failed)
 
     def test_dash_rejects_json_plain_unknown_flags_and_watch_without_a_terminal(self):
