@@ -25,8 +25,8 @@
 
 | 孫 | ブランチ | 内容 | 状況 |
 |---|---|---|---|
-| 1 | `mir-01-transcript-retention` | `claude/settings.json` に `cleanupPeriodDays` を足し、値（ディスク使用量の実測から決める）と理由を ADR に残す | ⬜ 待機中 |
-| 2 | `mir-02-background-ingest` | statusLine の `snapshot-quota` から、間引き・バックグラウンド・ロック付きで ingest を自動起動する。方式の比較と選択を ADR に残す | ⬜ 待機中 |
+| 1 | `mir-01-transcript-retention` | `claude/settings.json` に `cleanupPeriodDays` を足し、値（ディスク使用量の実測から決める）と理由を ADR に残す | 🔄 実装中 |
+| 2 | `mir-02-background-ingest` | statusLine の `snapshot-quota` から、間引き・バックグラウンド・ロック付きで ingest を自動起動する。方式の比較と選択を ADR に残す | 🔄 実装中 |
 | 3 | `mir-03-statusline-stale-warning` | 取り込みが一定時間以上止まっている・自動の取り込みが失敗し続けていることを statusLine に短く出す | ⬜ 待機中 |
 
 依存:
