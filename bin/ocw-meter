@@ -7936,10 +7936,10 @@ def update_auto_ingest_state(paths, **fields):
 
 def maybe_start_auto_ingest():
     """Starts the detached child when enabled, the throttle window has
-    passed and the storage already exists (record_quota_sample, which
-    runs just before, creates it and refuses a Git-worktree root — so a
-    refused root never gets a state file or a child from here). Returns
-    True when a child was started."""
+    passed, the storage already exists (record_quota_sample, which runs
+    just before, creates it) and the storage root is not inside a Git
+    worktree (checked once per interval, after the cheap throttle read).
+    Returns True when a child was started."""
     if not auto_ingest_enabled():
         return False
     root = storage_root()
@@ -7955,6 +7955,10 @@ def maybe_start_auto_ingest():
         return False
     me = os.environ.get("OCW_METER_SELF")
     if not me or not os.access(me, os.X_OK):
+        return False
+    # Once per interval (not per call): never write under, or start a child
+    # for, a storage root that resolves inside a Git worktree.
+    if in_git_worktree(root):
         return False
     # Mark the attempt BEFORE spawning so concurrent statusLine calls
     # (one per Claude pane) don't each spawn a child; the child's own
