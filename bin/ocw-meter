@@ -35,6 +35,7 @@ usage:
   ocw-meter report --quota-per-pct [--periods <n>] [--no-ingest] [--json|--plain]
   ocw-meter report --quota-progress [--periods <n>] [--no-ingest] [--json|--plain]
   ocw-meter report --daily [--days <n>] [--no-ingest] [--json|--plain]
+  ocw-meter report --heatmap [--weeks <n>] [--no-ingest] [--json|--plain]
   ocw-meter report --month [YYYY-MM] [--repo <owner>/<name>] [--no-ingest] [--json|--plain]
   ocw-meter report --reconcile [--month <YYYY-MM>] [--provider-total <model>=<tokens> ...] [--no-ingest] [--json|--plain]
   ocw-meter help
@@ -187,7 +188,21 @@ subcommands:
     --json / --plain give the numbers behind the graph (weighted and raw
     token breakdown per day x model). Cannot be combined with
     --pr/--phase/--model/--role/--window/--month/--reconcile/--since/
-    --until/--quota-per-pct/--quota-progress. --days only applies to --daily.
+    --until/--quota-per-pct/--quota-progress/--heatmap. --days only applies to --daily.
+
+  report --heatmap [--weeks <n>]
+    Per-day consumption as a GitHub-style grid: one column per week
+    (Monday first), one row per weekday, in LOCAL time. The amount is the
+    day's weighted tokens summed over all models (the --daily /
+    --quota-per-pct formula). Shade = 0 for no usage, else the day's rank
+    among the days with usage split into 4 quartile levels (one outlier day
+    does not wash out the rest); 256-colour greens on a terminal, " ░▒▓█"
+    otherwise. Default: as many weeks as fit the terminal width (max 52);
+    --weeks reduces it (1-52), and is cut down to the width in the pretty
+    view. Days after today are not drawn. --json / --plain give the per-day
+    values, levels and level thresholds. Cannot be combined with
+    --pr/--phase/--model/--role/--window/--month/--reconcile/--since/
+    --until/--quota-per-pct/--quota-progress/--daily. --weeks only applies to --heatmap.
 
   report --month [YYYY-MM]
     Cash cost (metered API) / capacity cost (Claude subscription quota)
@@ -1961,7 +1976,7 @@ def color_enabled():
 def paint(text, *styles):
     if not styles or not color_enabled():
         return text
-    codes = ";".join(_ANSI[s] for s in styles if s in _ANSI)
+    codes = ";".join(f"38;5;{s}" if isinstance(s, int) else _ANSI[s] for s in styles if isinstance(s, int) or s in _ANSI)
     return f"\x1b[{codes}m{text}\x1b[0m" if codes else text
 
 
@@ -3123,6 +3138,24 @@ def _daily_bar_cells(segments, max_total, width):
     return cells
 
 
+def _pretty_notes(footer_completeness, footer_freshness):
+    """末尾の「注記」欄 (警告は落とさず目立たせる)。--daily / --heatmap が共有する。"""
+    print(section("注記"))
+    fresh = footer_freshness["ingest_freshness_warning"]
+    if not str(fresh).startswith("(none"):
+        print("  " + paint("⚠ ingest の鮮度: " + str(fresh), "red", "bold"))
+    if str(footer_freshness["ingest_this_run"]).startswith("failed"):
+        print("  " + paint("⚠ ingest が失敗: " + str(footer_freshness["ingest_this_run"]), "red", "bold"))
+    # 数え漏れの警告 (pretty_footer と同じ文言・色。落とさない)
+    if footer_completeness["malformed_unvalidated_lines"]:
+        print("  " + paint(f"⚠ 不正行 {fmt_int(footer_completeness['malformed_unvalidated_lines'])} 行 (未隔離)。'ocw-meter validate' を実行", "yellow", "bold"))
+    if footer_completeness["quarantined_lines"]:
+        print("  " + paint(f"⚠ 隔離済みの行 {fmt_int(footer_completeness['quarantined_lines'])} 行 (このメーターが書いたイベント)", "yellow", "bold"))
+    print("\n".join(render_kv([
+        ("ingest", f"{footer_freshness['ingest_this_run']} / 最終 {footer_freshness['last_ingest_at_rfc3339'] or 'unknown'}"),
+    ])))
+
+
 def _pretty_daily(report, footer_completeness, footer_freshness):
     daily, totals = report["daily"], report["model_totals"]
     top = [t["model"] for t in totals[:DAILY_TOP_MODELS]]
@@ -3156,20 +3189,7 @@ def _pretty_daily(report, footer_completeness, footer_freshness):
             print("  " + paint(sym * 2, color) + " " + pad(shown, name_w) + "  " + pad(fmt_tokens(value), 7, "r")
                   + f"  {100.0 * value / grand:4.1f}%")
     print("  " + paint("重み付き = input + 1.25*cache_creation + 0.1*cache_read + 5*output (--quota-per-pct と同じ式)。素のトークン・費用は --plain / --json", "dim"))
-    print(section("注記"))
-    fresh = footer_freshness["ingest_freshness_warning"]
-    if not str(fresh).startswith("(none"):
-        print("  " + paint("⚠ ingest の鮮度: " + str(fresh), "red", "bold"))
-    if str(footer_freshness["ingest_this_run"]).startswith("failed"):
-        print("  " + paint("⚠ ingest が失敗: " + str(footer_freshness["ingest_this_run"]), "red", "bold"))
-    # 数え漏れの警告 (pretty_footer と同じ文言・色。落とさない)
-    if footer_completeness["malformed_unvalidated_lines"]:
-        print("  " + paint(f"⚠ 不正行 {fmt_int(footer_completeness['malformed_unvalidated_lines'])} 行 (未隔離)。'ocw-meter validate' を実行", "yellow", "bold"))
-    if footer_completeness["quarantined_lines"]:
-        print("  " + paint(f"⚠ 隔離済みの行 {fmt_int(footer_completeness['quarantined_lines'])} 行 (このメーターが書いたイベント)", "yellow", "bold"))
-    print("\n".join(render_kv([
-        ("ingest", f"{footer_freshness['ingest_this_run']} / 最終 {footer_freshness['last_ingest_at_rfc3339'] or 'unknown'}"),
-    ])))
+    _pretty_notes(footer_completeness, footer_freshness)
 
 
 def print_daily(report, as_json, footer_completeness, footer_freshness):
@@ -3462,6 +3482,151 @@ def print_quota_progress(result, rows, as_json, footer_freshness):
         for p in result["points"]:
             print(f"    {p['ts']}: {p['seven_day_used_pct']}")
     print("見積もりであり、止める・替える制御には使わない。weighted = input + 1.25*cache_creation + 0.1*cache_read + 5*output")
+
+
+# ── report --heatmap: 日ごとの消費量のヒートマップ (傘 ocw-meter-pretty-charts 孫4) ──
+# 量は report 側の日ごとの集計 (daily_usage_by_model) の重み付きトークンの合計 (全モデル)。
+# 週は月曜始まり (列)、曜日は月〜日 (行)。日の境目は --daily と同じローカル時刻。
+
+HEATMAP_MAX_WEEKS = 52
+_HEATMAP_LEVEL_SYMBOLS = " ░▒▓█"
+_HEATMAP_LEVEL_COLORS = (238, 22, 28, 34, 46)  # 256 色。0 = 使用なし (灰)、1〜4 = 緑が濃くなる
+_HEATMAP_CELL_WIDTH = 2
+_HEATMAP_LABEL_WIDTH = 3  # 曜日ラベル (全角 1 字 = 2 桁) + 空白
+
+
+def heatmap_max_weeks_for_width(width):
+    """端末幅に収まる最大の週数 (インデント 2 + 曜日ラベル 3 + 1 週 2 桁)。"""
+    return max(1, min(HEATMAP_MAX_WEEKS, (width - 2 - _HEATMAP_LABEL_WIDTH) // _HEATMAP_CELL_WIDTH))
+
+
+def heatmap_thresholds(values):
+    """使用のあった日 (> 0) の量を 4 分位で分ける境目 3 つ。使用なしなら空。
+    段階 1〜4 = 1 + (境目より大きい数)。外れ値の 1 日に他の日の段階が引っ張られない。"""
+    vs = sorted(v for v in values if v > 0)
+    if not vs:
+        return []
+    n = len(vs)
+    return [vs[max(0, math.ceil(k * n / 4) - 1)] for k in (1, 2, 3)]
+
+
+def heatmap_level(value, thresholds):
+    if value <= 0:
+        return 0
+    return 1 + sum(1 for t in thresholds if value > t)
+
+
+def report_heatmap(usage_events, weeks, today=None):
+    """今日の週を右端にした直近 weeks 週 (月曜始まり。今日より先は含めない) の日ごとの量と段階。
+    -> {"weeks", "weighted_formula", "start", "end", "days", "thresholds", "total_weighted_tokens",
+        "active_days", "busiest"}
+      days: 古い順の [{"date", "weekday" (0=月), "weighted_tokens", "level"}]"""
+    today = today or datetime.now().astimezone().date()
+    start = today - timedelta(days=today.weekday() + 7 * (weeks - 1))
+    by_day = daily_usage_by_model(usage_events)
+    days, offset = [], 0
+    while start + timedelta(days=offset) <= today:
+        d = start + timedelta(days=offset)
+        key = d.strftime("%Y-%m-%d")
+        value = sum(r["weighted_tokens"] for r in by_day.get(key, {}).values())
+        days.append({"date": key, "weekday": d.weekday(), "weighted_tokens": value})
+        offset += 1
+    thresholds = heatmap_thresholds([d["weighted_tokens"] for d in days])
+    for d in days:
+        d["level"] = heatmap_level(d["weighted_tokens"], thresholds)
+    used = [d for d in days if d["weighted_tokens"] > 0]
+    busiest = max(used, key=lambda d: (d["weighted_tokens"], d["date"])) if used else None
+    return {"weeks": weeks, "weighted_formula": "input + 1.25*cache_creation + 0.1*cache_read + 5*output",
+            "start": days[0]["date"], "end": days[-1]["date"], "days": days, "thresholds": thresholds,
+            "total_weighted_tokens": sum(d["weighted_tokens"] for d in days), "active_days": len(used),
+            "busiest": {"date": busiest["date"], "weighted_tokens": busiest["weighted_tokens"]} if busiest else None}
+
+
+def _heatmap_cell(level):
+    sym = _HEATMAP_LEVEL_SYMBOLS[level]
+    if color_enabled():
+        return paint("█" * _HEATMAP_CELL_WIDTH, _HEATMAP_LEVEL_COLORS[level])
+    return sym * _HEATMAP_CELL_WIDTH
+
+
+def _heatmap_month_line(report):
+    """列の上の月のラベル。月が変わる最初の列に「10月」を置く。前のラベルと重なるときは
+    後のラベルを省くが、前のラベルが最初の列 (その月の最終週 1 列だけが入っていることがある) なら
+    そちらを省いて次の月を残す (GitHub の草と同じ扱い)。"""
+    start = datetime.strptime(report["start"], "%Y-%m-%d").date()
+    width = report["weeks"] * _HEATMAP_CELL_WIDTH
+    placed, prev_month = [], None  # [(桁位置, ラベル)]
+    for c in range(report["weeks"]):
+        monday = start + timedelta(days=7 * c)
+        if monday.month == prev_month:
+            continue
+        prev_month = monday.month
+        label, pos = f"{monday.month}月", c * _HEATMAP_CELL_WIDTH
+        if pos + disp_width(label) > width:
+            continue
+        if placed and pos < placed[-1][0] + disp_width(placed[-1][1]):
+            if placed[-1][0] != 0:
+                continue
+            placed.pop()
+        placed.append((pos, label))
+    out, used = "", 0
+    for pos, label in placed:
+        out += " " * (pos - used) + label
+        used = pos + disp_width(label)
+    return out
+
+
+def _pretty_heatmap(report, weeks_requested, footer_completeness, footer_freshness):
+    print(section(f"日ごとの消費量 (直近 {report['weeks']} 週 / ローカル時刻 / 重み付きトークン)"))
+    if weeks_requested > report["weeks"]:
+        print("  " + paint(f"(端末幅に合わせて {weeks_requested} 週から {report['weeks']} 週に減らした)", "dim"))
+    if not report["active_days"]:
+        print("  (この期間に使用なし)")
+    print("  " + " " * _HEATMAP_LABEL_WIDTH + _heatmap_month_line(report))
+    grid = {}
+    for d in report["days"]:
+        start = datetime.strptime(report["start"], "%Y-%m-%d").date()
+        col = (datetime.strptime(d["date"], "%Y-%m-%d").date() - start).days // 7
+        grid[(d["weekday"], col)] = d["level"]
+    for wd in range(7):
+        label = _WEEKDAY_JA[wd] if wd % 2 == 0 else ""
+        cells = "".join(_heatmap_cell(grid[(wd, c)]) for c in range(report["weeks"]) if (wd, c) in grid)
+        print("  " + pad(label, _HEATMAP_LABEL_WIDTH - 1) + " " + cells)
+    print("  " + " " * _HEATMAP_LABEL_WIDTH + "少 " + "".join(_heatmap_cell(i) for i in range(5)) + " 多")
+    for note in ("濃さ: 使用日の量を 4 分位で 4 段階に", "(使用なしは別。外れ値に引っ張られない)",
+                 "量: 重み付きトークン (--daily と同じ式)", "正確な数値は --plain / --json"):
+        print("  " + paint(note, "dim"))
+    print(section("期間の合計"))
+    print("\n".join(render_kv([
+        ("期間", f"{report['start']} 〜 {report['end']}"),
+        ("合計", f"{fmt_tokens(report['total_weighted_tokens'])} (使用のあった日 {report['active_days']} 日)"),
+        ("いちばん多い日", (f"{report['busiest']['date']} ({_WEEKDAY_JA[datetime.strptime(report['busiest']['date'], '%Y-%m-%d').weekday()]}) "
+                          f"{fmt_tokens(report['busiest']['weighted_tokens'])}") if report["busiest"] else "—"),
+    ])))
+    _pretty_notes(footer_completeness, footer_freshness)
+
+
+def print_heatmap(report, weeks_requested, as_json, footer_completeness, footer_freshness):
+    if as_json:
+        print(json.dumps({**report, **footer_completeness, **footer_freshness}, ensure_ascii=False, indent=2, sort_keys=True))
+        return
+    if not REPORT_PLAIN:
+        _pretty_heatmap(report, weeks_requested, footer_completeness, footer_freshness)
+        return
+    print(f"日ごとの消費量ヒートマップ（直近 {report['weeks']} 週 / ローカル時刻）:")
+    print(f"  weighted_tokens = {report['weighted_formula']}")
+    print(f"  start: {report['start']}")
+    print(f"  end: {report['end']}")
+    print(f"  total_weighted_tokens: {report['total_weighted_tokens']}")
+    print(f"  active_days: {report['active_days']}")
+    busiest = report["busiest"]
+    print(f"  busiest_day: {busiest['date'] if busiest else None}")
+    print(f"  busiest_weighted_tokens: {busiest['weighted_tokens'] if busiest else None}")
+    print(f"  level_thresholds: {report['thresholds']}")
+    for d in report["days"]:
+        print(f"  {d['date']}: weighted_tokens={d['weighted_tokens']} level={d['level']}")
+    print(f"quarantined_lines: {footer_completeness['quarantined_lines']}")
+    print(f"malformed_unvalidated_lines: {footer_completeness['malformed_unvalidated_lines']}")
     print(f"last_ingest_at_rfc3339: {footer_freshness['last_ingest_at_rfc3339'] or 'unknown'}")
     print(f"ingest (this run): {footer_freshness['ingest_this_run']}")
     print(f"ingest_freshness_warning: {footer_freshness['ingest_freshness_warning']}")
@@ -4298,12 +4463,29 @@ def cmd_report(args):
     periods = None
     daily = False
     days = None
+    heatmap = False
+    weeks = None
     i = 0
     while i < len(args):
         token = args[i]
         if token == "--daily":
             daily = True
             i += 1
+        elif token == "--heatmap":
+            heatmap = True
+            i += 1
+        elif token == "--weeks":
+            if i + 1 >= len(args):
+                print("error: --weeks requires a value (positive integer)", file=sys.stderr)
+                return 1
+            try:
+                weeks = int(args[i + 1])
+            except ValueError:
+                weeks = 0
+            if not 1 <= weeks <= HEATMAP_MAX_WEEKS:
+                print(f"error: --weeks expects an integer from 1 to {HEATMAP_MAX_WEEKS}, got '{args[i + 1]}'", file=sys.stderr)
+                return 1
+            i += 2
         elif token == "--days":
             if i + 1 >= len(args):
                 print("error: --days requires a value (positive integer)", file=sys.stderr)
@@ -4422,12 +4604,24 @@ def cmd_report(args):
             ("--reconcile", reconcile), ("--month", month_flag_present), ("--pr", filter_pr is not None),
             ("--since/--until", since_str is not None or until_str is not None),
             ("--quota-per-pct", quota_per_pct), ("--quota-progress", quota_progress_flag),
-            ("--periods", periods is not None), (f"--{view}", view is not None)) if on), None)
+            ("--periods", periods is not None), ("--heatmap", heatmap), (f"--{view}", view is not None)) if on), None)
         if conflict:
             print(f"error: --daily cannot be combined with {conflict}", file=sys.stderr)
             return 1
     elif days is not None:
         print("error: --days only applies to --daily", file=sys.stderr)
+        return 1
+    if heatmap and not daily:
+        conflict = next((flag for flag, on in (
+            ("--reconcile", reconcile), ("--month", month_flag_present), ("--pr", filter_pr is not None),
+            ("--since/--until", since_str is not None or until_str is not None),
+            ("--quota-per-pct", quota_per_pct), ("--quota-progress", quota_progress_flag),
+            ("--periods", periods is not None), (f"--{view}", view is not None)) if on), None)
+        if conflict:
+            print(f"error: --heatmap cannot be combined with {conflict}", file=sys.stderr)
+            return 1
+    elif weeks is not None:
+        print("error: --weeks only applies to --heatmap", file=sys.stderr)
         return 1
     if reconcile and view is not None:
         print(f"error: --reconcile cannot be combined with --{view}", file=sys.stderr)
@@ -4588,6 +4782,15 @@ def cmd_report(args):
         result, rows = quota_progress(valid_events, time.time(),
                                       estimate_quota_per_pct(valid_events, periods or QUOTA_DEFAULT_PERIODS))
         print_quota_progress(result, rows, as_json, footer_freshness)
+        return 0
+
+    if heatmap:
+        usage_events = [e for e in valid_events if e.get("event_type") == "usage.message"]
+        weeks_requested = weeks or HEATMAP_MAX_WEEKS
+        # 幅で減らすのは端末向けの pretty だけ (--json / --plain は幅に依らず同じ数値を出す)
+        weeks_drawn = weeks_requested if (as_json or REPORT_PLAIN) else min(weeks_requested, heatmap_max_weeks_for_width(term_width()))
+        print_heatmap(report_heatmap(usage_events, weeks_drawn), weeks_requested, as_json,
+                      completeness_footer(paths, usage_events, malformed), footer_freshness)
         return 0
 
     if quota_per_pct:
