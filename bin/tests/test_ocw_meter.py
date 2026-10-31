@@ -117,6 +117,8 @@ def run_meter(args, home, extra_env=None, timeout=30, cwd=None):
         env.pop(key, None)
     if not extra_env or "HOME" not in extra_env:
         env["HOME"] = _default_home_for(home)
+    # snapshot-quota would otherwise start a real background ingest.
+    env["OCW_METER_AUTO_INGEST"] = "0"
     if extra_env:
         env.update(extra_env)
     return subprocess.run(
@@ -134,6 +136,7 @@ def run_meter_on_pty(args, home, extra_env=None):
     master, slave = pty.openpty()
     env = dict(os.environ, OCW_METER_HOME=str(home), HOME=str(pathlib.Path(home).parent))
     env.pop("NO_COLOR", None)
+    env["OCW_METER_AUTO_INGEST"] = "0"
     env.update(extra_env or {})
     proc = subprocess.Popen([str(OCW_METER), *args], cwd=str(REPO_ROOT),
                             env=env, stdout=slave, stderr=subprocess.DEVNULL)
@@ -170,6 +173,8 @@ def run_snapshot_quota(stdin_text, home, extra_env=None, timeout=30):
         env.pop(key, None)
     if not extra_env or "HOME" not in extra_env:
         env["HOME"] = _default_home_for(home)
+    # snapshot-quota would otherwise start a real background ingest.
+    env["OCW_METER_AUTO_INGEST"] = "0"
     if extra_env:
         env.update(extra_env)
     return subprocess.run(
@@ -3069,6 +3074,7 @@ class WorktreeRefusalPruningTests(OcwMeterTestCase):
         env.pop("OCW_METER_HOME", None)
         env["HOME"] = str(home)
         env["OCW_METER_QUOTA_INTERVAL"] = "0"
+        env["OCW_METER_AUTO_INGEST"] = "0"
         for key in ("OCW_RUN_ID", "OCW_ROLE", "HERDR_WORKSPACE_ID", "HERDR_PANE_ID"):
             env.pop(key, None)
         result = subprocess.run(
@@ -3381,6 +3387,100 @@ class PruneDiagnosticsTests(OcwMeterTestCase):
     def test_non_numeric_older_than_is_rejected(self):
         result = run_meter(["prune-diagnostics", "--older-than", "not-a-number"], self.home)
         self.assertNotEqual(result.returncode, 0)
+
+
+
+class AutoIngestTests(OcwMeterTestCase):
+    """傘 meter-ingest-retention 孫2: `snapshot-quota` starts a throttled,
+    detached background `ingest` (ADR DOC-2611010254)."""
+
+    def _stub(self, sleep_seconds):
+        # Stands in for `ocw-meter auto-ingest` (OCW_METER_SELF seam): logs
+        # one line per start, and the "done" marker only after the sleep.
+        stub = pathlib.Path(self.tmpdir.name) / "stub-self"
+        self.log = pathlib.Path(self.tmpdir.name) / "stub.log"
+        self.done = pathlib.Path(self.tmpdir.name) / "stub.done"
+        stub.write_text(f"#!/bin/sh\necho started >> {self.log}\nsleep {sleep_seconds}\ntouch {self.done}\n")
+        stub.chmod(0o755)
+        return stub
+
+    def _snapshot(self, stub, **env):
+        extra = {"OCW_METER_AUTO_INGEST": "1", "OCW_METER_SELF": str(stub),
+                 "OCW_METER_QUOTA_INTERVAL": "0"}
+        extra.update(env)
+        started = time.monotonic()
+        result = run_snapshot_quota(json.dumps(CLAUDE_STATUSLINE_SAMPLE), self.home, extra_env=extra)
+        return result, time.monotonic() - started
+
+    def _wait_for(self, path, timeout=15):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline and not path.exists():
+            time.sleep(0.05)
+        return path.exists()
+
+    def test_returns_without_waiting_and_is_throttled(self):
+        stub = self._stub(3)
+        # The very first call records the sample (creating the storage) and
+        # starts the child in the same invocation: this is the call that
+        # must not wait for it.
+        result, elapsed = self._snapshot(stub)
+        self.assertEqual(result.returncode, 0)
+        self.assertNotEqual(result.stdout.strip(), "")  # display line still printed
+        self.assertFalse(self.done.exists(), "snapshot-quota waited for the background child")
+        self.assertLess(elapsed, 2.5)
+        self.assertEqual(len(read_events(self.home)), 1)  # quota.sample still recorded
+        # Second call inside the interval: no second child.
+        self._snapshot(stub)
+        self.assertTrue(self._wait_for(self.done), "detached child did not outlive its parent")
+        self.assertEqual(self.log.read_text().count("started"), 1)
+
+    def test_disabled_does_not_start(self):
+        stub = self._stub(0)
+        self._snapshot(stub, OCW_METER_AUTO_INGEST="0")
+        time.sleep(0.5)
+        self.assertFalse(self.log.exists())
+
+    def test_unspawnable_child_does_not_break_snapshot(self):
+        result, _ = self._snapshot(pathlib.Path(self.tmpdir.name) / "missing")
+        self.assertEqual(result.returncode, 0)
+        self.assertNotEqual(result.stdout.strip(), "")
+
+    def test_refused_storage_in_git_worktree_gets_no_state_file_or_child(self):
+        repo = pathlib.Path(self.tmpdir.name) / "repo"
+        subprocess.run(["git", "init", "-q", str(repo)], check=True)
+        bad_home = repo / "meter"
+        (bad_home / "state").mkdir(parents=True)
+        stub = self._stub(0)
+        result = run_snapshot_quota(
+            json.dumps(CLAUDE_STATUSLINE_SAMPLE), bad_home,
+            extra_env={"OCW_METER_AUTO_INGEST": "1", "OCW_METER_SELF": str(stub), "OCW_METER_QUOTA_INTERVAL": "0"},
+        )
+        self.assertEqual(result.returncode, 0)
+        time.sleep(0.5)
+        self.assertFalse((bad_home / "state" / "auto-ingest.json").exists())
+        self.assertFalse(self.log.exists())
+
+    def test_real_child_ingests_and_records_state(self):
+        projects = pathlib.Path(self.tmpdir.name) / "projects"
+        write_transcript(projects, "slug", "sess-auto", [assistant_line("sess-auto", "msg-auto")])
+        env = {"OCW_METER_AUTO_INGEST": "1", "OCW_METER_QUOTA_INTERVAL": "0",
+               "OCW_METER_CLAUDE_PROJECTS_DIR": str(projects), "OCW_METER_PRICE_DIR": str(REPO_PRICE_DIR),
+               "OCW_METER_INGEST_USE_GH": "0"}
+        run_snapshot_quota(json.dumps(CLAUDE_STATUSLINE_SAMPLE), self.home, extra_env=env)
+        state_path = self.home / "state" / "auto-ingest.json"
+        deadline = time.monotonic() + 30
+        state = {}
+        while time.monotonic() < deadline:
+            if state_path.exists():
+                state = json.loads(state_path.read_text())
+                if state.get("last_result") in ("ok", "failed"):
+                    break
+            time.sleep(0.1)
+        self.assertEqual(state.get("last_result"), "ok", state)
+        self.assertEqual(state.get("consecutive_failures"), 0)
+        self.assertIsNotNone(state.get("last_success_at"))
+        types = [e["event_type"] for e in read_events(self.home)]
+        self.assertIn("usage.message", types)
 
 
 class SnapshotQuotaThrottleTests(OcwMeterTestCase):
@@ -5039,7 +5139,7 @@ class SnapshotQuotaRoundOneReviewTests(OcwMeterTestCase):
             proc = subprocess.Popen(
                 [str(OCW_METER), "snapshot-quota"],
                 cwd=str(REPO_ROOT),
-                env={**os.environ, "OCW_METER_HOME": str(self.home)},
+                env={**os.environ, "OCW_METER_HOME": str(self.home), "OCW_METER_AUTO_INGEST": "0"},
                 stdin=read_fd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
@@ -5082,7 +5182,7 @@ class SnapshotQuotaRoundOneReviewTests(OcwMeterTestCase):
             proc = subprocess.Popen(
                 [str(OCW_METER), "snapshot-quota"],
                 cwd=str(REPO_ROOT),
-                env={**os.environ, "OCW_METER_HOME": str(self.home)},
+                env={**os.environ, "OCW_METER_HOME": str(self.home), "OCW_METER_AUTO_INGEST": "0"},
                 stdin=slave_fd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,

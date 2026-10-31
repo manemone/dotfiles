@@ -368,6 +368,19 @@ environment:
     `snapshot-quota` above). A non-numeric or negative value falls back
     to the default rather than disabling throttling by accident.
 
+  OCW_METER_AUTO_INGEST
+    default: 1
+    `snapshot-quota` starts `ingest` in a detached background child at
+    most once per interval, so transcripts are captured before Claude
+    Code deletes them (cleanupPeriodDays). Set to 0/false/no/off to
+    disable. The outcome (last attempt / success / error / consecutive
+    failures) is kept in state/auto-ingest.json under OCW_METER_HOME.
+
+  OCW_METER_AUTO_INGEST_INTERVAL
+    default: 3600
+    Minimum seconds between automatic ingests. Non-numeric or negative
+    values fall back to the default.
+
   OCW_METER_CLAUDE_PROJECTS_DIR
     default: $HOME/.claude/projects
     Where `ingest` looks for `<slug>/<session-id>.jsonl` transcripts
@@ -437,6 +450,11 @@ while [ -L "$_ocw_meter_src" ]; do
 done
 OCW_METER_SCRIPT_DIR="$(CDPATH='' cd -- "$(dirname "$_ocw_meter_src")" && pwd)"
 export OCW_METER_SCRIPT_DIR
+# The resolved real path of this script: `snapshot-quota` re-executes it
+# as a detached child (`auto-ingest`) because the embedded program below
+# only lives in a temp file removed when THIS process exits.
+OCW_METER_SELF="${OCW_METER_SELF:-$OCW_METER_SCRIPT_DIR/$(basename "$_ocw_meter_src")}" # preset only by tests
+export OCW_METER_SELF
 unset _ocw_meter_src _ocw_meter_link_dir
 
 cmd="${1:-}"
@@ -451,7 +469,7 @@ case "$cmd" in
     usage
     exit 0
     ;;
-  event | bind-pr | validate | report | dash | ingest | snapshot-quota | prune-diagnostics)
+  event | bind-pr | validate | report | dash | ingest | snapshot-quota | prune-diagnostics | auto-ingest)
     ;;
   *)
     usage >&2
@@ -7864,7 +7882,146 @@ def cmd_snapshot_quota(args):
             file=sys.stderr,
         )
 
+    # Stage 4 (own guard, after the sample is recorded): kick off the
+    # throttled, detached background ingest. Nothing here may delay or
+    # alter the display line or the exit code.
+    with contextlib.suppress(Exception):
+        maybe_start_auto_ingest()
+
     print(display)
+    return 0
+
+
+# ── automatic background ingest (傘 meter-ingest-retention 孫2, ADR DOC-2611010254) ──
+#
+# `usage.message` only exists once a transcript has been ingested, and
+# Claude Code deletes transcripts after `cleanupPeriodDays`. `snapshot-quota`
+# runs on every statusLine redraw, i.e. exactly while transcripts grow, so
+# it is the trigger: at most once per interval it starts `ocw-meter
+# auto-ingest` as a DETACHED child (new session, stdio on /dev/null) and
+# returns without waiting. The decision costs one small JSON read.
+
+AUTO_INGEST_STATE_FILENAME = "auto-ingest.json"
+AUTO_INGEST_LOCK_FILENAME = "auto-ingest.lock"
+DEFAULT_AUTO_INGEST_INTERVAL_SECONDS = 3600.0
+_FALSE_STRINGS = frozenset({"0", "false", "no", "off"})
+
+
+def auto_ingest_enabled():
+    return os.environ.get("OCW_METER_AUTO_INGEST", "1").strip().lower() not in _FALSE_STRINGS
+
+
+def auto_ingest_interval_seconds():
+    raw = os.environ.get("OCW_METER_AUTO_INGEST_INTERVAL")
+    if raw is None or raw == "":
+        return DEFAULT_AUTO_INGEST_INTERVAL_SECONDS
+    try:
+        value = float(raw)
+    except ValueError:
+        return DEFAULT_AUTO_INGEST_INTERVAL_SECONDS
+    return value if value >= 0 else DEFAULT_AUTO_INGEST_INTERVAL_SECONDS
+
+
+def load_auto_ingest_state(paths):
+    return load_json_state_file(paths, AUTO_INGEST_STATE_FILENAME)
+
+
+def update_auto_ingest_state(paths, **fields):
+    state = load_auto_ingest_state(paths)
+    state = state if isinstance(state, dict) else {}
+    state.update(fields)
+    state["version"] = 1
+    save_json_state_file(paths, AUTO_INGEST_STATE_FILENAME, state)
+
+
+def maybe_start_auto_ingest():
+    """Starts the detached child when enabled, the throttle window has
+    passed, the storage already exists (record_quota_sample, which runs
+    just before, creates it) and the storage root is not inside a Git
+    worktree (checked once per interval, after the cheap throttle read).
+    Returns True when a child was started."""
+    if not auto_ingest_enabled():
+        return False
+    root = storage_root()
+    if not root:
+        return False
+    paths = Paths(root)
+    if not paths.state_dir.is_dir():
+        return False
+    now = datetime.now(timezone.utc)
+    state = load_auto_ingest_state(paths)
+    last = parse_ts(state.get("last_attempt_at")) if isinstance(state, dict) else None
+    if last is not None and 0 <= (now - last).total_seconds() < auto_ingest_interval_seconds():
+        return False
+    me = os.environ.get("OCW_METER_SELF")
+    if not me or not os.access(me, os.X_OK):
+        return False
+    # Once per interval (not per call): never write under, or start a child
+    # for, a storage root that resolves inside a Git worktree.
+    if in_git_worktree(root):
+        return False
+    # Mark the attempt BEFORE spawning so concurrent statusLine calls
+    # (one per Claude pane) don't each spawn a child; the child's own
+    # non-blocking lock is the real guard against a double run.
+    update_auto_ingest_state(paths, last_attempt_at=iso_utc(now))
+    try:
+        subprocess.Popen(
+            [me, "auto-ingest"],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+            close_fds=True,
+        )
+    except Exception as exc:
+        with contextlib.suppress(Exception):
+            update_auto_ingest_state(
+                paths,
+                last_result="failed",
+                last_error=redact_text(f"spawn failed: {type(exc).__name__}: {exc}"),
+            )
+            emit_meter_error(root, "auto_ingest_spawn_failed", exc)
+        return False
+    return True
+
+
+def cmd_auto_ingest(args):
+    """Internal: the detached child. Runs one full ingest under a
+    non-blocking lock (a second child exits silently), recording the
+    outcome in state/auto-ingest.json for the statusLine warning (孫3).
+    Always returns 0."""
+    root = storage_root()
+    if not root or in_git_worktree(root):
+        return 0
+    paths = ensure_storage(root)
+    with acquire_lock(paths.state_dir / AUTO_INGEST_LOCK_FILENAME, timeout=0) as acquired:
+        if not acquired:
+            return 0
+        now = iso_utc(datetime.now(timezone.utc))
+        update_auto_ingest_state(paths, last_attempt_at=now, last_result="running")
+        error = None
+        try:
+            result = perform_ingest(root)
+            if not result["ok"]:
+                error = result["error"]
+        except Exception as exc:
+            error = redact_text(f"{type(exc).__name__}: {exc}")
+            with contextlib.suppress(Exception):
+                emit_meter_error(root, "auto_ingest_failed", exc)
+        finished = iso_utc(datetime.now(timezone.utc))
+        prev = load_auto_ingest_state(paths)
+        prev = prev if isinstance(prev, dict) else {}
+        if error is None:
+            update_auto_ingest_state(
+                paths, last_finished_at=finished, last_result="ok", last_error=None,
+                last_success_at=finished, consecutive_failures=0,
+            )
+        else:
+            failures = prev.get("consecutive_failures")
+            update_auto_ingest_state(
+                paths, last_finished_at=finished, last_result="failed", last_error=error,
+                consecutive_failures=(failures if isinstance(failures, int) else 0) + 1,
+            )
     return 0
 
 
@@ -8200,6 +8357,12 @@ def main():
             with contextlib.suppress(Exception):
                 emit_meter_error(storage_root(), f"cmd_{cmd.replace('-', '_')}_unexpected_exception", exc)
             return 0
+
+    if cmd == "auto-ingest":
+        try:
+            return cmd_auto_ingest(rest)
+        except Exception:
+            return 0  # detached child: nobody is listening, never fail loud
 
     if cmd == "snapshot-quota":
         try:
