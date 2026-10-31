@@ -108,6 +108,7 @@
 | DOC-2610142359 | [implementer-compact-reminder-hook.md](adr/DOC-2610142359_implementer-compact-reminder-hook.md) | 実装の孫の文脈が 200k を超えたら、区切りでの `ocw self-compact` の判断を促す一文を差し込む PostToolUse フック（`claude/hooks/compact-reminder.sh`）の決定。`OCW_ROLE=implementer` だけに効かせ、compact は打たず、transcript の末尾だけを読み、超えた最初の 1 回と 50k 増えるごとに間引く（のち区切りのツール呼び出しで1区切り1回の再掲を追記）。判定できないときは黙る。実機で `additionalContext` が届くかは未検証として記録 |
 | DOC-2610200218 | [reviewer-fresh-each-round.md](adr/DOC-2610200218_reviewer-fresh-each-round.md) | 再レビューのたびにレビュワーの会話を新しくし、読み方の作法をレビュー指示に足す（`pr-review-loop`） |
 | DOC-2610310237 | [quota-per-pct-estimate.md](adr/DOC-2610310237_quota-per-pct-estimate.md) | 週の上限の 1% あたりのトークンを推定する方法・「測れない」の基準・誤差の要因（`ocw-meter report --quota-per-pct`） |
+| DOC-2611010251 | [transcript-retention-days.md](adr/DOC-2611010251_transcript-retention-days.md) | Claude Code の transcript の保持期間 `cleanupPeriodDays` を 90 日にした決定。ingest 前に transcript が消えた欠落の仕組み・自動の取り込みの「保険」である理由・ディスク使用量の実測と 30/90/180/365 の比較・`0` が検証エラーである出典・`settings.machine.json` での上書き |
 
 ### planning/ — ロードマップ・計画
 
