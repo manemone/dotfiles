@@ -271,8 +271,16 @@ ocw-meter report --quota-progress [--periods <n>] [--no-ingest] [--json|--plain]
 # 日の境目はローカル時刻（UTC ではない）。量は重み付きトークン（--quota-per-pct と同じ式）。
 # 期間内で量の多い上位 5 モデルを別々に、残りは「その他」にまとめる。使用の無い日も行を出す。
 # --json / --plain は、グラフの元の数値（日 × モデルの重み付きと素の内訳）を出す。
-# --pr / --phase / --model / --role / --window / --month / --reconcile / --since / --until / --quota-per-pct / --quota-progress とは併用不可
+# --pr / --phase / --model / --role / --window / --month / --reconcile / --since / --until / --quota-per-pct / --quota-progress / --heatmap とは併用不可
 ocw-meter report --daily [--days <n>] [--no-ingest] [--json|--plain]
+
+# 日ごとの消費量のヒートマップ（GitHub の草）: 週を列（月曜始まり）、曜日を行にして、消費の多い日ほど濃く塗る。
+# 量は日ごとの重み付きトークンの全モデル合計（--daily と同じ式）、日の境目はローカル時刻。
+# 濃さは 0（使用なし）と、使用のあった日を量の 4 分位で分けた 4 段階の計 5 段階（外れ値の 1 日に引っ張られない）。
+# 色があれば 256 色の緑、無ければ " ░▒▓█"。既定は端末幅に入るだけの週数（最大 52）、--weeks で減らせる（1〜52）。
+# 下に凡例・期間の合計・いちばん多かった日を出す。--json / --plain は日ごとの値・段階・段階の境目を出す。
+# --pr / --phase / --model / --role / --window / --month / --reconcile / --since / --until / --quota-per-pct / --quota-progress / --daily とは併用不可
+ocw-meter report --heatmap [--weeks <n>] [--no-ingest] [--json|--plain]
 
 # 月次: cash cost（従量API）/ capacity cost（Claudeサブスク枠）/
 # process efficiency（承認済みPRあたりの費用・ラウンド数等）を分離して表示

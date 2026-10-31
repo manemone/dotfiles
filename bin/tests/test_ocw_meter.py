@@ -3856,6 +3856,71 @@ class ReportGroupedViewsTests(OcwMeterTestCase):
         for bad in (["--pr", "1"], ["--model"], ["--quota-per-pct"], ["--since", "2026-07-01T00:00:00Z"], ["--month"], ["--daily"]):
             self.assertNotEqual(run_meter(["report", "--quota-progress", "--no-ingest", *bad], self.home).returncode, 0, bad)
 
+    # -- --heatmap --
+
+    def test_heatmap_levels_by_quartile_local_weekday_width_and_rejects_bad_combinations(self):
+        import unicodedata
+        jst = timezone(timedelta(hours=9))
+        today = datetime.now(jst).replace(hour=0, minute=0, second=0, microsecond=0)
+        events = []
+        def usage(local_dt, input_tokens):
+            stamp = local_dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+            events.append({"event_type": "usage.message", "schema_version": 1, "ts": stamp,
+                           "idempotency_key": f"k-{len(events)}", "event_id": f"id-{len(events)}",
+                           "completeness": "complete", "provider": "anthropic", "model": "claude-opus-5-5",
+                           "message_id": f"m-{len(events)}", "input_tokens": input_tokens, "cache_read_input_tokens": 0,
+                           "cache_creation_input_tokens": 0, "output_tokens": 0})
+        # 1 日だけ桁違いの外れ値があっても、他の日の段階はそれに引っ張られない。
+        usage(today - timedelta(days=1) + timedelta(minutes=30), 10)   # 00:30 JST は UTC では前日
+        usage(today - timedelta(days=1) - timedelta(minutes=30), 20)   # 23:30 JST (前々日) もその日に数える
+        usage(today - timedelta(days=3, hours=-12), 30)
+        usage(today - timedelta(days=4, hours=-12), 40)
+        usage(today - timedelta(days=5, hours=-12), 10000)
+        events_dir = pathlib.Path(self.home) / "events"
+        events_dir.mkdir(parents=True, exist_ok=True)
+        (events_dir / "2026-08-01.jsonl").write_text("".join(json.dumps(e) + "\n" for e in events), encoding="utf-8")
+        env = {"TZ": "JST-9", "NO_COLOR": "1"}
+
+        report = json.loads(run_meter(["report", "--heatmap", "--weeks", "3", "--no-ingest", "--json"], self.home, env).stdout)
+        days = report["days"]
+        self.assertEqual(days[0]["weekday"], 0)  # 月曜始まり
+        self.assertEqual(days[-1]["date"], today.strftime("%Y-%m-%d"))  # 今日より先のマスは無い
+        self.assertEqual(len(days), 14 + today.weekday() + 1)
+        for d in days:
+            self.assertEqual(d["weekday"], datetime.strptime(d["date"], "%Y-%m-%d").weekday())
+        by_date = {d["date"]: d for d in days}
+        def level(offset):
+            return by_date[(today - timedelta(days=offset)).strftime("%Y-%m-%d")]["level"]
+        self.assertEqual(by_date[(today - timedelta(days=1)).strftime("%Y-%m-%d")]["weighted_tokens"], 10)
+        self.assertEqual(by_date[(today - timedelta(days=2)).strftime("%Y-%m-%d")]["weighted_tokens"], 20)
+        self.assertEqual([level(n) for n in (1, 2, 3, 4, 5)], [1, 1, 2, 3, 4])
+        self.assertEqual(report["thresholds"], [20, 30, 40])
+        self.assertEqual(report["busiest"]["weighted_tokens"], 10000)
+        self.assertEqual(report["active_days"], 5)
+
+        # 端末幅が狭いと週数を減らし、マス目の行は端末幅に収まる (--weeks 52 を頼んでも)。
+        narrow = run_meter(["report", "--heatmap", "--weeks", "52", "--no-ingest"], self.home, {**env, "COLUMNS": "40"}).stdout
+        self.assertIn("直近 17 週", narrow)
+        self.assertNotIn("\x1b[", narrow)
+        lines = narrow.splitlines()
+        first = next(i for i, ln in enumerate(lines) if "端末幅に合わせて" in ln)
+        grid_lines = lines[first + 1:first + 9]  # 月のラベルの行 + 曜日の 7 行
+        self.assertTrue(grid_lines[1].lstrip().startswith("月"))
+        for line in grid_lines:
+            width = sum(2 if unicodedata.east_asian_width(c) in ("W", "F") else 1 for c in line)
+            self.assertLessEqual(width, 40, line)
+
+        plain = run_meter(["report", "--heatmap", "--weeks", "3", "--no-ingest", "--plain"], self.home, env).stdout
+        self.assertIn("level_thresholds: [20.0, 30.0, 40.0]", plain)
+
+        for bad in (["--heatmap", "--daily"], ["--heatmap", "--model"], ["--heatmap", "--quota-per-pct"], ["--heatmap", "--quota-progress"],
+                    ["--heatmap", "--pr", "1"], ["--heatmap", "--since", "2026-07-01T00:00:00Z"],
+                    ["--heatmap", "--weeks", "0"], ["--heatmap", "--weeks", "53"], ["--heatmap", "--days", "3"],
+                    ["--weeks", "3"]):
+            result = run_meter(["report", "--no-ingest", *bad], self.home, env)
+            self.assertNotEqual(result.returncode, 0, bad)
+            self.assertIn("error:", result.stderr)
+
     # -- --model --
 
     def test_model_view_groups_by_provider_and_model(self):
