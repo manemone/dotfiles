@@ -553,7 +553,7 @@ class ValidateTests(OcwMeterTestCase):
 class ReportTests(OcwMeterTestCase):
     def test_report_on_empty_storage_does_not_fail(self):
         # T20
-        result = run_meter(["report"], self.home)
+        result = run_meter(["report", "--plain"], self.home)
         self.assertEqual(result.returncode, 0)
         self.assertIn("total events:  0", result.stdout)
         self.assertIn("coverage:", result.stdout)
@@ -2330,7 +2330,7 @@ class PriceTableFallbackWarningTests(OcwMeterTestCase):
         self.assertEqual(data["price_table_fallback_count"], 1)
         # Text output must say "2件中1件" (partial), not claim the whole
         # month (2件) is a fallback.
-        text_result = run_report(self.home, self.projects_dir, args=["--month", "2026-08"], price_dir=price_dir)
+        text_result = run_report(self.home, self.projects_dir, args=["--month", "2026-08", "--plain"], price_dir=price_dir)
         self.assertIn("2件中1件", text_result.stdout)
 
     def test_month_report_text_output_shows_the_fallback_marker(self):
@@ -2341,7 +2341,7 @@ class PriceTableFallbackWarningTests(OcwMeterTestCase):
         write_transcript(self.projects_dir, "proj", "sess-july3", [
             assistant_line("sess-july3", "m1", model="deepseek-v4-pro", timestamp="2026-07-15T10:00:00.000Z"),
         ])
-        result = run_report(self.home, self.projects_dir, args=["--month", "2026-07"], price_dir=self.price_dir)
+        result = run_report(self.home, self.projects_dir, args=["--month", "2026-07", "--plain"], price_dir=self.price_dir)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("price_tables_applied:", result.stdout)
         self.assertIn("deepseek-2026-08-01 (effective 2026-08-01)", result.stdout)
@@ -2381,7 +2381,7 @@ class ReportAutoIngestTests(OcwMeterTestCase):
 
     def test_no_ingest_flag_skips_the_automatic_ingest(self):
         write_transcript(self.projects_dir, "proj", "sess-skip", [assistant_line("sess-skip", "m1")])
-        result = run_report(self.home, self.projects_dir, args=["--no-ingest"])
+        result = run_report(self.home, self.projects_dir, args=["--no-ingest", "--plain"])
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(read_events(self.home), [])
         self.assertIn("ingest (this run): skipped (--no-ingest)", result.stdout)
@@ -2394,7 +2394,7 @@ class ReportAutoIngestTests(OcwMeterTestCase):
         self.assertNotIn("ingest already ran automatically", result.stdout)
         self.assertIn("no usage.message events found in transcripts", result.stdout)
 
-        reconcile_result = run_report(self.home, self.projects_dir, args=["--reconcile", "--no-ingest"])
+        reconcile_result = run_report(self.home, self.projects_dir, args=["--reconcile", "--no-ingest", "--plain"])
         self.assertEqual(reconcile_result.returncode, 0, reconcile_result.stderr)
         self.assertNotIn("ingest already ran automatically", reconcile_result.stdout)
 
@@ -2438,7 +2438,7 @@ class ReportAutoIngestTests(OcwMeterTestCase):
         # storage root (report's own top-level worktree guard would
         # short-circuit before auto-ingest ever runs for that case).
         run_meter(["event", "run.start", "--idempotency-key", "k1"], self.home)
-        result = run_meter(["report"], self.home, extra_env={"HOME": ""})
+        result = run_meter(["report", "--plain"], self.home, extra_env={"HOME": ""})
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("total events:  1", result.stdout)
         self.assertIn("ingest (this run): failed: could not determine the Claude projects directory", result.stdout)
@@ -2452,7 +2452,7 @@ class ReportAutoIngestTests(OcwMeterTestCase):
 
     def test_footer_shows_last_ingest_timestamp_after_a_successful_run(self):
         write_transcript(self.projects_dir, "proj", "sess-fresh", [assistant_line("sess-fresh", "m1")])
-        result = run_report(self.home, self.projects_dir)
+        result = run_report(self.home, self.projects_dir, args=["--plain"])
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertNotIn("last_ingest_at: unknown", result.stdout)
         cursor = json.loads((self.home / "state" / "ingest-cursor.json").read_text(encoding="utf-8"))
@@ -2466,7 +2466,7 @@ class ReportAutoIngestTests(OcwMeterTestCase):
         state_dir = self.home / "state"
         state_dir.mkdir(parents=True, exist_ok=True)
         (state_dir / "ingest-cursor.json").write_text(json.dumps({"files": {}}), encoding="utf-8")
-        result = run_meter(["report", "--no-ingest"], self.home)
+        result = run_meter(["report", "--no-ingest", "--plain"], self.home)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("last_ingest_at: unknown", result.stdout)
         self.assertIn("last_ingest_at_rfc3339: unknown", result.stdout)
@@ -2496,7 +2496,7 @@ class ReportAutoIngestTests(OcwMeterTestCase):
             (state_dir / "ingest-cursor.json").write_text(
                 json.dumps({"files": {}, "last_ingest_at": ts}), encoding="utf-8",
             )
-            return run_meter(["report", "--no-ingest"], self.home)
+            return run_meter(["report", "--no-ingest", "--plain"], self.home)
 
         fresh_result = cursor_at_age(minutes=5)
         self.assertEqual(fresh_result.returncode, 0, fresh_result.stderr)
@@ -3632,7 +3632,7 @@ class ReportGroupedViewsTests(OcwMeterTestCase):
 
     def test_phase_model_role_window_month_on_empty_storage_do_not_fail(self):
         for view_args in (["--phase"], ["--model"], ["--role"], ["--window"], ["--month"]):
-            result = run_meter(["report", *view_args], self.home)
+            result = run_meter(["report", *view_args, "--plain"], self.home)
             self.assertEqual(result.returncode, 0, f"{view_args} failed: {result.stderr}")
             self.assertIn("coverage:", result.stdout)
             self.assertIn("completeness:", result.stdout)
@@ -3735,7 +3735,7 @@ class ReportGroupedViewsTests(OcwMeterTestCase):
                                opus_tokens / families["opus"]["weighted_tokens_per_pct"], places=1)
         self.assertIsNone(rows["anthropic/claude-haiku-5-5"]["estimated_weekly_pct"])
         self.assertIsNone(rows["deepseek/deepseek-v4-pro"]["estimated_weekly_pct"])
-        text = run_meter(["report", "--no-ingest", "--since", "2026-07-01T00:00:00Z"], self.home).stdout
+        text = run_meter(["report", "--no-ingest", "--since", "2026-07-01T00:00:00Z", "--plain"], self.home).stdout
         self.assertIn("estimated_weekly_pct: \n", text)
 
         for bad in (["--quota-per-pct", "--pr", "1"], ["--quota-per-pct", "--model"], ["--periods", "2"],
@@ -4123,6 +4123,66 @@ class ReportGroupedViewsTests(OcwMeterTestCase):
         self.assertEqual(data["pr_detail"]["five_hour_used_pct_max"], 20)
 
 
+class ReportPrettyDisplayTests(OcwMeterTestCase):
+    """傘 ocw-meter-pretty-charts 孫1: `report` の既定は pretty、`--plain` は
+    従来の key: value。描画の結果は丸ごと固定せず、振る舞いだけを守る
+    （色コードの混入・端末での色・数値の丸め・モード指定のエラー）。"""
+
+    def _seed_usage(self):
+        # 25.1B / 999,960 (丸めで 1000.0K にならず 1.0M になる) / 12,345 を一度に確かめる
+        run_meter(["event", "usage.message", "--idempotency-key", "pretty1", "--message-id", "pretty1",
+                   "--model", "claude-opus-x", "--provider", "anthropic", "--cost-basis", "estimated",
+                   "--input-tokens", "999960", "--cache-read-input-tokens", "25100000000",
+                   "--cache-creation-input-tokens", "12345", "--output-tokens", "7",
+                   "--ts", "2026-08-05T10:00:00.000Z"], self.home)
+
+    def _report_on_pty(self, args, extra_env=None):
+        """stdout だけを疑似端末にして report を走らせ、出力を返す。"""
+        master, slave = pty.openpty()
+        env = dict(os.environ, OCW_METER_HOME=str(self.home), HOME=str(self.home.parent))
+        env.pop("NO_COLOR", None)
+        env.update(extra_env or {})
+        proc = subprocess.Popen([str(OCW_METER), "report", "--no-ingest", *args], cwd=str(REPO_ROOT),
+                                env=env, stdout=slave, stderr=subprocess.DEVNULL)
+        os.close(slave)
+        chunks = []
+        while True:
+            try:
+                data = os.read(master, 4096)
+            except OSError:
+                break
+            if not data:
+                break
+            chunks.append(data)
+        os.close(master)
+        proc.wait(timeout=30)
+        return b"".join(chunks).decode("utf-8", "replace")
+
+    def test_color_only_on_a_terminal_without_no_color_and_numbers_are_rounded(self):
+        self._seed_usage()
+        piped = run_meter(["report", "--no-ingest", "--model"], self.home)
+        self.assertEqual(piped.returncode, 0)
+        # パイプ（ファイルへのリダイレクトも同じ）は pretty のまま、色コードだけが無い
+        self.assertNotIn("\x1b[", piped.stdout)
+        self.assertIn("注記", piped.stdout)
+        for rounded in ("25.1B", "1.0M", "12.3K"):
+            self.assertIn(rounded, piped.stdout)
+        self.assertNotIn("1000.0K", piped.stdout)
+        # 端末なら色が付き、NO_COLOR が空でない値で立っていれば付かない（空文字は「立っていない」）
+        self.assertIn("\x1b[", self._report_on_pty(["--model"]))
+        self.assertIn("\x1b[", self._report_on_pty(["--model"], {"NO_COLOR": ""}))
+        self.assertNotIn("\x1b[", self._report_on_pty(["--model"], {"NO_COLOR": "1"}))
+        # --plain は端末でも従来の key: value のまま（正確な値）で、色も付かない
+        plain = self._report_on_pty(["--model", "--plain"])
+        self.assertIn("input_tokens: 999960", plain)
+        self.assertNotIn("\x1b[", plain)
+
+    def test_plain_and_json_cannot_be_combined(self):
+        result = run_meter(["report", "--no-ingest", "--plain", "--json"], self.home)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("--plain cannot be combined with --json", result.stderr)
+
+
 class ReportMonthStandaloneTests(OcwMeterTestCase):
     """孫5プロンプト §1 --month (NOT --reconcile): cash cost / capacity
     cost / process efficiency."""
@@ -4176,7 +4236,7 @@ class ReportMonthStandaloneTests(OcwMeterTestCase):
         self.assertEqual(august["cash_cost"]["usage_message_count"], 0)
 
     def test_month_defaults_to_current_utc_month_when_value_omitted(self):
-        result = run_meter(["report", "--month"], self.home)
+        result = run_meter(["report", "--month", "--plain"], self.home)
         self.assertEqual(result.returncode, 0)
         self.assertIn("month:", result.stdout)
 
@@ -4365,7 +4425,7 @@ class ReportListPriceEquivTests(OcwMeterTestCase):
                    "--plan-source", "statusline", "--provider", "anthropic",
                    "--session-cost-usd", "5.0", "--run-id", "run-400", "--pr-number", "400",
                    "--ts", "2026-08-05T09:05:00.000Z"], self.home)
-        result = run_meter(["report", "--pr", "400"], self.home)
+        result = run_meter(["report", "--pr", "400", "--plain"], self.home)
         self.assertEqual(result.returncode, 0)
         self.assertIn("list_price_equiv_excluded_no_session_id_count:", result.stdout)
         self.assertIn("list_price_equiv_excluded_null_cost_count:", result.stdout)
@@ -4377,7 +4437,7 @@ class ReportListPriceEquivTests(OcwMeterTestCase):
     def test_window_text_output_prints_the_note_once_not_per_row(self):
         self._quota_sample("q1", "sess-win-a", 1.0, "2026-08-05T09:00:00.000Z", extra=["--window-id", "winA"])
         self._quota_sample("q2", "sess-win-b", 2.0, "2026-08-05T10:00:00.000Z", extra=["--window-id", "winB"])
-        result = run_meter(["report", "--window"], self.home)
+        result = run_meter(["report", "--window", "--plain"], self.home)
         self.assertEqual(result.returncode, 0)
         self.assertEqual(result.stdout.count("list_price_equiv_note:"), 1)
 
@@ -5159,7 +5219,7 @@ class SessionAttributionTests(OcwMeterTestCase):
         data = json.loads(run_meter(["report", "--json"], self.home).stdout)
         self.assertIn("quota.sampleの記録が始まるより前の期間は", data["attribution_known_limits"])
         self.assertNotIn("2026-08-01", data["attribution_known_limits"])
-        text = run_meter(["report"], self.home).stdout
+        text = run_meter(["report", "--plain"], self.home).stdout
         self.assertIn("attribution_known_limits:", text)
 
     def test_attribution_footer_counts_direct_session_and_unresolved_and_sums_to_total(self):
@@ -5192,7 +5252,7 @@ class SessionAttributionTests(OcwMeterTestCase):
         role_counts = data["attribution_role_counts"]
         self.assertEqual(role_counts, {"direct": 0, "session_id": 1, "unresolved": 2})
 
-        text = run_meter(["report"], self.home).stdout
+        text = run_meter(["report", "--plain"], self.home).stdout
         self.assertIn("attribution (run_id):", text)
         self.assertIn("attribution (role):", text)
 
