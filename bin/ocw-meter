@@ -1891,9 +1891,13 @@ REPORT_PLAIN = False
 #   fmt_tokens(25_100_000_000)   -> "25.1B"        トークン (K / M / B。1,000 未満はそのまま)
 #   fmt_usd(1.5)                 -> "$1.50"        費用 (None は "—")
 #   fmt_duration(3725)           -> "1h02m"        秒数
+#   fmt_pct(55.00000000000001)   -> "55%"          百分率 (None は "—")
+#   fmt_avg(2.9285714285714284)  -> "2.93"         平均値 (None は "—")
 #   disp_width(s) / pad(s, w, align)               東アジア文字幅 (全角=2) で揃える
 #   paint(text, "red")           -> 色が無効なら text のまま。色名は _ANSI 参照
 #   render_table(headers, rows, aligns=None, max_width=None)
+#       ※ セルに paint 済みの文字列を入れない (ESC が幅に数えられ列幅が狂う)。
+#         色は (str, 色名) の形で渡す
 #       -> (lines, dropped_headers)  rows の各セルは str か (str, 色名)。
 #          幅が足りなければ右端の列から落として dropped_headers で返す
 #   render_kv(pairs, indent=2)   -> lines          揃えた key: value
@@ -2046,6 +2050,22 @@ def _nz(v):
     return "—" if v is None else str(v)
 
 
+def fmt_pct(v):
+    """百分率。None は "—"、小数は 1 桁に丸める (整数なら小数点なし)。"""
+    if v is None:
+        return "—"
+    r = round(float(v), 1)
+    return f"{int(r)}%" if r == int(r) else f"{r}%"
+
+
+def fmt_avg(v):
+    """平均値。None は "—"、小数は 2 桁に丸める。"""
+    if v is None:
+        return "—"
+    r = round(float(v), 2)
+    return str(int(r)) if r == int(r) else str(r)
+
+
 def _family_color(model_key):
     return _MODEL_FAMILY_COLOR.get(model_family(model_key.split("/", 1)[-1])) if isinstance(model_key, str) else None
 
@@ -2082,7 +2102,7 @@ def _fmt_field(field, value):
     if field == "total_duration_seconds":
         return fmt_duration(value)
     if field in ("estimated_weekly_pct", "five_hour_used_pct_max", "seven_day_used_pct_max"):
-        return f"{value}%"
+        return fmt_pct(value)
     return str(value)
 
 
@@ -2194,8 +2214,10 @@ def _pretty_quota_per_pct(estimate, footer_freshness):
         else:
             rows.append([(family, color) if color else family, "—", "—", "—"])
             notes.append(f"{family}: 測れない — {row['reason']}")
-    lines, _ = render_table(["系統", "weighted/1%", "raw/1%", "区切り数(12h)"], rows)
+    lines, dropped = render_table(["系統", "weighted/1%", "raw/1%", "区切り数(12h)"], rows)
     print("\n".join(lines))
+    if dropped:
+        print("  " + paint(f"({'・'.join(dropped)} は幅が足りず省略。--plain で全部)", "dim"))
     for n in notes:
         print("  " + paint(n, "yellow"))
     print("  " + paint("weighted = input + 1.25*cache_creation + 0.1*cache_read + 5*output。見積もりであり、止める・替える制御には使わない", "dim"))
@@ -2217,7 +2239,7 @@ def _pretty_default_report(summary, filter_pr, repo, by_type, footer_completenes
         print(paint("filter", "dim") + f"  pr={filter_pr} (repo={repo})")
     print(section(f"events: {fmt_int(total)} 件"))
     mx = max(by_type.values()) if by_type else 0
-    rows = [[(t or "(none)"), fmt_int(n), paint(hbar(n, mx, 24), "cyan")]
+    rows = [[(t or "(none)"), fmt_int(n), (hbar(n, mx, 24), "cyan")]
             for t, n in sorted(by_type.items(), key=lambda kv: (kv[0] or ""))]
     if rows:
         lines, _ = render_table(["event_type", "件数", ""], rows, aligns=["l", "r", "l"])
@@ -2234,7 +2256,7 @@ def _pretty_default_report(summary, filter_pr, repo, by_type, footer_completenes
         ("イベントの時刻スパン", fmt_duration(d["total_span_seconds"])),
         ("review rounds", f"{d['review_round_count']} 回 / 人の介入 {d['human_intervention_count']} 回"),
         ("5h window 完了", f"{summary['five_hour_window_completion']} (window_ids: {', '.join(summary['five_hour_window_ids_seen']) or 'なし'})"),
-        ("5h / 7d 使用率 max", f"{d['five_hour_used_pct_max']}% / {d['seven_day_used_pct_max']}%"),
+        ("5h / 7d 使用率 max", f"{fmt_pct(d['five_hour_used_pct_max'])} / {fmt_pct(d['seven_day_used_pct_max'])}"),
         ("cash cost", cash),
         ("capacity messages", f"{fmt_int(d['capacity_message_count'])} (subscription。ドル建てなし)"),
         ("list price 相当", f"{fmt_usd(d['list_price_equiv_usd'], plus=True)} (下限・請求書ではない・cash と合算不可) / {fmt_int(d['list_price_equiv_session_count'])} sessions"),
@@ -2266,7 +2288,7 @@ def _pretty_month_report(summary, month, footer_completeness, footer_cost, foote
     pairs = [
         ("capacity messages", fmt_int(cap["capacity_message_count"])),
         ("quota.sample", fmt_int(cap["quota_sample_count"])),
-        ("5h / 7d 使用率 max", f"{cap['five_hour_used_pct_max']}% / {cap['seven_day_used_pct_max']}%"),
+        ("5h / 7d 使用率 max", f"{fmt_pct(cap['five_hour_used_pct_max'])} / {fmt_pct(cap['seven_day_used_pct_max'])}"),
         ("5h windows", fmt_int(cap["distinct_five_hour_windows"])),
         ("list price 相当", f"{fmt_usd(cap['list_price_equiv_usd'], plus=True)} (下限・請求書ではない) / {fmt_int(cap['list_price_equiv_session_count'])} sessions"),
     ]
@@ -2282,8 +2304,8 @@ def _pretty_month_report(summary, month, footer_completeness, footer_cost, foote
     pairs = [
         ("approved PRs", fmt_int(pe["approved_pr_count"])),
         ("平均 cash cost", fmt_usd(pe["avg_cash_cost_usd"])),
-        ("平均 review rounds", _nz(pe["avg_review_round_count"])),
-        ("平均 人の介入", _nz(pe["avg_human_intervention_count"])),
+        ("平均 review rounds", fmt_avg(pe["avg_review_round_count"])),
+        ("平均 人の介入", fmt_avg(pe["avg_human_intervention_count"])),
         ("平均 所要", fmt_duration(pe["avg_duration_seconds"])),
         ("5h window 完了の内訳", str(pe["five_hour_window_completion_breakdown"])),
     ]
