@@ -91,6 +91,8 @@ ocw agent reviewer
 
 # 司令官・実装の孫が自分のペインへ /compact を送り、compact の完了後に続きの1通も送る（Herdr のペイン内でのみ。他のペインへは送れない）
 ocw self-compact "復帰メモ <パス> を最初に読む。正典は計画書 <パス>"
+# 使い方だけ見たいときは -h / --help（何も送らない）。"-" で始まる引数は指示として送らず、エラーにする
+ocw self-compact --help
 
 # Herdr のワークスペースラベルを指定（ペインの claude の会話名にも使われる）
 ocw --herdr --label "myrepo :: タイトル" my-feature
