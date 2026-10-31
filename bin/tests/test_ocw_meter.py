@@ -3743,6 +3743,52 @@ class ReportGroupedViewsTests(OcwMeterTestCase):
                     ["--quota-per-pct", "--periods", "0"]):
             self.assertNotEqual(run_meter(["report", "--no-ingest", *bad], self.home).returncode, 0, bad)
 
+    # -- --daily --
+
+    def test_daily_splits_days_at_local_midnight_groups_other_and_rejects_bad_combinations(self):
+        jst = timezone(timedelta(hours=9))
+        today = datetime.now(jst).replace(hour=0, minute=0, second=0, microsecond=0)
+        events = []
+        def usage(local_dt, model, **tokens):
+            stamp = local_dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+            events.append({"event_type": "usage.message", "schema_version": 1, "ts": stamp,
+                           "idempotency_key": f"k-{len(events)}", "event_id": f"id-{len(events)}",
+                           "completeness": "complete", "provider": "anthropic", "model": model,
+                           "message_id": f"m-{len(events)}", "input_tokens": 0, "cache_read_input_tokens": 0,
+                           "cache_creation_input_tokens": 0, "output_tokens": 0, **tokens})
+        # 00:30 JST today is still yesterday in UTC; 23:30 JST yesterday likewise is not today.
+        usage(today + timedelta(minutes=30), "claude-opus-5-5", input_tokens=1000, cache_read_input_tokens=10000, output_tokens=100)
+        usage(today - timedelta(minutes=30), "claude-opus-5-5", input_tokens=100)
+        for n in range(6):  # six models on one day: the smallest ones fold into "その他"
+            usage(today - timedelta(days=2) + timedelta(hours=12), f"claude-sonnet-x{n}", input_tokens=10 * (n + 1))
+        events_dir = pathlib.Path(self.home) / "events"
+        events_dir.mkdir(parents=True, exist_ok=True)
+        (events_dir / "2026-08-01.jsonl").write_text("".join(json.dumps(e) + "\n" for e in events), encoding="utf-8")
+        env = {"TZ": "JST-9", "NO_COLOR": "1"}
+
+        report = json.loads(run_meter(["report", "--daily", "--days", "4", "--no-ingest", "--json"], self.home, env).stdout)
+        by_date = {d["date"]: d for d in report["daily"]}
+        self.assertEqual(len(report["daily"]), 4)  # the unused day (3 days ago) still has a row
+        self.assertEqual(report["daily"][0]["weighted_tokens"], 0)
+        today_row = by_date[today.strftime("%Y-%m-%d")]
+        yesterday_row = by_date[(today - timedelta(days=1)).strftime("%Y-%m-%d")]
+        # Same formula as --quota-per-pct: input + 1.25*cache_creation + 0.1*cache_read + 5*output.
+        self.assertEqual(today_row["weighted_tokens"], 1000 + 0.1 * 10000 + 5 * 100)
+        self.assertEqual(today_row["messages"], 1)
+        self.assertEqual(yesterday_row["weighted_tokens"], 100)
+
+        text = run_meter(["report", "--daily", "--days", "4", "--no-ingest"], self.home, env).stdout
+        self.assertIn("その他", text)
+        self.assertNotIn("\x1b[", text)
+        plain = run_meter(["report", "--daily", "--days", "4", "--no-ingest", "--plain"], self.home, env).stdout
+        self.assertIn(f"{today.strftime('%Y-%m-%d')}:\n    weighted_tokens: 2500", plain)
+
+        for bad in (["--daily", "--model"], ["--daily", "--quota-per-pct"], ["--daily", "--pr", "1"],
+                    ["--daily", "--since", "2026-07-01T00:00:00Z"], ["--daily", "--days", "0"], ["--days", "3"]):
+            result = run_meter(["report", "--no-ingest", *bad], self.home, env)
+            self.assertNotEqual(result.returncode, 0, bad)
+            self.assertIn("error:", result.stderr)
+
     # -- --model --
 
     def test_model_view_groups_by_provider_and_model(self):
