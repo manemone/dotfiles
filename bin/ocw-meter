@@ -4789,7 +4789,7 @@ def cmd_report(args):
         weeks_requested = weeks or HEATMAP_MAX_WEEKS
         # 幅で減らすのは端末向けの pretty だけ (--json / --plain は幅に依らず同じ数値を出す)
         weeks_drawn = weeks_requested if (as_json or REPORT_PLAIN) else min(weeks_requested, heatmap_max_weeks_for_width(term_width()))
-        print_heatmap(report_heatmap(usage_events, weeks_drawn), weeks_requested, as_json,
+        print_heatmap(report_heatmap(usage_events, weeks_drawn), weeks_requested if weeks else weeks_drawn, as_json,
                       completeness_footer(paths, usage_events, malformed), footer_freshness)
         return 0
 
