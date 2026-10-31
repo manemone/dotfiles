@@ -46,12 +46,14 @@ import json
 import os
 import pathlib
 import pty
+import re
 import shutil
 import stat
 import subprocess
 import sys
 import tempfile
 import time
+import unicodedata
 import unittest
 from datetime import datetime, timedelta, timezone
 
@@ -125,6 +127,29 @@ def run_meter(args, home, extra_env=None, timeout=30, cwd=None):
         text=True,
         timeout=timeout,
     )
+
+
+def run_meter_on_pty(args, home, extra_env=None):
+    """stdout だけを疑似端末にして ocw-meter を走らせ、出力を返す (色の出る経路を通す)。"""
+    master, slave = pty.openpty()
+    env = dict(os.environ, OCW_METER_HOME=str(home), HOME=str(pathlib.Path(home).parent))
+    env.pop("NO_COLOR", None)
+    env.update(extra_env or {})
+    proc = subprocess.Popen([str(OCW_METER), *args], cwd=str(REPO_ROOT),
+                            env=env, stdout=slave, stderr=subprocess.DEVNULL)
+    os.close(slave)
+    chunks = []
+    while True:
+        try:
+            data = os.read(master, 4096)
+        except OSError:
+            break
+        if not data:
+            break
+        chunks.append(data)
+    os.close(master)
+    proc.wait(timeout=30)
+    return b"".join(chunks).decode("utf-8", "replace")
 
 
 def run_snapshot_quota(stdin_text, home, extra_env=None, timeout=30):
@@ -4027,6 +4052,19 @@ class ReportGroupedViewsTests(OcwMeterTestCase):
         self.assertNotIn("日ごとのモデル別使用量", quota_only)
         self.assertIn("省略: ヒートマップ、日ごとの縦棒", quota_only)
 
+        # 端末 (色あり) でも、色コードの途中で切れず、色を除いた各行の幅が端末幅に収まる。
+        colored = run_meter_on_pty(["dash", "--no-ingest"], self.home, {**env, "LINES": "80"})
+        self.assertNotRegex(colored, r"\x1b(?!\[[0-9;]*m)")
+        self.assertNotRegex(colored, r"\x1b\[[0-9;]*(?![0-9;m])")
+        # 色を除いた各行の表示幅は、パイプで描いたもの (記号) と同じで、端末幅に収まる (ヒートマップの行が途中で終わらない)。
+        def width(line):
+            return sum(2 if unicodedata.east_asian_width(c) in ("W", "F") else 1 for c in line)
+        stripped = re.sub(r"\x1b\[[0-9;]*m", "", colored).replace("\r", "").splitlines()
+        self.assertEqual(len(stripped), len(full.splitlines()))
+        self.assertEqual([width(ln) for ln in stripped[2:]], [width(ln) for ln in full.splitlines()[2:]])
+        self.assertTrue(all(width(ln) <= 100 for ln in stripped))
+        self.assertEqual(colored.count("\x1b[0m"), len(re.findall(r"\x1b\[(?!0m)[0-9;]*m", colored)))  # 開いた色は全部閉じる
+
         # ingest が失敗しても止まらず、保存済みの集計で描き、注記に出る (HOME が空 = projects dir を決められない)。
         failed = dash(80, {"HOME": ""}, args=())
         self.assertIn("週の上限が 100% に届くまでの推移", failed)
@@ -4435,25 +4473,7 @@ class ReportPrettyDisplayTests(OcwMeterTestCase):
 
     def _report_on_pty(self, args, extra_env=None):
         """stdout だけを疑似端末にして report を走らせ、出力を返す。"""
-        master, slave = pty.openpty()
-        env = dict(os.environ, OCW_METER_HOME=str(self.home), HOME=str(self.home.parent))
-        env.pop("NO_COLOR", None)
-        env.update(extra_env or {})
-        proc = subprocess.Popen([str(OCW_METER), "report", "--no-ingest", *args], cwd=str(REPO_ROOT),
-                                env=env, stdout=slave, stderr=subprocess.DEVNULL)
-        os.close(slave)
-        chunks = []
-        while True:
-            try:
-                data = os.read(master, 4096)
-            except OSError:
-                break
-            if not data:
-                break
-            chunks.append(data)
-        os.close(master)
-        proc.wait(timeout=30)
-        return b"".join(chunks).decode("utf-8", "replace")
+        return run_meter_on_pty(["report", "--no-ingest", *args], self.home, extra_env)
 
     def test_color_only_on_a_terminal_without_no_color_and_numbers_are_rounded(self):
         self._seed_usage()

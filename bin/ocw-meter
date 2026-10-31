@@ -3895,9 +3895,10 @@ def term_height():
 
 def _clip(text, width):
     """表示幅 width に収める (超えたら末尾を … にする)。色コードがあれば、超えた行は色を落として切る。"""
-    text = text if disp_width(re.sub(r"\x1b\[[0-9;]*m", "", text)) <= width else re.sub(r"\x1b\[[0-9;]*m", "", text)
-    if disp_width(text) <= width:
+    plain = re.sub(r"\x1b\[[0-9;]*m", "", text)
+    if disp_width(plain) <= width:
         return text
+    text = plain
     out, used = "", 0
     for c in text:
         w = disp_width(c)
