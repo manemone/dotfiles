@@ -4077,6 +4077,17 @@ def _dash_daily_legend(report, width):
     return "  ".join(out)
 
 
+def dash_daily_days(usage_events, width):
+    """ダッシュボードの日ごとの縦棒の日数。軸の欄を除いた幅 width に、棒 3 桁 + 隙間 1 桁で入るだけ。
+    記録の最初の日より前と、ヒートマップと同じ上限 (HEATMAP_MAX_WEEKS 週) より前は描かない。"""
+    fit = max(1, width // 4)
+    first = min(daily_usage_by_model(usage_events), default=None)
+    if first is not None:
+        today = datetime.now().astimezone().date()
+        fit = min(fit, max(1, (today - datetime.strptime(first, "%Y-%m-%d").date()).days + 1))
+    return min(fit, HEATMAP_MAX_WEEKS * 7)
+
+
 def dash_lines(valid_events, footer_completeness, footer_freshness, now, height, width, watch=None):
     """ダッシュボードの全行 (色付き)。height は端末の高さ (None なら詰めない)。
     見出し・週の上限・日ごと・ヒートマップ・注記を、幅 width いっぱいの枠付きパネルで縦に並べる。
@@ -4087,11 +4098,18 @@ def dash_lines(valid_events, footer_completeness, footer_freshness, now, height,
     notes = _notes_lines(footer_completeness, footer_freshness)
     cw = width - 4  # パネルの中身の幅
 
-    # 縦軸のラベルの欄の幅は全グラフで共通 (軸の線が同じ列に来る)。最大幅は日ごとの縦棒の最大値のラベル
-    daily_report = report_daily(usage_events, DAILY_DEFAULT_DAYS)
-    max_daily = max([d["weighted_tokens"] for d in daily_report["daily"]] + [0])
-    # 縦棒の軸には最大のほか中央の目盛り (max/2) も並ぶ。短いほうの桁数で決めると縦棒だけ軸の線がずれる (1.5M と 750.0K など)
-    label_w = max(DASH_MIN_LABEL_W, len(fmt_tokens(max_daily)), len(fmt_tokens(max_daily / 2)))
+    # 縦軸のラベルの欄の幅は全グラフで共通 (軸の線が同じ列に来る)。最大幅は日ごとの縦棒の最大値のラベル。
+    # 日数はパネルの幅に入るだけ (棒 3 桁 + 隙間 1 桁)。日数が変わると最大値・ラベル幅も変わるので、収まるまで数え直す
+    label_w = DASH_MIN_LABEL_W
+    for _ in range(4):
+        daily_days = dash_daily_days(usage_events, cw - label_w - 2)
+        daily_report = report_daily(usage_events, daily_days)
+        max_daily = max([d["weighted_tokens"] for d in daily_report["daily"]] + [0])
+        # 縦棒の軸には最大のほか中央の目盛り (max/2) も並ぶ。短いほうの桁数で決めると縦棒だけ軸の線がずれる (1.5M と 750.0K など)
+        new_w = max(DASH_MIN_LABEL_W, len(fmt_tokens(max_daily)), len(fmt_tokens(max_daily / 2)))
+        if new_w <= label_w:
+            break
+        label_w = new_w
     top, styles, has_other = daily_series(daily_report)
     _grid, dropped = daily_columns(daily_report["daily"], top, styles, has_other, DASH_DAILY_ROWS[0], cw, label_w=label_w + 1)
     weeks = max(1, min(HEATMAP_MAX_WEEKS, (cw - label_w - 2) // _HEATMAP_CELL_WIDTH))

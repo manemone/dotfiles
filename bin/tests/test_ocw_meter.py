@@ -4107,6 +4107,25 @@ class ReportGroupedViewsTests(OcwMeterTestCase):
                 pos += 2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1
         self.assertEqual(len(axis_cols), 1, axis_cols)
 
+    def test_dash_daily_panel_fills_the_width_while_report_daily_keeps_14_days(self):
+        import re
+        self._seed_quota_samples([(h, h / 4) for h in range(0, 97, 8)])
+        for ago in (200, 60, 0):
+            ts = (datetime.now(timezone.utc) - timedelta(days=ago)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+            run_meter(["event", "usage.message", "--idempotency-key", f"fill{ago}", "--message-id", f"fill{ago}",
+                       "--model", "claude-opus-x", "--provider", "anthropic", "--cost-basis", "estimated",
+                       "--input-tokens", "1000", "--ts", ts], self.home)
+
+        def days_at(cols):
+            out = run_meter(["dash", "--no-ingest"], self.home, {"TZ": "JST-9", "COLUMNS": str(cols), "LINES": "80"}).stdout
+            return int(re.search(r"直近 (\d+) 日", out).group(1))
+
+        narrow, wide = days_at(100), days_at(140)
+        self.assertGreater(narrow, 14)
+        self.assertGreater(wide, narrow)
+        daily = json.loads(run_meter(["report", "--daily", "--no-ingest", "--json"], self.home).stdout)
+        self.assertEqual(len(daily["daily"]), 14)
+
     def test_dash_rejects_json_plain_unknown_flags_and_watch_without_a_terminal(self):
         for bad in (["--json"], ["--plain"], ["--bogus"], ["--watch", "0"], ["--watch", "x"],
                     ["--watch", "--no-ingest"], ["--watch", "5"]):

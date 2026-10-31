@@ -295,6 +295,7 @@ ocw-meter report --heatmap [--weeks <n>] [--no-ingest] [--json|--plain]
 # （パイプ・ファイルなど高さが取れないときは詰めない）。report と同じく先頭で ingest し（--no-ingest で飛ばせる）、失敗しても止まらず注記に出る。
 # --watch [秒] は既定 300 秒ごとに ingest して描き直す（ANSI のエスケープで画面を消す。描き終わってから数えるので ingest が長くても重ならない。
 # 失敗しても保存済みの集計で描く）。端末でないときの --watch はエラー、Ctrl-C は終了コード 0。
+# 日ごとの縦棒は端末の幅に入るだけの日数を描く（記録の最初の日より前と 52 週より前は描かない。report --daily の既定 14 日は変わらない）。
 # --json / --plain は付けられない（エラー。機械が読むなら個別の report のビューを使う）。理由は ADR DOC-2610312031 の決定 9
 ocw-meter dash [--watch [<seconds>]] [--no-ingest]
 
