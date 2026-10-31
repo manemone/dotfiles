@@ -3786,8 +3786,28 @@ class ReportGroupedViewsTests(OcwMeterTestCase):
         plain = run_meter(["report", "--daily", "--days", "4", "--no-ingest", "--plain"], self.home, env).stdout
         self.assertIn(f"{today.strftime('%Y-%m-%d')}:\n    weighted_tokens: 2500", plain)
 
+        # 既定は縦の積み上げ棒: 最大の日 (今日) は全段、少ない日は低い。幅が足りなければ古い日から削って知らせる。
+        lines = text.splitlines()
+        chart = [l.split("│", 1)[1] for l in lines if "│" in l]
+        self.assertEqual(len(chart), 11)
+        pitch = 4  # 3 桁の棒 + 隙間 1
+        column_height = [sum(1 for row in chart if row[i * pitch:i * pitch + 3].strip()) for i in range(4)]
+        self.assertEqual(column_height[3], 11)
+        self.assertEqual(column_height[0], 0)  # 使用の無い日は空の列
+        self.assertTrue(0 < column_height[1] < column_height[3] and 0 < column_height[2] < column_height[3])
+        self.assertNotIn("省略", text)
+        narrow = run_meter(["report", "--daily", "--days", "40", "--no-ingest"], self.home, {**env, "COLUMNS": "40"}).stdout
+        self.assertRegex(narrow, r"古い \d+ 日を省略")
+        # --rows で横棒 (1日1行、行末に合計)。縦棒の軸は出ない。
+        rows_text = run_meter(["report", "--daily", "--days", "4", "--rows", "--no-ingest"], self.home, env).stdout
+        self.assertIn("2.5K", rows_text)
+        self.assertNotIn("└", rows_text)
+        self.assertEqual(json.loads(run_meter(["report", "--daily", "--days", "4", "--rows", "--no-ingest", "--json"],
+                                              self.home, env).stdout)["daily"], report["daily"])
+
         for bad in (["--daily", "--model"], ["--daily", "--quota-per-pct"], ["--daily", "--pr", "1"],
-                    ["--daily", "--since", "2026-07-01T00:00:00Z"], ["--daily", "--days", "0"], ["--days", "3"]):
+                    ["--daily", "--since", "2026-07-01T00:00:00Z"], ["--daily", "--days", "0"], ["--days", "3"],
+                    ["--rows"], ["--model", "--rows"]):
             result = run_meter(["report", "--no-ingest", *bad], self.home, env)
             self.assertNotEqual(result.returncode, 0, bad)
             self.assertIn("error:", result.stderr)
