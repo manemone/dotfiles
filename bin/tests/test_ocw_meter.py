@@ -4065,6 +4065,13 @@ class ReportGroupedViewsTests(OcwMeterTestCase):
                 pos += width(ch)
         self.assertEqual(len(axis_cols), 1, axis_cols)
 
+        # 狭い端末でも、上の罫線に入らない補足 (時刻・グラフの凡例) は本文の 1 行に回り、落ちない。幅も端末幅ちょうど。
+        for cols in ("60", "40"):
+            narrow = run_meter(["dash", "--no-ingest"], self.home, {**env, "COLUMNS": cols, "LINES": "80"}).stdout
+            self.assertIn("現在", narrow)
+            self.assertIn("● 実績", narrow)
+            self.assertEqual({width(ln) for ln in narrow.splitlines()}, {int(cols)})
+
         # 端末 (色あり) でも、色コードの途中で切れず、色を除いた各行の幅が端末幅に収まる。
         colored = run_meter_on_pty(["dash", "--no-ingest"], self.home, {**env, "LINES": "80"})
         self.assertNotRegex(colored, r"\x1b(?!\[[0-9;]*m)")
