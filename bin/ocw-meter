@@ -3562,12 +3562,12 @@ def _heatmap_month_line(report):
             continue
         prev_month = monday.month
         label, pos = f"{monday.month}月", c * _HEATMAP_CELL_WIDTH
-        if pos + disp_width(label) > width:
-            continue
         if placed and pos < placed[-1][0] + disp_width(placed[-1][1]):
             if placed[-1][0] != 0:
                 continue
-            placed.pop()
+            placed.pop()  # 翌月のラベルが幅に入らなくても、最初の列のラベルは外す (翌月の週を前月に見せない)
+        if pos + disp_width(label) > width:
+            continue
         placed.append((pos, label))
     out, used = "", 0
     for pos, label in placed:
