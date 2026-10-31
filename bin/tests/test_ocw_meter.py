@@ -4000,6 +4000,46 @@ class ReportGroupedViewsTests(OcwMeterTestCase):
             self.assertNotEqual(result.returncode, 0, bad)
             self.assertIn("error:", result.stderr)
 
+    # -- dash --
+
+    def test_dash_drops_parts_in_order_when_the_terminal_is_short_and_fails_open(self):
+        self._seed_quota_samples([(h, h / 4) for h in range(0, 97, 8)])
+        env = {"TZ": "JST-9", "COLUMNS": "100"}
+
+        def dash(lines, extra=None, args=("--no-ingest",)):
+            result = run_meter(["dash", *args], self.home, {**env, "LINES": str(lines), **(extra or {})})
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertNotIn("\x1b[", result.stdout)  # パイプでは色が混ざらない
+            self.assertLessEqual(len(result.stdout.splitlines()), lines - 1, result.stdout)  # 崩れず画面に収まる
+            return result.stdout
+
+        full = dash(80)
+        for title in ("週の上限が 100% に届くまでの推移", "日ごとのモデル別使用量", "日ごとの消費量"):
+            self.assertIn(title, full)
+        self.assertNotIn("省略:", full)
+        # 高さが足りなければ、まずヒートマップ、次に日ごとの縦棒を省き、省いたことを出す。
+        no_heat = dash(30)
+        self.assertIn("日ごとのモデル別使用量", no_heat)
+        self.assertNotIn("日ごとの消費量", no_heat)
+        self.assertIn("省略: ヒートマップ", no_heat)
+        quota_only = dash(14)
+        self.assertIn("週の上限が 100% に届くまでの推移", quota_only)
+        self.assertNotIn("日ごとのモデル別使用量", quota_only)
+        self.assertIn("省略: ヒートマップ、日ごとの縦棒", quota_only)
+
+        # ingest が失敗しても止まらず、保存済みの集計で描き、注記に出る (HOME が空 = projects dir を決められない)。
+        failed = dash(80, {"HOME": ""}, args=())
+        self.assertIn("週の上限が 100% に届くまでの推移", failed)
+        self.assertIn("ingest が失敗", failed)
+
+    def test_dash_rejects_json_plain_unknown_flags_and_watch_without_a_terminal(self):
+        for bad in (["--json"], ["--plain"], ["--bogus"], ["--watch", "0"], ["--watch", "x"],
+                    ["--watch", "--no-ingest"], ["--watch", "5"]):
+            result = run_meter(["dash", "--no-ingest", *bad], self.home)
+            self.assertNotEqual(result.returncode, 0, bad)
+            self.assertIn("error:", result.stderr)
+            self.assertEqual(result.stdout, "")
+
     # -- --model --
 
     def test_model_view_groups_by_provider_and_model(self):
