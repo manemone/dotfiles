@@ -33,6 +33,7 @@ usage:
   ocw-meter report --window [--pr <n>] [--repo <owner>/<name>] [--no-ingest] [--json|--plain]
   ocw-meter report --since <rfc3339-ts> [--until <rfc3339-ts>] [--model|--role] [--pr <n>] [--periods <n>] [--no-ingest] [--json|--plain]
   ocw-meter report --quota-per-pct [--periods <n>] [--no-ingest] [--json|--plain]
+  ocw-meter report --quota-progress [--periods <n>] [--no-ingest] [--json|--plain]
   ocw-meter report --daily [--days <n>] [--no-ingest] [--json|--plain]
   ocw-meter report --month [YYYY-MM] [--repo <owner>/<name>] [--no-ingest] [--json|--plain]
   ocw-meter report --reconcile [--month <YYYY-MM>] [--provider-total <model>=<tokens> ...] [--no-ingest] [--json|--plain]
@@ -157,6 +158,25 @@ subcommands:
     combined with --pr/--phase/--model/--role/--window/--month/
     --reconcile/--since/--until. See the ADR on quota-per-pct.
 
+  report --quota-progress [--periods <n>]
+    This week's weekly-limit % over time: seven_day_used_pct of the
+    latest seven_day_resets_at period (reset-7d .. reset) as a
+    character chart (0/50/100% and date ticks, "▲" = now), with an
+    estimate of when it reaches 100% at the pace of the trailing 24
+    hours (shorter than that is noise at the integer % steps, longer
+    reacts too slowly to a changed pace; a span under 3 hours, no rise,
+    or no sample in the last 24 hours gives the reason instead), or
+    "この週のうちには届かない見込み". It also converts the remaining %
+    into weighted tokens per family using --quota-per-pct's estimate
+    (unmeasurable families show "—" and the reason; --periods picks
+    the periods of that estimate). With no sample, or one sample, in
+    the current week it says so instead of drawing (not an error).
+    --json carries the points where the % changed, the outlook and the
+    token conversion; --plain the same as key: value. An estimate,
+    never to stop or switch models automatically. Cannot be combined
+    with --pr/--phase/--model/--role/--window/--month/--reconcile/
+    --since/--until/--quota-per-pct. See the ADR on quota-per-pct.
+
   report --daily [--days <n>]
     Per-day usage by model for the last <n> days (default 14, today
     included), days split at LOCAL midnight (not UTC). The graph is one
@@ -167,7 +187,7 @@ subcommands:
     --json / --plain give the numbers behind the graph (weighted and raw
     token breakdown per day x model). Cannot be combined with
     --pr/--phase/--model/--role/--window/--month/--reconcile/--since/
-    --until/--quota-per-pct. --days only applies to --daily.
+    --until/--quota-per-pct/--quota-progress. --days only applies to --daily.
 
   report --month [YYYY-MM]
     Cash cost (metered API) / capacity cost (Claude subscription quota)
@@ -3179,6 +3199,274 @@ def print_daily(report, as_json, footer_completeness, footer_freshness):
     print(f"ingest_freshness_warning: {footer_freshness['ingest_freshness_warning']}")
 
 
+# ── report --quota-progress: this week's seven_day_used_pct over time ───
+# Reuses quota_periods / estimate_quota_per_pct above (the % series and the
+# tokens-per-1% estimate); nothing is re-derived here. Why the pace is taken
+# over the trailing 24 hours: ADR DOC-2610310237 §5. An estimate, never an
+# input to stopping or switching models.
+
+QUOTA_PROGRESS_PACE_HOURS = 24      # trailing window the pace is measured over
+QUOTA_PROGRESS_MIN_SPAN_HOURS = 3   # a shorter span is below the % granularity
+QUOTA_PROGRESS_ROWS = 11            # chart rows: 100, 90, ... 0 (%)
+
+
+def _iso_epoch(epoch):
+    return iso_utc(datetime.fromtimestamp(epoch, timezone.utc))
+
+
+def _local_md_hm(epoch_or_iso):
+    """`MM-DD HH:MM` in local time, from an epoch or an RFC3339 string."""
+    if isinstance(epoch_or_iso, str):
+        dt = parse_ts(epoch_or_iso)
+        return dt.astimezone().strftime("%m-%d %H:%M") if dt else str(epoch_or_iso)
+    return datetime.fromtimestamp(epoch_or_iso).strftime("%m-%d %H:%M")
+
+
+def _quota_projection(rows, resets, now):
+    """When the weekly % reaches 100 at the recent pace, or why that
+    cannot be said. `rows` are the period's (epoch, running-max %)."""
+    t_last, p_last = rows[-1]
+    out = {"pace_window_hours": QUOTA_PROGRESS_PACE_HOURS}
+    if p_last >= 100:
+        return {**out, "status": "already_full"}
+    if now - t_last > QUOTA_PROGRESS_PACE_HOURS * 3600:
+        return {**out, "status": "stale"}
+    t0 = t_last - QUOTA_PROGRESS_PACE_HOURS * 3600
+    i = bisect.bisect_right([r[0] for r in rows], t0) - 1
+    base_t, base_p = (t0, rows[i][1]) if i >= 0 else rows[0]
+    span_h = (t_last - base_t) / 3600
+    out.update(base_pct=base_p, span_hours=round(span_h, 2))
+    if span_h < QUOTA_PROGRESS_MIN_SPAN_HOURS:
+        return {**out, "status": "too_short"}
+    rate = (p_last - base_p) / span_h
+    if rate <= 0:
+        return {**out, "status": "no_progress", "rate_pct_per_hour": 0.0}
+    out["rate_pct_per_hour"] = round(rate, 3)
+    eta = t_last + (100 - p_last) / rate * 3600
+    if eta > resets:
+        return {**out, "status": "not_this_week",
+                "pct_at_reset": round(min(100.0, p_last + rate * (resets - t_last) / 3600), 1)}
+    return {**out, "status": "reaches", "reaches_100_at": _iso_epoch(eta),
+            "hours_before_reset": round((resets - eta) / 3600, 1), "already_past": eta < now}
+
+
+def quota_progress(valid_events, now, estimate):
+    """(result, rows): the latest weekly period's % series, the 100% outlook
+    and the remaining % in weighted tokens per family. `rows` (every sample,
+    running max) is for the chart only; `result` is what --json prints."""
+    periods = quota_periods(valid_events, 1)
+    if not periods:
+        return {"status": "no_week", "message": "quota.sample が無い（statusLine の記録がまだ無い）"}, []
+    resets, rows = next(iter(periods.items()))
+    if resets <= now:
+        return {"status": "no_week", "seven_day_resets_at": resets,
+                "message": f"今の週の quota.sample が無い（最新の週は {_local_md_hm(resets)} にリセット済み）"}, []
+    week = {"seven_day_resets_at": resets, "week_start": _iso_epoch(resets - 7 * 86400),
+            "week_end": _iso_epoch(resets), "samples": len(rows)}
+    if len(rows) < 2:
+        return {"status": "insufficient", **week,
+                "message": "今の週の quota.sample が1件しか無く、推移を描けない"}, []
+    t_last, p_last = rows[-1]
+    # The % only ever steps up, so the points where it changes carry the
+    # whole series (a week holds thousands of samples, a few dozen changes).
+    points, shown = [], None
+    for t, p in rows:
+        if p != shown:
+            points.append({"ts": _iso_epoch(t), "seven_day_used_pct": p})
+            shown = p
+    remaining = max(0.0, 100 - p_last)
+    tokens = {}
+    for family, row in estimate["families"].items():
+        if row["status"] == "estimated":
+            raw = row.get("raw_tokens_per_pct")
+            tokens[family] = {"status": "estimated", "weighted_tokens": round(remaining * row["weighted_tokens_per_pct"]),
+                              "raw_tokens": round(remaining * raw) if raw else None}
+        else:
+            tokens[family] = {"status": "unmeasurable", "reason": row["reason"]}
+    return {"status": "ok", **week, "now": _iso_epoch(now), "current_pct": p_last,
+            "last_sample_at": _iso_epoch(t_last), "points": points,
+            "projection": _quota_projection(rows, resets, now),
+            "remaining_pct": remaining, "remaining_tokens": tokens}, rows
+
+
+def _pace_label(proj):
+    """The span the pace was actually measured over: 24 hours, or less when
+    the week's first sample is newer than that."""
+    hours = min(proj["span_hours"], proj["pace_window_hours"])
+    return f"{hours:g}" if hours >= proj["pace_window_hours"] else f"{hours:.1f}".rstrip("0").rstrip(".")
+
+
+def _quota_projection_summary(proj):
+    s = proj["status"]
+    if s == "reaches":
+        text = f"{_local_md_hm(proj['reaches_100_at'])} ごろに 100% に届く見込み（リセットの約 {fmt_duration(proj['hours_before_reset'] * 3600)} 前）"
+        if proj.get("already_past"):
+            text += "。ただし最後の記録が古く、すでに過ぎた時刻になっている（当てにならない）"
+        return text
+    if s == "not_this_week":
+        return f"この週のうちには届かない見込み（リセット時点で約 {fmt_pct(proj['pct_at_reset'])}）"
+    if s == "no_progress":
+        return f"直近 {_pace_label(proj)} 時間は増えていないので、届く見込みは立たない"
+    if s == "stale":
+        return f"直近 {proj['pace_window_hours']} 時間に記録が無く、速さを出せない"
+    if s == "too_short":
+        return f"速さを出すには記録の幅が足りない（{proj['span_hours']} 時間 < {QUOTA_PROGRESS_MIN_SPAN_HOURS} 時間）"
+    return "すでに 100% に届いている"
+
+
+def render_quota_chart(rows, proj, resets, now):
+    """The week as a character grid: time across (reset-7d .. reset), 0-100%
+    up. `●` actual, `·` the projection at the recent pace, `▲` now. Returns
+    lines; the width follows the terminal."""
+    span, start = 7 * 86400, resets - 7 * 86400
+    width = max(28, min(term_width() - 8, 112))
+    height = QUOTA_PROGRESS_ROWS
+    times = [r[0] for r in rows]
+    t_last, p_last = rows[-1]
+    rate = proj.get("rate_pct_per_hour") if proj["status"] in ("reaches", "not_this_week") else None
+
+    def col_of(t):
+        return min(width - 1, max(0, int((t - start) / span * width)))
+
+    def row_of(p):
+        return height - 1 - int(round(min(100.0, max(0.0, p)) / 100 * (height - 1)))
+
+    grid = [[(" ", None)] * width for _ in range(height)]
+    now_col = col_of(now)
+    prev, done = None, False
+    for c in range(width):
+        if c <= now_col:
+            # actual: up to the column's end or now, whichever is earlier, so the
+            # line ends at the last sample (the "現在" %) and the now column is not a forecast
+            i = bisect.bisect_right(times, min(start + (c + 1) / width * span, now)) - 1
+            if i < 0:
+                continue
+            ch, color, p = "●", "cyan", rows[i][1]
+        elif rate is not None and not done:
+            tc = start + (c + 0.5) / width * span
+            p = min(100.0, p_last + rate * (tc - t_last) / 3600)
+            ch, color, done = "·", "yellow", p >= 100
+        else:
+            continue
+        r = row_of(p)
+        if prev is not None:  # join steps so the line has no gaps
+            for rr in range(min(prev, r) + 1, max(prev, r)):
+                grid[rr][c] = ("│", color)
+        grid[r][c] = (ch, color)
+        prev = r
+
+    lines = []
+    for i in range(height):
+        label = f"{100 - i * 10}%" if i % 5 == 0 else ""
+        body = "".join(paint(ch, color) if color else ch for ch, color in grid[i])
+        lines.append((pad(label, 4, "r") + " " + ("┤" if label else "│") + body).rstrip())
+    axis = ["─"] * width
+    labels = [" "] * (width + 2)
+    last_end = -2
+    midnight = datetime.fromtimestamp(start).replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+    while midnight.timestamp() < resets:
+        c = col_of(midnight.timestamp())
+        axis[c] = "┬"
+        text = midnight.strftime("%m/%d")
+        pos = max(0, min(c - 2, width - len(text)))
+        if pos > last_end:
+            labels[pos:pos + len(text)] = list(text)
+            last_end = pos + len(text)
+        midnight += timedelta(days=1)
+    axis_cells = [paint("▲", "bold") if c == now_col else ch for c, ch in enumerate(axis)]
+    lines.append(pad("", 4) + " └" + "".join(axis_cells))
+    lines.append(" " * 6 + "".join(labels).rstrip())
+    return lines
+
+
+def _pretty_quota_progress(result, rows, footer_freshness):
+    print(section("週の上限が 100% に届くまでの推移 (見積もり)"))
+    if result["status"] != "ok":
+        print("  " + paint(result["message"], "yellow"))
+    else:
+        proj, resets = result["projection"], result["seven_day_resets_at"]
+        now = parse_ts(result["now"]).timestamp()
+        print("  " + f"今の週: {_local_md_hm(resets - 7 * 86400)} 〜 {_local_md_hm(resets)}（リセット）")
+        print("\n".join(render_quota_chart(rows, proj, resets, now)))
+        legend = [paint("●", "cyan") + " 実績", paint("▲", "bold") + " 今"]
+        if proj["status"] in ("reaches", "not_this_week"):
+            legend.insert(1, paint("·", "yellow") + f" 見込み（直近 {_pace_label(proj)} 時間の速さで延長）")
+        print("  " + "   ".join(legend))
+        pairs = [("現在", f"{fmt_pct(result['current_pct'])}（{_local_md_hm(result['last_sample_at'])} の記録）"),
+                 ("100% への見込み", _quota_projection_summary(proj))]
+        if "rate_pct_per_hour" in proj and proj["rate_pct_per_hour"] > 0:
+            pairs.insert(1, ("直近の速さ", f"+{proj['rate_pct_per_hour'] * 24:.1f}%/日"
+                             f"（直近 {_pace_label(proj)} 時間: {fmt_pct(proj['base_pct'])} → {fmt_pct(result['current_pct'])}）"))
+        print("\n".join(render_kv(pairs)))
+        print(section(f"残り {fmt_pct(result['remaining_pct'])} をトークンに直すと (見積もり)"))
+        table_rows, notes = [], []
+        for family, row in result["remaining_tokens"].items():
+            color = _MODEL_FAMILY_COLOR.get(family)
+            name = (family, color) if color else family
+            if row["status"] == "estimated":
+                table_rows.append([name, fmt_tokens(row["weighted_tokens"]), fmt_tokens(row["raw_tokens"])])
+            else:
+                table_rows.append([name, "—", "—"])
+                notes.append(f"{family}: 測れない — {row['reason']}")
+        lines, dropped = render_table(["系統", "残り weighted", "残り raw"], table_rows)
+        print("\n".join(lines))
+        if dropped:
+            print("  " + paint(f"({'・'.join(dropped)} は幅が足りず省略。--plain で全部)", "dim"))
+        for n in notes:
+            print("  " + paint(n, "yellow"))
+    print("  " + paint("見積もりであり、止める・替える制御には使わない。weighted = input + 1.25*cache_creation + 0.1*cache_read + 5*output", "dim"))
+    print(section("注記"))
+    fresh = footer_freshness["ingest_freshness_warning"]
+    if not str(fresh).startswith("(none"):
+        print("  " + paint("⚠ ingest の鮮度: " + str(fresh), "red", "bold"))
+    if str(footer_freshness["ingest_this_run"]).startswith("failed"):
+        print("  " + paint("⚠ ingest が失敗: " + str(footer_freshness["ingest_this_run"]), "red", "bold"))
+    print("\n".join(render_kv([
+        ("ingest", f"{footer_freshness['ingest_this_run']} / 最終 {footer_freshness['last_ingest_at_rfc3339'] or 'unknown'}"),
+    ])))
+    print("  " + paint("点列などの数値は --plain / --json で見られます。", "dim"))
+
+
+def print_quota_progress(result, rows, as_json, footer_freshness):
+    if as_json:
+        print(json.dumps({**result, **footer_freshness}, ensure_ascii=False, indent=2, sort_keys=True))
+        return
+    if not REPORT_PLAIN:
+        _pretty_quota_progress(result, rows, footer_freshness)
+        return
+    print("週の上限が 100% に届くまでの推移（見積もり）:")
+    print(f"  status: {result['status']}")
+    if result["status"] != "ok":
+        print(f"  message: {result['message']}")
+    else:
+        proj = result["projection"]
+        print(f"  seven_day_resets_at: {result['seven_day_resets_at']}")
+        print(f"  week: {result['week_start']} .. {result['week_end']}")
+        print(f"  samples: {result['samples']}")
+        print(f"  current_pct: {result['current_pct']}")
+        print(f"  last_sample_at: {result['last_sample_at']}")
+        print(f"  projection: {proj['status']}")
+        for key in ("pace_window_hours", "base_pct", "span_hours", "rate_pct_per_hour", "reaches_100_at",
+                    "hours_before_reset", "pct_at_reset"):
+            if key in proj:
+                print(f"    {key}: {proj[key]}")
+        print(f"    summary: {_quota_projection_summary(proj)}")
+        print(f"  remaining_pct: {result['remaining_pct']}")
+        print("  remaining_tokens:")
+        for family, row in result["remaining_tokens"].items():
+            if row["status"] == "estimated":
+                print(f"    {family}: weighted={row['weighted_tokens']} raw={row['raw_tokens']}")
+            else:
+                print(f"    {family}: 測れない: {row['reason']}")
+        print("  points:")
+        for p in result["points"]:
+            print(f"    {p['ts']}: {p['seven_day_used_pct']}")
+    print("見積もりであり、止める・替える制御には使わない。weighted = input + 1.25*cache_creation + 0.1*cache_read + 5*output")
+    print(f"last_ingest_at_rfc3339: {footer_freshness['last_ingest_at_rfc3339'] or 'unknown'}")
+    print(f"ingest (this run): {footer_freshness['ingest_this_run']}")
+    print(f"ingest_freshness_warning: {footer_freshness['ingest_freshness_warning']}")
+
+
 def report_by_role(scoped_events):
     """孫5 §1 --role: usage.message token/cost totals AND total event
     count, grouped by envelope `role` (commander/implementer/reviewer/
@@ -4006,6 +4294,7 @@ def cmd_report(args):
     no_ingest = False
     since_str = until_str = None
     quota_per_pct = False
+    quota_progress_flag = False
     periods = None
     daily = False
     days = None
@@ -4029,6 +4318,9 @@ def cmd_report(args):
             i += 2
         elif token == "--quota-per-pct":
             quota_per_pct = True
+            i += 1
+        elif token == "--quota-progress":
+            quota_progress_flag = True
             i += 1
         elif token == "--periods":
             if i + 1 >= len(args):
@@ -4129,8 +4421,8 @@ def cmd_report(args):
         conflict = next((flag for flag, on in (
             ("--reconcile", reconcile), ("--month", month_flag_present), ("--pr", filter_pr is not None),
             ("--since/--until", since_str is not None or until_str is not None),
-            ("--quota-per-pct", quota_per_pct), ("--periods", periods is not None),
-            (f"--{view}", view is not None)) if on), None)
+            ("--quota-per-pct", quota_per_pct), ("--quota-progress", quota_progress_flag),
+            ("--periods", periods is not None), (f"--{view}", view is not None)) if on), None)
         if conflict:
             print(f"error: --daily cannot be combined with {conflict}", file=sys.stderr)
             return 1
@@ -4155,7 +4447,15 @@ def cmd_report(args):
             return 1
         if view is None:
             view = "model"
-    if quota_per_pct:
+    if quota_progress_flag:
+        # --periods is allowed: it picks the periods of the tokens-per-1% estimate.
+        conflict = next((flag for flag, on in (
+            ("--quota-per-pct", quota_per_pct), ("--reconcile", reconcile), ("--month", month_flag_present),
+            ("--pr", filter_pr is not None), ("--since/--until", range_given), (f"--{view}", view is not None)) if on), None)
+        if conflict:
+            print(f"error: --quota-progress cannot be combined with {conflict}", file=sys.stderr)
+            return 1
+    elif quota_per_pct:
         conflict = next((flag for flag, on in (
             ("--reconcile", reconcile), ("--month", month_flag_present), ("--pr", filter_pr is not None),
             ("--since/--until", range_given), (f"--{view}", view is not None)) if on), None)
@@ -4282,6 +4582,12 @@ def cmd_report(args):
         usage_events = [e for e in valid_events if e.get("event_type") == "usage.message"]
         print_daily(report_daily(usage_events, days or DAILY_DEFAULT_DAYS), as_json,
                     completeness_footer(paths, usage_events, malformed), footer_freshness)
+        return 0
+
+    if quota_progress_flag:
+        result, rows = quota_progress(valid_events, time.time(),
+                                      estimate_quota_per_pct(valid_events, periods or QUOTA_DEFAULT_PERIODS))
+        print_quota_progress(result, rows, as_json, footer_freshness)
         return 0
 
     if quota_per_pct:
