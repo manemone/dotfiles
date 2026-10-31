@@ -3483,6 +3483,55 @@ class AutoIngestTests(OcwMeterTestCase):
         self.assertIn("usage.message", types)
 
 
+class AutoIngestWarningTests(OcwMeterTestCase):
+    """傘 meter-ingest-retention 孫3: the statusLine line gets a short
+    warning only when the auto-ingest is stale or failing (fail-open)."""
+
+    def _display(self, state_text=None, **env):
+        state_dir = self.home / "state"
+        state_dir.mkdir(parents=True, exist_ok=True)
+        path = state_dir / "auto-ingest.json"
+        if state_text is None:
+            path.unlink(missing_ok=True)
+        else:
+            path.write_text(state_text)
+        extra = {"OCW_METER_AUTO_INGEST": "1", "OCW_METER_QUOTA_INTERVAL": "0",
+                 "OCW_METER_SELF": str(pathlib.Path(self.tmpdir.name) / "missing")}  # never spawn
+        extra.update(env)
+        result = run_snapshot_quota(json.dumps(CLAUDE_STATUSLINE_SAMPLE), self.home, extra_env=extra)
+        self.assertEqual(result.returncode, 0)
+        return result.stdout.strip()
+
+    @staticmethod
+    def _state(success_ago_h=None, attempt_ago_h=0.5, failures=0, result="ok"):
+        now = datetime.now(timezone.utc)
+        ts = lambda h: (now - timedelta(hours=h)).strftime("%Y-%m-%dT%H:%M:%SZ")  # noqa: E731
+        state = {"version": 1, "last_attempt_at": ts(attempt_ago_h), "last_result": result,
+                 "consecutive_failures": failures}
+        if success_ago_h is not None:
+            state["last_success_at"] = ts(success_ago_h)
+        return json.dumps(state)
+
+    def test_warning_only_when_stale_or_failing_and_fail_open(self):
+        base = self._display(None)
+        self.assertNotIn("⚠", base)
+        # Healthy / just under the threshold / first run: line unchanged.
+        self.assertEqual(self._display(self._state(success_ago_h=1)), base)
+        self.assertEqual(self._display(self._state(success_ago_h=23)), base)
+        self.assertEqual(self._display(self._state(failures=2, result="failed")), base)
+        # Disabled auto-ingest never warns.
+        self.assertEqual(self._display(self._state(success_ago_h=100), OCW_METER_AUTO_INGEST="0"), base)
+        # Past the threshold, and consecutive failures: warning appended.
+        self.assertTrue(self._display(self._state(success_ago_h=72, attempt_ago_h=1)).startswith(base))
+        self.assertIn("⚠ ingest 3d", self._display(self._state(success_ago_h=72, attempt_ago_h=1)))
+        self.assertIn("fail×3", self._display(self._state(success_ago_h=1, failures=3, result="failed")))
+        # An ingest that was just started after a long break is not a warning yet.
+        self.assertEqual(self._display(self._state(success_ago_h=72, attempt_ago_h=0.01, result="running")), base)
+        # Corrupt state: still exits 0 with the normal line.
+        self.assertEqual(self._display("{not json"), base)
+        self.assertEqual(self._display('{"last_success_at": 5, "consecutive_failures": "x"}'), base)
+
+
 class SnapshotQuotaThrottleTests(OcwMeterTestCase):
     def test_second_call_within_interval_is_throttled(self):
         r1 = run_snapshot_quota(json.dumps(CLAUDE_STATUSLINE_SAMPLE), self.home)
