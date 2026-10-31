@@ -262,10 +262,15 @@ ocw-meter report --quota-per-pct [--periods <n>] [--no-ingest] [--json|--plain]
 # （リセットまでに届かないなら「この週のうちには届かない見込み」。グラフには · の線で描く）、残りの % を
 # --quota-per-pct の見積もりで系統ごとの重み付きトークンに換算する（測れない系統は — と理由）。
 # 今の週の quota.sample が無い・1件しか無いときは、描かずにその旨を出す（エラーにしない）。
-# --json は % が変わった点の列・見込み・換算、--plain は同じ数値の key: value。--periods は換算に使う見積もりの期間数。
+# グラフには ○ の線で「直近 4 週（今の週より前で区切りの終わった週）の平均」も重ねる。各週を週の始まりからの経過時間で揃え、
+# その経過時間までの最後の記録の値（補間しない）を、その位置で値のある週だけで平均する。--compare-weeks <n> で週の数を変え、
+# 0 なら重ねない。区切りの終わった週が足りなければある分で平均して凡例に週数を書き、1週も無ければ線を描かずにその旨を出す。
+# 「今の時点」の行には、平均の同じ時点の値との差と、平均の週末（リセット時点）の値を添える。--compare-weeks は --quota-progress とだけ併用できる。
+# --json は % が変わった点の列・見込み・換算（--compare-weeks 0 でなければ weekly_average: 平均の点列・使った週・週数も）、
+# --plain は同じ数値の key: value。--periods は換算に使う見積もりの期間数。
 # 見積もりであり、止める・モデルを替える制御には使わない（ADR DOC-2610310237 §5）。
 # --pr / --phase / --model / --role / --window / --month / --reconcile / --since / --until / --quota-per-pct とは併用不可
-ocw-meter report --quota-progress [--periods <n>] [--no-ingest] [--json|--plain]
+ocw-meter report --quota-progress [--periods <n>] [--compare-weeks <n>] [--no-ingest] [--json|--plain]
 
 # 日ごとのモデル別使用量: 直近 N 日（既定 14、今日を含む）を、1日1行の横向きの積み上げ棒で描く。
 # 日の境目はローカル時刻（UTC ではない）。量は重み付きトークン（--quota-per-pct と同じ式）。
