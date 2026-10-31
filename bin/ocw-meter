@@ -4089,7 +4089,9 @@ def dash_lines(valid_events, footer_completeness, footer_freshness, now, height,
 
     # 縦軸のラベルの欄の幅は全グラフで共通 (軸の線が同じ列に来る)。最大幅は日ごとの縦棒の最大値のラベル
     daily_report = report_daily(usage_events, DAILY_DEFAULT_DAYS)
-    label_w = max(DASH_MIN_LABEL_W, len(fmt_tokens(max([d["weighted_tokens"] for d in daily_report["daily"]] + [0]))))
+    max_daily = max([d["weighted_tokens"] for d in daily_report["daily"]] + [0])
+    # 縦棒の軸には最大のほか中央の目盛り (max/2) も並ぶ。短いほうの桁数で決めると縦棒だけ軸の線がずれる (1.5M と 750.0K など)
+    label_w = max(DASH_MIN_LABEL_W, len(fmt_tokens(max_daily)), len(fmt_tokens(max_daily / 2)))
     top, styles, has_other = daily_series(daily_report)
     _grid, dropped = daily_columns(daily_report["daily"], top, styles, has_other, DASH_DAILY_ROWS[0], cw, label_w=label_w + 1)
     weeks = max(1, min(HEATMAP_MAX_WEEKS, (cw - label_w - 2) // _HEATMAP_CELL_WIDTH))

@@ -4088,6 +4088,25 @@ class ReportGroupedViewsTests(OcwMeterTestCase):
         self.assertIn("週の上限の推移", failed)
         self.assertIn("ingest が失敗", failed)
 
+    def test_dash_axis_lines_align_when_the_daily_max_is_between_1m_and_2m(self):
+        # 最大が 1.5M だと中央の目盛りは 750.0K (6 桁) で最大 (4 桁) より長い。ラベル幅を最大だけで決めると縦棒の軸だけ 1 列ずれる。
+        import unicodedata
+        self._seed_quota_samples([(h, h / 4) for h in range(0, 97, 8)])
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+        run_meter(["event", "usage.message", "--idempotency-key", "axis1", "--message-id", "axis1",
+                   "--model", "claude-opus-x", "--provider", "anthropic", "--cost-basis", "estimated",
+                   "--input-tokens", "1500000", "--ts", now], self.home)
+        out = run_meter(["dash", "--no-ingest"], self.home, {"TZ": "JST-9", "COLUMNS": "100", "LINES": "80"}).stdout
+        self.assertIn("1.5M", out)
+        axis_cols = set()
+        for ln in out.splitlines():
+            pos = 0
+            for ch in ln:
+                if ch in "┤└" or (ch == "│" and 1 < pos < 12):
+                    axis_cols.add(pos)
+                pos += 2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1
+        self.assertEqual(len(axis_cols), 1, axis_cols)
+
     def test_dash_rejects_json_plain_unknown_flags_and_watch_without_a_terminal(self):
         for bad in (["--json"], ["--plain"], ["--bogus"], ["--watch", "0"], ["--watch", "x"],
                     ["--watch", "--no-ingest"], ["--watch", "5"]):
