@@ -27,7 +27,7 @@
 | 1 | `omp-01-pretty-default` | pretty 表示の土台（表・桁区切り・単位の丸め・色と TTY の判定）を作り、全ビューの既定にする。旧形式を `--plain` で残す。表示の方針を ADR に残し、文書の出力例を直す | ✅ PR #188 マージ済 |
 | 2 | `omp-02-daily-by-model` | 日ごとの集計を作り、`report --daily` で日×モデルの積み上げ棒を描く | ✅ PR #189 マージ済 |
 | 3 | `omp-03-quota-progress` | `report --quota-progress` で今の週の `seven_day_used_pct` の推移・100% に届く見込み・残りのトークン換算を描く | ✅ PR #190 マージ済 |
-| 4 | `omp-04-heatmap` | `report --heatmap` で日ごとの消費量の草を描く（孫2 の日ごとの集計を使う） | 🔄 実装中 |
+| 4 | `omp-04-heatmap` | `report --heatmap` で日ごとの消費量の草を描く（孫2 の日ごとの集計を使う） | ✅ PR #191 マージ済 |
 
 依存:
 
@@ -255,6 +255,7 @@ D は B の日ごとの集計と重み付きの式を使うので B の後にす
 - 2026-10-31: 孫1 の PR #188 を司令官がマージした。傘で unittest（433件）・`pre-commit run --all-files`・`doc-id verify` が通った。表示の方針の ADR は DOC-2610312031。孫2・孫3 を並列で spawn する
 - 2026-10-31: 孫2 の PR #189 を司令官がマージした。傘で unittest（434件）・`pre-commit run --all-files`・`doc-id verify` が通った。孫4 を spawn する。孫3 の PR #190 は承認済みだが孫2 のマージで傘とコンフリクトしたため、孫3 に傘への rebase と再レビューを頼んだ
 - 2026-10-31: 孫3 が傘へ rebase し、再レビューで承認された PR #190 を司令官がマージした。傘で unittest（435件）・`pre-commit run --all-files`・`doc-id verify` が通った。残りは孫4
+- 2026-10-31: 孫4 の PR #191 を司令官がマージした。傘で unittest（436件）・`pre-commit run --all-files`・`doc-id verify` が通った。全孫がマージ済みになったので、傘→master の最終 PR を司令官のワークスペースの implementer に作らせる（master へのマージは人間）
 
 ## 孫1用プロンプト:
 
