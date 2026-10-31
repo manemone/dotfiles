@@ -3198,7 +3198,10 @@ def daily_columns(daily, top, styles, has_other, height, width):
     height = max(2, height)
     totals = [d["weighted_tokens"] for d in daily]
     max_total = max(totals + [0])
-    ticks = {0: fmt_tokens(max_total), (height - 1) // 2: fmt_tokens(max_total / 2), height - 1: "0"}
+    ticks = {0: fmt_tokens(max_total), height - 1: "0"}
+    mid = height - int(round(height / 2))  # ちょうど半分の値の棒のてっぺんの行 (_daily_bar_cells の丸めと同じ)
+    if 0 < mid < height - 1:
+        ticks[mid] = fmt_tokens(max_total / 2)
     y_w = max(len(t) for t in ticks.values())
     avail = max(1, width - y_w - 1)
     if len(daily) * 2 <= avail:
