@@ -25,8 +25,8 @@
 | 孫 | ブランチ | 内容 | 状況 |
 |---|---|---|---|
 | 1 | `omp-01-pretty-default` | pretty 表示の土台（表・桁区切り・単位の丸め・色と TTY の判定）を作り、全ビューの既定にする。旧形式を `--plain` で残す。表示の方針を ADR に残し、文書の出力例を直す | ✅ PR #188 マージ済 |
-| 2 | `omp-02-daily-by-model` | 日ごとの集計を作り、`report --daily` で日×モデルの積み上げ棒を描く | ⬜ 待機中 |
-| 3 | `omp-03-quota-progress` | `report --quota-progress` で今の週の `seven_day_used_pct` の推移・100% に届く見込み・残りのトークン換算を描く | ⬜ 待機中 |
+| 2 | `omp-02-daily-by-model` | 日ごとの集計を作り、`report --daily` で日×モデルの積み上げ棒を描く | 🔄 実装中 |
+| 3 | `omp-03-quota-progress` | `report --quota-progress` で今の週の `seven_day_used_pct` の推移・100% に届く見込み・残りのトークン換算を描く | 🔄 実装中 |
 | 4 | `omp-04-heatmap` | `report --heatmap` で日ごとの消費量の草を描く（孫2 の日ごとの集計を使う） | ⬜ 待機中 |
 
 依存:
