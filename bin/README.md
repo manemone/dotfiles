@@ -289,6 +289,15 @@ ocw-meter report --daily [--days <n>] [--rows] [--no-ingest] [--json|--plain]
 # --pr / --phase / --model / --role / --window / --month / --reconcile / --since / --until / --quota-per-pct / --quota-progress / --daily とは併用不可
 ocw-meter report --heatmap [--weeks <n>] [--no-ingest] [--json|--plain]
 
+# 一画面のダッシュボード（人間向け）: 週の上限の推移（直近 4 週の平均の線つき）・日ごとのモデル別の縦棒・消費のヒートマップを縦に並べる。
+# 各グラフは report --quota-progress / --daily / --heatmap と同じ描画で、端末の高さ・幅に合わせる。
+# 高さが足りないときはグラフの高さを詰め、それでも足りなければヒートマップ → 日ごとの縦棒の順に省いて、省いたことを 1 行出す
+# （パイプ・ファイルなど高さが取れないときは詰めない）。report と同じく先頭で ingest し（--no-ingest で飛ばせる）、失敗しても止まらず注記に出る。
+# --watch [秒] は既定 300 秒ごとに ingest して描き直す（ANSI のエスケープで画面を消す。描き終わってから数えるので ingest が長くても重ならない。
+# 失敗しても保存済みの集計で描く）。端末でないときの --watch はエラー、Ctrl-C は終了コード 0。
+# --json / --plain は付けられない（エラー。機械が読むなら個別の report のビューを使う）。理由は ADR DOC-2610312031 の決定 9
+ocw-meter dash [--watch [<seconds>]] [--no-ingest]
+
 # 月次: cash cost（従量API）/ capacity cost（Claudeサブスク枠）/
 # process efficiency（承認済みPRあたりの費用・ラウンド数等）を分離して表示
 # --reconcile とは別物（こちらは突合をしない）

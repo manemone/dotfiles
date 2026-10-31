@@ -38,6 +38,7 @@ usage:
   ocw-meter report --heatmap [--weeks <n>] [--no-ingest] [--json|--plain]
   ocw-meter report --month [YYYY-MM] [--repo <owner>/<name>] [--no-ingest] [--json|--plain]
   ocw-meter report --reconcile [--month <YYYY-MM>] [--provider-total <model>=<tokens> ...] [--no-ingest] [--json|--plain]
+  ocw-meter dash [--watch [<seconds>]] [--no-ingest]
   ocw-meter help
 
 subcommands:
@@ -224,6 +225,22 @@ subcommands:
     always in separate top-level keys — never summed (孫5, plan §16).
     Cannot be combined with --phase/--model/--role/--window. NOT the
     same as `report --reconcile --month ...` below.
+
+  dash [--watch [<seconds>]] [--no-ingest]
+    One-screen dashboard for humans: the week-quota chart (with the
+    average of recent weeks), the per-day stacked columns by model and the
+    consumption heatmap, stacked vertically, drawn by the same code as
+    `report --quota-progress` / `--daily` / `--heatmap`. Like `report`, it
+    ingests first (--no-ingest skips; an ingest failure never stops it and
+    shows in the notes). The heights follow the terminal: the charts are
+    squeezed first, and if that is not enough the heatmap, then the daily
+    columns, are left out (a warning line says so). --watch redraws every
+    <seconds> (default 300; ingest again each time, counted from the end of
+    the previous draw so runs never overlap; on a failed ingest the stored
+    data is drawn and the notes say so). It clears the screen with ANSI
+    escapes, needs a terminal (an error otherwise) and leaves with exit 0 on
+    Ctrl-C. dash has no --json / --plain (error): use the report views for
+    machine-readable output.
 
   report ... --repo <owner>/<name>
     ~/.local/state/ocw-meter is ONE store shared across every repo this
@@ -432,7 +449,7 @@ case "$cmd" in
     usage
     exit 0
     ;;
-  event | bind-pr | validate | report | ingest | snapshot-quota | prune-diagnostics)
+  event | bind-pr | validate | report | dash | ingest | snapshot-quota | prune-diagnostics)
     ;;
   *)
     usage >&2
@@ -3156,19 +3173,26 @@ def _daily_bar_cells(segments, max_total, width):
 def _pretty_notes(footer_completeness, footer_freshness):
     """末尾の「注記」欄 (警告は落とさず目立たせる)。--daily / --heatmap が共有する。"""
     print(section("注記"))
+    print("\n".join(_notes_lines(footer_completeness, footer_freshness)))
+
+
+def _notes_lines(footer_completeness, footer_freshness):
+    """注記欄の中身 (警告 + ingest の1行)。dash も使う。"""
+    lines = []
     fresh = footer_freshness["ingest_freshness_warning"]
     if not str(fresh).startswith("(none"):
-        print("  " + paint("⚠ ingest の鮮度: " + str(fresh), "red", "bold"))
+        lines.append("  " + paint("⚠ ingest の鮮度: " + str(fresh), "red", "bold"))
     if str(footer_freshness["ingest_this_run"]).startswith("failed"):
-        print("  " + paint("⚠ ingest が失敗: " + str(footer_freshness["ingest_this_run"]), "red", "bold"))
+        lines.append("  " + paint("⚠ ingest が失敗: " + str(footer_freshness["ingest_this_run"]), "red", "bold"))
     # 数え漏れの警告 (pretty_footer と同じ文言・色。落とさない)
     if footer_completeness["malformed_unvalidated_lines"]:
-        print("  " + paint(f"⚠ 不正行 {fmt_int(footer_completeness['malformed_unvalidated_lines'])} 行 (未隔離)。'ocw-meter validate' を実行", "yellow", "bold"))
+        lines.append("  " + paint(f"⚠ 不正行 {fmt_int(footer_completeness['malformed_unvalidated_lines'])} 行 (未隔離)。'ocw-meter validate' を実行", "yellow", "bold"))
     if footer_completeness["quarantined_lines"]:
-        print("  " + paint(f"⚠ 隔離済みの行 {fmt_int(footer_completeness['quarantined_lines'])} 行 (このメーターが書いたイベント)", "yellow", "bold"))
-    print("\n".join(render_kv([
+        lines.append("  " + paint(f"⚠ 隔離済みの行 {fmt_int(footer_completeness['quarantined_lines'])} 行 (このメーターが書いたイベント)", "yellow", "bold"))
+    lines.extend(render_kv([
         ("ingest", f"{footer_freshness['ingest_this_run']} / 最終 {footer_freshness['last_ingest_at_rfc3339'] or 'unknown'}"),
-    ])))
+    ]))
+    return lines
 
 
 def daily_series(report):
@@ -3481,14 +3505,15 @@ def _quota_projection_summary(proj):
     return "すでに 100% に届いている"
 
 
-def render_quota_chart(rows, proj, resets, now, avg=None):
+def render_quota_chart(rows, proj, resets, now, avg=None, height=QUOTA_PROGRESS_ROWS, width=None):
     """The week as a character grid: time across (reset-7d .. reset), 0-100%
     up. `●` actual, `·` the projection at the recent pace, `○` the average of
-    past weeks (`avg`: its point series), `▲` now. Returns lines; the width
-    follows the terminal."""
+    past weeks (`avg`: its point series), `▲` now. Returns lines. `height`
+    (grid rows, 孫7 の dash が詰める) and `width` (plot columns) default to
+    the 11 rows and the terminal width."""
     span, start = 7 * 86400, resets - 7 * 86400
-    width = max(28, min(term_width() - 8, 112))
-    height = QUOTA_PROGRESS_ROWS
+    width = max(28, min(term_width() - 8, 112)) if width is None else max(10, width)
+    height = max(3, height)
     times = [r[0] for r in rows]
     t_last, p_last = rows[-1]
     rate = proj.get("rate_pct_per_hour") if proj["status"] in ("reaches", "not_this_week") else None
@@ -3537,8 +3562,9 @@ def render_quota_chart(rows, proj, resets, now, avg=None):
         prev = r
 
     lines = []
+    label_rows = {0, (height - 1) // 2, height - 1}  # 100% / 中央 / 0% (height=11 なら 100,50,0)
     for i in range(height):
-        label = f"{100 - i * 10}%" if i % 5 == 0 else ""
+        label = f"{round(100 * (height - 1 - i) / (height - 1))}%" if i in label_rows else ""
         body = "".join(paint(ch, color) if color else ch for ch, color in grid[i])
         lines.append((pad(label, 4, "r") + " " + ("┤" if label else "│") + body).rstrip())
     axis = ["─"] * width
@@ -3575,6 +3601,15 @@ def _weekly_average_summary(wa, current_pct):
     return text + f"。平均の週末（リセット時点）は {fmt_pct(end['avg_pct'])}"
 
 
+def _quota_legend(proj, avg, short=False):
+    legend = [paint("●", "cyan") + " 実績", paint("▲", "bold") + " 今"]
+    if avg:
+        legend.insert(1, paint("○", "magenta") + (" 平均" if short else f" 直近 {avg['weeks_used']} 週の平均"))
+    if proj["status"] in ("reaches", "not_this_week"):
+        legend.insert(1, paint("·", "yellow") + (" 見込み" if short else f" 見込み（直近 {_pace_label(proj)} 時間の速さで延長）"))
+    return "   ".join(legend)
+
+
 def _pretty_quota_progress(result, rows, footer_freshness):
     print(section("週の上限が 100% に届くまでの推移 (見積もり)"))
     if result["status"] != "ok":
@@ -3586,12 +3621,7 @@ def _pretty_quota_progress(result, rows, footer_freshness):
         avg = result.get("weekly_average")
         avg = avg if avg and avg["status"] == "ok" else None
         print("\n".join(render_quota_chart(rows, proj, resets, now, avg)))
-        legend = [paint("●", "cyan") + " 実績", paint("▲", "bold") + " 今"]
-        if avg:
-            legend.insert(1, paint("○", "magenta") + f" 直近 {avg['weeks_used']} 週の平均")
-        if proj["status"] in ("reaches", "not_this_week"):
-            legend.insert(1, paint("·", "yellow") + f" 見込み（直近 {_pace_label(proj)} 時間の速さで延長）")
-        print("  " + "   ".join(legend))
+        print("  " + _quota_legend(proj, avg))
         pairs = [("現在", f"{fmt_pct(result['current_pct'])}（{_local_md_hm(result['last_sample_at'])} の記録）"),
                  ("100% への見込み", _quota_projection_summary(proj))]
         if "rate_pct_per_hour" in proj and proj["rate_pct_per_hour"] > 0:
@@ -3780,23 +3810,30 @@ def _heatmap_month_line(report):
     return out
 
 
+def heatmap_lines(report):
+    """マス目の部分 (月のラベルの行 + 曜日 7 行 + 凡例の行 = 9 行)。孫7 のダッシュボードも呼ぶ部品で、
+    幅は report の週数 (heatmap_max_weeks_for_width で決める) が決める。"""
+    lines = ["  " + " " * _HEATMAP_LABEL_WIDTH + _heatmap_month_line(report)]
+    grid = {}
+    start = datetime.strptime(report["start"], "%Y-%m-%d").date()
+    for d in report["days"]:
+        col = (datetime.strptime(d["date"], "%Y-%m-%d").date() - start).days // 7
+        grid[(d["weekday"], col)] = d["level"]
+    for wd in range(7):
+        label = _WEEKDAY_JA[wd] if wd % 2 == 0 else ""
+        cells = "".join(_heatmap_cell(grid[(wd, c)]) for c in range(report["weeks"]) if (wd, c) in grid)
+        lines.append("  " + pad(label, _HEATMAP_LABEL_WIDTH - 1) + " " + cells)
+    lines.append("  " + " " * _HEATMAP_LABEL_WIDTH + "少 " + "".join(_heatmap_cell(i) for i in range(5)) + " 多")
+    return lines
+
+
 def _pretty_heatmap(report, weeks_requested, footer_completeness, footer_freshness):
     print(section(f"日ごとの消費量 (直近 {report['weeks']} 週 / ローカル時刻 / 重み付きトークン)"))
     if weeks_requested > report["weeks"]:
         print("  " + paint(f"(端末幅に合わせて {weeks_requested} 週から {report['weeks']} 週に減らした)", "dim"))
     if not report["active_days"]:
         print("  (この期間に使用なし)")
-    print("  " + " " * _HEATMAP_LABEL_WIDTH + _heatmap_month_line(report))
-    grid = {}
-    for d in report["days"]:
-        start = datetime.strptime(report["start"], "%Y-%m-%d").date()
-        col = (datetime.strptime(d["date"], "%Y-%m-%d").date() - start).days // 7
-        grid[(d["weekday"], col)] = d["level"]
-    for wd in range(7):
-        label = _WEEKDAY_JA[wd] if wd % 2 == 0 else ""
-        cells = "".join(_heatmap_cell(grid[(wd, c)]) for c in range(report["weeks"]) if (wd, c) in grid)
-        print("  " + pad(label, _HEATMAP_LABEL_WIDTH - 1) + " " + cells)
-    print("  " + " " * _HEATMAP_LABEL_WIDTH + "少 " + "".join(_heatmap_cell(i) for i in range(5)) + " 多")
+    print("\n".join(heatmap_lines(report)))
     for note in ("濃さ: 使用日の量を 4 分位で 4 段階に", "(使用なしは別。外れ値に引っ張られない)",
                  "量: 重み付きトークン (--daily と同じ式)", "正確な数値は --plain / --json"):
         print("  " + paint(note, "dim"))
@@ -3834,6 +3871,199 @@ def print_heatmap(report, weeks_requested, as_json, footer_completeness, footer_
     print(f"last_ingest_at_rfc3339: {footer_freshness['last_ingest_at_rfc3339'] or 'unknown'}")
     print(f"ingest (this run): {footer_freshness['ingest_this_run']}")
     print(f"ingest_freshness_warning: {footer_freshness['ingest_freshness_warning']}")
+
+
+# ── dash: 一画面のダッシュボード (傘 ocw-meter-pretty-charts 孫7) ──
+# 孫3〜6 の描画の部品 (render_quota_chart / daily_columns / heatmap_lines) に高さと幅を渡して縦に並べる。
+# 人間向けの pretty だけを持つ (--json / --plain は無い)。個別のビュー (report --daily など) はそのまま残る。
+
+DASH_WATCH_DEFAULT_SECONDS = 300
+DASH_QUOTA_ROWS = (5, QUOTA_PROGRESS_ROWS)      # 週の上限のグラフの行数 (最小, 最大)
+DASH_DAILY_ROWS = (4, DAILY_COLUMNS_HEIGHT)     # 日ごとの縦棒の行数 (最小, 最大)
+DASH_HEATMAP_LINES = 10                         # 見出し 1 + マス目 9 (heatmap_lines)
+DASH_HEADER_LINES = 2
+
+
+def term_height():
+    """端末の高さ。LINES も端末も無い (パイプ・ファイル) ときは None で、高さを理由には詰めない。"""
+    try:
+        n = shutil.get_terminal_size((80, 0)).lines
+    except (ValueError, OSError):
+        return None
+    return n if n > 0 else None
+
+
+def _clip(text, width):
+    """表示幅 width に収める (超えたら末尾を … にする)。色コードがあれば、超えた行は色を落として切る。"""
+    plain = re.sub(r"\x1b\[[0-9;]*m", "", text)
+    if disp_width(plain) <= width:
+        return text
+    text = plain
+    out, used = "", 0
+    for c in text:
+        w = disp_width(c)
+        if used + w > width - 1:
+            break
+        out, used = out + c, used + w
+    return out + "…"
+
+
+def dash_layout(budget, quota_ok, notes_lines):
+    """高さ budget (行数。None なら詰めない) への配分。
+    まずグラフの高さを最小まで詰め、それでも入らなければヒートマップ → 日ごとの縦棒の順に省く。
+    -> {"quota_rows", "daily_rows", "daily", "heatmap", "omitted", "overflow"}"""
+    q_min, q_max = DASH_QUOTA_ROWS if quota_ok else (0, 0)
+    d_min, d_max = DASH_DAILY_ROWS
+    quota_fixed = 4 if quota_ok else 2  # 見出し + 軸 2 + 凡例 / 見出し + メッセージ
+    plans = [(True, True, []), (True, False, ["ヒートマップ"]), (False, False, ["ヒートマップ", "日ごとの縦棒"])]
+    for daily, heatmap, omitted in plans:
+        need = (DASH_HEADER_LINES + notes_lines + quota_fixed + q_min + (d_min + 4 if daily else 0)
+                + (DASH_HEATMAP_LINES if heatmap else 0) + (1 if omitted else 0))
+        if budget is None or need <= budget or (daily, heatmap) == (False, False):
+            overflow = budget is not None and need > budget
+            break
+    extra = 10 ** 6 if budget is None else max(0, budget - need)
+    q_rows, d_rows = q_min, d_min
+    while extra > 0 and (q_rows < q_max or (daily and d_rows < d_max)):
+        if q_rows < q_max:
+            q_rows, extra = q_rows + 1, extra - 1
+        if extra > 0 and daily and d_rows < d_max:
+            d_rows, extra = d_rows + 1, extra - 1
+    return {"quota_rows": q_rows, "daily_rows": d_rows, "daily": daily, "heatmap": heatmap,
+            "omitted": omitted, "overflow": overflow}
+
+
+def _dash_daily_legend(report, width):
+    """日ごとの縦棒の凡例を 1 行に (入らない分は … で省く)。"""
+    top, styles, has_other = daily_series(report)
+    names = [n.split("/", 1)[-1] if "/" in n else n for n in top] + (["その他"] if has_other else [])
+    out, used = [], 2
+    for name, (sym, color) in zip(names, styles):
+        w = 2 + 1 + disp_width(name) + 2
+        if used + w > width:
+            out.append("…")
+            break
+        out.append(paint(sym * 2, color) + " " + name)
+        used += w
+    return "  " + "  ".join(out)
+
+
+def dash_lines(valid_events, footer_completeness, footer_freshness, now, height, width, watch=None):
+    """ダッシュボードの全行 (色付き)。height は端末の高さ (None なら詰めない)。"""
+    usage_events = [e for e in valid_events if e.get("event_type") == "usage.message"]
+    result, rows = quota_progress(valid_events, now, {"families": {}}, QUOTA_COMPARE_WEEKS)
+    quota_ok = result["status"] == "ok"
+    notes = _notes_lines(footer_completeness, footer_freshness)
+    layout = dash_layout(None if height is None else height - 1, quota_ok, len(notes))
+
+    head = paint("ocw-meter dash", "bold") + paint(f"  {datetime.fromtimestamp(now).strftime('%m-%d %H:%M:%S')} 現在", "dim")
+    if watch:
+        head += paint(f"  {watch} 秒ごとに自動更新 (Ctrl-C で終了)", "dim")
+    lines = [head]
+    if quota_ok:
+        resets = result["seven_day_resets_at"]
+        lines.append("  " + _clip(f"今の週 {fmt_pct(result['current_pct'])} / リセットまで {fmt_duration(resets - now)} / "
+                                  f"100% への見込み: {_quota_projection_summary(result['projection'])}", width - 2))
+    else:
+        lines.append("  " + paint("今の週: —", "dim"))
+
+    lines.append(section("週の上限が 100% に届くまでの推移 (見積もり)"))
+    if quota_ok:
+        avg = result.get("weekly_average")
+        avg = avg if avg and avg["status"] == "ok" else None
+        lines.extend(render_quota_chart(rows, result["projection"], resets, now, avg, height=layout["quota_rows"],
+                                        width=min(width - 8, 112)))
+        lines.append("  " + _quota_legend(result["projection"], avg, short=width < 100))
+    else:
+        lines.append("  " + paint(result["message"], "yellow"))
+
+    if layout["daily"]:
+        report = report_daily(usage_events, DAILY_DEFAULT_DAYS)
+        top, styles, has_other = daily_series(report)
+        grid, dropped = daily_columns(report["daily"], top, styles, has_other, layout["daily_rows"], width - 2)
+        title = f"日ごとのモデル別使用量 (直近 {report['days']} 日 / 重み付きトークン)"
+        lines.append(section(title) + (paint(f"  古い {dropped} 日を省略", "yellow") if dropped else ""))
+        lines.extend("  " + ln for ln in grid)
+        lines.append(_dash_daily_legend(report, width))
+    if layout["heatmap"]:
+        weeks = heatmap_max_weeks_for_width(width)
+        lines.append(section(f"日ごとの消費量 (直近 {weeks} 週 / 重み付きトークン)"))
+        lines.extend(heatmap_lines(report_heatmap(usage_events, weeks)))
+    if layout["omitted"]:
+        lines.append("  " + paint(f"⚠ 端末の高さ ({height} 行) が足りないため省略: "
+                                  + "、".join(layout["omitted"]), "yellow"))
+    lines.extend(notes)
+    return [_clip(ln, width) for ln in lines]
+
+
+def cmd_dash(args):
+    no_ingest = False
+    watch = None
+    i = 0
+    while i < len(args):
+        token = args[i]
+        if token == "--no-ingest":
+            no_ingest = True
+            i += 1
+        elif token == "--watch":
+            if i + 1 < len(args) and not args[i + 1].startswith("-"):
+                try:
+                    watch = int(args[i + 1])
+                except ValueError:
+                    watch = 0
+                if watch < 1:
+                    print(f"error: --watch expects a positive number of seconds, got '{args[i + 1]}'", file=sys.stderr)
+                    return 1
+                i += 2
+            else:
+                watch = DASH_WATCH_DEFAULT_SECONDS
+                i += 1
+        elif token in ("--json", "--plain"):
+            print(f"error: dash has no {token} (it is the human-facing screen; use the report views for machine-readable output)", file=sys.stderr)
+            return 1
+        else:
+            print(f"error: unknown dash flag: {token}", file=sys.stderr)
+            return 1
+    if watch is not None and not sys.stdout.isatty():
+        print("error: --watch needs a terminal (it redraws the screen; it would keep appending to a pipe or file)", file=sys.stderr)
+        return 1
+
+    root = storage_root()
+    if in_git_worktree(root):
+        print(f"error: OCW_METER_HOME ({root}) resolves inside a Git worktree; refusing to operate", file=sys.stderr)
+        return 1
+    paths = ensure_storage(root)
+
+    def frame():
+        # ingest の失敗は止めず、注記に出す (auto_ingest_for_report は投げない)。--watch では失敗しても前の集計 (保存済みのイベント) で描く
+        ingest_run = auto_ingest_for_report(root, no_ingest)
+        footer_freshness = ingest_freshness_footer(load_ingest_cursor(paths), ingest_run)
+        valid_events, malformed = [], 0
+        for obj, _raw, error in iter_stored_events(paths):
+            if error:
+                malformed += 1
+            else:
+                valid_events.append(obj)
+        usage_events = [e for e in valid_events if e.get("event_type") == "usage.message"]
+        return dash_lines(valid_events, completeness_footer(paths, usage_events, malformed), footer_freshness,
+                          time.time(), term_height(), term_width(), watch)
+
+    if watch is None:
+        print("\n".join(frame()))
+        return 0
+    try:
+        print(paint("ingest して集計中…", "dim"), flush=True)
+        while True:
+            try:
+                lines = frame()
+            except Exception as exc:  # 画面を出し続ける (次の周期でまた試す)
+                lines = [paint(f"⚠ 描画に失敗: {redact_text(f'{type(exc).__name__}: {exc}')}", "red", "bold")]
+            sys.stdout.write("\x1b[H\x1b[2J" + "\n".join(lines) + "\n")
+            sys.stdout.flush()
+            time.sleep(watch)  # 描き終わってから数える (ingest が長くても重ならない)
+    except KeyboardInterrupt:
+        print()
+        return 0
 
 
 def report_by_role(scoped_events):
@@ -7825,12 +8055,14 @@ def main():
                 emit_meter_error(storage_root(), "cmd_snapshot_quota_unexpected_exception", exc)
             return 0
 
-    if cmd in ("validate", "report", "ingest", "prune-diagnostics"):
+    if cmd in ("validate", "report", "dash", "ingest", "prune-diagnostics"):
         try:
             if cmd == "validate":
                 return cmd_validate(rest)
             if cmd == "report":
                 return cmd_report(rest)
+            if cmd == "dash":
+                return cmd_dash(rest)
             if cmd == "ingest":
                 return cmd_ingest(rest)
             return cmd_prune_diagnostics(rest)

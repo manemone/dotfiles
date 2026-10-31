@@ -46,12 +46,14 @@ import json
 import os
 import pathlib
 import pty
+import re
 import shutil
 import stat
 import subprocess
 import sys
 import tempfile
 import time
+import unicodedata
 import unittest
 from datetime import datetime, timedelta, timezone
 
@@ -125,6 +127,29 @@ def run_meter(args, home, extra_env=None, timeout=30, cwd=None):
         text=True,
         timeout=timeout,
     )
+
+
+def run_meter_on_pty(args, home, extra_env=None):
+    """stdout だけを疑似端末にして ocw-meter を走らせ、出力を返す (色の出る経路を通す)。"""
+    master, slave = pty.openpty()
+    env = dict(os.environ, OCW_METER_HOME=str(home), HOME=str(pathlib.Path(home).parent))
+    env.pop("NO_COLOR", None)
+    env.update(extra_env or {})
+    proc = subprocess.Popen([str(OCW_METER), *args], cwd=str(REPO_ROOT),
+                            env=env, stdout=slave, stderr=subprocess.DEVNULL)
+    os.close(slave)
+    chunks = []
+    while True:
+        try:
+            data = os.read(master, 4096)
+        except OSError:
+            break
+        if not data:
+            break
+        chunks.append(data)
+    os.close(master)
+    proc.wait(timeout=30)
+    return b"".join(chunks).decode("utf-8", "replace")
 
 
 def run_snapshot_quota(stdin_text, home, extra_env=None, timeout=30):
@@ -4000,6 +4025,59 @@ class ReportGroupedViewsTests(OcwMeterTestCase):
             self.assertNotEqual(result.returncode, 0, bad)
             self.assertIn("error:", result.stderr)
 
+    # -- dash --
+
+    def test_dash_drops_parts_in_order_when_the_terminal_is_short_and_fails_open(self):
+        self._seed_quota_samples([(h, h / 4) for h in range(0, 97, 8)])
+        env = {"TZ": "JST-9", "COLUMNS": "100"}
+
+        def dash(lines, extra=None, args=("--no-ingest",)):
+            result = run_meter(["dash", *args], self.home, {**env, "LINES": str(lines), **(extra or {})})
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertNotIn("\x1b[", result.stdout)  # パイプでは色が混ざらない
+            self.assertLessEqual(len(result.stdout.splitlines()), lines - 1, result.stdout)  # 崩れず画面に収まる
+            return result.stdout
+
+        full = dash(80)
+        for title in ("週の上限が 100% に届くまでの推移", "日ごとのモデル別使用量", "日ごとの消費量"):
+            self.assertIn(title, full)
+        self.assertNotIn("省略:", full)
+        # 高さが足りなければ、まずヒートマップ、次に日ごとの縦棒を省き、省いたことを出す。
+        no_heat = dash(30)
+        self.assertIn("日ごとのモデル別使用量", no_heat)
+        self.assertNotIn("日ごとの消費量", no_heat)
+        self.assertIn("省略: ヒートマップ", no_heat)
+        quota_only = dash(14)
+        self.assertIn("週の上限が 100% に届くまでの推移", quota_only)
+        self.assertNotIn("日ごとのモデル別使用量", quota_only)
+        self.assertIn("省略: ヒートマップ、日ごとの縦棒", quota_only)
+
+        # 端末 (色あり) でも、色コードの途中で切れず、色を除いた各行の幅が端末幅に収まる。
+        colored = run_meter_on_pty(["dash", "--no-ingest"], self.home, {**env, "LINES": "80"})
+        self.assertNotRegex(colored, r"\x1b(?!\[[0-9;]*m)")
+        self.assertNotRegex(colored, r"\x1b\[[0-9;]*(?![0-9;m])")
+        # 色を除いた各行の表示幅は、パイプで描いたもの (記号) と同じで、端末幅に収まる (ヒートマップの行が途中で終わらない)。
+        def width(line):
+            return sum(2 if unicodedata.east_asian_width(c) in ("W", "F") else 1 for c in line)
+        stripped = re.sub(r"\x1b\[[0-9;]*m", "", colored).replace("\r", "").splitlines()
+        self.assertEqual(len(stripped), len(full.splitlines()))
+        self.assertEqual([width(ln) for ln in stripped[2:]], [width(ln) for ln in full.splitlines()[2:]])
+        self.assertTrue(all(width(ln) <= 100 for ln in stripped))
+        self.assertEqual(colored.count("\x1b[0m"), len(re.findall(r"\x1b\[(?!0m)[0-9;]*m", colored)))  # 開いた色は全部閉じる
+
+        # ingest が失敗しても止まらず、保存済みの集計で描き、注記に出る (HOME が空 = projects dir を決められない)。
+        failed = dash(80, {"HOME": ""}, args=())
+        self.assertIn("週の上限が 100% に届くまでの推移", failed)
+        self.assertIn("ingest が失敗", failed)
+
+    def test_dash_rejects_json_plain_unknown_flags_and_watch_without_a_terminal(self):
+        for bad in (["--json"], ["--plain"], ["--bogus"], ["--watch", "0"], ["--watch", "x"],
+                    ["--watch", "--no-ingest"], ["--watch", "5"]):
+            result = run_meter(["dash", "--no-ingest", *bad], self.home)
+            self.assertNotEqual(result.returncode, 0, bad)
+            self.assertIn("error:", result.stderr)
+            self.assertEqual(result.stdout, "")
+
     # -- --model --
 
     def test_model_view_groups_by_provider_and_model(self):
@@ -4395,25 +4473,7 @@ class ReportPrettyDisplayTests(OcwMeterTestCase):
 
     def _report_on_pty(self, args, extra_env=None):
         """stdout だけを疑似端末にして report を走らせ、出力を返す。"""
-        master, slave = pty.openpty()
-        env = dict(os.environ, OCW_METER_HOME=str(self.home), HOME=str(self.home.parent))
-        env.pop("NO_COLOR", None)
-        env.update(extra_env or {})
-        proc = subprocess.Popen([str(OCW_METER), "report", "--no-ingest", *args], cwd=str(REPO_ROOT),
-                                env=env, stdout=slave, stderr=subprocess.DEVNULL)
-        os.close(slave)
-        chunks = []
-        while True:
-            try:
-                data = os.read(master, 4096)
-            except OSError:
-                break
-            if not data:
-                break
-            chunks.append(data)
-        os.close(master)
-        proc.wait(timeout=30)
-        return b"".join(chunks).decode("utf-8", "replace")
+        return run_meter_on_pty(["report", "--no-ingest", *args], self.home, extra_env)
 
     def test_color_only_on_a_terminal_without_no_color_and_numbers_are_rounded(self):
         self._seed_usage()
