@@ -146,6 +146,7 @@
   "theme": "dark",
   "editorMode": "normal",
   "autoCompactEnabled": true,
+  "cleanupPeriodDays": 90,
   "switchModelsOnFlag": true,
   "statusLine": {
     "type": "command",

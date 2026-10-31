@@ -144,6 +144,7 @@ Claude Code の設定ファイル。以下の汎用設定を含む（マシン�
 | `theme` | `dark` | テーマ |
 | `editorMode` | `normal` | エディタモード |
 | `autoCompactEnabled` | `true` | 自動コンパクション |
+| `cleanupPeriodDays` | `90` | transcript（`~/.claude/projects/`）を消すまでの日数（既定30）。`ocw-meter` の取り込み前に transcript が消えて使用量の記録が欠落するのを防ぐ保険。値の根拠は ADR DOC-2611010251_transcript-retention-days。`0` は検証エラーになるので使わない。マシンごとに変えるなら `settings.machine.json` で上書きする |
 | `switchModelsOnFlag` | `true` | フラグによるモデル切り替え |
 | `skipWorkflowUsageWarning` | `true` | ワークフロー警告スキップ |
 | `permissions.defaultMode` | `acceptEdits` | 権限のデフォルトモード |

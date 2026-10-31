@@ -18,6 +18,7 @@
 | デプロイの運用手順（世代確認・ロールバック・dev モード等）を調べる | [reference/DOC-2608040805_配布実体運用ガイド.md](reference/DOC-2608040805_配布実体運用ガイド.md) | canonical prefix の構造・manifest 全フィールド・移行手順 |
 | なぜ `ocw` の命名・レイアウトを今の形にしたかを知る | [adr/DOC-2608062258_ocw-worktree-naming-and-layout.md](adr/DOC-2608062258_ocw-worktree-naming-and-layout.md) | `ai/` 接頭辞の廃止・ディレクトリのネスト・git config `ocw.*` によるレイアウト表現・squash マージ検出の決定と、却下した案 |
 | なぜ `ocw-meter` をこの設計にしたかを知る | [adr/DOC-2608021229_llm-cost-observability-collection-method.md](adr/DOC-2608021229_llm-cost-observability-collection-method.md) | feasibility probe の実測結果に基づく収集方式の決定記録 |
+| なぜ `ocw-meter` の ingest を statusLine から自動で走らせるようにしたかを知る | [adr/DOC-2611010254_auto-ingest.md](adr/DOC-2611010254_auto-ingest.md) | statusLine 起点・間隔・ロック・`quota.sample` への影響の実測と、hook / OS のスケジューラを採らなかった理由 |
 | なぜスキルを複数の AI エージェントへ配るようにしたかを知る | [adr/DOC-2608272128_skills-multi-agent-distribution.md](adr/DOC-2608272128_skills-multi-agent-distribution.md) | `skills/` の切り出し・配布先エージェントの決め方・却下した案 |
 | なぜ Codex / OpenCode のグローバル指示を `claude/CLAUDE.md` から配るようにしたかを知る | [adr/DOC-2609072334_codex-opencode-global-instructions-distribution.md](adr/DOC-2609072334_codex-opencode-global-instructions-distribution.md) | `codex/` `opencode/` の新設・単一ソース symlink 方式・却下した案 |
 | なぜ git 操作の許可ポリシーを今の形にしたかを知る | [adr/DOC-2609121719_git-operation-permission-policy.md](adr/DOC-2609121719_git-operation-permission-policy.md) | `main`/`master` へのマージだけを人間に残す線引きと、PreToolUse フックの担保範囲を `gh pr merge` の base 判定1点に絞った決定、却下した案 |
@@ -108,6 +109,7 @@
 | DOC-2610142359 | [implementer-compact-reminder-hook.md](adr/DOC-2610142359_implementer-compact-reminder-hook.md) | 実装の孫の文脈が 200k を超えたら、区切りでの `ocw self-compact` の判断を促す一文を差し込む PostToolUse フック（`claude/hooks/compact-reminder.sh`）の決定。`OCW_ROLE=implementer` だけに効かせ、compact は打たず、transcript の末尾だけを読み、超えた最初の 1 回と 50k 増えるごとに間引く（のち区切りのツール呼び出しで1区切り1回の再掲を追記）。判定できないときは黙る。実機で `additionalContext` が届くかは未検証として記録 |
 | DOC-2610200218 | [reviewer-fresh-each-round.md](adr/DOC-2610200218_reviewer-fresh-each-round.md) | 再レビューのたびにレビュワーの会話を新しくし、読み方の作法をレビュー指示に足す（`pr-review-loop`） |
 | DOC-2610310237 | [quota-per-pct-estimate.md](adr/DOC-2610310237_quota-per-pct-estimate.md) | 週の上限の 1% あたりのトークンを推定する方法・「測れない」の基準・誤差の要因（`ocw-meter report --quota-per-pct`） |
+| DOC-2611010251 | [transcript-retention-days.md](adr/DOC-2611010251_transcript-retention-days.md) | Claude Code の transcript の保持期間 `cleanupPeriodDays` を 90 日にした決定。ingest 前に transcript が消えた欠落の仕組み・自動の取り込みの「保険」である理由・ディスク使用量の実測と 30/90/180/365 の比較・`0` が検証エラーである出典・`settings.machine.json` での上書き |
 
 ### planning/ — ロードマップ・計画
 

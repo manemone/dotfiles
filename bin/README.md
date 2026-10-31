@@ -404,6 +404,16 @@ PR番号はリポジトリ**内**でしか一意でない。`--pr`とstandalone�
 - **サンプリング間隔を自制する**（既定60秒、`OCW_METER_QUOTA_INTERVAL`で変更可）。statusLineは
   描画のたびに呼ばれるため（実測 最大54回/時間、DOC-2608021229 §2.1）、間隔内の呼び出しは
   `state/quota-last-sample.json` を見て書き込みをスキップし、表示文字列の計算のみ行う
+- **ingest を間引いて自動で起動する。** `snapshot-quota` は表示と記録を済ませたあと、最後の試行から
+  `OCW_METER_AUTO_INGEST_INTERVAL` 秒（既定3600）たっていれば、`ocw-meter auto-ingest` を**切り離した子プロセス**で
+  起動して、完了を待たずに戻る（transcript が Claude Code に消される前に `usage.message` を拾うため。ADR DOC-2611010254）。
+  二重起動は子のロックで防ぐ。起動や子の失敗は表示・`quota.sample`・終了コードに影響しない。`OCW_METER_AUTO_INGEST=0` で無効化。
+  結果は `state/auto-ingest.json`（`last_attempt_at` / `last_success_at` / `last_result` / `last_error` / `consecutive_failures`）
+- **取り込みの遅れ・失敗を表示の1行に警告として足す。** `state/auto-ingest.json` だけを読み、最後に成功した時刻から
+  `max(24時間, 間隔の3倍)` 以上たっている、または自動の取り込みが3回続けて失敗しているときだけ、`⚠ ingest 3d`（遅れ。48時間未満は `26h`）・
+  `⚠ ingest fail×3`（失敗が続いている）のような短い警告を末尾に足す（両方なら `⚠ ingest 3d fail×3`）。ふだんは何も足さない。
+  長い休みのあとの最初の呼び出しが取り込みを起動した直後（10分以内。失敗中は除く）は出さない。状態ファイルが無い・壊れている・
+  `OCW_METER_AUTO_INGEST=0` のときも出さない。出たら `ocw-meter ingest` を手で叩いて結果（エラー）を見る
 - `rate_limits`（5時間枠・週間枠）が無いセッション（`claude-ds`＝DeepSeek経由は原理的に常にこれ）は
   `five_hour_used_pct`等を`null`、`completeness: "unknown"`として記録する。**推測で埋めない**
 - `rate_limits.five_hour.resets_at` が既に過去の時刻（stale値。DOC-2608021229 §2.1で実測: 8サンプル中3件）の
