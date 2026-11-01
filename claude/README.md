@@ -220,7 +220,8 @@ opus5.5 · 7d ▰▰▰▰▰│▰▱▱▱ 62% · 日16:00 3d7h · ctx ◑ 50%
 
 先頭の `opus5.5` はモデル名を短くしたもの（`claude-opus-5-5` → `opus5.5`、`deepseek-flash[1m]` →
 `ds-flash`）。`claude-ds`（DeepSeek）のセッションでは、そのすぐ後ろにその会話で使った金額が出る
-（例 `ds-flash $0.16`）。この金額は会話記録のトークン数に `bin/prices/` の DeepSeek 価格表を
+（例 `ds-flash $0.16`）。この金額は会話記録とサブエージェントの記録（`subagents/agent-*.jsonl`。
+claude-ds はサブエージェントも DeepSeek で動く）のトークン数に `bin/prices/` の DeepSeek 価格表を
 当てて出し直したもので、Claude Code の `/cost`（Anthropic の価格での見積もり）とは一致しない。
 バーは週間枠の使用率、`│` は週の経過位置（7日のうち何割過ぎたか）。続く `日16:00` は
 リセットの曜日と時刻（ローカルタイム）、`3d7h` はリセットまでの残り。バーと数字は、使用率が

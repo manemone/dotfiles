@@ -289,9 +289,10 @@ subcommands:
     1h40m", 5 cells) appears only when Claude Code still reports one; ctx
     is a circle icon colored green <=25%, yellow <=75%, red above. For a
     claude-ds (DeepSeek) session, the session's spend so far follows the
-    model name ("ds-flash $0.16"); it is recomputed from the transcript
-    and bin/prices/, because Claude Code's own `cost.total_cost_usd` is
-    priced with Anthropic rates and does not match DeepSeek's billing.
+    model name ("ds-flash $0.16"); it is recomputed from the session's
+    transcript, its subagents' transcripts and bin/prices/, because
+    Claude Code's own `cost.total_cost_usd` is priced with Anthropic
+    rates and does not match DeepSeek's billing.
     Reset details are omitted when
     `resets_at` is missing, already past, or not within 7 days) and exits 0 — no matter what: empty stdin, malformed
     JSON, a missing `rate_limits` (every DeepSeek/claude-ds session —
@@ -7434,8 +7435,9 @@ def _quota_color(used_pct, elapsed_pct):
 # 表示する費用は価格表から出し直す。記録側の形は変えない。
 
 _STATUSLINE_MODEL_FAMILIES = ("opus", "sonnet", "haiku", "fable")
-# 費用のキャッシュ（読んだ位置と message.id）の版。形を変えたら上げる。
-STATUSLINE_COST_CACHE_VERSION = 1
+# 費用のキャッシュ（ファイルごとの読んだ位置と message.id）の版。
+# 形を変えたら上げる。
+STATUSLINE_COST_CACHE_VERSION = 2
 # キャッシュはただの高速化なので、古いセッションの分は消してよい。
 STATUSLINE_COST_CACHE_MAX_AGE_SECONDS = 7 * 24 * 3600
 # キャッシュが無いセッションで、これより大きい会話記録は読まない
@@ -7493,6 +7495,28 @@ def _statusline_cost_cache_path(state_dir, session_id):
     return state_dir / "statusline-cost" / f"{session_id}.json"
 
 
+def _statusline_cost_transcript_files(transcript_path):
+    """そのセッションで費用が発生した記録ファイルを返す。
+
+    メインの会話は `transcript_path` 自身。サブエージェント（Agent
+    ツール）の記録は `<slug>/<session>/subagents/agent-*.jsonl` に
+    別ファイルで書かれ（`ingest` が #184 から読んでいるのと同じ場所）、
+    そちらも DeepSeek で課金される。"""
+    files = [transcript_path]
+    if transcript_path.endswith(".jsonl"):
+        subagent_dir = transcript_path[: -len(".jsonl")] + "/subagents"
+        try:
+            names = os.listdir(subagent_dir)
+        except OSError:
+            return files
+        files.extend(
+            os.path.join(subagent_dir, name)
+            for name in sorted(names)
+            if name.startswith("agent-") and name.endswith(".jsonl")
+        )
+    return files
+
+
 def _load_statusline_cost_cache(cache_path):
     try:
         data = json.loads(cache_path.read_text(encoding="utf-8"))
@@ -7502,11 +7526,17 @@ def _load_statusline_cost_cache(cache_path):
         return None
     if data.get("version") != STATUSLINE_COST_CACHE_VERSION:
         return None
-    if not isinstance(data.get("offset"), int):
+    files = data.get("files")
+    if not isinstance(files, dict) or not all(
+        isinstance(entry, dict) and isinstance(entry.get("offset"), int)
+        for entry in files.values()
+    ):
         return None
     if not isinstance(data.get("total_usd"), (int, float)):
         return None
     if not isinstance(data.get("message_ids"), list):
+        return None
+    if not isinstance(data.get("price_table_versions"), list):
         return None
     return data
 
@@ -7559,11 +7589,18 @@ def resolve_statusline_session_cost(obj, model_id):
     例外は外へ出さない（statusLine はどんな入力でも exit 0 で 1 行を
     出す契約なので、ここで落ちても表示全体を巻き込まない）。
 
-    記録は `transcript_path` が指す会話記録から読む。同じ応答が内容
-    ブロックごとに 2〜3 回追記されるので（実測）、`message.id` で重複を
-    除いてから価格表を当てる。statusLine は描画のたびに呼ばれるため、
-    読んだ位置と message.id を state/statusline-cost/ に残し、次からは
-    追記された分だけを読む。"""
+    記録は `transcript_path` が指す会話記録と、そのセッションの
+    サブエージェントの記録（`transcript_path` の `.jsonl` を除いた
+    ディレクトリの `subagents/agent-*.jsonl`）から読む。claude-ds は
+    サブエージェントも DeepSeek で動き、そちらも課金される。同じ応答が
+    内容ブロックごとに 2〜3 回追記されるので（実測）、`message.id` で
+    重複を除いてから価格表を当てる。statusLine は描画のたびに呼ばれる
+    ため、ファイルごとの読んだ位置と message.id を
+    state/statusline-cost/ に残し、次からは追記された分だけを読む。
+
+    価格表はメッセージ自身の timestamp の日付で選ぶ（`ingest` と同じ
+    規則）。実行日で選ぶと、後から足した価格表が過去のメッセージに
+    遡って当たってしまう。"""
     try:
         normalized = normalize_model_name(model_id) if isinstance(model_id, str) else None
         if infer_provider(normalized) != "deepseek":
@@ -7571,34 +7608,43 @@ def resolve_statusline_session_cost(obj, model_id):
         transcript_path = obj.get("transcript_path") if isinstance(obj, dict) else None
         if not isinstance(transcript_path, str) or not transcript_path:
             return None
-        price_table = select_price_table(
-            load_price_tables(price_table_dir()),
-            datetime.now(timezone.utc).strftime("%Y-%m-%d"),
-        )
-        if price_table is None:
+        price_tables = load_price_tables(price_table_dir())
+        if not price_tables:
             return None
-        price_version = price_table.get("price_table_version")
+        # 価格表の一覧（版の集合）が変わったら読み直す。メッセージごとに
+        # 自身の日付で表を選ぶので、新しい表が加わっても過去のメッセージの
+        # 金額は変わらない（表の訂正に追随させるための条件）。
+        price_versions = sorted(str(table.get("price_table_version") or "") for table in price_tables)
+        today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
         root = storage_root()
         cache_path = _statusline_cost_cache_path(Paths(root).state_dir, obj.get("session_id"))
         entry = _load_statusline_cost_cache(cache_path) if cache_path is not None else None
         if entry is not None and (
             entry.get("transcript_path") != transcript_path
-            or entry.get("price_table_version") != price_version
+            or entry.get("price_table_versions") != price_versions
         ):
-            # 会話記録が入れ替わった・価格表が変わった -> 最初から読み直す。
+            # 会話記録が入れ替わった・価格表の一覧が変わった -> 最初から読み直す。
             entry = None
-        if entry is None:
-            try:
-                if os.stat(transcript_path).st_size > STATUSLINE_COST_MAX_TRANSCRIPT_BYTES:
-                    return None
-            except OSError:
-                return None
 
-        result = read_new_lines(transcript_path, entry)
-        if result is None:
-            return None
-        if entry is not None and not result["lines"]:
+        transcript_files = _statusline_cost_transcript_files(transcript_path)
+        if entry is None:
+            # キャッシュが無いときの初回読みだけで大きさを見る（描画を止めないため）。
+            for path in transcript_files:
+                try:
+                    if os.stat(path).st_size > STATUSLINE_COST_MAX_TRANSCRIPT_BYTES:
+                        return None
+                except OSError:
+                    continue
+
+        read_results = []
+        for path in transcript_files:
+            prev = entry.get("files", {}).get(path) if entry is not None else None
+            result = read_new_lines(path, prev)
+            if result is not None:
+                read_results.append((path, result))
+        has_new_lines = any(result["lines"] for _path, result in read_results)
+        if entry is not None and not has_new_lines:
             # 追記が無い呼び出しが大半（statusLine は描画のたびに呼ばれる）。
             # 読んだ位置も合計も前回のままなので、そのまま返す。
             return float(entry["total_usd"]) if entry.get("priced_messages") else None
@@ -7610,42 +7656,52 @@ def resolve_statusline_session_cost(obj, model_id):
         else:
             message_ids, total, priced_messages = set(), 0.0, 0
 
-        for raw_line in result["lines"]:
-            try:
-                record = json.loads(raw_line.decode("utf-8"))
-            except (UnicodeDecodeError, json.JSONDecodeError):
-                continue
-            if not isinstance(record, dict) or record.get("type") != "assistant":
-                continue
-            message = record.get("message")
-            if not isinstance(message, dict):
-                continue
-            message_id = message.get("id")
-            usage = message.get("usage")
-            if not isinstance(message_id, str) or not message_id or not isinstance(usage, dict):
-                continue
-            if message_id in message_ids:
-                continue
-            message_ids.add(message_id)
-            cost, _version, _effective, _basis, _tod = compute_cost(
-                normalize_model_name(message.get("model")),
-                usage,
-                price_table,
-                parse_ts(record.get("timestamp")),
-            )
-            if cost is None:
-                continue
-            total += cost
-            priced_messages += 1
-
-        if cache_path is not None and result["lines"]:
-            _save_statusline_cost_cache(root, cache_path, {
-                "version": STATUSLINE_COST_CACHE_VERSION,
-                "transcript_path": transcript_path,
+        files_state = {}
+        for path, result in read_results:
+            files_state[path] = {
                 "inode": result["stat"]["inode"],
                 "size": result["stat"]["size"],
                 "offset": result["new_offset"],
-                "price_table_version": price_version,
+            }
+            for raw_line in result["lines"]:
+                try:
+                    record = json.loads(raw_line.decode("utf-8"))
+                except (UnicodeDecodeError, json.JSONDecodeError):
+                    continue
+                if not isinstance(record, dict) or record.get("type") != "assistant":
+                    continue
+                message = record.get("message")
+                if not isinstance(message, dict):
+                    continue
+                message_id = message.get("id")
+                usage = message.get("usage")
+                if not isinstance(message_id, str) or not message_id or not isinstance(usage, dict):
+                    continue
+                if message_id in message_ids:
+                    continue
+                message_ids.add(message_id)
+                ts_dt = parse_ts(record.get("timestamp"))
+                price_table = select_price_table(
+                    price_tables,
+                    ts_dt.strftime("%Y-%m-%d") if ts_dt is not None else today_str,
+                )
+                cost, _version, _effective, _basis, _tod = compute_cost(
+                    normalize_model_name(message.get("model")),
+                    usage,
+                    price_table,
+                    ts_dt,
+                )
+                if cost is None:
+                    continue
+                total += cost
+                priced_messages += 1
+
+        if cache_path is not None and has_new_lines:
+            _save_statusline_cost_cache(root, cache_path, {
+                "version": STATUSLINE_COST_CACHE_VERSION,
+                "transcript_path": transcript_path,
+                "files": files_state,
+                "price_table_versions": price_versions,
                 "total_usd": total,
                 "priced_messages": priced_messages,
                 "message_ids": sorted(message_ids),

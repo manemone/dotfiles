@@ -3728,11 +3728,14 @@ class DeepSeekCostDisplayTests(OcwMeterTestCase):
         }
 
     def _append(self, *messages):
-        with open(self.transcript, "a", encoding="utf-8") as fh:
+        self._append_to(self.transcript, *messages)
+
+    def _append_to(self, path, *messages):
+        with open(path, "a", encoding="utf-8") as fh:
             for message in messages:
                 fh.write(json.dumps(message) + "\n")
 
-    def _run(self, model_id="deepseek-flash[1m]", transcript=None):
+    def _run(self, model_id="deepseek-flash[1m]", transcript=None, extra_env=None):
         payload = {
             "model": {"id": model_id},
             "session_id": "session-1",
@@ -3741,7 +3744,7 @@ class DeepSeekCostDisplayTests(OcwMeterTestCase):
             # 価格表から出し直すので、この値は表示に使われない。
             "cost": {"total_cost_usd": 6.20},
         }
-        return run_snapshot_quota(json.dumps(payload), self.home).stdout.strip()
+        return run_snapshot_quota(json.dumps(payload), self.home, extra_env=extra_env).stdout.strip()
 
     def test_cost_comes_from_the_price_table_and_duplicate_lines_are_ignored(self):
         # input 1M トークン × $0.15/M（ピーク外の時間帯）= $0.15。
@@ -3754,6 +3757,35 @@ class DeepSeekCostDisplayTests(OcwMeterTestCase):
         self.assertEqual(self._run(), "ds-flash $0.15 · ctx ○ 12%")
         self._append(self._message("m2", 1_000_000))
         self.assertEqual(self._run(), "ds-flash $0.30 · ctx ○ 12%")
+        # サブエージェントの記録（<session>/subagents/agent-*.jsonl）も
+        # 合計に入る。メイン側と同じ message.id は二重に数えない。
+        subagent = pathlib.Path(self.tmpdir.name) / "session" / "subagents" / "agent-x.jsonl"
+        subagent.parent.mkdir(parents=True)
+        self._append_to(subagent, self._message("m1", 1_000_000), self._message("m3", 1_000_000))
+        self.assertEqual(self._run(), "ds-flash $0.45 · ctx ○ 12%")
+
+    def test_price_table_follows_each_message_date(self):
+        # メッセージ自身の timestamp の日付で価格表を選ぶ（実行日で1枚に
+        # 決め打ちしない）。10/10 は $0.10/M、10/21 は $0.20/M の表。
+        price_dir = pathlib.Path(self.tmpdir.name) / "prices"
+        price_dir.mkdir()
+        for name, version, effective, price in (
+            ("old.json", "t-old", "2026-10-01", 0.10),
+            ("new.json", "t-new", "2026-10-20", 0.20),
+        ):
+            (price_dir / name).write_text(json.dumps({
+                "price_table_version": version,
+                "effective_date": effective,
+                "models": {"deepseek-flash": {
+                    "cache_hit_in": price, "cache_miss_in": price, "out": price,
+                }},
+            }), encoding="utf-8")
+        self._append(
+            self._message("m-old", 1_000_000, timestamp="2026-10-10T12:00:00Z"),
+            self._message("m-new", 1_000_000, timestamp="2026-10-21T12:00:00Z"),
+        )
+        result = self._run(extra_env={"OCW_METER_PRICE_DIR": str(price_dir)})
+        self.assertEqual(result, "ds-flash $0.30 · ctx ○ 12%")
 
     def test_unreadable_transcript_omits_only_the_cost(self):
         result = self._run(transcript=pathlib.Path(self.tmpdir.name) / "missing.jsonl")

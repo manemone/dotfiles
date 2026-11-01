@@ -402,9 +402,12 @@ PR番号はリポジトリ**内**でしか一意でない。`--pr`とstandalone�
   （`ds-flash $0.16`。1セント未満は `$<0.01`）。statusLine の `cost.total_cost_usd` は
   Claude Code が Anthropic の価格で見積もった値で、DeepSeek の実額と大きく食い違う
   （実セッションで Claude Code の `$6.20` に対し、価格表から出し直すと `$0.16`）。
-  そのため `transcript_path` の会話記録を読み、`message.id` の重複（同じ応答が内容ブロックごとに
-  2〜3回書かれる）を除いた usage に `bin/prices/` の価格表を当てて出し直す。読んだ位置は
-  `state/statusline-cost/<session_id>.json` に残し、次からは追記された分だけを読む
+  そのため `transcript_path` の会話記録と、そのセッションのサブエージェントの記録
+  （`transcript_path` の `.jsonl` を除いたディレクトリの `subagents/agent-*.jsonl`。claude-ds は
+  サブエージェントも DeepSeek で動き課金される）を読み、`message.id` の重複（同じ応答が内容
+  ブロックごとに 2〜3回書かれる）を除いた usage に `bin/prices/` の価格表を当てて出し直す。
+  価格表はメッセージ自身の timestamp の日付で選ぶ（`ingest` と同じ規則）。読んだ位置は
+  ファイルごとに `state/statusline-cost/<session_id>.json` に残し、次からは追記された分だけを読む
   （7日より前のセッションの分は新しいセッションができたときに消す）。記録側の
   `session_cost_usd` はこれまでどおり Claude Code の値をそのまま残す
 - **週間枠はバーとリセット情報で出す。** バーは使用率、`│` は週の経過位置（7日のうち何割過ぎたか）。
@@ -619,10 +622,12 @@ GitHub token形式（`ghp_...` 等 / `github_pat_...`）に一致する値、キ
 この置換は保存物だけでなく、meterが出す例外・警告メッセージにも適用される。
 
 **既知の限界（カバレッジは「全部取れている」ものではない — 計画書5.10 / DOC-2608021229 §2.2 実測）**:
-- **背景ユーティリティ呼び出し（タイトル生成・要約等）とサブエージェント分はtranscriptに一切記録されない
+- **背景ユーティリティ呼び出し（タイトル生成・要約等）はtranscriptに一切記録されない
   （旧構成での実測カバー率 0%）。** 旧構成ではここにだけ `deepseek-v4-flash` を使っていたため
-  モデル単位で 0% に見えたが、原因は呼び出しの役割である。現在この分は `deepseek-flash`
-  （`CLAUDE_CODE_SUBAGENT_MODEL=deepseek-flash`）で、`ingest` では原理的に取得できない
+  モデル単位で 0% に見えたが、原因は呼び出しの役割である。この分は `ingest` では取得できない。
+  サブエージェント（Agent ツール）の分は `<slug>/<session>/subagents/agent-*.jsonl` に
+  別ファイルで記録され、#184（2026-10-31）から `ingest` が読んでいる
+  （`CLAUDE_CODE_SUBAGENT_MODEL=deepseek-flash` で動く）
 - **メインセッションのモデルはtranscriptに記録される。** 現構成のメインは `deepseek-flash[1m]`
   （`deepseek-flash` として記録・計上される）。カバー率の実測は旧構成のメイン `deepseek-v4-pro` で
   約89%（残り約11%は他マシン・別期間・streaming中断/retryで課金されたが記録されない分などが要因。
