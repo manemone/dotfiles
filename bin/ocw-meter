@@ -281,9 +281,12 @@ subcommands:
     object from stdin, appends one `quota.sample` event (rate_limits /
     context usage / session cost — plan §8.5, DOC-2608021229 §2.1/§8), and
     ALWAYS prints a short display string to stdout (e.g.
-    "5h:37%→04:10 7d:12% ctx:24%", where the `→HH:MM` suffix is the local
-    time the 5-hour window resets — omitted when `resets_at` is missing
-    or already past) and exits 0 — no matter what: empty stdin, malformed
+    "7d ▰▰▰▰▰│▰▱▱▱ 62% · 日16:00 3d7h · ctx 24%": the bar is the weekly
+    usage, │ marks how far the week has elapsed, then the reset weekday and
+    local time and the time left; the color follows usage vs. elapsed
+    (NO_COLOR turns it off). A 5h segment ("5h 37%→04:10") appears only
+    when Claude Code still reports one. Reset details are omitted when
+    `resets_at` is missing, already past, or not within 7 days) and exits 0 — no matter what: empty stdin, malformed
     JSON, a missing `rate_limits` (every DeepSeek/claude-ds session —
     DOC-2608021229 §2.1), python3 itself being unavailable, or an unexpected
     exception. A broken statusLine command would blank out or corrupt
@@ -7337,48 +7340,109 @@ def format_five_hour_reset(five_hour_resets_at):
         return None
 
 
+# statusLine 専用の見た目の定数。週の枠は 7 日固定で、バーは 10 マス。
+_SEVEN_DAY_SECONDS = 7 * 24 * 3600
+_WEEKDAY_JA = "月火水木金土日"
+_QUOTA_BAR_CELLS = 10
+# 使用%が経過%をこれだけ（ポイント）上回ると黄、さらに上回ると赤にする。
+_PACE_YELLOW_PT = 5
+_PACE_RED_PT = 15
+
+
+def _statusline_paint(text, style):
+    """statusLine 用の色付け。stdout は端末ではなくパイプなので
+    `color_enabled()`（isatty 判定）は使えない。NO_COLOR だけを見る。"""
+    if not style or os.environ.get("NO_COLOR"):
+        return text
+    return f"\x1b[{_ANSI[style]}m{text}\x1b[0m"
+
+
+def _format_remaining(seconds):
+    """残り秒を "3d7h" / "7h12m" / "12m" にする。"""
+    days, rest = divmod(int(seconds), 86400)
+    hours, rest = divmod(rest, 3600)
+    minutes = rest // 60
+    if days > 0:
+        return f"{days}d{hours}h"
+    if hours > 0:
+        return f"{hours}h{minutes:02d}m"
+    return f"{minutes}m"
+
+
+def _seven_day_reset(resets_at, now_epoch):
+    """週の枠のリセットを (ラベル "日16:00", 残り文字列, 経過%) にする。
+    過去の値、または 7 日より先の値（枠の長さと合わない）は信用せず None。"""
+    resets = _as_int(resets_at)
+    if resets is None:
+        return None
+    remaining = resets - now_epoch
+    if remaining <= 0 or remaining > _SEVEN_DAY_SECONDS + 3600:
+        return None
+    try:
+        local = datetime.fromtimestamp(resets, tz=timezone.utc).astimezone()
+    except (ValueError, OverflowError, OSError):
+        return None
+    label = f"{_WEEKDAY_JA[local.weekday()]}{local:%H:%M}"
+    elapsed = min(100.0, max(0.0, (1 - remaining / _SEVEN_DAY_SECONDS) * 100))
+    return label, _format_remaining(remaining), elapsed
+
+
+def _quota_bar(used_pct, elapsed_pct):
+    """使用%の分だけ塗ったバー。経過%の位置に目印 │ を差し込む。"""
+    cells = _QUOTA_BAR_CELLS
+    filled = max(0, min(cells, int(used_pct / 100 * cells + 0.5)))
+    bar = "\u25b0" * filled + "\u25b1" * (cells - filled)
+    if elapsed_pct is not None:
+        pos = max(0, min(cells, int(elapsed_pct / 100 * cells + 0.5)))
+        bar = f"{bar[:pos]}\u2502{bar[pos:]}"
+    return bar
+
+
+def _quota_color(used_pct, elapsed_pct):
+    """経過%があればペースとの差、無ければ使用%そのもので色を決める。"""
+    if elapsed_pct is not None:
+        over = used_pct - elapsed_pct
+        if over > _PACE_RED_PT:
+            return "red"
+        return "yellow" if over > _PACE_YELLOW_PT else "green"
+    if used_pct >= 90:
+        return "red"
+    return "yellow" if used_pct >= 70 else "green"
+
+
 def format_quota_display(obj):
-    """Builds the minimal statusLine text (DOC-2608021229 §8 instruction 7:
-    "5h:37% 7d:12% ctx:24%" 程度に。`context_window.used_percentage` が
-    nullの場合は `ctx` を非表示にする) — omits whatever wasn't obtainable
-    rather than showing a placeholder. Never raises: `_get`/`_as_number`
-    degrade to None at every step, so a totally unparseable `obj`
-    (including None itself) just produces an empty string, which is
-    exactly what cmd_snapshot_quota falls back to on any earlier
-    failure anyway.
+    """statusLine の 1 行を組み立てる。例（色は省略）:
 
-    Deliberately uses the RAW `context_window.used_percentage` here, not
-    `resolve_context_used_pct()`'s fallback-computed value: DOC-2608021229 §8-3
-    (the RECORDED `context_used_pct` field) and §8-7 (the DISPLAYED
-    string) are two separate instructions with two different answers for
-    the null case — record the fallback estimate, but hide `ctx` from
-    the status bar rather than show a number the instruction explicitly
-    says to omit (round-1 review: these were conflated, showing a
-    fallback-derived `ctx:25%` even when the instruction called for no
-    `ctx` segment at all).
+        7d \u25b0\u25b0\u25b0\u25b0\u25b0\u2502\u25b0\u25b1\u25b1\u25b1 62% \u00b7 日16:00 3d7h \u00b7 ctx 24%
 
-    The 5h segment additionally carries the window's reset time as a
-    local clock time (`5h:37%\u219204:10`, see `format_five_hour_reset`) —
-    an addition to DOC-2608021229 §8-7's example string, not a
-    replacement of it: the instruction's point was "keep it minimal",
-    and the one thing the percentage alone can't answer is 何時まで待てば
-    枠が戻るのか."""
+    バーは使用%、│ は週の経過%の位置。バーと数字は、使用%が経過%を
+    どれだけ上回るかで緑・黄・赤になる。5h 欄は来たときだけ出す。
+
+    取れなかった値は placeholder を出さず黙って省く。例外は外へ出さない
+    （`_get` / `_as_number` が各段で None に落とす。解釈できない `obj`
+    は空文字になり、cmd_snapshot_quota の失敗時の既定値と一致する）。
+    `ctx` は生の `context_window.used_percentage` だけを使い、null なら
+    出さない（DOC-2608021229 §8-3 の記録側とは別の指示、§8-7）。"""
     parts = []
     five_hour_pct = _as_number(_get(obj, "rate_limits", "five_hour", "used_percentage"))
     if five_hour_pct is not None:
-        # 5h 枠だけリセット時刻を併記する（7d 枠は「何日の何時か」まで
-        # 書かないと読めず statusLine には長すぎるうえ、待って回復を狙う
-        # 単位でもない）。`resets_at` が無い/stale なら "%" だけに戻る。
         reset_hhmm = format_five_hour_reset(_get(obj, "rate_limits", "five_hour", "resets_at"))
         suffix = f"\u2192{reset_hhmm}" if reset_hhmm else ""
-        parts.append(f"5h:{_fmt_pct(five_hour_pct)}%{suffix}")
+        text = f"5h {_fmt_pct(five_hour_pct)}%{suffix}"
+        parts.append(_statusline_paint(text, _quota_color(five_hour_pct, None)))
     seven_day_pct = _as_number(_get(obj, "rate_limits", "seven_day", "used_percentage"))
     if seven_day_pct is not None:
-        parts.append(f"7d:{_fmt_pct(seven_day_pct)}%")
+        reset = _seven_day_reset(_get(obj, "rate_limits", "seven_day", "resets_at"), time.time())
+        elapsed = reset[2] if reset else None
+        bar = _quota_bar(seven_day_pct, elapsed)
+        text = f"7d {bar} {_fmt_pct(seven_day_pct)}%"
+        parts.append(_statusline_paint(text, _quota_color(seven_day_pct, elapsed)))
+        if reset:
+            parts.append(f"{reset[0]} {reset[1]}")
     raw_context_pct = _as_number(_get(obj, "context_window", "used_percentage"))
     if raw_context_pct is not None:
-        parts.append(f"ctx:{_fmt_pct(raw_context_pct)}%")
-    return " ".join(parts)
+        parts.append(_statusline_paint(f"ctx {_fmt_pct(raw_context_pct)}%", "dim"))
+    return _statusline_paint(" \u00b7 ", "dim").join(parts)
 
 
 def resolve_quota_git_context(cwd):

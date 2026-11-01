@@ -394,11 +394,14 @@ PR番号はリポジトリ**内**でしか一意でない。`--pr`とstandalone�
 
 - `claude/settings.json` の `statusLine` から `ocw-meter snapshot-quota` として呼ばれる想定
   （`claude/README.md` §3.4 参照）。stdinのstatusLine JSONから `quota.sample` イベントを1行appendし、
-  ステータスバー表示文字列（例 `5h:37%→04:10 7d:12% ctx:24%`）をstdoutへ返す
-- **5時間枠にはリセット時刻を併記する。** `rate_limits.five_hour.resets_at`（epoch秒）を
-  **ローカルタイムの `HH:MM`** に変換して `5h:<使用率>%→<リセット時刻>` の形で出す。週間枠には
-  併記しない（日付まで書かないと読めず、statusLineには長すぎるため）。記録側の
-  `five_hour_resets_at` はepoch秒のままで、この変換は表示専用
+  ステータスバー表示文字列（例 `7d ▰▰▰▰▰│▰▱▱▱ 62% · 日16:00 3d7h · ctx 24%`）をstdoutへ返す
+- **週間枠はバーとリセット情報で出す。** バーは使用率、`│` は週の経過位置（7日のうち何割過ぎたか）。
+  続けてリセットの曜日と時刻（ローカルタイム）、リセットまでの残り（`3d7h` / `7h12m` / `12m`）を出す。
+  バーと数字は、使用率が経過率を5pt超えると黄、15pt超えると赤、それ以内は緑（`NO_COLOR` で無色）。
+  `resets_at` が無い・過去・7日より先のときは、リセット情報と `│` を省く
+- **5時間枠は来たときだけ出す。** `rate_limits.five_hour` がある場合に限り
+  `5h <使用率>%→<リセット時刻>` を出す。記録側の `five_hour_resets_at` はepoch秒のままで、
+  これらの変換は表示専用
 - **例外が起きても必ずstdoutに表示文字列を出しexit 0する。** 空入力・不正JSON・巨大入力・
   `rate_limits`欠落のいずれでも壊れない
 - **サンプリング間隔を自制する**（既定60秒、`OCW_METER_QUOTA_INTERVAL`で変更可）。statusLineは
