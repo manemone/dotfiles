@@ -421,7 +421,7 @@ PR番号はリポジトリ**内**でしか一意でない。`--pr`とstandalone�
   `five_hour_used_pct`等を`null`、`completeness: "unknown"`として記録する。**推測で埋めない**
 - `rate_limits.five_hour.resets_at` が既に過去の時刻（stale値。DOC-2608021229 §2.1で実測: 8サンプル中3件）の
   場合、`window_id`を`null`にして`completeness: "partial"`で記録する（stale値を新しい窓のIDとして
-  採用しない）。**表示側でもこの場合はリセット時刻を併記せず `5h:<使用率>%` だけに戻す**
+  採用しない）。**表示側でもこの場合はリセット時刻を併記せず `5h <使用率>%` だけに戻す**
   （過去の時刻をステータスバーに出すと「もう枠が戻った」と読み違えるため）。値が欠落・非数値・
   範囲外（例: 秒ではなくミリ秒）のときも同様に併記を省く。同一`window_id`内で`used_percentage`が前回より減少した場合も`partial`にしstderrへ警告する
 - `context_window.used_percentage`が`null`の場合、**記録するイベントの`context_used_pct`フィールドのみ**
