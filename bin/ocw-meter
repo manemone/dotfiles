@@ -281,12 +281,19 @@ subcommands:
     object from stdin, appends one `quota.sample` event (rate_limits /
     context usage / session cost — plan §8.5, DOC-2608021229 §2.1/§8), and
     ALWAYS prints a short display string to stdout (e.g.
-    "7d ▰▰▰▰▰│▰▱▱▱ 62% · 日16:00 3d7h · ctx ◑ 50%": the bar is the weekly
-    usage, │ marks how far the week has elapsed, then the reset weekday and
-    local time and the time left; the color follows usage vs. elapsed
-    (NO_COLOR turns it off). A 5h segment ("5h ▰▰▱│▱▱ 37% · 04:10 1h40m", 5 cells) appears
-    only when Claude Code still reports one; ctx is a circle icon colored
-    green <=25%, yellow <=75%, red above. Reset details are omitted when
+    "opus5.5 · 7d ▰▰▰▰▰│▰▱▱▱ 62% · 日16:00 3d7h · ctx ◑ 50%": the model name
+    comes first in a short form (`opus5.5` / `ds-flash`), the bar is the
+    weekly usage, │ marks how far the week has elapsed, then the reset
+    weekday and local time and the time left; the color follows usage vs.
+    elapsed (NO_COLOR turns it off). A 5h segment ("5h ▰▰▱│▱▱ 37% · 04:10
+    1h40m", 5 cells) appears only when Claude Code still reports one; ctx
+    is a circle icon colored green <=25%, yellow <=75%, red above. For a
+    claude-ds (DeepSeek) session, the session's spend so far follows the
+    model name ("ds-flash $0.16"); it is recomputed from the session's
+    transcript, its subagents' transcripts and bin/prices/, because
+    Claude Code's own `cost.total_cost_usd` is priced with Anthropic
+    rates and does not match DeepSeek's billing.
+    Reset details are omitted when
     `resets_at` is missing, already past, or not within 7 days) and exits 0 — no matter what: empty stdin, malformed
     JSON, a missing `rate_limits` (every DeepSeek/claude-ds session —
     DOC-2608021229 §2.1), python3 itself being unavailable, or an unexpected
@@ -7417,10 +7424,302 @@ def _quota_color(used_pct, elapsed_pct):
     return "yellow" if used_pct >= 70 else "green"
 
 
+# ── statusLine: モデル名と claude-ds の費用 ──────────────────────────
+#
+# 記録側の `session_cost_usd`（statusLine の `cost.total_cost_usd`）は
+# Claude Code が自分で見積もった値で、claude-ds（DeepSeek 経由）の
+# セッションでは実際の請求額と大きく食い違う。2026-11-01 に実セッションで
+# 確かめたところ、Claude Code は $6.20 と言ったが、`bin/prices/` の
+# DeepSeek 価格表でトークン数から出し直すと $0.16 だった（Claude Code は
+# DeepSeek のモデル名を Anthropic の価格に当てていると見られる）。
+# 表示する費用は価格表から出し直す。記録側の形は変えない。
+
+_STATUSLINE_MODEL_FAMILIES = ("opus", "sonnet", "haiku", "fable")
+# 費用のキャッシュ（ファイルごとの読んだ位置と message.id）の版。
+# 形を変えたら上げる。
+STATUSLINE_COST_CACHE_VERSION = 2
+# キャッシュはただの高速化なので、古いセッションの分は消してよい。
+STATUSLINE_COST_CACHE_MAX_AGE_SECONDS = 7 * 24 * 3600
+# キャッシュが無いセッションで、これより大きい会話記録は読まない
+# （読むのはキャッシュを作るときの1回だけだが、その1回で statusLine を
+# 止めないため。実測した claude-ds の会話記録は最大 13.5MB）。
+STATUSLINE_COST_MAX_TRANSCRIPT_BYTES = 32 * 1024 * 1024
+
+
+def statusline_model_name(model_id):
+    """statusLine の `model.id` から表示用の短い名前を作る。
+
+    `claude-opus-5-5` -> `opus5.5`、`deepseek-flash[1m]` -> `ds-flash`。
+    版番号は家族名の直後の数字を最大2つまで残す（`claude-haiku-4-5-20251001`
+    の日付のような長い数字は落とす）。解釈できない名前は、正規化した
+    そのままの名前を返す（短くできないだけで、出さないよりはまし）。"""
+    if not isinstance(model_id, str):
+        return None
+    normalized = normalize_model_name(model_id)
+    if not normalized:
+        return None
+    if normalized.startswith("deepseek-"):
+        return "ds-" + normalized[len("deepseek-"):]
+    if not normalized.startswith("claude-"):
+        return normalized
+    parts = normalized[len("claude-"):].split("-")
+    family_index = next(
+        (index for index, part in enumerate(parts) if part in _STATUSLINE_MODEL_FAMILIES),
+        None,
+    )
+    if family_index is None:
+        return "-".join(parts)
+    version = []
+    for part in parts[family_index + 1:]:
+        if not part.isdigit() or len(part) > 3:
+            break
+        version.append(part)
+        if len(version) == 2:
+            break
+    return parts[family_index] + ".".join(version)
+
+
+def _format_usd(amount):
+    """費用を `$0.16` の形にする。1 セント未満は `$<0.01`（`$0.00` は
+    「無料」に見えるため出さない）。"""
+    if amount is None:
+        return None
+    if amount < 0.01:
+        return "$<0.01"
+    return f"${amount:.2f}"
+
+
+def _statusline_cost_cache_path(state_dir, session_id):
+    if not isinstance(session_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", session_id):
+        return None
+    return state_dir / "statusline-cost" / f"{session_id}.json"
+
+
+def _statusline_cost_transcript_files(transcript_path):
+    """そのセッションで費用が発生した記録ファイルを返す。
+
+    メインの会話は `transcript_path` 自身。サブエージェント（Agent
+    ツール）の記録は `<slug>/<session>/subagents/agent-*.jsonl` に
+    別ファイルで書かれ（`ingest` が #184 から読んでいるのと同じ場所）、
+    そちらも DeepSeek で課金される。"""
+    files = [transcript_path]
+    if transcript_path.endswith(".jsonl"):
+        subagent_dir = transcript_path[: -len(".jsonl")] + "/subagents"
+        try:
+            names = os.listdir(subagent_dir)
+        except OSError:
+            return files
+        files.extend(
+            os.path.join(subagent_dir, name)
+            for name in sorted(names)
+            if name.startswith("agent-") and name.endswith(".jsonl")
+        )
+    return files
+
+
+def _load_statusline_cost_cache(cache_path):
+    try:
+        data = json.loads(cache_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    if data.get("version") != STATUSLINE_COST_CACHE_VERSION:
+        return None
+    files = data.get("files")
+    if not isinstance(files, dict) or not all(
+        isinstance(entry, dict) and isinstance(entry.get("offset"), int)
+        for entry in files.values()
+    ):
+        return None
+    if not isinstance(data.get("total_usd"), (int, float)):
+        return None
+    if not isinstance(data.get("message_ids"), list):
+        return None
+    if not isinstance(data.get("price_table_versions"), list):
+        return None
+    return data
+
+
+def _prune_statusline_cost_cache(cache_dir):
+    """7 日より前のセッションのキャッシュを消す（新しいセッションが
+    できたときだけ呼ぶ）。消せなくても何もしない。"""
+    cutoff = time.time() - STATUSLINE_COST_CACHE_MAX_AGE_SECONDS
+    try:
+        entries = list(os.scandir(cache_dir))
+    except OSError:
+        return
+    for item in entries:
+        try:
+            if item.name.startswith(".") or item.stat().st_mtime >= cutoff:
+                continue
+            os.unlink(item.path)
+        except OSError:
+            continue
+
+
+def _save_statusline_cost_cache(root, cache_path, entry, prune):
+    """費用のキャッシュを書く。書けなくても表示は壊さないので、失敗は
+    握りつぶす。ほかのサブコマンドと同じく、Git worktree の下には書かない
+    （OCW_METER_HOME の設定ミスでリポジトリを汚さないため）。"""
+    try:
+        if in_git_worktree(root):
+            return
+        ensure_dir(cache_path.parent, 0o700)
+        tmp_fd, tmp_path = tempfile.mkstemp(dir=str(cache_path.parent), prefix=".tmp-", suffix=".json")
+        try:
+            with os.fdopen(tmp_fd, "w", encoding="utf-8") as fh:
+                json.dump(entry, fh, ensure_ascii=False, sort_keys=True)
+            os.chmod(tmp_path, 0o600)
+            os.replace(tmp_path, cache_path)
+        except Exception:
+            with contextlib.suppress(OSError):
+                os.unlink(tmp_path)
+            raise
+        if prune:
+            _prune_statusline_cost_cache(cache_path.parent)
+    except Exception:
+        pass
+
+
+def resolve_statusline_session_cost(obj, model_id):
+    """claude-ds（DeepSeek）のセッションで使った金額（USD）を返す。
+
+    対象外（Anthropic のセッションなど）と、記録が読めないときは None。
+    例外は外へ出さない（statusLine はどんな入力でも exit 0 で 1 行を
+    出す契約なので、ここで落ちても表示全体を巻き込まない）。
+
+    記録は `transcript_path` が指す会話記録と、そのセッションの
+    サブエージェントの記録（`transcript_path` の `.jsonl` を除いた
+    ディレクトリの `subagents/agent-*.jsonl`）から読む。claude-ds は
+    サブエージェントも DeepSeek で動き、そちらも課金される。同じ応答が
+    内容ブロックごとに 2〜3 回追記されるので（実測）、`message.id` で
+    重複を除いてから価格表を当てる。statusLine は描画のたびに呼ばれる
+    ため、ファイルごとの読んだ位置と message.id を
+    state/statusline-cost/ に残し、次からは追記された分だけを読む。
+
+    価格表はメッセージ自身の timestamp の日付で選ぶ（`ingest` と同じ
+    規則）。実行日で選ぶと、後から足した価格表が過去のメッセージに
+    遡って当たってしまう。"""
+    try:
+        normalized = normalize_model_name(model_id) if isinstance(model_id, str) else None
+        if infer_provider(normalized) != "deepseek":
+            return None
+        transcript_path = obj.get("transcript_path") if isinstance(obj, dict) else None
+        if not isinstance(transcript_path, str) or not transcript_path:
+            return None
+        price_tables = load_price_tables(price_table_dir())
+        if not price_tables:
+            return None
+        # 価格表の一覧（版の集合）が変わったら読み直す。メッセージごとに
+        # 自身の日付で表を選ぶので、新しい表が加わっても過去のメッセージの
+        # 金額は変わらない（表の訂正に追随させるための条件）。
+        price_versions = sorted(str(table.get("price_table_version") or "") for table in price_tables)
+        today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+        root = storage_root()
+        cache_path = _statusline_cost_cache_path(Paths(root).state_dir, obj.get("session_id"))
+        entry = _load_statusline_cost_cache(cache_path) if cache_path is not None else None
+        if entry is not None and (
+            entry.get("transcript_path") != transcript_path
+            or entry.get("price_table_versions") != price_versions
+        ):
+            # 会話記録が入れ替わった・価格表の一覧が変わった -> 最初から読み直す。
+            entry = None
+
+        transcript_files = _statusline_cost_transcript_files(transcript_path)
+        if entry is None:
+            # キャッシュが無いときの初回読みだけで大きさを見る（描画を止めないため）。
+            for path in transcript_files:
+                try:
+                    if os.stat(path).st_size > STATUSLINE_COST_MAX_TRANSCRIPT_BYTES:
+                        return None
+                except OSError:
+                    continue
+
+        read_results = []
+        for path in transcript_files:
+            prev = entry.get("files", {}).get(path) if entry is not None else None
+            result = read_new_lines(path, prev)
+            if result is not None:
+                read_results.append((path, result))
+        has_new_lines = any(result["lines"] for _path, result in read_results)
+        if entry is not None and not has_new_lines:
+            # 追記が無い呼び出しが大半（statusLine は描画のたびに呼ばれる）。
+            # 読んだ位置も合計も前回のままなので、そのまま返す。
+            return float(entry["total_usd"]) if entry.get("priced_messages") else None
+
+        if entry is not None:
+            message_ids = {value for value in entry.get("message_ids", []) if isinstance(value, str)}
+            total = float(entry["total_usd"])
+            priced_messages = int(entry.get("priced_messages") or 0)
+        else:
+            message_ids, total, priced_messages = set(), 0.0, 0
+
+        files_state = {}
+        for path, result in read_results:
+            files_state[path] = {
+                "inode": result["stat"]["inode"],
+                "size": result["stat"]["size"],
+                "offset": result["new_offset"],
+            }
+            for raw_line in result["lines"]:
+                try:
+                    record = json.loads(raw_line.decode("utf-8"))
+                except (UnicodeDecodeError, json.JSONDecodeError):
+                    continue
+                if not isinstance(record, dict) or record.get("type") != "assistant":
+                    continue
+                message = record.get("message")
+                if not isinstance(message, dict):
+                    continue
+                message_id = message.get("id")
+                usage = message.get("usage")
+                if not isinstance(message_id, str) or not message_id or not isinstance(usage, dict):
+                    continue
+                if message_id in message_ids:
+                    continue
+                message_ids.add(message_id)
+                ts_dt = parse_ts(record.get("timestamp"))
+                price_table = select_price_table(
+                    price_tables,
+                    ts_dt.strftime("%Y-%m-%d") if ts_dt is not None else today_str,
+                )
+                cost, _version, _effective, _basis, _tod = compute_cost(
+                    normalize_model_name(message.get("model")),
+                    usage,
+                    price_table,
+                    ts_dt,
+                )
+                if cost is None:
+                    continue
+                total += cost
+                priced_messages += 1
+
+        if cache_path is not None and has_new_lines:
+            _save_statusline_cost_cache(root, cache_path, {
+                "version": STATUSLINE_COST_CACHE_VERSION,
+                "transcript_path": transcript_path,
+                "files": files_state,
+                "price_table_versions": price_versions,
+                "total_usd": total,
+                "priced_messages": priced_messages,
+                "message_ids": sorted(message_ids),
+                "updated_at": iso_utc(datetime.now(timezone.utc)),
+            }, prune=entry is None)
+        return total if priced_messages else None
+    except Exception:
+        return None
+
+
 def format_quota_display(obj):
     """statusLine の 1 行を組み立てる。例（色は省略）:
 
         7d \u25b0\u25b0\u25b0\u25b0\u25b0\u2502\u25b0\u25b1\u25b1\u25b1 62% \u00b7 日16:00 3d7h \u00b7 ctx \u25d1 50%
+
+    先頭はモデルの短い名前（`opus5.5`）。claude-ds（DeepSeek）の
+    セッションでは、そのすぐ後ろにその会話で使った金額を足す
+    （`ds-flash $0.16`）。
 
     バーは使用%、│ は週の経過%の位置。バーと数字は、使用%が経過%を
     どれだけ上回るかで緑・黄・赤になる。5h 欄は来たときだけ出し、
@@ -7433,6 +7732,16 @@ def format_quota_display(obj):
     `ctx` は生の `context_window.used_percentage` だけを使い、null なら
     出さない（DOC-2608021229 §8-3 の記録側とは別の指示、§8-7）。"""
     parts = []
+    model_id = _get(obj, "model", "id")
+    head = []
+    model_name = statusline_model_name(model_id)
+    if model_name:
+        head.append(_statusline_paint(model_name, "dim"))
+    cost_text = _format_usd(resolve_statusline_session_cost(obj, model_id))
+    if cost_text:
+        head.append(cost_text)
+    if head:
+        parts.append(" ".join(head))
     five_hour_pct = _as_number(_get(obj, "rate_limits", "five_hour", "used_percentage"))
     if five_hour_pct is not None:
         reset = _five_hour_reset(_get(obj, "rate_limits", "five_hour", "resets_at"), time.time())

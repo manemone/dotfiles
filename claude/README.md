@@ -207,7 +207,7 @@ deploy した後、`settings.machine.json` からその行を削除して再デ�
 ### 3.4 statusLine — Claude 利用枠スナップショット
 
 `ocw-meter snapshot-quota`（`bin/README.md` §3.3 参照）を `statusLine` コマンドとして配線し、
-Claude Code のステータスバーに週間枠（バー・リセット日時・残り時間）/ コンテキスト使用率を表示する。
+Claude Code のステータスバーにモデル名・週間枠（バー・リセット日時・残り時間）/ コンテキスト使用率を表示する。
 5時間枠は Claude Code が報告してきたときだけ表示する。
 詳細設計は `docs/planning/DOC-2608021229-a_ai-llm-cost-observability_計画.md` 第5.6章・第8.5章、
 `docs/adr/DOC-2608021229_llm-cost-observability-collection-method.md` §2.1・§8 を参照。
@@ -215,9 +215,14 @@ Claude Code のステータスバーに週間枠（バー・リセット日時�
 **表示内容**（例。実際は色が付く）:
 
 ```
-7d ▰▰▰▰▰│▰▱▱▱ 62% · 日16:00 3d7h · ctx ◑ 50%
+opus5.5 · 7d ▰▰▰▰▰│▰▱▱▱ 62% · 日16:00 3d7h · ctx ◑ 50%
 ```
 
+先頭の `opus5.5` はモデル名を短くしたもの（`claude-opus-5-5` → `opus5.5`、`deepseek-flash[1m]` →
+`ds-flash`）。`claude-ds`（DeepSeek）のセッションでは、そのすぐ後ろにその会話で使った金額が出る
+（例 `ds-flash $0.16`）。この金額は会話記録とサブエージェントの記録（`subagents/agent-*.jsonl`。
+claude-ds はサブエージェントも DeepSeek で動く）のトークン数に `bin/prices/` の DeepSeek 価格表を
+当てて出し直したもので、Claude Code の `/cost`（Anthropic の価格での見積もり）とは一致しない。
 バーは週間枠の使用率、`│` は週の経過位置（7日のうち何割過ぎたか）。続く `日16:00` は
 リセットの曜日と時刻（ローカルタイム）、`3d7h` はリセットまでの残り。バーと数字は、使用率が
 経過率を5pt超えると黄、15pt超えると赤、それ以内は緑（`NO_COLOR` で無色）。`resets_at` が無い・
@@ -227,7 +232,8 @@ Claude Code のステータスバーに週間枠（バー・リセット日時�
 25%以下は緑、75%以下は黄、それより上は赤。
 
 取得できない項目は表示しない（例: `claude-ds`（DeepSeek）セッションでは `rate_limits` が
-一切来ないため `5h`/`7d` は出ず、`ctx` のみになるか、コンテキスト情報も無ければ完全に空になる）。
+一切来ないため `5h`/`7d` は出ず、`ds-flash $0.16 · ctx ...` のようにモデル名・金額・`ctx` だけになる。
+会話記録が読めないときは金額だけを省く）。
 `ctx` は `context_window.used_percentage` が生の値として取得できているときのみ表示する
 （推定値からのフォールバック計算は記録用イベントにのみ使い、表示には使わない）。
 
