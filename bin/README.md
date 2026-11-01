@@ -394,7 +394,19 @@ PR番号はリポジトリ**内**でしか一意でない。`--pr`とstandalone�
 
 - `claude/settings.json` の `statusLine` から `ocw-meter snapshot-quota` として呼ばれる想定
   （`claude/README.md` §3.4 参照）。stdinのstatusLine JSONから `quota.sample` イベントを1行appendし、
-  ステータスバー表示文字列（例 `7d ▰▰▰▰▰│▰▱▱▱ 62% · 日16:00 3d7h · ctx ◑ 50%`）をstdoutへ返す
+  ステータスバー表示文字列（例 `opus5.5 · 7d ▰▰▰▰▰│▰▱▱▱ 62% · 日16:00 3d7h · ctx ◑ 50%`）をstdoutへ返す
+- **先頭にモデル名を短く出す。** `model.id` から作り、`claude-opus-5-5` は `opus5.5`、
+  `claude-sonnet-5` は `sonnet5`、`deepseek-flash[1m]` は `ds-flash` のようにする。
+  版番号は家族名の直後の数字を最大2つまで残し、`haiku-4-5-20251001` のような日付は落とす
+- **claude-ds（DeepSeek）の会話では、その会話で使った金額をモデル名の直後に出す**
+  （`ds-flash $0.16`。1セント未満は `$<0.01`）。statusLine の `cost.total_cost_usd` は
+  Claude Code が Anthropic の価格で見積もった値で、DeepSeek の実額と大きく食い違う
+  （実セッションで Claude Code の `$6.20` に対し、価格表から出し直すと `$0.16`）。
+  そのため `transcript_path` の会話記録を読み、`message.id` の重複（同じ応答が内容ブロックごとに
+  2〜3回書かれる）を除いた usage に `bin/prices/` の価格表を当てて出し直す。読んだ位置は
+  `state/statusline-cost/<session_id>.json` に残し、次からは追記された分だけを読む
+  （7日より前のセッションの分は新しいセッションができたときに消す）。記録側の
+  `session_cost_usd` はこれまでどおり Claude Code の値をそのまま残す
 - **週間枠はバーとリセット情報で出す。** バーは使用率、`│` は週の経過位置（7日のうち何割過ぎたか）。
   続けてリセットの曜日と時刻（ローカルタイム）、リセットまでの残り（`3d7h` / `7h12m` / `12m`）を出す。
   バーと数字は、使用率が経過率を5pt超えると黄、15pt超えると赤、それ以内は緑（`NO_COLOR` で無色）。

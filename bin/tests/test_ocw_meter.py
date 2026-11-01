@@ -2830,7 +2830,7 @@ class SnapshotQuotaBasicsTests(OcwMeterTestCase):
     def test_claude_session_prints_display_and_records_complete_sample(self):
         result = run_snapshot_quota(json.dumps(CLAUDE_STATUSLINE_SAMPLE), self.home)
         self.assertEqual(result.returncode, 0)
-        self.assertEqual(result.stdout.strip(), "5h ▰▰▱▱▱ 37% · 7d ▰▱▱▱▱▱▱▱▱▱ 12% · ctx ◔ 24%")
+        self.assertEqual(result.stdout.strip(), "opus5 · 5h ▰▰▱▱▱ 37% · 7d ▰▱▱▱▱▱▱▱▱▱ 12% · ctx ◔ 24%")
 
         events = read_events(self.home)
         self.assertEqual(len(events), 1)
@@ -2866,7 +2866,9 @@ class SnapshotQuotaBasicsTests(OcwMeterTestCase):
         }
         result = run_snapshot_quota(json.dumps(obj), self.home)
         self.assertEqual(result.returncode, 0)
-        self.assertEqual(result.stdout.strip(), "")  # no rate_limits, no context_window -> nothing to show
+        # no rate_limits, no context_window -> モデル名だけ。transcript_path も
+        # 無いので、費用も出ない。
+        self.assertEqual(result.stdout.strip(), "ds-v4-pro")
 
         event = read_events(self.home)[0]
         self.assertEqual(event["completeness"], "unknown")
@@ -2919,7 +2921,7 @@ class SnapshotQuotaBasicsTests(OcwMeterTestCase):
         obj["rate_limits"]["some_new_window"] = {"used_percentage": 99}
         result = run_snapshot_quota(json.dumps(obj), self.home)
         self.assertEqual(result.returncode, 0)
-        self.assertEqual(result.stdout.strip(), "5h ▰▰▱▱▱ 37% · 7d ▰▱▱▱▱▱▱▱▱▱ 12% · ctx ◔ 24%")
+        self.assertEqual(result.stdout.strip(), "opus5 · 5h ▰▰▱▱▱ 37% · 7d ▰▱▱▱▱▱▱▱▱▱ 12% · ctx ◔ 24%")
         self.assertEqual(read_events(self.home)[0]["completeness"], "complete")
 
     def test_known_keys_missing_does_not_crash(self):
@@ -2967,7 +2969,7 @@ class SnapshotQuotaBasicsTests(OcwMeterTestCase):
         bad_home = repo_dir / "ocw-meter-home"
         result = run_snapshot_quota(json.dumps(CLAUDE_STATUSLINE_SAMPLE), bad_home)
         self.assertEqual(result.returncode, 0)
-        self.assertEqual(result.stdout.strip(), "5h ▰▰▱▱▱ 37% · 7d ▰▱▱▱▱▱▱▱▱▱ 12% · ctx ◔ 24%")
+        self.assertEqual(result.stdout.strip(), "opus5 · 5h ▰▰▱▱▱ 37% · 7d ▰▱▱▱▱▱▱▱▱▱ 12% · ctx ◔ 24%")
         self.assertIn("resolves inside a Git worktree", result.stderr)
         self.assertFalse((bad_home / "events").exists())
 
@@ -3542,8 +3544,8 @@ class SnapshotQuotaThrottleTests(OcwMeterTestCase):
         self.assertEqual(r2.returncode, 0)
         # Both calls still print a display string — throttling only
         # skips the storage write, never the stdout contract.
-        self.assertEqual(r1.stdout.strip(), "5h ▰▰▱▱▱ 37% · 7d ▰▱▱▱▱▱▱▱▱▱ 12% · ctx ◔ 24%")
-        self.assertEqual(r2.stdout.strip(), "5h ▰▰▱▱▱ 37% · 7d ▰▱▱▱▱▱▱▱▱▱ 12% · ctx ◔ 24%")
+        self.assertEqual(r1.stdout.strip(), "opus5 · 5h ▰▰▱▱▱ 37% · 7d ▰▱▱▱▱▱▱▱▱▱ 12% · ctx ◔ 24%")
+        self.assertEqual(r2.stdout.strip(), "opus5 · 5h ▰▰▱▱▱ 37% · 7d ▰▱▱▱▱▱▱▱▱▱ 12% · ctx ◔ 24%")
         self.assertEqual(len(read_events(self.home)), 1)
 
     def test_interval_zero_disables_throttling(self):
@@ -3676,6 +3678,92 @@ class SevenDayDisplayTests(OcwMeterTestCase):
         for used, code in ((55, "32"), (62, "33"), (80, "31")):
             out = self._run(used, remaining, extra_env=env).stdout
             self.assertIn(f"\x1b[{code}m7d ", out, f"used={used}")
+
+
+class ModelDisplayTests(OcwMeterTestCase):
+    """先頭のモデル名: statusLine の model.id を短くして出す。"""
+
+    def _run(self, model_id):
+        obj = {"model": {"id": model_id}, "context_window": {"used_percentage": 50}}
+        return run_snapshot_quota(json.dumps(obj), self.home).stdout.strip()
+
+    def test_short_names(self):
+        for model_id, expected in (
+            ("claude-opus-5-5", "opus5.5"),
+            ("claude-sonnet-5", "sonnet5"),
+            ("claude-haiku-4-5-20251001", "haiku4.5"),
+            ("deepseek-flash[1m]", "ds-flash"),
+        ):
+            self.assertEqual(self._run(model_id), f"{expected} · ctx ◑ 50%", model_id)
+
+    def test_missing_model_keeps_the_rest(self):
+        result = run_snapshot_quota(json.dumps({"context_window": {"used_percentage": 50}}), self.home)
+        self.assertEqual(result.stdout.strip(), "ctx ◑ 50%")
+
+
+class DeepSeekCostDisplayTests(OcwMeterTestCase):
+    """claude-ds（DeepSeek）の会話で使った金額を、価格表から出して足す。
+
+    statusLine の cost.total_cost_usd は Claude Code が Anthropic の価格で
+    見積もった値で、DeepSeek の実額と合わないため使わない。"""
+
+    def setUp(self):
+        super().setUp()
+        self.transcript = pathlib.Path(self.tmpdir.name) / "session.jsonl"
+
+    def _message(self, message_id, input_tokens, timestamp="2026-10-21T12:00:00Z"):
+        return {
+            "type": "assistant",
+            "timestamp": timestamp,
+            "message": {
+                "id": message_id,
+                "model": "deepseek-flash",
+                "usage": {
+                    "input_tokens": input_tokens,
+                    "cache_read_input_tokens": 0,
+                    "cache_creation_input_tokens": 0,
+                    "output_tokens": 0,
+                },
+            },
+        }
+
+    def _append(self, *messages):
+        with open(self.transcript, "a", encoding="utf-8") as fh:
+            for message in messages:
+                fh.write(json.dumps(message) + "\n")
+
+    def _run(self, model_id="deepseek-flash[1m]", transcript=None):
+        payload = {
+            "model": {"id": model_id},
+            "session_id": "session-1",
+            "transcript_path": str(transcript or self.transcript),
+            "context_window": {"used_percentage": 12},
+            # 価格表から出し直すので、この値は表示に使われない。
+            "cost": {"total_cost_usd": 6.20},
+        }
+        return run_snapshot_quota(json.dumps(payload), self.home).stdout.strip()
+
+    def test_cost_comes_from_the_price_table_and_duplicate_lines_are_ignored(self):
+        # input 1M トークン × $0.15/M（ピーク外の時間帯）= $0.15。
+        # 同じ message.id の追記（内容ブロックごとに 2〜3 回書かれる）は二重に数えない。
+        self._append(self._message("m1", 1_000_000), self._message("m1", 1_000_000))
+        self.assertEqual(self._run(), "ds-flash $0.15 · ctx ○ 12%")
+
+    def test_following_lines_are_added_incrementally(self):
+        self._append(self._message("m1", 1_000_000))
+        self.assertEqual(self._run(), "ds-flash $0.15 · ctx ○ 12%")
+        self._append(self._message("m2", 1_000_000))
+        self.assertEqual(self._run(), "ds-flash $0.30 · ctx ○ 12%")
+
+    def test_unreadable_transcript_omits_only_the_cost(self):
+        result = self._run(transcript=pathlib.Path(self.tmpdir.name) / "missing.jsonl")
+        self.assertEqual(result, "ds-flash · ctx ○ 12%")
+
+    def test_anthropic_session_never_shows_a_cost(self):
+        self._append(self._message("m1", 1_000_000))
+        result = self._run(model_id="claude-opus-5-5")
+        self.assertEqual(result, "opus5.5 · ctx ○ 12%")
+        self.assertNotIn("$", result)
 
 
 class SnapshotQuotaWindowTests(OcwMeterTestCase):
@@ -5194,8 +5282,8 @@ class SnapshotQuotaRoundOneReviewTests(OcwMeterTestCase):
         # Both calls still print the display string — the point of the
         # fix is suppressing the wasted git subprocess call and stderr
         # noise, never the stdout contract.
-        self.assertEqual(r1.stdout.strip(), "5h ▰▰▱▱▱ 37% · 7d ▰▱▱▱▱▱▱▱▱▱ 12% · ctx ◔ 24%")
-        self.assertEqual(r2.stdout.strip(), "5h ▰▰▱▱▱ 37% · 7d ▰▱▱▱▱▱▱▱▱▱ 12% · ctx ◔ 24%")
+        self.assertEqual(r1.stdout.strip(), "opus5 · 5h ▰▰▱▱▱ 37% · 7d ▰▱▱▱▱▱▱▱▱▱ 12% · ctx ◔ 24%")
+        self.assertEqual(r2.stdout.strip(), "opus5 · 5h ▰▰▱▱▱ 37% · 7d ▰▱▱▱▱▱▱▱▱▱ 12% · ctx ◔ 24%")
 
     def test_cwd_is_recorded_on_the_event(self):
         # Finding 4: `json_cwd` was already extracted (to resolve git
