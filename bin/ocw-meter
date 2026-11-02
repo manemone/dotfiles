@@ -299,7 +299,8 @@ subcommands:
     `refresh-balance` child fetches https://api.deepseek.com/user/balance
     with the same key file as claude-ds and the next redraw shows the new
     value, so the status bar never waits on the network. A failed fetch
-    keeps the last amount with a trailing "?" ("残高 $12.34?"); with no
+    keeps the last amount with a trailing "?" ("残高 $12.34?"), and so does
+    a value older than max(15 minutes, 3 x the refresh interval); with no
     cached amount the segment is omitted.
     Reset details are omitted when
     `resets_at` is missing, already past, or not within 7 days) and exits 0 — no matter what: empty stdin, malformed
@@ -408,7 +409,9 @@ environment:
   OCW_METER_BALANCE_INTERVAL
     default: 300
     Minimum seconds between balance fetches. Non-numeric or negative values
-    fall back to the default.
+    fall back to the default. The age that earns a trailing "?" follows it
+    (max(15 minutes, 3 x interval)), so a long interval does not make the
+    value look stale between successful fetches.
 
   OCW_METER_DEEPSEEK_BALANCE_URL
     default: https://api.deepseek.com/user/balance
@@ -7763,7 +7766,11 @@ STATUSLINE_BALANCE_URL = "https://api.deepseek.com/user/balance"
 DEFAULT_STATUSLINE_BALANCE_INTERVAL_SECONDS = 5 * 60.0
 # 取得に成功していても、これより古い値は `?` を付ける。PC がスリープして
 # いた場合、再描画の直後のキャッシュは何日も前のことがあるため。
+# 取得の間隔を延ばしたときに `?` が出っぱなしにならないよう、実際の閾値は
+# max(これ, STATUSLINE_BALANCE_STALE_INTERVAL_MULTIPLIER × 間隔) にする
+# （auto-ingest の遅れの警告と同じ考え方）。
 STATUSLINE_BALANCE_STALE_SECONDS = 15 * 60
+STATUSLINE_BALANCE_STALE_INTERVAL_MULTIPLIER = 3
 STATUSLINE_BALANCE_HTTP_TIMEOUT_SECONDS = 5.0
 # ANTHROPIC_AUTH_TOKEN を鍵として使ってよい相手の確認にだけ使う
 # （別の相手の鍵を DeepSeek へ送らないため）。
@@ -7924,7 +7931,10 @@ def _statusline_balance_is_stale(entry, now=None):
     if fetched is None:
         return True
     now = now or datetime.now(timezone.utc)
-    return (now - fetched).total_seconds() > STATUSLINE_BALANCE_STALE_SECONDS
+    interval = statusline_balance_interval_seconds()
+    threshold = max(STATUSLINE_BALANCE_STALE_SECONDS,
+                    STATUSLINE_BALANCE_STALE_INTERVAL_MULTIPLIER * interval)
+    return (now - fetched).total_seconds() > threshold
 
 
 def _format_statusline_balance(entry, now=None):

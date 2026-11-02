@@ -3914,10 +3914,16 @@ class DeepSeekBalanceDisplayTests(OcwMeterTestCase):
                 self.assertEqual(self._display(), f"ds-flash · {expected} · ctx ◑ 50%")
 
     def test_failed_or_ancient_fetch_marks_the_last_amount(self):
-        for kwargs in ({"last_result": "failed"}, {"fetched_ago": 3600}):
-            with self.subTest(**kwargs):
+        for kwargs, env, expected in (
+            ({"last_result": "failed"}, {}, "残高 $12.34?"),
+            ({"fetched_ago": 3600}, {}, "残高 $12.34?"),
+            # 間隔を延ばしたときの古さの閾値は max(15分, 3 × 間隔)。
+            # 取得に成功していて次の取得もまだ先なら `?` は付けない。
+            ({"fetched_ago": 1000}, {"OCW_METER_BALANCE_INTERVAL": "3600"}, "残高 $12.34"),
+        ):
+            with self.subTest(expected=expected, **kwargs):
                 write_balance_cache(self.home, [{"currency": "USD", "total_balance": 12.34}], **kwargs)
-                self.assertEqual(self._display(), "ds-flash · 残高 $12.34? · ctx ◑ 50%")
+                self.assertEqual(self._display(extra_env=env), f"ds-flash · {expected} · ctx ◑ 50%")
 
     def test_balance_is_hidden_outside_claude_ds_or_when_disabled(self):
         write_balance_cache(self.home, [{"currency": "USD", "total_balance": 12.34}])
