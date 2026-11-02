@@ -292,7 +292,15 @@ subcommands:
     model name ("ds-flash $0.16"); it is recomputed from the session's
     transcript, its subagents' transcripts and bin/prices/, because
     Claude Code's own `cost.total_cost_usd` is priced with Anthropic
-    rates and does not match DeepSeek's billing.
+    rates and does not match DeepSeek's billing. The wallet's remaining
+    balance follows the session spend ("ds-flash $0.16 · 残高 $12.34";
+    CNY accounts show "残高 CNY 100.00"). The balance is read from
+    state/statusline-balance.json only: when it is stale, a detached
+    `refresh-balance` child fetches https://api.deepseek.com/user/balance
+    with the same key file as claude-ds and the next redraw shows the new
+    value, so the status bar never waits on the network. A failed fetch
+    keeps the last amount with a trailing "?" ("残高 $12.34?"); with no
+    cached amount the segment is omitted.
     Reset details are omitted when
     `resets_at` is missing, already past, or not within 7 days) and exits 0 — no matter what: empty stdin, malformed
     JSON, a missing `rate_limits` (every DeepSeek/claude-ds session —
@@ -392,6 +400,21 @@ environment:
     Minimum seconds between automatic ingests. Non-numeric or negative
     values fall back to the default.
 
+  OCW_METER_BALANCE
+    default: 1
+    Set to 0/false/no/off to turn off the claude-ds wallet balance segment
+    (`snapshot-quota`) and its background `refresh-balance` child.
+
+  OCW_METER_BALANCE_INTERVAL
+    default: 300
+    Minimum seconds between balance fetches. Non-numeric or negative values
+    fall back to the default.
+
+  OCW_METER_DEEPSEEK_BALANCE_URL
+    default: https://api.deepseek.com/user/balance
+    Override for tests. Never point this at a host you do not trust with
+    the DeepSeek API key.
+
   OCW_METER_CLAUDE_PROJECTS_DIR
     default: $HOME/.claude/projects
     Where `ingest` looks for `<slug>/<session-id>.jsonl` transcripts
@@ -480,7 +503,7 @@ case "$cmd" in
     usage
     exit 0
     ;;
-  event | bind-pr | validate | report | dash | ingest | snapshot-quota | prune-diagnostics | auto-ingest)
+  event | bind-pr | validate | report | dash | ingest | snapshot-quota | prune-diagnostics | auto-ingest | refresh-balance)
     ;;
   *)
     usage >&2
@@ -7446,6 +7469,13 @@ STATUSLINE_COST_CACHE_MAX_AGE_SECONDS = 7 * 24 * 3600
 STATUSLINE_COST_MAX_TRANSCRIPT_BYTES = 32 * 1024 * 1024
 
 
+def statusline_is_deepseek(model_id):
+    """statusLine の `model.id` が claude-ds（DeepSeek）のセッションか。"""
+    if not isinstance(model_id, str):
+        return False
+    return infer_provider(normalize_model_name(model_id)) == "deepseek"
+
+
 def statusline_model_name(model_id):
     """statusLine の `model.id` から表示用の短い名前を作る。
 
@@ -7602,8 +7632,7 @@ def resolve_statusline_session_cost(obj, model_id):
     規則）。実行日で選ぶと、後から足した価格表が過去のメッセージに
     遡って当たってしまう。"""
     try:
-        normalized = normalize_model_name(model_id) if isinstance(model_id, str) else None
-        if infer_provider(normalized) != "deepseek":
+        if not statusline_is_deepseek(model_id):
             return None
         transcript_path = obj.get("transcript_path") if isinstance(obj, dict) else None
         if not isinstance(transcript_path, str) or not transcript_path:
@@ -7712,14 +7741,355 @@ def resolve_statusline_session_cost(obj, model_id):
         return None
 
 
+# ── statusLine: DeepSeek のウォレット残高 ─────────────────────────────
+#
+# claude-ds（DeepSeek）の会話では、この会話の費用の隣にウォレットの
+# 残高を出す。DeepSeek の残高 API は `GET /user/balance` で、応答は
+# 通貨ごとに `balance_infos[].currency`（USD / CNY）と
+# `balance_infos[].total_balance`（金額の文字列）を持つ
+# （https://api-docs.deepseek.com/api/get-user-balance）。
+#
+# statusLine は1時間に最大50回以上呼ばれるので、描画のたびに API は
+# 叩かない。描画側は state/statusline-balance.json だけを読み、期限が
+# 切れていれば切り離した子プロセス（`refresh-balance`）に取得させる。
+# 取得に失敗してもキャッシュの金額は消さず、`?` を付けて古い値である
+# ことを示す。鍵は claude-ds と同じ場所から読み、キャッシュにも
+# ログにも残さない。
+
+STATUSLINE_BALANCE_CACHE_VERSION = 1
+STATUSLINE_BALANCE_CACHE_FILENAME = "statusline-balance.json"
+STATUSLINE_BALANCE_LOCK_FILENAME = "statusline-balance.lock"
+STATUSLINE_BALANCE_URL = "https://api.deepseek.com/user/balance"
+DEFAULT_STATUSLINE_BALANCE_INTERVAL_SECONDS = 5 * 60.0
+# 取得に成功していても、これより古い値は `?` を付ける。PC がスリープして
+# いた場合、再描画の直後のキャッシュは何日も前のことがあるため。
+STATUSLINE_BALANCE_STALE_SECONDS = 15 * 60
+STATUSLINE_BALANCE_HTTP_TIMEOUT_SECONDS = 5.0
+# ANTHROPIC_AUTH_TOKEN を鍵として使ってよい相手の確認にだけ使う
+# （別の相手の鍵を DeepSeek へ送らないため）。
+_DEEPSEEK_API_BASE_URL = "https://api.deepseek.com"
+
+
+def statusline_balance_enabled():
+    return os.environ.get("OCW_METER_BALANCE", "1").strip().lower() not in _FALSE_STRINGS
+
+
+def statusline_balance_interval_seconds():
+    raw = os.environ.get("OCW_METER_BALANCE_INTERVAL")
+    if raw is None or raw == "":
+        return DEFAULT_STATUSLINE_BALANCE_INTERVAL_SECONDS
+    try:
+        value = float(raw)
+    except ValueError:
+        return DEFAULT_STATUSLINE_BALANCE_INTERVAL_SECONDS
+    return value if value >= 0 else DEFAULT_STATUSLINE_BALANCE_INTERVAL_SECONDS
+
+
+def _deepseek_api_key_file():
+    explicit = os.environ.get("DEEPSEEK_API_KEY_FILE")
+    if explicit:
+        return pathlib.Path(explicit)
+    return pathlib.Path(os.path.expanduser("~")) / ".config" / "deepseek" / "api_key"
+
+
+def deepseek_api_key():
+    """claude-ds と同じ場所から DeepSeek の鍵を読む。
+
+    claude-ds は起動時にこのファイルを読んで ANTHROPIC_AUTH_TOKEN に
+    入れるので、通常はどちらでも同じ鍵になる。ファイルが読めないとき
+    だけ環境変数に頼り、しかも DeepSeek の URL を向いているセッションに
+    限る（別の相手向けの鍵を DeepSeek へ送らないため）。"""
+    try:
+        key = _deepseek_api_key_file().read_text(encoding="utf-8").strip()
+    except (OSError, UnicodeDecodeError):
+        key = ""
+    if key:
+        return key
+    base = os.environ.get("ANTHROPIC_BASE_URL") or ""
+    token = (os.environ.get("ANTHROPIC_AUTH_TOKEN") or "").strip()
+    if token and base.startswith(_DEEPSEEK_API_BASE_URL):
+        return token
+    return None
+
+
+def _parse_statusline_balance_payload(payload):
+    """残高 API の応答を `[{"currency", "total_balance"}]` にする。
+    `balance_infos` が無い・形が違う・金額が数値でないものは捨てる
+    （1件も残らなければ None で、取得失敗として扱う）。"""
+    if not isinstance(payload, dict):
+        return None
+    infos = payload.get("balance_infos")
+    if not isinstance(infos, list):
+        return None
+    entries = []
+    for info in infos:
+        if not isinstance(info, dict):
+            continue
+        currency = info.get("currency")
+        amount = info.get("total_balance")
+        if not isinstance(currency, str) or not currency or isinstance(amount, bool):
+            continue
+        try:
+            amount = float(amount)
+        except (TypeError, ValueError):
+            continue
+        if not math.isfinite(amount):
+            continue
+        entries.append({"currency": currency, "total_balance": amount})
+    return entries or None
+
+
+def fetch_statusline_balance(url, key, timeout=STATUSLINE_BALANCE_HTTP_TIMEOUT_SECONDS):
+    """残高 API を叩いて `balance_infos` を返す。通信断・HTTP エラー・
+    想定外の形はすべて None。鍵は Authorization ヘッダにだけ載せ、
+    例外のメッセージにも入れない。
+
+    statusLine の描画経路（snapshot-quota）はこの関数を通らない
+    （取得は切り離した refresh-balance 子プロセスだけが行う）ので、
+    urllib の読み込みはここで遅延させる。"""
+    import urllib.request
+
+    class _RefuseRedirect(urllib.request.HTTPRedirectHandler):
+        """Authorization ヘッダは urllib の既定のリダイレクトで転送先へ
+        そのまま引き継がれる。鍵を別のホストへ送らないよう、リダイレクトは
+        すべて失敗として扱う。"""
+
+        def redirect_request(self, req, fp, code, msg, headers, newurl):
+            return None
+
+    request = urllib.request.Request(
+        url,
+        headers={"Authorization": f"Bearer {key}", "Accept": "application/json"},
+        method="GET",
+    )
+    try:
+        with urllib.request.build_opener(_RefuseRedirect).open(request, timeout=timeout) as response:
+            payload = json.loads(response.read(1_000_000).decode("utf-8"))
+    except Exception:
+        return None
+    return _parse_statusline_balance_payload(payload)
+
+
+def _statusline_balance_cache_path(state_dir):
+    return state_dir / STATUSLINE_BALANCE_CACHE_FILENAME
+
+
+def _load_statusline_balance_cache(cache_path):
+    try:
+        data = json.loads(cache_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    if data.get("version") != STATUSLINE_BALANCE_CACHE_VERSION:
+        return None
+    if not isinstance(data.get("balances"), list):
+        return None
+    return data
+
+
+def _save_statusline_balance_cache(root, cache_path, entry):
+    """残高キャッシュを書く。書けなければ False（描画は壊さないので、
+    失敗は握りつぶして呼び出し側の判断に任せる）。費用のキャッシュと
+    同じく、Git worktree の下には書かない。"""
+    try:
+        if in_git_worktree(root):
+            return False
+        ensure_dir(cache_path.parent, 0o700)
+        tmp_fd, tmp_path = tempfile.mkstemp(dir=str(cache_path.parent), prefix=".tmp-", suffix=".json")
+        try:
+            with os.fdopen(tmp_fd, "w", encoding="utf-8") as fh:
+                json.dump(entry, fh, ensure_ascii=False, sort_keys=True)
+            os.chmod(tmp_path, 0o600)
+            os.replace(tmp_path, cache_path)
+        except Exception:
+            with contextlib.suppress(OSError):
+                os.unlink(tmp_path)
+            return False
+        return True
+    except Exception:
+        return False
+
+
+def _format_balance_amount(currency, amount):
+    if currency == "USD":
+        return f"${amount:.2f}"
+    return f"{currency} {amount:.2f}"
+
+
+def _statusline_balance_is_stale(entry, now=None):
+    if entry.get("last_result") != "ok":
+        return True
+    fetched = parse_ts(entry.get("fetched_at"))
+    if fetched is None:
+        return True
+    now = now or datetime.now(timezone.utc)
+    return (now - fetched).total_seconds() > STATUSLINE_BALANCE_STALE_SECONDS
+
+
+def _format_statusline_balance(entry, now=None):
+    """キャッシュから「残高 $12.34」を作る。金額が無ければ None。
+    最後の取得が失敗している、または値が古すぎるときは末尾に `?` を付ける。"""
+    if not isinstance(entry, dict):
+        return None
+    texts = []
+    for item in entry.get("balances") or []:
+        if not isinstance(item, dict):
+            continue
+        currency = item.get("currency")
+        amount = _as_number(item.get("total_balance"))
+        if not isinstance(currency, str) or not currency or amount is None:
+            continue
+        texts.append(_format_balance_amount(currency, amount))
+    if not texts:
+        return None
+    text = "残高 " + "/".join(texts)
+    if _statusline_balance_is_stale(entry, now):
+        text += "?"
+    return text
+
+
+def resolve_statusline_balance(model_id, now=None):
+    """DeepSeek のセッションで、キャッシュから残高の表示文字列を作る。
+    キャッシュが無い・対象外のセッションでは None。例外は外へ出さない。"""
+    try:
+        if not statusline_balance_enabled() or not statusline_is_deepseek(model_id):
+            return None
+        root = storage_root()
+        if not root:
+            return None
+        cache_path = _statusline_balance_cache_path(Paths(root).state_dir)
+        return _format_statusline_balance(_load_statusline_balance_cache(cache_path), now)
+    except Exception:
+        return None
+
+
+def _statusline_balance_root_refused_recently(root, now):
+    """設定された root が Git worktree の中にあり、直近に拒否されたことを
+    記録から知る。これを知るためだけに、描画のたびに git の subprocess を
+    起動しないための判定。拒否の記録は record_quota_sample が既定 root の
+    state/quota-worktree-refusal.json に残す（DOC-2608081456【6】）。"""
+    default_root = default_storage_root()
+    if not default_root or default_root == root:
+        return False
+    try:
+        # 読むだけの load_json_state_file を使う（描画の経路なので、既定 root
+        # が拒否されていても書き込みを起こさない）。
+        state = load_json_state_file(Paths(default_root), QUOTA_WORKTREE_REFUSAL_FILENAME)
+    except Exception:
+        return False
+    last = parse_ts(state.get(root)) if isinstance(state, dict) else None
+    return last is not None and 0 <= (now - last).total_seconds() < statusline_balance_interval_seconds()
+
+
+def maybe_start_statusline_balance_refresh(model_id):
+    """残高のキャッシュが期限切れ（または未取得）なら、取得を切り離した
+    子プロセスに任せる。描画は待たない。試行時刻を先にキャッシュへ書いて
+    から起動するので、描画のたびに子プロセスが増えることはない。
+    起動できたら True。
+
+    試行時刻の読み直しと書き込みは refresh-balance と同じロックの中で
+    行う（複数ペインが同時に初回描画しても、後の書き込みが先の取得結果を
+    上書きしないように）。ロックは起動の前に離す: 子も同じロックを
+    取るので、持ったまま起動すると子が timeout=0 で諦めてしまう。"""
+    try:
+        if not statusline_balance_enabled() or not statusline_is_deepseek(model_id):
+            return False
+        root = storage_root()
+        if not root:
+            return False
+        me = os.environ.get("OCW_METER_SELF")
+        if not me or not os.access(me, os.X_OK):
+            return False
+        paths = Paths(root)
+        cache_path = _statusline_balance_cache_path(paths.state_dir)
+        # 高頻度の呼び出しで git の subprocess を起動しないよう、まず
+        # キャッシュだけを見る安い throttle 判定を行う。
+        entry = _load_statusline_balance_cache(cache_path)
+        now = datetime.now(timezone.utc)
+        last_attempt = parse_ts(entry.get("last_attempt_at")) if entry else None
+        if last_attempt is not None and 0 <= (now - last_attempt).total_seconds() < statusline_balance_interval_seconds():
+            return False
+        # ロックを作る前に見る（拒否される root の下にディレクトリを作らない）。
+        # まず拒否の記録を安く見て、記録が無いときだけ git を起動する。
+        if _statusline_balance_root_refused_recently(root, now):
+            return False
+        if in_git_worktree(root):
+            return False
+        with acquire_lock(paths.state_dir / STATUSLINE_BALANCE_LOCK_FILENAME, timeout=0) as acquired:
+            if not acquired:
+                return False
+            # 同じロックの中で読み直す。複数ペインの初回描画が同時に走っても、
+            # 後の書き込みが先の取得結果を上書きしないように。
+            now = datetime.now(timezone.utc)
+            entry = _load_statusline_balance_cache(cache_path)
+            last_attempt = parse_ts(entry.get("last_attempt_at")) if entry else None
+            if last_attempt is not None and 0 <= (now - last_attempt).total_seconds() < statusline_balance_interval_seconds():
+                return False
+            next_entry = dict(entry) if entry else {"version": STATUSLINE_BALANCE_CACHE_VERSION, "balances": []}
+            next_entry["last_attempt_at"] = iso_utc(now)
+            if not _save_statusline_balance_cache(root, cache_path, next_entry):
+                return False
+        try:
+            subprocess.Popen(
+                [me, "refresh-balance"],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+                close_fds=True,
+            )
+        except Exception:
+            return False
+        return True
+    except Exception:
+        return False
+
+
+def cmd_refresh_balance(args):
+    """内部用: statusLine から切り離して起動される子プロセス。残高を
+    取得して state/statusline-balance.json を更新する。取得に失敗しても
+    前回の金額と取得時刻は残し、last_result だけを failed にして次回の
+    表示に `?` を付けさせる。待っている相手がいないので常に exit 0。"""
+    try:
+        if not statusline_balance_enabled():
+            return 0
+        root = storage_root()
+        if not root or in_git_worktree(root):
+            return 0
+        paths = Paths(root)
+        with acquire_lock(paths.state_dir / STATUSLINE_BALANCE_LOCK_FILENAME, timeout=0) as acquired:
+            if not acquired:
+                return 0
+            cache_path = _statusline_balance_cache_path(paths.state_dir)
+            entry = _load_statusline_balance_cache(cache_path)
+            entry = dict(entry) if entry else {"version": STATUSLINE_BALANCE_CACHE_VERSION, "balances": []}
+            now = datetime.now(timezone.utc)
+            key = deepseek_api_key()
+            url = os.environ.get("OCW_METER_DEEPSEEK_BALANCE_URL") or STATUSLINE_BALANCE_URL
+            balances = fetch_statusline_balance(url, key) if key else None
+            if balances is not None:
+                entry["balances"] = balances
+                entry["fetched_at"] = iso_utc(now)
+                entry["last_result"] = "ok"
+            else:
+                entry["last_result"] = "failed"
+            entry["last_attempt_at"] = iso_utc(now)
+            _save_statusline_balance_cache(root, cache_path, entry)
+    except Exception:
+        pass
+    return 0
+
+
 def format_quota_display(obj):
     """statusLine の 1 行を組み立てる。例（色は省略）:
 
         7d \u25b0\u25b0\u25b0\u25b0\u25b0\u2502\u25b0\u25b1\u25b1\u25b1 62% \u00b7 日16:00 3d7h \u00b7 ctx \u25d1 50%
 
     先頭はモデルの短い名前（`opus5.5`）。claude-ds（DeepSeek）の
-    セッションでは、そのすぐ後ろにその会話で使った金額を足す
-    （`ds-flash $0.16`）。
+    セッションでは、そのすぐ後ろにその会話で使った金額を足し
+    （`ds-flash $0.16`）、さらにウォレットの残高を足す
+    （`残高 $12.34`。取得できていないときは `残高 $12.34?`）。
 
     バーは使用%、│ は週の経過%の位置。バーと数字は、使用%が経過%を
     どれだけ上回るかで緑・黄・赤になる。5h 欄は来たときだけ出し、
@@ -7742,6 +8112,9 @@ def format_quota_display(obj):
         head.append(cost_text)
     if head:
         parts.append(" ".join(head))
+    balance_text = resolve_statusline_balance(model_id)
+    if balance_text:
+        parts.append(balance_text)
     five_hour_pct = _as_number(_get(obj, "rate_limits", "five_hour", "used_percentage"))
     if five_hour_pct is not None:
         reset = _five_hour_reset(_get(obj, "rate_limits", "five_hour", "resets_at"), time.time())
@@ -8267,6 +8640,13 @@ def cmd_snapshot_quota(args):
             f"{redact_text(f'{type(exc).__name__}: {exc}')}",
             file=sys.stderr,
         )
+
+    # Stage: claude-ds（DeepSeek）の残高キャッシュが期限切れなら、取得を
+    # 切り離した子プロセス（refresh-balance）に任せる。表示は上の
+    # format_quota_display が済ませているキャッシュだけを読むので、
+    # ここで待つことはない（次の再描画から新しい値が出る）。
+    with contextlib.suppress(Exception):
+        maybe_start_statusline_balance_refresh(_get(obj, "model", "id"))
 
     # Stage 4 (own guard, after the sample is recorded): kick off the
     # throttled, detached background ingest. Nothing here may delay or
@@ -8804,6 +9184,12 @@ def main():
     if cmd == "auto-ingest":
         try:
             return cmd_auto_ingest(rest)
+        except Exception:
+            return 0  # detached child: nobody is listening, never fail loud
+
+    if cmd == "refresh-balance":
+        try:
+            return cmd_refresh_balance(rest)
         except Exception:
             return 0  # detached child: nobody is listening, never fail loud
 
