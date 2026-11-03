@@ -29,7 +29,7 @@ claude-ds（Claude Code を DeepSeek の API で動かすラッパ `bin/claude-d
 | 1 | dotfiles | `dcd-01-autocompact-window` | `bin/claude-ds` の `CLAUDE_CODE_AUTO_COMPACT_WINDOW` を 20〜25万へ下げ、README の理由を実測に合わせて直す。サブエージェントに効くかを確かめる | ✅ PR #208 マージ済 |
 | 2 | dotfiles | `dcd-02-self-compact-rules` | self-compact の決まり（pr-review-loop・umbrella-orchestrator の自動付与指示・`compact-reminder.sh`・ADR）を DeepSeek の実測で見直す。Claude にも効かせるかは人間に確かめる | ✅ PR #207 マージ済 |
 | 3 | dotfiles | `dcd-03-ui-checker-pane` | deepseek-flash の画像読み取りを確かめ、UI 確認役を別の会話（ペイン）として立てる仕組みを作る | ✅ PR #209 マージ済 |
-| 4 | pixidex | `dcd-04-checker-request` | pixidex の「確かめ役」の頼み方（規約・現役の計画書の型・ADR）を孫3 の仕組みに合わせる | 🔄 実装中 |
+| 4 | pixidex | `dcd-04-checker-request` | pixidex の「確かめ役」の頼み方（規約・現役の計画書の型・ADR）を孫3 の仕組みに合わせる | ⏳ 人間のマージ待ち (PR pixidex#234) |
 
 依存:
 
@@ -310,6 +310,7 @@ pixidex は private のため、owner/name は値ではなく解決方法を書�
 - 2026-11-03: 訂正: 人間が Claude にも効かせてよいとしたのは回数の上限（増分制）だけだった。閾値 150k は claude-ds のときだけにし、それ以外の Claude は 200k に戻した（フックは `ANTHROPIC_BASE_URL` で見分ける。司令官が傘へ直接コミット。ADR DOC-2611032102 §3 の 4 を訂正）
 - 2026-11-03: 孫1 の PR #208 を司令官がマージした。claude-ds の `CLAUDE_CODE_AUTO_COMPACT_WINDOW` を 786432→233000（ADR DOC-2611032100）。傘で unittest・`pre-commit run --all-files`・`bash tests/compact_reminder_test.sh`・`doc-id verify` が通った
 - 2026-11-03: 孫3 の PR #209 を司令官がマージした（`ocw checker`）。傘で unittest・`pre-commit run --all-files`・`bash tests/compact_reminder_test.sh`・`doc-id verify` が通った。孫4 を pixidex の `origin/main` から spawn した
+- 2026-11-03: 孫4 の PR pixidex#234 が HEAD d975354f で承認された。ADR に「`ocw checker` が配られてから main にマージ」という前提があるため、傘の master へのマージとデプロイの後に人間がマージする
 
 ## 孫1用プロンプト:
 
