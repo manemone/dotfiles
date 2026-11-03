@@ -114,30 +114,30 @@ assert_silent "OCW_ROLE 未設定では黙る" "$(run_hook "" s-role "$T")"
 
 log "--- 閾値と間引き（同一セッション） ---"
 S=s-thr
-write_transcript "$T" 200000
-assert_silent "閾値ちょうど（200,000）では黙る" "$(run_hook implementer $S "$T")"
-write_transcript "$T" 200001
+write_transcript "$T" 150000
+assert_silent "閾値ちょうど（150,000）では黙る" "$(run_hook implementer $S "$T")"
+write_transcript "$T" 150001
 assert_speaks "閾値超えで最初の 1 回は差し込む" "$(run_hook implementer $S "$T")"
-write_transcript "$T" 249999
+write_transcript "$T" 199999
 assert_silent "直近の差し込みから 50k 未満の増加では黙る" "$(run_hook implementer $S "$T")"
-write_transcript "$T" 250001
+write_transcript "$T" 200001
 assert_speaks "50k 増えたら再掲する" "$(run_hook implementer $S "$T")"
 write_transcript "$T" 80000
 assert_silent "compact で閾値以下に戻ると黙る" "$(run_hook implementer $S "$T")"
-write_transcript "$T" 210000
+write_transcript "$T" 160000
 assert_speaks "戻ったあと再び超えたら最初の 1 回から差し込む" "$(run_hook implementer $S "$T")"
 
 log "--- 区切りのツール呼び出し（1区切り1回） ---"
 S=s-bnd
-write_transcript "$T" 210000
+write_transcript "$T" 160000
 assert_speaks "区切りでない呼び出しで閾値超えの最初の 1 回は差し込む" "$(run_hook implementer $S "$T" ls)"
-write_transcript "$T" 215000
+write_transcript "$T" 165000
 out=$(run_hook implementer $S "$T" commit)
 assert_speaks "50k 未満の増加でも、区切り（git commit）なら差し込む" "$out"
 case "$out" in *"1行書く"*) pass "区切りの文面は compact するか見送るかを1行書かせる" ;; *) fail "区切りの文面が想定と違う (got: $out)" ;; esac
-write_transcript "$T" 218000
+write_transcript "$T" 168000
 assert_silent "同じ区切り（commit → push → PR 作成）では繰り返さない" "$(run_hook implementer $S "$T" push)$(run_hook implementer $S "$T" prcreate)"
-write_transcript "$T" 220000
+write_transcript "$T" 170000
 assert_silent "区切りでない呼び出しは 50k 未満なら黙る" "$(run_hook implementer $S "$T" ls)"
 # コミット系のクールダウン中でも、依頼系（再レビュー依頼）の区切りには届く。
 assert_speaks "コミットの直後でも、再レビュー依頼（herdr agent prompt）の直後には差し込む" "$(run_hook implementer $S "$T" prompt)"
@@ -150,7 +150,7 @@ open(sys.argv[1], "w").write("%s\n%f\n%f" % (ctx, 1.0, 1.0))
 PY
 assert_speaks "次のコミット系の区切りでは再び差し込む" "$(run_hook implementer $S "$T" commit)"
 assert_speaks "次の依頼系の区切り（SendMessage）でも再び差し込む" "$(run_hook implementer $S "$T" sendmsg)"
-write_transcript "$T" 190000
+write_transcript "$T" 140000
 assert_silent "区切りでも閾値以下なら黙る" "$(run_hook implementer s-bnd-low "$T" commit)"
 write_transcript "$T" 300000
 assert_silent "区切りでもサブエージェントなら黙る" "$(run_hook implementer s-bnd-sub "$T" subagent)"
