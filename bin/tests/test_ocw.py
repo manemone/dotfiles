@@ -2304,7 +2304,9 @@ class CheckerTests(HerdrOcwTestCase):
     def test_first_call_splits_a_pane_and_starts_the_checker_then_reuses_it(self):
         req = self.make_request()
         result = self.run_checker(
-            [str(req)], extra_env={"OCW_CHECKER_COMMAND": "mychecker --flag"}
+            [str(req)],
+            # bash 4.2 compat mode = the quoting behaviour of macOS /bin/bash 3.2
+            extra_env={"OCW_CHECKER_COMMAND": "mychecker --flag", "BASH_COMPAT": "42"},
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         calls = self.herdr_calls()

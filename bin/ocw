@@ -2298,7 +2298,10 @@ run_checker() {
       die "could not record the checker pane in ${state_file}"
     herdr pane rename "$pane" checker >/dev/null || true
     # Single-quote the prompt by hand (printf %q emits $'..' in the C locale).
-    herdr pane run "$pane" "${line} '${prompt//\'/\'\\\'\'}'" >/dev/null ||
+    # The replacement goes through a variable: inline in "...", bash <= 4.2
+    # (macOS /bin/bash 3.2) skips quote removal on it and breaks the quoting.
+    local sq="'\\''"
+    herdr pane run "$pane" "${line} '${prompt//\'/$sq}'" >/dev/null ||
       die "failed to start the checker in pane ${pane}"
     echo "started a checker in pane ${pane}"
   fi
