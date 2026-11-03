@@ -165,7 +165,7 @@ claude-ds
 #   ANTHROPIC_DEFAULT_HAIKU_MODEL="deepseek-flash"
 #   CLAUDE_CODE_SUBAGENT_MODEL="deepseek-flash"
 #   CLAUDE_CODE_EFFORT_LEVEL="max"
-#   CLAUDE_CODE_AUTO_COMPACT_WINDOW="786432"
+#   CLAUDE_CODE_AUTO_COMPACT_WINDOW="190000"
 #   claude "$@"
 ```
 
@@ -177,7 +177,7 @@ claude-ds
 モデルは DeepSeek 公式の Claude Code 連携ページの設定例（全部 Flash。`deepseek-flash` は 2026-10-17 から V4.1-Flash-1017）に合わせている。旧 `deepseek-v4-flash` は引退済みで互換転送されているだけなので使わない。`deepseek-v4-pro` は現役だが既定では使わない（使うなら `--model` で指定）。
 
 - `CLAUDE_CODE_EFFORT_LEVEL=max`: 公式推奨。環境変数は `effortLevel` 設定より優先されるため、配布物の `effortLevel` には負けない
-- `CLAUDE_CODE_AUTO_COMPACT_WINDOW=786432`: 公式推奨の自動 compact の上限（安全網）。`claude/hooks/compact-reminder.sh` の 150k（ADR DOC-2611032102）や司令官の 150k / 300k は「区切りで自発的に compact する判断」の目安で役割が違い、衝突しない。DeepSeek はキャッシュヒットがミスの約1/50と安く、長い文脈のコストが響きにくいため公式値をそのまま採る
+- `CLAUDE_CODE_AUTO_COMPACT_WINDOW=190000`: 自動 compact の窓の大きさ（安全網）。実際に compact が始まるのは「窓 − 出力の予約（最大 20000）− 13000」の位置で、190000 なら約 157,000 トークン。公式値の 786432 は DeepSeek では高すぎた。2026-11-03 の実測で費用の約8割が文脈 10万超の呼び出しから出ており（キャッシュ読み直しが 53%）、self-compact を取りこぼした会話は 30〜48万まで伸びたため、`claude/hooks/compact-reminder.sh` の 150k（区切りで self-compact する目安。ADR DOC-2611032102）のすぐ上で始まるようにし、self-compact の機会を奪わずに取りこぼしだけを拾う。この環境変数は `claude-ds` の `exec env` の中にしか無く、通常の `claude` の会話には効かない。理由と比較は ADR [DOC-2611032100](../docs/adr/DOC-2611032100_claude-ds-autocompact-window.md)
 - **`settings.machine.json` の `env` は、ここで固定した環境変数より優先される**（Claude Code は `env` の各エントリをプロセス環境へ書き込み、シェルから継承した値を置き換える）。たとえば `env` に `CLAUDE_CODE_SUBAGENT_MODEL: "sonnet"` があると、subagent は `ANTHROPIC_DEFAULT_SONNET_MODEL`（`deepseek-flash[1m]`）に読み替えられる。Flash で動く点は変わらず、1M 文脈版になるだけ
 
 API キーは `DEEPSEEK_API_KEY_FILE` 環境変数で指定可能（デフォルト: `~/.config/deepseek/api_key`）。
