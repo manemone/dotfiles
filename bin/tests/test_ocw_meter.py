@@ -6,7 +6,9 @@ skin + embedded python3), matching bin/ocw's style. Every test points
 OCW_METER_HOME at a throwaway tempdir outside this repo, so nothing here
 touches real state or the repo itself.
 
-No network access. No secrets. See docs/planning/DOC-2608021229-a_..._計画.md §13
+No secrets. Nothing here touches an external network: the DeepSeek balance
+tests run a loopback HTTP server and point the fetch at it. See
+docs/planning/DOC-2608021229-a_..._計画.md §13
 for the numbered test-case list (T01, T02, ...) this file implements.
 
 Coverage of §13.2 across 孫1 + 孫3 + 孫4 (this file):
@@ -42,6 +44,7 @@ message.content non-exposure, cost formula, price-table versioning).
 import atexit
 import concurrent.futures
 import hashlib
+import http.server
 import json
 import os
 import pathlib
@@ -52,6 +55,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unicodedata
 import unittest
@@ -119,6 +123,9 @@ def run_meter(args, home, extra_env=None, timeout=30, cwd=None):
         env["HOME"] = _default_home_for(home)
     # snapshot-quota would otherwise start a real background ingest.
     env["OCW_METER_AUTO_INGEST"] = "0"
+    # 残高の取得は DeepSeek の API への通信なので、既定では切る
+    # （残高のテストだけが自分で有効にして loopback のサーバーを向ける）。
+    env["OCW_METER_BALANCE"] = "0"
     if extra_env:
         env.update(extra_env)
     return subprocess.run(
@@ -137,6 +144,7 @@ def run_meter_on_pty(args, home, extra_env=None):
     env = dict(os.environ, OCW_METER_HOME=str(home), HOME=str(pathlib.Path(home).parent))
     env.pop("NO_COLOR", None)
     env["OCW_METER_AUTO_INGEST"] = "0"
+    env["OCW_METER_BALANCE"] = "0"
     env.update(extra_env or {})
     proc = subprocess.Popen([str(OCW_METER), *args], cwd=str(REPO_ROOT),
                             env=env, stdout=slave, stderr=subprocess.DEVNULL)
@@ -177,6 +185,8 @@ def run_snapshot_quota(stdin_text, home, extra_env=None, timeout=30):
         env["HOME"] = _default_home_for(home)
     # snapshot-quota would otherwise start a real background ingest.
     env["OCW_METER_AUTO_INGEST"] = "0"
+    # 残高の取得も既定では切る（残高のテストだけが有効にする）。
+    env["OCW_METER_BALANCE"] = "0"
     if extra_env:
         env.update(extra_env)
     return subprocess.run(
@@ -188,6 +198,26 @@ def run_snapshot_quota(stdin_text, home, extra_env=None, timeout=30):
         text=True,
         timeout=timeout,
     )
+
+
+def write_balance_cache(home, balances, *, fetched_ago=0, attempted_ago=0, last_result="ok"):
+    """snapshot-quota が読む残高キャッシュを直接置く（取得の子プロセスを
+    走らせずに表示だけを確かめるため）。attempted_ago を 0 にすると
+    「たった今試行した」ことになり、次の snapshot-quota は取得を起動しない。"""
+    state_dir = pathlib.Path(home) / "state"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    now = datetime.now(timezone.utc)
+
+    def _iso(seconds):
+        return (now - timedelta(seconds=seconds)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+
+    (state_dir / "statusline-balance.json").write_text(json.dumps({
+        "version": 1,
+        "balances": balances,
+        "fetched_at": _iso(fetched_ago),
+        "last_attempt_at": _iso(attempted_ago),
+        "last_result": last_result,
+    }), encoding="utf-8")
 
 
 def real_ocw_meter_home_contamination_fingerprint():
@@ -3796,6 +3826,165 @@ class DeepSeekCostDisplayTests(OcwMeterTestCase):
         result = self._run(model_id="claude-opus-5-5")
         self.assertEqual(result, "opus5.5 · ctx ○ 12%")
         self.assertNotIn("$", result)
+
+    def test_balance_follows_the_cost(self):
+        # 残高は「この会話の費用」のすぐ後ろに置く。
+        self._append(self._message("m1", 1_000_000))
+        write_balance_cache(self.home, [{"currency": "USD", "total_balance": 12.34}])
+        self.assertEqual(
+            self._run(extra_env={"OCW_METER_BALANCE": "1"}),
+            "ds-flash $0.15 · 残高 $12.34 · ctx ○ 12%",
+        )
+
+
+class DeepSeekBalanceDisplayTests(OcwMeterTestCase):
+    """claude-ds（DeepSeek）の会話で、ウォレットの残高を出す。
+
+    表示は state/statusline-balance.json だけを読み、取得は切り離した
+    refresh-balance 子プロセスが行う（statusLine は API を待たない）。"""
+
+    def _cache_path(self):
+        return pathlib.Path(self.home) / "state" / "statusline-balance.json"
+
+    def _display(self, model_id="deepseek-flash[1m]", extra_env=None):
+        env = {"OCW_METER_BALANCE": "1"}
+        env.update(extra_env or {})
+        payload = {"model": {"id": model_id}, "context_window": {"used_percentage": 50}}
+        return run_snapshot_quota(json.dumps(payload), self.home, extra_env=env).stdout.strip()
+
+    def _serve_balance(self, payload, status=200, delay=0.0, headers=None):
+        """loopback の HTTP サーバーを立て、(URL, 受け取ったリクエスト) を返す。
+        外部ネットワークには出ない。"""
+        seen = []
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                seen.append({"path": self.path, "auth": self.headers.get("Authorization")})
+                time.sleep(delay)
+                body = json.dumps(payload).encode("utf-8")
+                self.send_response(status)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                for name, value in (headers or {}).items():
+                    self.send_header(name, value)
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *args):
+                pass
+
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        return f"http://127.0.0.1:{server.server_address[1]}/user/balance", seen
+
+    def _network_env(self, url):
+        key_file = pathlib.Path(self.tmpdir.name) / "deepseek-key"
+        key_file.write_text("test-key\n", encoding="utf-8")
+        return {
+            "OCW_METER_BALANCE": "1",
+            "DEEPSEEK_API_KEY_FILE": str(key_file),
+            "OCW_METER_DEEPSEEK_BALANCE_URL": url,
+            "no_proxy": "127.0.0.1",
+            "NO_PROXY": "127.0.0.1",
+        }
+
+    def _wait_for(self, predicate, timeout=10.0):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if predicate():
+                return True
+            time.sleep(0.05)
+        return False
+
+    def _cached_result(self):
+        try:
+            return json.loads(self._cache_path().read_text(encoding="utf-8")).get("last_result")
+        except (OSError, ValueError):
+            return None
+
+    def test_cached_balance_is_shown_in_its_currency(self):
+        for balances, expected in (
+            ([{"currency": "USD", "total_balance": 12.34}], "残高 $12.34"),
+            ([{"currency": "CNY", "total_balance": 100.0}], "残高 CNY 100.00"),
+        ):
+            with self.subTest(expected=expected):
+                write_balance_cache(self.home, balances)
+                self.assertEqual(self._display(), f"ds-flash · {expected} · ctx ◑ 50%")
+
+    def test_failed_or_ancient_fetch_marks_the_last_amount(self):
+        for kwargs, env, expected in (
+            ({"last_result": "failed"}, {}, "残高 $12.34?"),
+            ({"fetched_ago": 3600}, {}, "残高 $12.34?"),
+            # 間隔を延ばしたときの古さの閾値は max(15分, 3 × 間隔)。
+            # 取得に成功していて次の取得もまだ先なら `?` は付けない。
+            ({"fetched_ago": 1000}, {"OCW_METER_BALANCE_INTERVAL": "3600"}, "残高 $12.34"),
+        ):
+            with self.subTest(expected=expected, **kwargs):
+                write_balance_cache(self.home, [{"currency": "USD", "total_balance": 12.34}], **kwargs)
+                self.assertEqual(self._display(extra_env=env), f"ds-flash · {expected} · ctx ◑ 50%")
+
+    def test_balance_is_hidden_outside_claude_ds_or_when_disabled(self):
+        write_balance_cache(self.home, [{"currency": "USD", "total_balance": 12.34}])
+        self.assertEqual(self._display(model_id="claude-opus-5-5"), "opus5.5 · ctx ◑ 50%")
+        self.assertEqual(
+            self._display(extra_env={"OCW_METER_BALANCE": "0"}),
+            "ds-flash · ctx ◑ 50%",
+        )
+
+    def test_refresh_fetches_and_stores_the_balance(self):
+        url, seen = self._serve_balance({"is_available": True, "balance_infos": [
+            {"currency": "USD", "total_balance": "12.34", "granted_balance": "0.00", "topped_up_balance": "12.34"},
+        ]})
+        result = run_meter(["refresh-balance"], self.home, extra_env=self._network_env(url))
+        self.assertEqual(result.returncode, 0)
+        cache = json.loads(self._cache_path().read_text(encoding="utf-8"))
+        self.assertEqual(cache["balances"], [{"currency": "USD", "total_balance": 12.34}])
+        self.assertEqual(cache["last_result"], "ok")
+        self.assertEqual(seen[0]["path"], "/user/balance")
+        self.assertEqual(seen[0]["auth"], "Bearer test-key")
+        # 鍵はキャッシュに残さない。
+        self.assertNotIn("test-key", self._cache_path().read_text(encoding="utf-8"))
+
+    def test_failed_refresh_keeps_the_last_amount(self):
+        write_balance_cache(self.home, [{"currency": "USD", "total_balance": 5.0}], fetched_ago=3600)
+        url, _seen = self._serve_balance({"error": "boom"}, status=500)
+        result = run_meter(["refresh-balance"], self.home, extra_env=self._network_env(url))
+        self.assertEqual(result.returncode, 0)
+        cache = json.loads(self._cache_path().read_text(encoding="utf-8"))
+        self.assertEqual(cache["balances"], [{"currency": "USD", "total_balance": 5.0}])
+        self.assertEqual(cache["last_result"], "failed")
+        self.assertEqual(self._display(), "ds-flash · 残高 $5.00? · ctx ◑ 50%")
+
+    def test_refresh_does_not_follow_redirects(self):
+        # 鍵を載せた Authorization ヘッダは urllib の既定のリダイレクトで
+        # 転送先にも送られる。別ホストへ鍵を送らないことを固定する。
+        target_url, target_seen = self._serve_balance({"is_available": True, "balance_infos": [
+            {"currency": "USD", "total_balance": "9.99"},
+        ]})
+        redirect_url, _seen = self._serve_balance({}, status=302, headers={"Location": target_url})
+        result = run_meter(["refresh-balance"], self.home, extra_env=self._network_env(redirect_url))
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(target_seen, [])
+        self.assertEqual(self._cached_result(), "failed")
+
+    def test_snapshot_quota_refreshes_in_the_background(self):
+        # サーバーは 2 秒待たせる。snapshot-quota はその完了を待たずに
+        # 戻り、次の再描画で新しい値が出る、が守るべき振る舞い。
+        url, _seen = self._serve_balance({"is_available": True, "balance_infos": [
+            {"currency": "USD", "total_balance": "7.00"},
+        ]}, delay=2.0)
+        env = self._network_env(url)
+        payload = json.dumps({"model": {"id": "deepseek-flash[1m]"}, "context_window": {"used_percentage": 50}})
+        started = time.monotonic()
+        first = run_snapshot_quota(payload, self.home, extra_env=env)
+        elapsed = time.monotonic() - started
+        self.assertEqual(first.returncode, 0)
+        self.assertNotIn("残高", first.stdout)
+        self.assertLess(elapsed, 1.5, "snapshot-quota waited for the balance fetch")
+        self.assertTrue(self._wait_for(lambda: self._cached_result() == "ok"))
+        self.assertIn("残高 $7.00", run_snapshot_quota(payload, self.home, extra_env=env).stdout)
 
 
 class SnapshotQuotaWindowTests(OcwMeterTestCase):

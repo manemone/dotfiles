@@ -410,6 +410,18 @@ PR番号はリポジトリ**内**でしか一意でない。`--pr`とstandalone�
   ファイルごとに `state/statusline-cost/<session_id>.json` に残し、次からは追記された分だけを読む
   （7日より前のセッションの分は新しいセッションができたときに消す）。記録側の
   `session_cost_usd` はこれまでどおり Claude Code の値をそのまま残す
+- **claude-ds（DeepSeek）の会話では、ウォレットの残高も出す**（`ds-flash $0.16 · 残高 $12.34`）。
+  DeepSeek の残高 API（`GET https://api.deepseek.com/user/balance`）は `balance_infos[].currency`
+  （`USD` / `CNY`）ごとの `total_balance`（金額の文字列）を返す。USD は `$12.34`、CNY は
+  `CNY 100.00` のように通貨が分かる形で出す。描画のたびには取得せず、キャッシュ
+  （`state/statusline-balance.json`）だけを読む。最後の試行から5分（`OCW_METER_BALANCE_INTERVAL`）
+  たっていれば、`ocw-meter refresh-balance` を**切り離した子プロセス**で起動して描画は待たない
+  （新しい値は次の再描画から出る。二重起動は子のロックで防ぐ）。鍵は `claude-ds` と同じ場所
+  （`DEEPSEEK_API_KEY_FILE`、既定は `~/.config/deepseek/api_key`）から読み、キャッシュにも
+  ログにも残さない。取得に失敗したときは前回の金額を消さず `残高 $12.34?` と `?` を付けて
+  古い値と分かるようにし（取得成功でも max(15分, 3 × 取得間隔) より古い値には付ける。
+  スリープ復帰直後など。間隔を延ばしても `?` が出っぱなしにならない）、
+  キャッシュが無ければ欄ごと省く。`OCW_METER_BALANCE=0` で無効化
 - **週間枠はバーとリセット情報で出す。** バーは使用率、`│` は週の経過位置（7日のうち何割過ぎたか）。
   続けてリセットの曜日と時刻（ローカルタイム）、リセットまでの残り（`3d7h` / `7h12m` / `12m`）を出す。
   バーと数字は、使用率が経過率を5pt超えると黄、15pt超えると赤、それ以内は緑（`NO_COLOR` で無色）。
@@ -546,8 +558,11 @@ attribution (role):   direct 0.0% / via session_id 66.7% / unresolved 33.3%
 | `OCW_METER_RAW` | `0` | `1`にすると `snapshot-quota` がredaction済みのstatusLine生JSONを `raw/YYYY-MM-DD/` へ保存する（既定オフ） |
 | `OCW_METER_CLAUDE_PROJECTS_DIR` | `~/.claude/projects` | `ingest` がtranscriptを探すディレクトリ |
 | `OCW_METER_PRICE_DIR` | `<symlink を解決した先にある ocw-meter の実体のディレクトリ>/prices` | `ingest` が価格表(`*.json`)を探すディレクトリ |
-| `OCW_METER_INGEST_USE_GH` | `0` | `1` にすると、PR番号未解決時に `gh pr list --head <branch>` へフォールバックする（既定オフ = ネットワークを一切叩かない） |
+| `OCW_METER_INGEST_USE_GH` | `0` | `1` にすると、PR番号未解決時に `gh pr list --head <branch>` へフォールバックする（既定オフ = `ingest` はネットワークを叩かない） |
 | `OCW_METER_QUOTA_INTERVAL` | `60`（秒） | `snapshot-quota` が実際に `quota.sample` を書き込む最短間隔。数値でない値・負値は既定値にフォールバックする |
+| `OCW_METER_BALANCE` | `1` | `0` にすると `snapshot-quota` のDeepSeek残高欄と、その取得の子プロセスを止める |
+| `OCW_METER_BALANCE_INTERVAL` | `300`（秒） | 残高を取得する最短間隔。数値でない値・負値は既定値にフォールバックする |
+| `OCW_METER_DEEPSEEK_BALANCE_URL` | `https://api.deepseek.com/user/balance` | 残高APIのURL（テスト用。信頼できない相手に鍵を送らないこと） |
 
 **`quota.sample` の保存量について（計画書 §9.1 の前提を上回る規模）**: 計画書 §9.1 の
 「JSONLで十分」という判断は「全期間で39,805メッセージ、1イベント約600B」という実績に基づくが、
