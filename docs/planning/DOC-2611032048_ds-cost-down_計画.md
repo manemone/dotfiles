@@ -27,7 +27,7 @@ claude-ds（Claude Code を DeepSeek の API で動かすラッパ `bin/claude-d
 | 孫 | リポ | ブランチ | 内容 | 状況 |
 |---|---|---|---|---|
 | 1 | dotfiles | `dcd-01-autocompact-window` | `bin/claude-ds` の `CLAUDE_CODE_AUTO_COMPACT_WINDOW` を 20〜25万へ下げ、README の理由を実測に合わせて直す。サブエージェントに効くかを確かめる | 🔄 実装中 |
-| 2 | dotfiles | `dcd-02-self-compact-rules` | self-compact の決まり（pr-review-loop・umbrella-orchestrator の自動付与指示・`compact-reminder.sh`・ADR）を DeepSeek の実測で見直す。Claude にも効かせるかは人間に確かめる | 🔄 実装中 |
+| 2 | dotfiles | `dcd-02-self-compact-rules` | self-compact の決まり（pr-review-loop・umbrella-orchestrator の自動付与指示・`compact-reminder.sh`・ADR）を DeepSeek の実測で見直す。Claude にも効かせるかは人間に確かめる | ✅ PR #207 マージ済 |
 | 3 | dotfiles | `dcd-03-ui-checker-pane` | deepseek-flash の画像読み取りを確かめ、UI 確認役を別の会話（ペイン）として立てる仕組みを作る | 🔄 実装中 |
 | 4 | pixidex | `dcd-04-checker-request` | pixidex の「確かめ役」の頼み方（規約・現役の計画書の型・ADR）を孫3 の仕組みに合わせる | ⬜ 待機中 |
 
@@ -202,7 +202,7 @@ pixidex は private のため、owner/name は値ではなく解決方法を書�
 - 変更したファイルに `pre-commit run --files <path>`（新規・大幅変更の時点で）
 - `bin/` を変えたら `python3 -m unittest discover -s bin/tests -v`
 - デプロイ関連のシェルを変えたら `tests/deploy_smoke.sh`
-- `claude/hooks/compact-reminder.sh` を変えたら `tests/compact_reminder_test.sh`
+- `claude/hooks/compact-reminder.sh` を変えたら `bash tests/compact_reminder_test.sh`（bash 用。`sh` で呼ぶと `pipefail` で落ちる）
 - `docs/` 新規は doc-id 採番、`./tools/doc-id/doc-id verify`
 - pixidex 側はそのリポの `AGENTS.md` の手順に従う
 - **全孫のマージと人間の配布のあと**、ocw-meter で 1日分を見比べ、試算どおり下がったか確かめる（試算は甘め。付録A の
@@ -306,6 +306,7 @@ pixidex は private のため、owner/name は値ではなく解決方法を書�
 - 2026-11-03: 計画書を起草した。傘は `origin/master`（86943bc）から切られている。孫1〜3 を並列で spawn する。孫4 は孫3 のマージ後
 - 2026-11-03: 孫1〜3 を spawn した（`ocw -H --no-commander`、base-ref は `ds-cost-down`）。ブリーフと分析スクリプトは転記後に削除した（スクリプトは付録A）
 - 2026-11-03: 人間の決定: self-compact の回数上限の緩和は、DeepSeek だけでなく通常の Claude の会話にも適用してよい（設計2 の2 の「Claude にも効かせるか」への回答）。閾値の変更と区切りの追加はこの回答の範囲外で、孫2 が測定結果を添えて改めて確かめる。孫2 へ中継済み
+- 2026-11-03: 孫2 の PR #207 を司令官がマージした。閾値 200k→150k、実装途中の回数上限を増分制に置き換え、Claude の会話にも効く（ADR DOC-2611032102。閾値の変更も孫2 が人間に確認済み）。傘で unittest（465件）・`pre-commit run --all-files`・`bash tests/compact_reminder_test.sh`・`doc-id verify` が通った。孫1 の自動圧縮の位置は 150k より上に置くこと
 
 ## 孫1用プロンプト:
 
@@ -461,7 +462,7 @@ PR を作る前に `docs/design/DOC-2608020715_プルリクエストの作法.md
 
 ```bash
 pre-commit run --all-files
-sh tests/compact_reminder_test.sh
+bash tests/compact_reminder_test.sh
 ./tools/doc-id/doc-id verify
 ```
 
