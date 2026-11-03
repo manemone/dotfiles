@@ -450,7 +450,8 @@ to send to $HERDR_PANE_ID itself. The permission mode of the checker session
 is whatever its own settings say; nothing is auto-approved.
 
 Compacting: the checker is told to run `ocw self-compact` itself after a
-reply when its context passes 200,000 tokens (it resumes with a "wait for the
+reply when its measured context passes the threshold (150,000 on DeepSeek,
+200,000 otherwise; the request carries the measuring command) (it resumes with a "wait for the
 next request" prompt, not the implementer's). The implementer cannot compact
 the checker pane from outside (self-compact only targets its own pane).
 
@@ -2186,9 +2187,16 @@ self_compact() {
 # and never a pane named by the caller.
 CHECKER_RESULT_FILE="result.md"
 
+# Context-size check handed to the checker (same measurement and thresholds as
+# pr-review-loop's self-compact section and claude/hooks/compact-reminder.sh,
+# ADR DOC-2611032102: 150,000 for DeepSeek, 200,000 otherwise). The
+# compact-reminder hook only fires for OCW_ROLE=implementer, so the checker
+# is given the measurement in its request instead.
+CHECKER_CONTEXT_CHECK='python3 -c '"'"'import glob,json,os;f=glob.glob(os.path.expanduser("~/.claude/projects/*/"+os.environ["CLAUDE_CODE_SESSION_ID"]+".jsonl"))[0];u=[json.loads(l)["message"]["usage"] for l in open(f) if json.loads(l).get("type")=="assistant"][-1];n=u["input_tokens"]+u.get("cache_read_input_tokens",0)+u.get("cache_creation_input_tokens",0);t=150000 if "deepseek" in os.environ.get("ANTHROPIC_BASE_URL","") else 200000;print(n,t,"OVER" if n>t else "ok")'"'"
+
 checker_prompt() {
   local dir="$1"
-  printf '%s' "あなたは UI 確認役です。${dir}/checklist.md を読み、${dir}/shoot.sh を sh でそのまま実行して撮影し、チェックリストの各項目を、撮れた画像を実際に見て OK か NG かを根拠つきで判定してください。撮影方法を自分で探し直したり shoot.sh を書き換えたりしないこと（shoot.sh が失敗したら、その出力を報告して止まる）。結果は ${dir}/${CHECKER_RESULT_FILE}.tmp に書いてから ${dir}/${CHECKER_RESULT_FILE} へ mv し、最後に 3 行以内で要約を返してください。要約を返したあと、文脈が 200,000 トークンを超えていれば ocw self-compact \"UI 確認役。確認は終わった。次の依頼を待つ\" で自分を compact してください。"
+  printf '%s' "あなたは UI 確認役です。${dir}/checklist.md を読み、${dir}/shoot.sh を sh でそのまま実行して撮影し、チェックリストの各項目を、撮れた画像を実際に見て OK か NG かを根拠つきで判定してください。撮影方法を自分で探し直したり shoot.sh を書き換えたりしないこと（shoot.sh が失敗したら、その出力を報告して止まる）。結果は ${dir}/${CHECKER_RESULT_FILE}.tmp に書いてから ${dir}/${CHECKER_RESULT_FILE} へ mv し、最後に 3 行以内で要約を返してください。要約を返したあと、自分の文脈の大きさを次のコマンドで測り、OVER と出たときだけ ocw self-compact \"UI 確認役。確認は終わった。次の依頼を待つ\" で自分を compact してください（ok なら何もしない）: ${CHECKER_CONTEXT_CHECK}"
 }
 
 checker_pane_reusable() {

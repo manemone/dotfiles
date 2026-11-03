@@ -2319,6 +2319,13 @@ class CheckerTests(HerdrOcwTestCase):
         self.assertTrue(runs[0][3].startswith("mychecker --flag '"), runs[0][3])
         self.assertIn(f"{req}/checklist.md", runs[0][3])
         self.assertIn(f"{req}/shoot.sh", runs[0][3])
+        # The prompt carries single quotes (the context-size command); the line
+        # must still split back into: command, flag, and ONE prompt argument.
+        words = shlex.split(runs[0][3])
+        self.assertEqual(words[:2], ["mychecker", "--flag"])
+        self.assertEqual(len(words), 4, words)
+        self.assertIn("CLAUDE_CODE_SESSION_ID", words[3])
+        self.assertIn("ocw self-compact", words[3])
 
         # Second call: the recorded pane's agent is alive -> prompt it, no new pane.
         (req / "result.md").write_text("stale", encoding="utf-8")
