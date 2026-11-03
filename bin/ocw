@@ -2268,7 +2268,7 @@ run_checker() {
 
   # A reviewer shares the implementer's worktree but must get its own checker:
   # reusing the implementer's would hand the "separate eyes" a context that
-  # already saw the implementer's own checks (ADR on the screen-review skill).
+  # already saw the implementer's own checks (ADR DOC-2611040233 §3.4).
   state_file="${git_dir}/ocw-checker-pane"
   if [ "${OCW_ROLE:-}" = "reviewer" ]; then
     state_file="${git_dir}/ocw-checker-pane-reviewer"

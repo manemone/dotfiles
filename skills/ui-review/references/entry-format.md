@@ -15,18 +15,18 @@
      - "web/**/*.js"
      - "web/**/*.css"
    machine_checks:      # 手順 1。コマンドと、何を数えるかの 1 行説明
-     - cmd: "bundle exec rspec spec/wording_spec.rb"
+     - cmd: "npm run lint:wording"
        note: "用語表の言葉の揺れ"
    principles_docs:     # 手順 4。画面の原則の文書
      - "docs/design/screen-principles.md"
    glossary_docs:       # 手順 4。用語表
      - "docs/adr/glossary.md"
    flows:               # 手順 3。持ち主のいつもの流れ。1 本ずつ、画面の名前を添えて
-     - name: "設定を選んで下書きを作る"
-       screens: ["生成"]
-       steps: ["設定を選ぶ", "下書きを頼む", "結果の表を見る"]
-   serve_cmd: "tools/devenv/serve-small-copy"   # 小さいコピーを立てるコマンド
-   url: "http://localhost:18059/"               # 立てたあとの URL
+     - name: "ログインして一覧から1件開く"
+       screens: ["ログイン", "一覧", "詳細"]
+       steps: ["ログインする", "一覧を見る", "1件開く"]
+   serve_cmd: "scripts/serve-sample-data"   # 小さいコピーを立てるコマンド
+   url: "http://localhost:8080/"               # 立てたあとの URL
    danger_marker: "data-danger"                 # 押してはいけないボタンを見分ける印（属性名・クラス名など）
    viewport: "1920x1080"                        # 無ければ 1920x1080
    ```
