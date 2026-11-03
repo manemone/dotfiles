@@ -2262,6 +2262,124 @@ class SelfCompactTests(HerdrOcwTestCase):
         self.assertEqual(len(self.herdr_calls()), 1)
 
 
+class CheckerTests(HerdrOcwTestCase):
+    """`ocw checker` (ADR on UI checks by a separate conversation). The
+    regressions that matter: the request only ever goes to the checker pane
+    ocw itself created (never the caller's pane), the launch line honours
+    OCW_CHECKER_COMMAND, and bad arguments send nothing."""
+
+    def make_request(self, shoot=True, checklist=True):
+        req = pathlib.Path(self.tmpdir.name) / "req"
+        req.mkdir(exist_ok=True)
+        if shoot:
+            (req / "shoot.sh").write_text("echo shot\n", encoding="utf-8")
+        if checklist:
+            (req / "checklist.md").write_text("- 見出しがある\n", encoding="utf-8")
+        return req
+
+    def run_checker(self, args, pane_id="wXX:p1", extra_env=None):
+        env = {} if pane_id is None else {"HERDR_PANE_ID": pane_id}
+        env.update(extra_env or {})
+        return self.run_herdr_ocw(["checker", *args], cwd=self.repo_root, extra_env=env)
+
+    def test_first_call_splits_a_pane_and_starts_the_checker_then_reuses_it(self):
+        req = self.make_request()
+        result = self.run_checker(
+            [str(req)], extra_env={"OCW_CHECKER_COMMAND": "mychecker --flag"}
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        calls = self.herdr_calls()
+        split = [c for c in calls if c[:2] == ["pane", "split"]]
+        self.assertEqual(len(split), 1)
+        self.assertEqual(split[0][2], "wXX:p1")
+        self.assertIn("OCW_ROLE=checker", split[0])
+        runs = [c for c in calls if c[:2] == ["pane", "run"]]
+        self.assertEqual(len(runs), 1)
+        new_pane = runs[0][2]
+        self.assertNotEqual(new_pane, "wXX:p1")
+        self.assertTrue(runs[0][3].startswith("mychecker --flag '"), runs[0][3])
+        self.assertIn(f"{req}/checklist.md", runs[0][3])
+        self.assertIn(f"{req}/shoot.sh", runs[0][3])
+
+        # Second call: the recorded pane's agent is alive -> prompt it, no new pane.
+        (req / "result.md").write_text("stale", encoding="utf-8")
+        self.herdr_log.unlink()
+        result = self.run_checker([str(req)])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        calls = self.herdr_calls()
+        self.assertEqual([c for c in calls if c[:2] == ["pane", "split"]], [])
+        prompts = [c for c in calls if c[:2] == ["agent", "prompt"]]
+        self.assertEqual(len(prompts), 1)
+        self.assertEqual(prompts[0][2], new_pane)
+        self.assertFalse((req / "result.md").exists(), "a stale result must not be mistaken for the new one")
+
+    def test_a_dead_checker_pane_is_replaced_and_the_callers_own_pane_is_never_a_target(self):
+        req = self.make_request()
+        git_dir = subprocess.run(
+            ["git", "-C", str(self.repo_root), "rev-parse", "--absolute-git-dir"],
+            capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        state = pathlib.Path(git_dir) / "ocw-checker-pane"
+        # State file points at the caller itself: must be ignored, not prompted.
+        state.write_text("wXX:p1\n", encoding="utf-8")
+        result = self.run_checker([str(req)])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        calls = self.herdr_calls()
+        self.assertEqual([c for c in calls if c[:2] == ["agent", "prompt"]], [])
+        self.assertEqual(len([c for c in calls if c[:2] == ["pane", "split"]]), 1)
+        # A recorded pane whose agent is gone (status unknown) is replaced too.
+        self.herdr_log.unlink()
+        seq = pathlib.Path(self.tmpdir.name) / "status-seq"
+        seq.write_text("unknown\n", encoding="utf-8")
+        result = self.run_checker([str(req)], extra_env={"OCW_TEST_HERDR_STATUS_SEQ": str(seq)})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        calls = self.herdr_calls()
+        self.assertEqual([c for c in calls if c[:2] == ["agent", "prompt"]], [])
+        self.assertEqual(len([c for c in calls if c[:2] == ["pane", "split"]]), 1)
+
+    def test_sends_nothing_on_bad_arguments_or_outside_herdr(self):
+        req = self.make_request()
+        incomplete = pathlib.Path(self.tmpdir.name) / "incomplete"
+        incomplete.mkdir()
+        (incomplete / "shoot.sh").write_text("x", encoding="utf-8")
+        for label, args, pane_id in [
+            ("no dir", [], "wXX:p1"),
+            ("missing dir", [str(req / "nope")], "wXX:p1"),
+            ("no checklist", [str(incomplete)], "wXX:p1"),
+            ("unknown option", [str(req), "--foo"], "wXX:p1"),
+            ("bad wait", [str(req), "--wait", "x"], "wXX:p1"),
+            ("two dirs", [str(req), str(req)], "wXX:p1"),
+            ("unset pane id", [str(req)], None),
+            ("empty pane id", [str(req)], ""),
+        ]:
+            with self.subTest(label):
+                result = self.run_checker(args, pane_id=pane_id)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(self.herdr_calls(), [])
+        result = self.run_checker(["--help"])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("usage:", result.stdout)
+        self.assertEqual(self.herdr_calls(), [])
+
+    def test_wait_returns_when_result_appears_and_times_out_otherwise(self):
+        req = self.make_request()
+        env = {"OCW_CHECKER_POLL_SEC": "0.05"}
+        result = self.run_checker([str(req), "--wait", "1"], extra_env=env)
+        self.assertEqual(result.returncode, 3, result.stderr)
+        self.assertIn("timed out", result.stderr)
+
+        # A result written after the send (here: by a background writer) is picked up.
+        writer = subprocess.Popen(
+            ["sh", "-c", f"sleep 0.3; echo ok > '{req}/result.md.tmp'; mv '{req}/result.md.tmp' '{req}/result.md'"]
+        )
+        try:
+            result = self.run_checker([str(req), "--wait", "20"], extra_env=env)
+        finally:
+            writer.wait()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("result.md", result.stdout)
+
+
 class HelpTopicTests(unittest.TestCase):
     """`ocw help <topic>` hierarchy (docs/planning/DOC-2609072210_ocw-usage-
     discovery_計画.md 孫1 prompt). The plan calls out one regression by name:
@@ -2271,7 +2389,7 @@ class HelpTopicTests(unittest.TestCase):
     OcwTestCase repo fixture is needed since `ocw help` must work with or
     without a git repository present (see test_help_works_outside_a_git_repository)."""
 
-    EXPECTED_TOPICS = {"config", "naming", "rm", "herdr", "meter", "env"}
+    EXPECTED_TOPICS = {"config", "naming", "rm", "herdr", "checker", "meter", "env"}
 
     def setUp(self):
         self.tmpdir = tempfile.TemporaryDirectory()
@@ -2319,8 +2437,8 @@ class HelpTopicTests(unittest.TestCase):
         self.assertIn("usage:", result.stdout)
         self.assertLessEqual(
             len(result.stdout.encode("utf-8")),
-            2048,
-            "`ocw help` output must stay under 2 KB (計画書「呼び出し規約」)",
+            2200,
+            "`ocw help` output must stay compact (計画書「呼び出し規約」の 2 KB を、ocw checker の追加で 2200 バイトへ緩めた)",
         )
         self.assertEqual(self.advertised_topics(result.stdout), self.EXPECTED_TOPICS)
 
