@@ -416,7 +416,7 @@ gh pr view <PR番号> -R <owner/name> --json baseRefName,reviews,commits
      自分を compact する（その手順は pr-review-loop 側。使えなければ何もしない）。compact の後は、
      復帰メモに従ってレビュー待ちに戻り、この「実装完了後の流れ」を最後まで続けること
      実装の途中でも、検証が通ってコミットした直後の区切りで、文脈が
-     150,000 トークンを超えていれば `ocw self-compact` で自分を compact してよい（WIP のコミットは
+     150,000 トークン（claude-ds 以外の Claude は 200,000。`ANTHROPIC_BASE_URL` に `deepseek` を含むかで見分ける）を超えていれば `ocw self-compact` で自分を compact してよい（WIP のコミットは
      区切りでない。指摘対応の修正の途中は対象外。回数の上限は無いが、前回の compact から文脈が
      100,000 以上増えていなければ見送る。ADR DOC-2610142337・DOC-2611032102）。
      測り方は `/pr-review-loop` の「区切りでの自己 compact（実装側のみ）」の手順1のコマンドと同じ（その節の (3) の項だけを読めばよい。手順の「Phase 3 へ進む」は実装途中には当てはまらない）。復帰メモ
@@ -519,7 +519,7 @@ gh pr view <PR番号> -R <owner/name> --json baseRefName,reviews,commits
    なお `/pr-review-loop` は、レビューを依頼した直後の区切りで文脈が大きければ `ocw self-compact` で
    自分を compact する。compact の後は、復帰メモに従ってレビュー待ちに戻り、この流れを最後まで続けること
    実装の途中でも、検証が通ってコミットした直後の区切りで、文脈が
-   150,000 トークンを超えていれば `ocw self-compact` で自分を compact してよい（WIP のコミットは
+   150,000 トークン（claude-ds 以外の Claude は 200,000。`ANTHROPIC_BASE_URL` に `deepseek` を含むかで見分ける）を超えていれば `ocw self-compact` で自分を compact してよい（WIP のコミットは
    区切りでない。指摘対応の修正の途中は対象外。回数の上限は無いが、前回の compact から文脈が
    100,000 以上増えていなければ見送る。ADR DOC-2610142337・DOC-2611032102）。
    測り方は `/pr-review-loop` の「区切りでの自己 compact（実装側のみ）」の手順1のコマンドと同じ（その節の (3) の項だけを読めばよい。手順の「Phase 3 へ進む」は実装途中には当てはまらない）。復帰メモ

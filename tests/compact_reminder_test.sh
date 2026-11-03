@@ -104,6 +104,9 @@ assert_silent() {
 
 log "=== compact-reminder.sh テスト ==="
 
+# 以下は claude-ds（DeepSeek、閾値 150k）として走らせる。Claude（200k）は末尾で確かめる。
+export ANTHROPIC_BASE_URL="https://api.deepseek.com/anthropic"
+
 T="$TMP/t.jsonl"
 
 log "--- 役割の絞り込み ---"
@@ -195,6 +198,12 @@ printf 'garbage\n{"type":"assistant"\n' >"$TMP/bad.jsonl"
 assert_silent "usage を読めない transcript では黙る" "$(run_hook implementer s-bad "$TMP/bad.jsonl")"
 write_transcript "$T" 300000
 assert_silent "session_id にパス区切りがあると黙る" "$(run_hook implementer "../evil" "$T")"
+
+log "--- Claude（claude-ds でない）の閾値は 200k ---"
+write_transcript "$T" 180000
+assert_silent "Claude では 150k 超でも 200k 以下なら黙る" "$(ANTHROPIC_BASE_URL='' run_hook implementer s-claude "$T")"
+write_transcript "$T" 200001
+assert_speaks "Claude では 200k 超で差し込む" "$(ANTHROPIC_BASE_URL='' run_hook implementer s-claude "$T")"
 
 # 明示的な exit は使わない（git_guard_test.sh と同じ理由。trap の後の exit は SC2329 を誤検知する）。
 [ "$FAIL" -eq 0 ]

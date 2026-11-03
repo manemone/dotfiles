@@ -365,7 +365,7 @@ force push は無音で通る。**`Bash(git push *--force*)` のように空白�
 ### 3.6 compact-reminder フック — 実装の孫に自己 compact の判断を思い出させる
 
 `~/.claude/hooks/compact-reminder.sh`（`claude/hooks/compact-reminder.sh` から symlink される
-PostToolUse フック）は、**`OCW_ROLE=implementer` のペインでだけ**、文脈が 150,000 トークンを
+PostToolUse フック）は、**`OCW_ROLE=implementer` のペインでだけ**、文脈が 150,000 トークン（claude-ds 以外の Claude は 200,000。`ANTHROPIC_BASE_URL` に `deepseek` を含むかで見分ける）を
 超えたら「区切りなら `ocw self-compact` を判断すること」と `additionalContext` で差し込む。
 **compact そのものは打たない。** それ以外の役割（司令官・レビュワー・未設定）には何も言わない。
 
