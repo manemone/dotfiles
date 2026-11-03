@@ -415,7 +415,7 @@ implementer's own Herdr workspace, so a human can watch it, and it can
 
     ocw checker <request-dir> [--wait <seconds>]
 
-Run it from the implementer's pane ($HERDR_PANE_ID must be set). The request
+Run it from the implementer's or reviewer's pane ($HERDR_PANE_ID must be set). The request
 is a directory the implementer prepares:
 
   <request-dir>/shoot.sh      the capture script. The checker runs it as is
@@ -432,7 +432,9 @@ existence means it is complete. ocw deletes an old result.md before sending.
 
   - First call: splits a new pane (below the implementer, OCW_ROLE=checker)
     and starts the checker there with the request as its first prompt. The
-    pane id is remembered in the worktree's git dir (ocw-checker-pane).
+    pane id is remembered in the worktree's git dir (ocw-checker-pane;
+    ocw-checker-pane-reviewer when called from a reviewer pane, so the
+    reviewer's checker never shares context with the implementer's).
   - Later calls: if that pane's agent is still alive, the new request is sent
     to it (it keeps its context; compact it when it grows). Otherwise a new
     pane is made.
@@ -2264,7 +2266,13 @@ run_checker() {
   git_dir="$(git rev-parse --absolute-git-dir 2>/dev/null)" ||
     die "ocw checker: not inside a git worktree"
 
+  # A reviewer shares the implementer's worktree but must get its own checker:
+  # reusing the implementer's would hand the "separate eyes" a context that
+  # already saw the implementer's own checks (ADR on the screen-review skill).
   state_file="${git_dir}/ocw-checker-pane"
+  if [ "${OCW_ROLE:-}" = "reviewer" ]; then
+    state_file="${git_dir}/ocw-checker-pane-reviewer"
+  fi
   if [ -f "$state_file" ]; then
     pane="$(cat "$state_file")"
   fi
