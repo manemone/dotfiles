@@ -26,9 +26,9 @@ claude-ds（Claude Code を DeepSeek の API で動かすラッパ `bin/claude-d
 
 | 孫 | リポ | ブランチ | 内容 | 状況 |
 |---|---|---|---|---|
-| 1 | dotfiles | `dcd-01-autocompact-window` | `bin/claude-ds` の `CLAUDE_CODE_AUTO_COMPACT_WINDOW` を 20〜25万へ下げ、README の理由を実測に合わせて直す。サブエージェントに効くかを確かめる | ⬜ 待機中 |
-| 2 | dotfiles | `dcd-02-self-compact-rules` | self-compact の決まり（pr-review-loop・umbrella-orchestrator の自動付与指示・`compact-reminder.sh`・ADR）を DeepSeek の実測で見直す。Claude にも効かせるかは人間に確かめる | ⬜ 待機中 |
-| 3 | dotfiles | `dcd-03-ui-checker-pane` | deepseek-flash の画像読み取りを確かめ、UI 確認役を別の会話（ペイン）として立てる仕組みを作る | ⬜ 待機中 |
+| 1 | dotfiles | `dcd-01-autocompact-window` | `bin/claude-ds` の `CLAUDE_CODE_AUTO_COMPACT_WINDOW` を 20〜25万へ下げ、README の理由を実測に合わせて直す。サブエージェントに効くかを確かめる | 🔄 実装中 |
+| 2 | dotfiles | `dcd-02-self-compact-rules` | self-compact の決まり（pr-review-loop・umbrella-orchestrator の自動付与指示・`compact-reminder.sh`・ADR）を DeepSeek の実測で見直す。Claude にも効かせるかは人間に確かめる | 🔄 実装中 |
+| 3 | dotfiles | `dcd-03-ui-checker-pane` | deepseek-flash の画像読み取りを確かめ、UI 確認役を別の会話（ペイン）として立てる仕組みを作る | 🔄 実装中 |
 | 4 | pixidex | `dcd-04-checker-request` | pixidex の「確かめ役」の頼み方（規約・現役の計画書の型・ADR）を孫3 の仕組みに合わせる | ⬜ 待機中 |
 
 依存:
@@ -304,6 +304,7 @@ pixidex は private のため、owner/name は値ではなく解決方法を書�
 （司令官が運用中に分かったこと・人間の決定をここに追記する）
 
 - 2026-11-03: 計画書を起草した。傘は `origin/master`（86943bc）から切られている。孫1〜3 を並列で spawn する。孫4 は孫3 のマージ後
+- 2026-11-03: 孫1〜3 を spawn した（`ocw -H --no-commander`、base-ref は `ds-cost-down`）。ブリーフと分析スクリプトは転記後に削除した（スクリプトは付録A）
 
 ## 孫1用プロンプト:
 
