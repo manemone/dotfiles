@@ -365,7 +365,7 @@ force push は無音で通る。**`Bash(git push *--force*)` のように空白�
 ### 3.6 compact-reminder フック — 実装の孫に自己 compact の判断を思い出させる
 
 `~/.claude/hooks/compact-reminder.sh`（`claude/hooks/compact-reminder.sh` から symlink される
-PostToolUse フック）は、**`OCW_ROLE=implementer` のペインでだけ**、文脈が 200,000 トークンを
+PostToolUse フック）は、**`OCW_ROLE=implementer` のペインでだけ**、文脈が 150,000 トークン（claude-ds 以外の Claude は 200,000。`ANTHROPIC_BASE_URL` に `deepseek` を含むかで見分ける）を
 超えたら「区切りなら `ocw self-compact` を判断すること」と `additionalContext` で差し込む。
 **compact そのものは打たない。** それ以外の役割（司令官・レビュワー・未設定）には何も言わない。
 
@@ -377,7 +377,7 @@ PostToolUse フック）は、**`OCW_ROLE=implementer` のペインでだけ**�
   （compact した）状態を消す。状態は `${XDG_STATE_HOME:-~/.local/state}/dotfiles/compact-reminder/<session_id>`
 - 判定できない入力（python3 無し・transcript が読めない・壊れた JSON）は何も言わず、エージェントを止めない
 - テストは `tests/compact_reminder_test.sh`。**実機で `additionalContext` が孫の文脈に届くかは未検証**
-  （デプロイ後に確かめる。ADR [DOC-2610142359](../docs/adr/DOC-2610142359_implementer-compact-reminder-hook.md) §4）
+  （デプロイ後に確かめる。閾値 150,000 の根拠は ADR [DOC-2611032102](../docs/adr/DOC-2611032102_self-compact-rules-revision.md)。ADR [DOC-2610142359](../docs/adr/DOC-2610142359_implementer-compact-reminder-hook.md) §4）
 
 無効化するには、リポジトリ側の `claude/settings.json` から `hooks.PostToolUse` を削除する
 （machine 設定で `hooks.PostToolUse` を空配列にしても同じ。§3.5 の無効化と同様の浅いマージ）。

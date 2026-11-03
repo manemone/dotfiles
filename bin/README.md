@@ -94,6 +94,9 @@ ocw self-compact "復帰メモ <パス> を最初に読む。正典は計画書 
 # 使い方だけ見たいときは -h / --help（何も送らない）。"-" で始まる引数は指示として送らず、エラーにする
 ocw self-compact --help
 
+# UI 確認を、サブエージェントではなく別のペインの確認役に頼む（実装役のペインで。使い方は「UI 確認役に頼む」節）
+ocw checker /tmp/ui-check-001 --wait 540   # Bash ツールのタイムアウトは 600000 ms にして打つ
+
 # Herdr のワークスペースラベルを指定（ペインの claude の会話名にも使われる）
 ocw --herdr --label "myrepo :: タイトル" my-feature
 
@@ -121,10 +124,40 @@ ocw help config  # ワークツリーの作成先、git config ocw.* の5キー
 ocw help naming  # 名前 → ブランチ名・ディレクトリ名の変換規則
 ocw help rm      # ocw rm の解決規則・マージ済み判定
 ocw help herdr   # -H / --no-commander / --label のペイン構成・グループ・会話名・ocw agent・ocw self-compact
+ocw help checker # ocw checker（UI 確認役）のリクエストの形・ペインの扱い・--wait
 ocw help meter   # ocw-meter 連携（run_id）
 ocw help env     # 環境変数
 ocw help all     # 全 topic を連結
 ```
+
+### UI 確認役に頼む（`ocw checker`）
+
+実装役が UI の見た目を確かめたいとき、サブエージェントに頼む代わりに、同じ Herdr ワークスペースに
+確認役のペインを足して頼む。確認役は普通の会話なので、人間が横から見られ、`ocw self-compact` もできる。
+既定は Claude の Sonnet（`OCW_CHECKER_COMMAND` で上書き。既定値 `claude --model sonnet`）。Sonnet の消費は
+サブスクの週の上限に効く。なぜ Claude か・なぜこの形かは ADR
+[DOC-2611032105](../docs/adr/DOC-2611032105_ui-checker-pane.md) を参照。
+
+**実装役から頼む手順（実装役のペインで）:**
+
+1. リクエスト用のディレクトリを作る（`mktemp -d`。パスに引用符・`$`・バッククォート・改行を入れない）
+2. 次の2ファイルを置く
+   - `shoot.sh` — 撮影スクリプト。確認役はこれを `sh` でそのまま流す（書き換えず、撮影方法を探し直さない）。
+     撮った画像などの出力先はこのディレクトリの下（例 `out/`）にする。起動するサーバや前提は、スクリプトの中で
+     立てる（確認役は環境を組み立てない）
+   - `checklist.md` — 確認項目。1項目1行で、判定の基準（何が見えれば OK か）と、見る画像のパスを書く
+3. `ocw checker <リクエストのディレクトリ> --wait 540` を、Bash ツールのタイムアウトを 600000 ms（上限）にして打つ（既定の 120 秒だと途中で打ち切られる）。初回は確認役のペインが実装役の下に分割されて起動し、
+   2回目以降は生きている確認役へそのまま送る（文脈を引き継ぐ。膨らんだら確認役が自分で `ocw self-compact` する。依頼文でそう頼んでいる）。
+   `--wait` を付けなければ送ってすぐ戻る
+
+**返ってくるもの:** `<リクエストのディレクトリ>/result.md`（項目ごとの OK/NG と、見たものの根拠）。
+確認役は `result.md.tmp` に書いてから移すので、`result.md` があれば書き終わっている。`ocw` は送る前に古い
+`result.md` を消す。`--wait` の終了コードは、現れたら 0、時間切れなら 3（依頼は生きている。`result.md` が
+できるのを自分で見に行く。`ocw checker` を打ち直すと依頼を二重に送る。ツールに打ち切られたときも同じで、打ち直さない）。
+
+宛先は `ocw` が作って `.git` 内の `ocw-checker-pane` に控えた確認役のペインだけで、実装役自身のペインへは
+送らない。確認役のセッションの権限は確認役自身の設定に従う（自動承認はしない）。
+
 
 **なぜこの設計か**（`ai/` 接頭辞の廃止・ネスト方針・レイアウトをフルパス雛形1本で表現する
 判断・マージ済み判定の再定義・却下した案とその理由）は ADR
@@ -165,7 +198,7 @@ claude-ds
 #   ANTHROPIC_DEFAULT_HAIKU_MODEL="deepseek-flash"
 #   CLAUDE_CODE_SUBAGENT_MODEL="deepseek-flash"
 #   CLAUDE_CODE_EFFORT_LEVEL="max"
-#   CLAUDE_CODE_AUTO_COMPACT_WINDOW="786432"
+#   CLAUDE_CODE_AUTO_COMPACT_WINDOW="233000"
 #   claude "$@"
 ```
 
@@ -177,7 +210,7 @@ claude-ds
 モデルは DeepSeek 公式の Claude Code 連携ページの設定例（全部 Flash。`deepseek-flash` は 2026-10-17 から V4.1-Flash-1017）に合わせている。旧 `deepseek-v4-flash` は引退済みで互換転送されているだけなので使わない。`deepseek-v4-pro` は現役だが既定では使わない（使うなら `--model` で指定）。
 
 - `CLAUDE_CODE_EFFORT_LEVEL=max`: 公式推奨。環境変数は `effortLevel` 設定より優先されるため、配布物の `effortLevel` には負けない
-- `CLAUDE_CODE_AUTO_COMPACT_WINDOW=786432`: 公式推奨の自動 compact の上限（安全網）。`claude/hooks/compact-reminder.sh` の 200k や司令官の 150k / 300k は「区切りで自発的に compact する判断」の目安で役割が違い、衝突しない。DeepSeek はキャッシュヒットがミスの約1/50と安く、長い文脈のコストが響きにくいため公式値をそのまま採る
+- `CLAUDE_CODE_AUTO_COMPACT_WINDOW=233000`: 自動 compact の窓の大きさ（安全網）。実際に compact が始まるのは「窓 − 出力の予約（最大 20000）− 13000」の位置で、233000 なら約 200,000 トークン。公式値の 786432 は DeepSeek では高すぎた。2026-11-03 の実測で費用の約8割が文脈 10万超の呼び出しから出ており（キャッシュ読み直しが 53%）、self-compact を取りこぼした会話は 30〜48万まで伸びた。`claude/hooks/compact-reminder.sh` の 150k（区切りで self-compact する目安。ADR DOC-2611032102）に、区切りを待つ幅（再掲間隔 50k）を足した位置で始まるようにし、self-compact の機会を奪わずに取りこぼしだけを拾う。この環境変数は `claude-ds` の `exec env` の中にしか無く、通常の `claude` の会話には効かない。理由と比較は ADR [DOC-2611032100](../docs/adr/DOC-2611032100_claude-ds-autocompact-window.md)
 - **`settings.machine.json` の `env` は、ここで固定した環境変数より優先される**（Claude Code は `env` の各エントリをプロセス環境へ書き込み、シェルから継承した値を置き換える）。たとえば `env` に `CLAUDE_CODE_SUBAGENT_MODEL: "sonnet"` があると、subagent は `ANTHROPIC_DEFAULT_SONNET_MODEL`（`deepseek-flash[1m]`）に読み替えられる。Flash で動く点は変わらず、1M 文脈版になるだけ
 
 API キーは `DEEPSEEK_API_KEY_FILE` 環境変数で指定可能（デフォルト: `~/.config/deepseek/api_key`）。

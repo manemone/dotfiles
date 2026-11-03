@@ -13,6 +13,7 @@ WORKSPACE_LABEL_OVERRIDE=""
 COMMANDER_COMMAND="${OCW_COMMANDER_COMMAND:-claude}"
 IMPLEMENTER_COMMAND="${OCW_IMPLEMENTER_COMMAND:-claude}"
 REVIEWER_COMMAND="${OCW_REVIEWER_COMMAND:-claude}"
+CHECKER_COMMAND="${OCW_CHECKER_COMMAND:-claude --model sonnet}"
 
 # Observability (docs/planning/DOC-2608021229-a_..._計画.md §7.4, 孫2 prompt). Always
 # fail-open: ocw-meter being entirely absent from PATH, or failing internally,
@@ -40,6 +41,7 @@ usage:
   ocw rm -f <worktree-name>
   ocw agent [commander|implementer|reviewer]
   ocw self-compact <instruction>
+  ocw checker <dir> [--wait <sec>]
   ocw ls
   ocw label-prefix
   ocw help [topic]
@@ -102,7 +104,7 @@ USAGE
 # help_topic_<name>() per word here -- bin/tests/test_ocw.py pins this
 # (topics advertised in usage()'s topics: section must all be dispatchable,
 # and vice versa).
-HELP_TOPICS="config naming rm herdr meter env"
+HELP_TOPICS="config naming rm herdr checker meter env"
 
 help_topic_description() {
   case "$1" in
@@ -110,6 +112,7 @@ help_topic_description() {
     naming) printf '%s\n' "how input becomes a branch/directory name" ;;
     rm) printf '%s\n' "what 'ocw rm' deletes and how merged-ness is decided" ;;
     herdr) printf '%s\n' "-H/--herdr pane layout and roles" ;;
+    checker) printf '%s\n' "UI check in a separate checker pane" ;;
     meter) printf '%s\n' "ocw-meter integration (run_id, OCW_RUN_ID)" ;;
     env) printf '%s\n' "environment variables ocw reads and sets" ;;
   esac
@@ -401,6 +404,63 @@ running. Start or attach first with: herdr".
 TOPIC
 }
 
+help_topic_checker() {
+  cat <<'TOPIC'
+topic: checker
+
+Hand a UI check to a separate conversation (a checker pane) instead of a
+subagent. The checker is a normal agent session in a pane of the
+implementer's own Herdr workspace, so a human can watch it, and it can
+`ocw self-compact` like any pane.
+
+    ocw checker <request-dir> [--wait <seconds>]
+
+Run it from the implementer's pane ($HERDR_PANE_ID must be set). The request
+is a directory the implementer prepares:
+
+  <request-dir>/shoot.sh      the capture script. The checker runs it as is
+                              and does not look for another way to capture.
+                              It writes its screenshots/outputs somewhere the
+                              checklist names (e.g. <request-dir>/out/).
+  <request-dir>/checklist.md  what to check, one item per line, plus the
+                              paths of the images to look at.
+
+The checker runs shoot.sh, goes through the checklist, and writes
+<request-dir>/result.md (OK/NG per item with the evidence, and what it saw).
+result.md is written to a temporary name and moved into place, so its
+existence means it is complete. ocw deletes an old result.md before sending.
+
+  - First call: splits a new pane (below the implementer, OCW_ROLE=checker)
+    and starts the checker there with the request as its first prompt. The
+    pane id is remembered in the worktree's git dir (ocw-checker-pane).
+  - Later calls: if that pane's agent is still alive, the new request is sent
+    to it (it keeps its context; compact it when it grows). Otherwise a new
+    pane is made.
+  - Without --wait the command returns right after sending. With --wait it
+    polls for result.md for up to <seconds> and exits 0 when it appears, or
+    3 on timeout (the request is still pending; polling again for result.md
+    is enough -- re-running `ocw checker` would send the request again).
+    An agent's Bash tool times out (Claude Code: 120 s by default, 600 s at
+    most), so run it with a tool timeout above --wait (e.g. --wait 540 with
+    a 600000 ms tool timeout). If the tool cuts it off anyway, the request is
+    still alive: do not re-run, look for result.md.
+
+The only pane this ever sends to is the checker pane ocw created; it refuses
+to send to $HERDR_PANE_ID itself. The permission mode of the checker session
+is whatever its own settings say; nothing is auto-approved.
+
+Compacting: the checker is told to run `ocw self-compact` itself after a
+reply when its measured context passes the threshold (150,000 on DeepSeek,
+200,000 otherwise; the request carries the measuring command) (it resumes with a "wait for the
+next request" prompt, not the implementer's). The implementer cannot compact
+the checker pane from outside (self-compact only targets its own pane).
+
+OCW_CHECKER_COMMAND (default: claude --model sonnet) is the launch line. A
+claude/claude-ds line gets --name "UI確認 / <branch>". The request is passed
+as the line's last argument, so the command must take a prompt that way.
+TOPIC
+}
+
 help_topic_meter() {
   cat <<'TOPIC'
 topic: meter
@@ -457,6 +517,9 @@ read by ocw:
                             (these three are read at creation and stored;
                             `ocw agent` runs the stored line -- `ocw help
                             herdr`)
+  OCW_CHECKER_COMMAND      default: claude --model sonnet
+                            command for the UI checker pane; read each time
+                            `ocw checker` starts one -- `ocw help checker`
   OCW_NO_VSCODE            unset by default
                             any non-empty value skips launching VS Code
                             in the default (non-Herdr) create mode --
@@ -480,6 +543,7 @@ show_help_topic() {
     naming) help_topic_naming ;;
     rm) help_topic_rm ;;
     herdr) help_topic_herdr ;;
+    checker) help_topic_checker ;;
     meter) help_topic_meter ;;
     env) help_topic_env ;;
     *)
@@ -2033,6 +2097,9 @@ remove_worktree() {
 # once the pane has left `working` (compact runs inside the same working
 # period and ends in done/idle; measured in the ADR).
 SELF_COMPACT_RESUME_PROMPT="復帰メモがあれば読み、計画書の続きから再開してください。"
+# A checker pane (OCW_ROLE=checker, see `ocw checker`) must not be told to resume
+# implementation work from the plan: it shares the implementer's worktree.
+SELF_COMPACT_CHECKER_RESUME_PROMPT="UI 確認役です。実装作業は始めません。次の確認の依頼が届くまで待ってください。"
 
 # A failed `herdr pane get` yields an empty status (treated as still working by
 # the watcher) instead of killing the watcher under pipefail.
@@ -2105,10 +2172,157 @@ self_compact() {
     die "failed to send /compact to pane ${HERDR_PANE_ID}"
 
   # Detached so it outlives this command and the tool call that ran it.
-  (self_compact_resume_watcher "$HERDR_PANE_ID" "$SELF_COMPACT_RESUME_PROMPT" \
+  local resume_prompt="$SELF_COMPACT_RESUME_PROMPT"
+  [ "${OCW_ROLE:-}" = "checker" ] && resume_prompt="$SELF_COMPACT_CHECKER_RESUME_PROMPT"
+  (self_compact_resume_watcher "$HERDR_PANE_ID" "$resume_prompt" \
     </dev/null >/dev/null 2>&1 &)
 
   echo "queued /compact for pane ${HERDR_PANE_ID}; a background watcher sends the resume prompt after compact finishes; end this turn now"
+}
+
+# `ocw checker <request-dir> [--wait <seconds>]` (ADR: UI check by a separate
+# conversation). Sends a UI-check request to a checker pane in the caller's
+# own Herdr workspace. The only pane it ever sends to is the checker pane it
+# created (recorded in ocw-checker-pane in the git dir), never $HERDR_PANE_ID
+# and never a pane named by the caller.
+CHECKER_RESULT_FILE="result.md"
+
+# Context-size check handed to the checker (same measurement and thresholds as
+# pr-review-loop's self-compact section and claude/hooks/compact-reminder.sh,
+# ADR DOC-2611032102: 150,000 for DeepSeek, 200,000 otherwise). The
+# compact-reminder hook only fires for OCW_ROLE=implementer, so the checker
+# is given the measurement in its request instead.
+CHECKER_CONTEXT_CHECK='python3 -c '"'"'import glob,json,os;f=glob.glob(os.path.expanduser("~/.claude/projects/*/"+os.environ["CLAUDE_CODE_SESSION_ID"]+".jsonl"))[0];u=[json.loads(l)["message"]["usage"] for l in open(f) if json.loads(l).get("type")=="assistant"][-1];n=u["input_tokens"]+u.get("cache_read_input_tokens",0)+u.get("cache_creation_input_tokens",0);t=150000 if "deepseek" in os.environ.get("ANTHROPIC_BASE_URL","") else 200000;print(n,t,"OVER" if n>t else "ok")'"'"
+
+checker_prompt() {
+  local dir="$1"
+  printf '%s' "あなたは UI 確認役です。${dir}/checklist.md を読み、${dir}/shoot.sh を sh でそのまま実行して撮影し、チェックリストの各項目を、撮れた画像を実際に見て OK か NG かを根拠つきで判定してください。撮影方法を自分で探し直したり shoot.sh を書き換えたりしないこと（shoot.sh が失敗したら、その出力を報告して止まる）。結果は ${dir}/${CHECKER_RESULT_FILE}.tmp に書いてから ${dir}/${CHECKER_RESULT_FILE} へ mv し、最後に 3 行以内で要約を返してください。要約を返したあと、自分の文脈の大きさを次のコマンドで測り、OVER と出たときだけ ocw self-compact \"UI 確認役。確認は終わった。次の依頼を待つ\" で自分を compact してください（ok なら何もしない）: ${CHECKER_CONTEXT_CHECK}"
+}
+
+checker_pane_reusable() {
+  local pane="$1"
+  local status=""
+
+  [ -n "$pane" ] || return 1
+  status="$(pane_agent_status "$pane")"
+  case "$status" in
+    "" | unknown) return 1 ;;
+  esac
+  return 0
+}
+
+run_checker() {
+  local dir=""
+  local wait_sec=""
+  local git_dir=""
+  local state_file=""
+  local pane=""
+  local prompt=""
+  local branch=""
+  local line=""
+  local split_json=""
+  local waited=0
+
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      -h | --help)
+        echo "usage: ocw checker <request-dir> [--wait <seconds>]"
+        echo "(see \`ocw help checker\` for details; sends nothing)"
+        return 0
+        ;;
+      --wait)
+        [ "$#" -ge 2 ] || die "usage: ocw checker <request-dir> [--wait <seconds>]"
+        wait_sec="$2"
+        case "$wait_sec" in
+          "" | *[!0-9]*) die "ocw checker: --wait takes a number of seconds" ;;
+        esac
+        shift 2
+        ;;
+      -*)
+        die "usage: ocw checker <request-dir> [--wait <seconds>] (unknown option: $1)"
+        ;;
+      *)
+        [ -z "$dir" ] || die "usage: ocw checker <request-dir> [--wait <seconds>]"
+        dir="$1"
+        shift
+        ;;
+    esac
+  done
+
+  [ -n "$dir" ] || die "usage: ocw checker <request-dir> [--wait <seconds>]"
+  [ -d "$dir" ] || die "ocw checker: not a directory: ${dir}"
+  dir="$(cd "$dir" && pwd)"
+  case "$dir" in
+    *[\'\"\\\$\`]* | *$'\n'* | *$'\r'*) die "ocw checker: the request directory path must not contain quotes, backslashes, \$, backticks or newlines" ;;
+  esac
+  [ -f "${dir}/shoot.sh" ] || die "ocw checker: ${dir}/shoot.sh is missing"
+  [ -f "${dir}/checklist.md" ] || die "ocw checker: ${dir}/checklist.md is missing"
+
+  [ -n "${HERDR_PANE_ID:-}" ] ||
+    die "HERDR_PANE_ID is not set; ocw checker works only inside a Herdr pane"
+  require_command herdr
+  git_dir="$(git rev-parse --absolute-git-dir 2>/dev/null)" ||
+    die "ocw checker: not inside a git worktree"
+
+  state_file="${git_dir}/ocw-checker-pane"
+  if [ -f "$state_file" ]; then
+    pane="$(cat "$state_file")"
+  fi
+  # Never send to the caller's own pane, even if the state file says so.
+  if [ "$pane" = "$HERDR_PANE_ID" ]; then
+    pane=""
+  fi
+
+  rm -f "${dir}/${CHECKER_RESULT_FILE}"
+  prompt="$(checker_prompt "$dir")"
+
+  if checker_pane_reusable "$pane"; then
+    herdr agent prompt "$pane" "$prompt" >/dev/null ||
+      die "failed to send the request to checker pane ${pane}"
+    echo "sent the request to checker pane ${pane}"
+  else
+    branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)"
+    line="$(pane_command_with_name "$CHECKER_COMMAND" "UI確認 / ${branch}")"
+    split_json="$(
+      herdr pane split "$HERDR_PANE_ID" \
+        --direction down \
+        --cwd "$PWD" \
+        --env "OCW_ROLE=checker" \
+        --no-focus
+    )" || die "failed to split a checker pane from ${HERDR_PANE_ID}"
+    pane="$(json_nested_field "$split_json" pane pane_id)" ||
+      die "could not read the checker pane ID from Herdr response"
+    [ -n "$pane" ] && [ "$pane" != "$HERDR_PANE_ID" ] ||
+      die "Herdr returned an unusable checker pane ID"
+    printf '%s\n' "$pane" >"$state_file" ||
+      die "could not record the checker pane in ${state_file}"
+    herdr pane rename "$pane" checker >/dev/null || true
+    # Single-quote the prompt by hand (printf %q emits $'..' in the C locale).
+    # The replacement goes through a variable: inline in "...", bash <= 4.2
+    # (macOS /bin/bash 3.2) skips quote removal on it and breaks the quoting.
+    local sq="'\\''"
+    herdr pane run "$pane" "${line} '${prompt//\'/$sq}'" >/dev/null ||
+      die "failed to start the checker in pane ${pane}"
+    echo "started a checker in pane ${pane}"
+  fi
+
+  if [ -n "$wait_sec" ]; then
+    while [ "$waited" -lt "$wait_sec" ]; do
+      if [ -f "${dir}/${CHECKER_RESULT_FILE}" ]; then
+        echo "result: ${dir}/${CHECKER_RESULT_FILE}"
+        return 0
+      fi
+      sleep "${OCW_CHECKER_POLL_SEC:-1}"
+      waited=$((waited + 1))
+    done
+    if [ -f "${dir}/${CHECKER_RESULT_FILE}" ]; then
+      echo "result: ${dir}/${CHECKER_RESULT_FILE}"
+      return 0
+    fi
+    echo "timed out after ${wait_sec}s; ${dir}/${CHECKER_RESULT_FILE} not written yet" >&2
+    return 3
+  fi
+  echo "result will appear at ${dir}/${CHECKER_RESULT_FILE}"
 }
 
 while true; do
@@ -2193,6 +2407,12 @@ case "$cmd" in
   self-compact)
     shift
     self_compact "$@"
+    ;;
+
+  checker)
+    shift
+    run_checker "$@"
+    exit $?
     ;;
 
   agent)
