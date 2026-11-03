@@ -2240,6 +2240,25 @@ class SelfCompactTests(HerdrOcwTestCase):
                 self.assertIn("usage:", result.stderr)
                 self.assertEqual(self.herdr_calls(), [])
 
+    def test_checker_role_resumes_with_its_own_prompt_not_the_implementers(self):
+        # A checker shares the implementer's worktree; "resume from the plan"
+        # would make it start implementing.
+        seq = pathlib.Path(self.tmpdir.name) / "status-seq"
+        seq.write_text("working\ndone\n", encoding="utf-8")
+        extra_env = {
+            "HERDR_PANE_ID": "wXX:p2",
+            "OCW_ROLE": "checker",
+            "OCW_TEST_HERDR_STATUS_SEQ": str(seq),
+            "OCW_SELF_COMPACT_POLL_SEC": "0.05",
+        }
+        result = self.run_herdr_ocw(["self-compact", "memo"], cwd=self.tmpdir.name, extra_env=extra_env)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        calls = self.wait_for_calls(2)
+        prompts = [c for c in calls if c[:2] == ["agent", "prompt"]]
+        self.assertEqual(len(prompts), 2, calls)
+        self.assertNotIn("計画書", prompts[1][3])
+        self.assertIn("UI 確認役", prompts[1][3])
+
     def test_allow_rule_is_scoped_to_this_command_only(self):
         # The rule exists to get past the auto-mode classifier ([Tmux Self
         # Drive]); allowing `herdr agent prompt` in general would let the AI

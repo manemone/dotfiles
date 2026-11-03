@@ -440,10 +440,19 @@ existence means it is complete. ocw deletes an old result.md before sending.
     polls for result.md for up to <seconds> and exits 0 when it appears, or
     3 on timeout (the request is still pending; polling again for result.md
     is enough -- re-running `ocw checker` would send the request again).
+    An agent's Bash tool times out (Claude Code: 120 s by default, 600 s at
+    most), so run it with a tool timeout above --wait (e.g. --wait 540 with
+    a 600000 ms tool timeout). If the tool cuts it off anyway, the request is
+    still alive: do not re-run, look for result.md.
 
 The only pane this ever sends to is the checker pane ocw created; it refuses
 to send to $HERDR_PANE_ID itself. The permission mode of the checker session
 is whatever its own settings say; nothing is auto-approved.
+
+Compacting: the checker is told to run `ocw self-compact` itself after a
+reply when its context passes 200,000 tokens (it resumes with a "wait for the
+next request" prompt, not the implementer's). The implementer cannot compact
+the checker pane from outside (self-compact only targets its own pane).
 
 OCW_CHECKER_COMMAND (default: claude --model sonnet) is the launch line. A
 claude/claude-ds line gets --name "UI確認 / <branch>". The request is passed
@@ -504,12 +513,12 @@ read by ocw:
                             command for the implementer pane
   OCW_REVIEWER_COMMAND     default: claude
                             command for the reviewer pane
-  OCW_CHECKER_COMMAND      default: claude --model sonnet
-                            command for the UI checker pane; read each time
-                            `ocw checker` starts one -- `ocw help checker`
                             (these three are read at creation and stored;
                             `ocw agent` runs the stored line -- `ocw help
                             herdr`)
+  OCW_CHECKER_COMMAND      default: claude --model sonnet
+                            command for the UI checker pane; read each time
+                            `ocw checker` starts one -- `ocw help checker`
   OCW_NO_VSCODE            unset by default
                             any non-empty value skips launching VS Code
                             in the default (non-Herdr) create mode --
@@ -2087,6 +2096,9 @@ remove_worktree() {
 # once the pane has left `working` (compact runs inside the same working
 # period and ends in done/idle; measured in the ADR).
 SELF_COMPACT_RESUME_PROMPT="復帰メモがあれば読み、計画書の続きから再開してください。"
+# A checker pane (OCW_ROLE=checker, see `ocw checker`) must not be told to resume
+# implementation work from the plan: it shares the implementer's worktree.
+SELF_COMPACT_CHECKER_RESUME_PROMPT="UI 確認役です。実装作業は始めません。次の確認の依頼が届くまで待ってください。"
 
 # A failed `herdr pane get` yields an empty status (treated as still working by
 # the watcher) instead of killing the watcher under pipefail.
@@ -2159,7 +2171,9 @@ self_compact() {
     die "failed to send /compact to pane ${HERDR_PANE_ID}"
 
   # Detached so it outlives this command and the tool call that ran it.
-  (self_compact_resume_watcher "$HERDR_PANE_ID" "$SELF_COMPACT_RESUME_PROMPT" \
+  local resume_prompt="$SELF_COMPACT_RESUME_PROMPT"
+  [ "${OCW_ROLE:-}" = "checker" ] && resume_prompt="$SELF_COMPACT_CHECKER_RESUME_PROMPT"
+  (self_compact_resume_watcher "$HERDR_PANE_ID" "$resume_prompt" \
     </dev/null >/dev/null 2>&1 &)
 
   echo "queued /compact for pane ${HERDR_PANE_ID}; a background watcher sends the resume prompt after compact finishes; end this turn now"
@@ -2174,7 +2188,7 @@ CHECKER_RESULT_FILE="result.md"
 
 checker_prompt() {
   local dir="$1"
-  printf '%s' "あなたは UI 確認役です。${dir}/checklist.md を読み、${dir}/shoot.sh を sh でそのまま実行して撮影し、チェックリストの各項目を、撮れた画像を実際に見て OK か NG かを根拠つきで判定してください。撮影方法を自分で探し直したり shoot.sh を書き換えたりしないこと（shoot.sh が失敗したら、その出力を報告して止まる）。結果は ${dir}/${CHECKER_RESULT_FILE}.tmp に書いてから ${dir}/${CHECKER_RESULT_FILE} へ mv し、最後に 3 行以内で要約を返してください。"
+  printf '%s' "あなたは UI 確認役です。${dir}/checklist.md を読み、${dir}/shoot.sh を sh でそのまま実行して撮影し、チェックリストの各項目を、撮れた画像を実際に見て OK か NG かを根拠つきで判定してください。撮影方法を自分で探し直したり shoot.sh を書き換えたりしないこと（shoot.sh が失敗したら、その出力を報告して止まる）。結果は ${dir}/${CHECKER_RESULT_FILE}.tmp に書いてから ${dir}/${CHECKER_RESULT_FILE} へ mv し、最後に 3 行以内で要約を返してください。要約を返したあと、文脈が 200,000 トークンを超えていれば ocw self-compact \"UI 確認役。確認は終わった。次の依頼を待つ\" で自分を compact してください。"
 }
 
 checker_pane_reusable() {
