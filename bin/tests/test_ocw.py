@@ -2341,6 +2341,24 @@ class CheckerTests(HerdrOcwTestCase):
         self.assertEqual(prompts[0][2], new_pane)
         self.assertFalse((req / "result.md").exists(), "a stale result must not be mistaken for the new one")
 
+    def test_a_reviewer_never_reuses_the_implementers_checker_pane(self):
+        req = self.make_request()
+        git_dir = subprocess.run(
+            ["git", "-C", str(self.repo_root), "rev-parse", "--absolute-git-dir"],
+            capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        implementer_state = pathlib.Path(git_dir) / "ocw-checker-pane"
+        implementer_state.write_text("wXX:p9\n", encoding="utf-8")
+        result = self.run_checker([str(req)], extra_env={"OCW_ROLE": "reviewer"})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        calls = self.herdr_calls()
+        # The implementer's live checker is not sent to; a new pane is split.
+        self.assertEqual([c for c in calls if c[:2] == ["agent", "prompt"]], [])
+        self.assertEqual(len([c for c in calls if c[:2] == ["pane", "split"]]), 1)
+        self.assertEqual(implementer_state.read_text(encoding="utf-8").strip(), "wXX:p9")
+        reviewer_state = pathlib.Path(git_dir) / "ocw-checker-pane-reviewer"
+        self.assertTrue(reviewer_state.is_file())
+
     def test_a_dead_checker_pane_is_replaced_and_the_callers_own_pane_is_never_a_target(self):
         req = self.make_request()
         git_dir = subprocess.run(

@@ -18,6 +18,7 @@
 | デプロイの運用手順（世代確認・ロールバック・dev モード等）を調べる | [reference/DOC-2608040805_配布実体運用ガイド.md](reference/DOC-2608040805_配布実体運用ガイド.md) | canonical prefix の構造・manifest 全フィールド・移行手順 |
 | なぜ `ocw` の命名・レイアウトを今の形にしたかを知る | [adr/DOC-2608062258_ocw-worktree-naming-and-layout.md](adr/DOC-2608062258_ocw-worktree-naming-and-layout.md) | `ai/` 接頭辞の廃止・ディレクトリのネスト・git config `ocw.*` によるレイアウト表現・squash マージ検出の決定と、却下した案 |
 | なぜ `ocw-meter` をこの設計にしたかを知る | [adr/DOC-2608021229_llm-cost-observability-collection-method.md](adr/DOC-2608021229_llm-cost-observability-collection-method.md) | feasibility probe の実測結果に基づく収集方式の決定記録 |
+| なぜ画面を触る PR の確認を汎用スキル `ui-review` にしたかを知る | [adr/DOC-2611040233_ui-review-skill.md](adr/DOC-2611040233_ui-review-skill.md) | 既存の画面レビューの下敷きと不採用の理由・リポ側の入口の形・レビュー役専用の確認役ペイン |
 | なぜ `ocw-meter` の ingest を statusLine から自動で走らせるようにしたかを知る | [adr/DOC-2611010254_auto-ingest.md](adr/DOC-2611010254_auto-ingest.md) | statusLine 起点・間隔・ロック・`quota.sample` への影響の実測と、hook / OS のスケジューラを採らなかった理由 |
 | なぜスキルを複数の AI エージェントへ配るようにしたかを知る | [adr/DOC-2608272128_skills-multi-agent-distribution.md](adr/DOC-2608272128_skills-multi-agent-distribution.md) | `skills/` の切り出し・配布先エージェントの決め方・却下した案 |
 | なぜ Codex / OpenCode のグローバル指示を `claude/CLAUDE.md` から配るようにしたかを知る | [adr/DOC-2609072334_codex-opencode-global-instructions-distribution.md](adr/DOC-2609072334_codex-opencode-global-instructions-distribution.md) | `codex/` `opencode/` の新設・単一ソース symlink 方式・却下した案 |
