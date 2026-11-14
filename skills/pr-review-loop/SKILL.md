@@ -496,7 +496,9 @@ command -v ocw-meter >/dev/null && ocw-meter event phase.start --phase review_re
 #### 置き場所
 
 ```bash
-mkdir -p -m 700 "/tmp/pr-review-loop-$(id -u)"
+d="/tmp/pr-review-loop-$(id -u)"
+mkdir -p -m 700 "$d"
+[ -d "$d" ] && [ ! -L "$d" ] && [ -O "$d" ] && chmod 700 "$d" || echo "STOP: $d が自分の持ち物のディレクトリでない"
 gh repo view --json nameWithOwner -q .nameWithOwner    # 例: manemone/dotfiles
 ```
 
@@ -512,6 +514,11 @@ gh repo view --json nameWithOwner -q .nameWithOwner    # 例: manemone/dotfiles
 持ち物になり、同じマシンの別ユーザーが書き込めず pr-review-loop を回せない。書く側とレビュワーペインは
 同じユーザーで動くので、`id -u` を使えばパスは揃う。ユーザー名ではなく uid にするのは、
 ユーザー名の文字種に依存せず、承認文（`claude/settings.json`）の書式も単純に保てるため。
+
+`mkdir -p -m 700` は、パスが既にあると（別ユーザーが先に作ったディレクトリや symlink でも）何もせず成功し、
+持ち主も権限も確かめない。uid は誰でも分かるので、他人が先回りして置いたディレクトリへ指示ファイルを
+書くと、差し替えられて指示を操作されうる。そのため上のコマンドで symlink でないこと・自分の持ち物であることを
+確かめ、`STOP:` が出たら**書き込まず人間に報告して止まる**（人間の判断なしに別のパスへ逃げない）。
 
 **リポジトリ名をファイル名に含めるのは必須。** PR番号だけだと、別リポジトリの同番号のPRを
 並行して回したときに同じファイルを取り合い、レビュワーが**別リポジトリのレビュー依頼を読む**。
