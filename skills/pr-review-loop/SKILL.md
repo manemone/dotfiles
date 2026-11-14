@@ -496,16 +496,22 @@ command -v ocw-meter >/dev/null && ocw-meter event phase.start --phase review_re
 #### 置き場所
 
 ```bash
-mkdir -p /tmp/pr-review-loop
+mkdir -p -m 700 "/tmp/pr-review-loop-$(id -u)"
 gh repo view --json nameWithOwner -q .nameWithOwner    # 例: manemone/dotfiles
 ```
 
 得られた `owner/repo` の `/` を `-` に置き換え、次のパスを `$REVIEW_REQUEST` とする
-（`$PR` などと同じ記法。以降このファイルを指すときは、この**絶対パス**をリテラルに埋める）。
+（`$PR` などと同じ記法。以降このファイルを指すときは、この**絶対パス**をリテラルに埋める。
+`<uid>` は `id -u` の値）。
 
 ```
-/tmp/pr-review-loop/<owner>-<repo>-<PR番号>.md
+/tmp/pr-review-loop-<uid>/<owner>-<repo>-<PR番号>.md
 ```
+
+**ディレクトリはユーザーごとに分ける。** 固定の `/tmp/pr-review-loop` だと、最初に作ったユーザーの
+持ち物になり、同じマシンの別ユーザーが書き込めず pr-review-loop を回せない。書く側とレビュワーペインは
+同じユーザーで動くので、`id -u` を使えばパスは揃う。ユーザー名ではなく uid にするのは、
+ユーザー名の文字種に依存せず、承認文（`claude/settings.json`）の書式も単純に保てるため。
 
 **リポジトリ名をファイル名に含めるのは必須。** PR番号だけだと、別リポジトリの同番号のPRを
 並行して回したときに同じファイルを取り合い、レビュワーが**別リポジトリのレビュー依頼を読む**。
@@ -516,7 +522,7 @@ gh repo view --json nameWithOwner -q .nameWithOwner    # 例: manemone/dotfiles
 
 `$TMPDIR` も使わない。書く側（このペイン）と読む側（レビュワーペイン）は別プロセスであり、
 macOS のようにセッションごとに `TMPDIR` が異なる環境ではパスがズレて解決できなくなる。
-ベタ書きの `/tmp` は、両者が同じ値を見ることを保証するためのものである。
+ベタ書きの `/tmp`（と同じユーザーなら同じになる uid）は、両者が同じ値を見ることを保証するためのものである。
 
 #### テンプレートの置換
 
