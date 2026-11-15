@@ -88,6 +88,9 @@ symlink_backup "$DOTFILES_DEPLOY_SRC/claude/hooks/git-guard.sh" "$CLAUDE_DIR/hoo
 # git-guard.sh と同じ理由でファイル単位。実装の孫（OCW_ROLE=implementer）にだけ働く。
 symlink_backup "$DOTFILES_DEPLOY_SRC/claude/hooks/compact-reminder.sh" "$CLAUDE_DIR/hooks/compact-reminder.sh" || FAIL=1
 
+# --- Symlink session-state.sh (会話の状態を記録するフック。bin/herdr-resume が読む) ---
+symlink_backup "$DOTFILES_DEPLOY_SRC/claude/hooks/session-state.sh" "$CLAUDE_DIR/hooks/session-state.sh" || FAIL=1
+
 # --- Resolve where to read claude/'s own contents from for THIS run ---
 # symlink_backup (used for CLAUDE.md above) always links through
 # DOTFILES_DEPLOY_SRC regardless of DRY_RUN — its DRY-RUN branch only prints

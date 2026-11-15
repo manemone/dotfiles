@@ -230,7 +230,8 @@ links_for_tool() {
         "$HOME/bin/ocw-meter" \
         "$HOME/bin/persona" \
         "$HOME/bin/dfup" \
-        "$HOME/bin/dfdown"
+        "$HOME/bin/dfdown" \
+        "$HOME/bin/herdr-resume"
       ;;
     claude)
       printf '%s\n' \
@@ -238,6 +239,7 @@ links_for_tool() {
         "$HOME/.claude/CLAUDE.machine.md" \
         "$HOME/.claude/hooks/git-guard.sh" \
         "$HOME/.claude/hooks/compact-reminder.sh" \
+        "$HOME/.claude/hooks/session-state.sh" \
         "$HOME/.claude/settings.machine.json"
       ;;
     codex)

@@ -51,7 +51,7 @@ while IFS= read -r -d '' file; do
 done < <(
   find "$repo_root" \
     \( -path "$repo_root/.git" -o -path "$repo_root/*/.git" \) -prune -o \
-    -type f -name '*.py' -print0
+    -type f \( -name '*.py' -o -name 'herdr-resume' \) -print0
 )
 
 echo "== embedded python3 heredoc in bin/ocw-meter =="
