@@ -49,6 +49,8 @@ class DecideTest(unittest.TestCase):
             (rec("working", age=2 * 86400), "idle", "skip", None),
             (rec("ended", crons=fresh_cron), "idle", "skip", None),
             (rec("working"), "unknown", "skip", None),
+            (rec("working"), "done", "send", "resume"),  # 背面のペインは idle でなく done になる
+            ({**rec("working"), "interrupted": True}, "idle", "skip", None),  # 人間が Esc で止めた
         ]
         for record, status, action, kind in cases:
             d = hr.decide(record, status, NOW)
@@ -86,7 +88,8 @@ class RecoverTest(unittest.TestCase):
         (self.state / "reboot-recovery" / "sessions").mkdir(parents=True)
         self.env = {**os.environ, "PATH": "%s:%s" % (t / "bin", os.environ["PATH"]), "STUB_DIR": str(t),
                     "XDG_STATE_HOME": str(self.state), "HERDR_RESUME_BOOT_ID": "boot-1",
-                    "HERDR_RESUME_WINDOWS_BOOT": "2026-01-01T00:00:00"}
+                    "HERDR_RESUME_WINDOWS_BOOT": "2026-01-01T00:00:00",
+                    "HERDR_RESUME_SETTLE_SECONDS": "0"}
         self.t = t
 
     def put(self, sid, record):
@@ -104,20 +107,27 @@ class RecoverTest(unittest.TestCase):
             "s-work": {"state": "working", "updated_at": now - 10},
             "s-cron": {"state": "idle", "updated_at": now - 10, "crons": {"c": now - 10}},
             "s-idle": {"state": "idle", "updated_at": now - 10},
+            "s-esc": {"state": "working", "updated_at": now - 10, "transcript_path": str(self.t / "esc.jsonl")},
         }.items():
             self.put(sid, r)
+        (self.t / "esc.jsonl").write_text("\n".join(json.dumps(d) for d in [
+            {"type": "assistant", "message": {"content": [{"type": "text", "text": "x"}]}},
+            {"type": "user", "message": {"role": "user", "content": [
+                {"type": "text", "text": "[Request interrupted by user]"}]}},
+            {"type": "file-history-snapshot"}]))
         (self.t / "panes.json").write_text(json.dumps({"result": {"panes": [
             pane("w1:p1", "s-blocked", "idle"), pane("w1:p2", "s-work", "idle"),
             pane("w1:p3", "s-cron", "idle"), pane("w1:p4", "s-idle", "idle"),
-            pane("w1:p5", "s-none", "idle")]}}))
+            pane("w1:p5", "s-none", "idle"), pane("w1:p6", "s-esc", "idle")]}}))
         self.run_cmd("recover", "--json")
         sent = (self.t / "sent.log").read_text().splitlines()
         self.assertEqual(len(sent), 2)  # 作業中と巡回あり待機中だけ
         report = json.loads((self.state / "reboot-recovery" / "last-recovery.json").read_text())
         self.assertEqual({e["pane_id"] for e in report["sent"]}, {"w1:p2", "w1:p3"})
         not_sent = {e["pane_id"]: e for e in report["not_sent"]}
-        self.assertEqual(set(not_sent), {"w1:p1", "w1:p4", "w1:p5"})
+        self.assertEqual(set(not_sent), {"w1:p1", "w1:p4", "w1:p5", "w1:p6"})
         self.assertTrue(not_sent["w1:p1"]["needs_human"])
+        self.assertEqual(not_sent["w1:p6"]["code"], "interrupted")
         self.assertEqual(report["boot_id"], "boot-1")
         # 同じ boot_id の2回目は送らない
         self.run_cmd("recover", "--json")
@@ -126,6 +136,15 @@ class RecoverTest(unittest.TestCase):
         self.env["HERDR_RESUME_BOOT_ID"] = "boot-2"
         self.run_cmd("recover", "--json")
         self.assertEqual(len((self.t / "sent.log").read_text().splitlines()), 4)
+
+
+class NoBootIdTest(unittest.TestCase):
+    def test_recover_refuses_without_boot_id(self):
+        # 冪等の鍵が無いまま送らない（2度目の呼び出しで2重に積むため）
+        with tempfile.TemporaryDirectory() as d:
+            with self.assertRaises(RuntimeError):
+                hr.recover(Path(d), NOW, None, None)
+            self.assertFalse((Path(d) / "last-recovery.json").exists())
 
 
 class HookTest(unittest.TestCase):
@@ -158,6 +177,18 @@ class HookTest(unittest.TestCase):
         self.fire({**base, "hook_event_name": "PostToolUse", "tool_name": "CronDelete",
                    "tool_input": {"id": "job12345"}})
         self.assertEqual(self.state()["crons"], {})
+
+    def test_one_shot_cron_and_session_end_reason(self):
+        base = {"session_id": "abc-1", "cwd": "/x"}
+        self.fire({**base, "hook_event_name": "UserPromptSubmit", "transcript_path": "/t.jsonl"})
+        self.assertEqual(self.state()["transcript_path"], "/t.jsonl")
+        self.fire({**base, "hook_event_name": "PostToolUse", "tool_name": "CronCreate",
+                   "tool_input": {"recurring": False}, "tool_response": {"id": "once1234"}})
+        self.assertEqual(self.state().get("crons", {}), {})  # 一回きりは巡回に数えない
+        self.fire({**base, "hook_event_name": "SessionEnd", "reason": "other"})  # WSL の停止でも出うる
+        self.assertEqual(self.state()["state"], "working")
+        self.fire({**base, "hook_event_name": "SessionEnd", "reason": "prompt_input_exit"})
+        self.assertEqual(self.state()["state"], "ended")
 
     def test_failures_never_break_the_conversation(self):
         ro = Path(self.tmp.name) / "ro"

@@ -94,7 +94,10 @@ def main():
     elif event == "Stop":
         new_state = "idle"
     elif event == "SessionEnd":
-        new_state = "ended"
+        # 人間が終えたと分かる理由だけ ended にする。other などは WSL の停止に伴う終了でも出うるので、
+        # 直前の状態を残す（全会話が ended で上書きされて再開が全滅するのを防ぐ）。
+        if payload.get("reason") in ("prompt_input_exit", "logout", "clear", "resume"):
+            new_state = "ended"
     elif event == "Notification":
         if payload.get("notification_type") in ("permission_prompt", "elicitation_dialog"):
             new_state = "blocked"
@@ -110,8 +113,12 @@ def main():
         if tool in CRON_TOOLS:
             crons = rec.get("crons") if isinstance(rec.get("crons"), dict) else {}
             if tool == "CronCreate":
-                key = cron_id(payload.get("tool_response")) or "anon-%d" % now
-                crons[key] = now
+                tin0 = payload.get("tool_input")
+                # 一回きりのジョブ（recurring: false）は実行後に自分で消え、CronDelete も来ない。
+                # 巡回として数えない。
+                if not (isinstance(tin0, dict) and tin0.get("recurring") is False):
+                    key = cron_id(payload.get("tool_response")) or "anon-%d" % now
+                    crons[key] = now
             else:
                 tin = payload.get("tool_input") if isinstance(payload.get("tool_input"), dict) else {}
                 key = cron_id(tin)
@@ -136,6 +143,8 @@ def main():
     if isinstance(payload.get("cwd"), str):
         rec["cwd"] = payload["cwd"]
     rec["last_event"] = event
+    if isinstance(payload.get("transcript_path"), str):
+        rec["transcript_path"] = payload["transcript_path"]
     save(path, rec)
 
 
