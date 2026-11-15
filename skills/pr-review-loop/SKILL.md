@@ -113,6 +113,8 @@ markers:
   reply: "🤖💬 対応報告"
 reviewer_cmd: "claude"            # レビュワーペインでエージェントを起動し直すコマンド
 ui_review: ".claude/ui-review.yml" # 画面を触る PR の確認の入口ファイル（省略可。形は ui-review スキル）
+ci_gate: "after_approval"          # 承認の前に CI の完了を待たない（省略可。既定は before_approval。条件は下の「CI の扱いの解決」）
+child_pr_ci: "narrowed"            # 既定ブランチ以外向きの PR の CI は絞って流す、の宣言（省略可。既定は full）
 ```
 
 **設定ファイルがない場合**、リポジトリ構成から自動検出:
@@ -157,6 +159,33 @@ fi
 - `CONVENTION_DOCS` — 規約docのパスリスト（空ならスキル内蔵規約のみ）
 - `REVIEWER_CMD` — レビュワーを再起動するコマンド（空なら Phase 2 Step 2 で決める）
 - `UI_REVIEW_ENTRY` — `ui_review` の値（画面確認の入口ファイルのパス。未設定なら空）
+- `CI_GATE` / `CI_SCOPE` — PR ごとに下の「CI の扱いの解決」で決める（`before` / `after`、`full` / `narrowed`）
+
+### CI の扱いの解決（`CI_GATE` / `CI_SCOPE`）
+
+**宣言が無いリポでは、従来どおり `CI_GATE=before`・`CI_SCOPE=full`**（CI が現HEADで green であることを、
+承認の前に full suite の一番強い証拠として使う。黙って弱くならない）。次の2つは**リポ側が `.claude/pr-review.yml`
+で宣言したときだけ**効く。どちらも、PR の base を `gh pr view <PR> --json baseRefName` で取り、
+`gh repo view --json defaultBranchRef -q .defaultBranchRef.name` の既定ブランチ名と突合してから決める
+（`main` / `master` に固定しない）。**base が既定ブランチなら、宣言があっても `before` / `full` のまま**
+（その PR のマージは人間で、CI を確かめる関門が司令官側に無いため）。
+
+- **`ci_gate: after_approval` → `CI_GATE=after`**（承認の前に CI の完了を待たない）。次を**すべて**満たすときだけ:
+  1. base が既定ブランチでない（傘ブランチ向きの孫 PR など）。マージは傘の司令官が行い、司令官が
+     `umbrella-orchestrator` §2.4 の条件「対象HEAD の必須チェックが green」を確かめてからマージするため、
+     CI を待つ場所が承認の前から**マージの前**へ移るだけで、確認が消えるわけではない
+  2. 現HEADの CI が**赤（failure）でない**。`gh pr checks <PR> --required`（必須の設定が無ければ
+     `gh pr checks <PR>`）で failure があれば、宣言があっても承認しない（**CI が既に赤なら承認しない**は残る）。
+     まだ走っている・未着手（pending）なら承認してよい
+  3. コードのレビューと、手元の関係する検証（変更に直接関係する test / lint）は従来どおり行う
+- **`child_pr_ci: narrowed` → `CI_SCOPE=narrowed`**（base が既定ブランチでない PR だけ）。このリポでは、
+  そうした PR の CI は関係する範囲に絞って流し、全件は既定ブランチ向きの PR（傘→既定ブランチ）と既定ブランチの
+  CI で流れる、という宣言。CI が現HEADで green（証拠1）は**絞った範囲の green で足りる**。ただし全件の
+  証拠ではないので、承認文には「絞った CI の green。全件は傘→既定ブランチの CI で確かめる」と書く。
+  影響の広い変更（依存・共有設定・build 設定）で CI 側が全件に倒れるかどうかは、リポ側の仕組みが決める
+  （このスキルは判定しない）。倒れずに広い影響が疑われるときは、従来どおり下の
+  「レビュワー自身が full suite を実行する場合」に当たる
+- 二つの宣言は独立。`after_approval` だけ、`narrowed` だけの宣言も有効
 
 ### 画面を触る PR かどうかの判定
 
@@ -560,6 +589,35 @@ macOS のようにセッションごとに `TMPDIR` が異なる環境ではパ�
 見出し行とその直下の「実装者とレビュワーが同じ基準で使う」の1行（スキル内部の案内であり、
 レビュワーには不要）は貼らない。
 
+- `{{CI_POLICY}}` ← 「承認の条件」の段落の直後に置く。`CI_GATE=before` かつ `CI_SCOPE=full` なら**この行と
+  直後の空行を削除**する。そうでなければ、該当する次の節だけを貼る（両方なら両方。`CI_GATE=after` の節を先に）:
+
+  `CI_GATE=after` のとき:
+
+  ```markdown
+  ### CI の扱い（このPRは、承認の前に CI の完了を待たない）
+
+  このリポは `ci_gate: after_approval` を宣言していて、この PR は既定ブランチ向きではない。
+  - **CI の完了を承認の前提にしない。** コードのレビューと手元の関係する検証で承認してよい。
+    「現HEADに full-suite 結果が存在しない」「CI の結果の信頼性に疑義がある」は、reviewer が full suite を
+    回す理由にしない（マージ前に司令官が現HEADの必須チェックの green を確かめるため）
+  - **ただし CI が現HEADで赤（failure）なら承認しない。** 承認の前に `gh pr checks <PR> --required`
+    （必須の設定が無ければ `gh pr checks <PR>`）で failure が無いことを確かめる。pending は承認してよい
+  - 承認文には、CI を確かめた時点の状態（green / 実行中 / 未着手）と「マージ前に司令官が確かめる」を書く
+  - 上の「レビュワー自身が full suite を実行する場合」のうち、上記2項以外（targeted test の失敗・影響範囲を
+    限定できない・依存や共有設定の変更など）は、そのまま適用する
+  ```
+
+  `CI_SCOPE=narrowed` のとき:
+
+  ```markdown
+  ### CI の範囲（このPRの CI は絞られている）
+
+  このリポは `child_pr_ci: narrowed` を宣言していて、この PR は既定ブランチ向きではない。CI が現HEADで green
+  なら、それは**絞った範囲の green** であり、CI の証拠（強さ1）として足りる。全件は傘→既定ブランチの PR の CI で
+  確かめる。承認文には「絞った CI の green。全件は傘→既定ブランチの CI で確かめる」と書く。
+  ```
+
 - `{{FINDING_GATE}}` ← 「finding の判定基準（general finding qualification gate）」節。
   `レビューで気づいたことは、` の段落から、その節の末尾（`両者は矛盾しない。`）
   までを貼る。**次の「テストの判断基準（risk-based testing）」節まで巻き込まない。**
@@ -762,6 +820,8 @@ production code / 実行スクリプト / runtime config / 依存 / build設定 
 **「現HEADに対して必要な full-suite 保証が存在し、レビュワーがそれを確認した」**である。
 承認レビューには、**どの full-suite 結果を、どのSHAに対するものとして確認したか**を明記する。
 現HEADに対する保証が確認できない場合は承認せず、自分で full suite を実行する。
+
+{{CI_POLICY}}
 
 完了したらサマリーとレビュー状態（承認/変更要求）を報告すること。
 REVIEW_EOF
@@ -1444,8 +1504,14 @@ herdr agent prompt "$REVIEWER_PANE" "以下を読んでPRレビューを実行�
    **CI green（独立した証拠）＞ 実装者がSHA付きで記録した結果 ＝ pre-commit フックによる実行
    （どちらも自己申告）**。自己申告を根拠にする場合は、SHAの一致に加えて `--no-verify` の申告が
    無いことを確認する。現HEADに対する結果が確認できない場合は完了報告に進まず、`TEST_CMD` を
-   実行して結果を現HEADのSHA付きで記録する。
-4. CIがパスしていることを確認。
+   実行して結果を現HEADのSHA付きで記録する。**`CI_GATE=after`（Phase 0.5）のときは、この手順は
+   「CI が現HEADで赤でないこと」と、レビュワーが承認文に書いた CI の状態の確認に置き換わる**
+   （full-suite 保証はマージ前の司令官の確認が担う）。`CI_SCOPE=narrowed` のときの CI の green は
+   絞った範囲の green であり、承認文もそう書かれていることを確認する。
+4. CIの状態を確認する。`CI_GATE=before`（宣言なしを含む）なら**パスしていること**。
+   `CI_GATE=after` なら、**赤でないことだけ**確かめ、実行中・未着手なら待たずに5へ進む
+   （待つと、承認から司令官への報告までが CI の時間だけ遅れる）。赤なら承認が誤りだったので
+   報告に進まず、承認したレビュワーに知らせて Phase 5 へ戻る。
 5. **このスキルはどの PR もマージしない。** base が既定ブランチでも傘ブランチでも、承認は
    マージ許可ではない。マージは、既定ブランチ向きの PR なら人間、傘ブランチ向きの孫の PR なら
    傘の司令官（`umbrella-orchestrator` §2.4 の条件を満たしたとき）が行う。ここでは
@@ -1473,7 +1539,7 @@ herdr agent prompt "$REVIEWER_PANE" "以下を読んでPRレビューを実行�
 - レビューサイクル数
 - 修正した主な指摘
 - テスト結果
-- CI状態
+- CI状態（`CI_GATE=after` では「実行中・マージ前に司令官が確かめる」でよい）
 - 未解決の非ブロッキング項目
 - 承認条件をどう満たしたか
 - **マージの実施状況**: 「マージは実行していないこと」と、承認をだれ（人間／司令官のペイン）に
