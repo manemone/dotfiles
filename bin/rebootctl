@@ -1,0 +1,293 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# rebootctl — Windows の勝手な再起動からの復帰の「Windows 側の入口」。
+#
+#   rebootctl status [--json]   Windows と Herdr の状態を読む（読み取りだけ）
+#   rebootctl setup             人間が管理者 PowerShell に貼るコマンドを表示する（実行しない）
+#   rebootctl boot [--hold]     WSL 起動後に Herdr を起こし、会話の再開を呼ぶ（冪等）
+#
+# 設計と判断の根拠は ADR DOC-2611151248（bin/README.md §3.6 に使い方）。
+# 状態の置き場所は ${XDG_STATE_HOME:-~/.local/state}/reboot-recovery/ に固定
+# （sessions/ と last-recovery.json は herdr-resume、boot.log はこのツールが書く）。
+
+STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/reboot-recovery"
+BOOT_LOG="$STATE_DIR/boot.log"
+TASK_NAME="dotfiles-reboot-recovery"
+# 会話の復元（herdr が workspace を戻す）を待つ上限秒数
+RESTORE_WAIT="${REBOOTCTL_RESTORE_WAIT:-90}"
+
+POLICY_KEY_AU='HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU'
+UX_KEY='HKLM:\SOFTWARE\Microsoft\WindowsUpdate\UX\Settings'
+REBOOT_REQUIRED_KEY='HKLM:\SOFTWARE\Microsoft\WindowsUpdate\Auto Update\RebootRequired'
+
+usage() {
+  cat <<'EOF'
+Usage: rebootctl <command>
+
+  status [--json]   Windows の再起動ポリシー・アクティブ時間・最終起動時刻・起動タスクの登録・
+                    Herdr サーバの生死を読む（何も書き換えない）
+  setup             管理者 PowerShell に貼るコマンドを表示する（このコマンドは何も実行しない）
+  boot [--hold]     Herdr のサーバを起こし、会話の復元を待ち、herdr-resume があれば recover を呼ぶ。
+                    何度呼んでも害は無い。--hold は最後に居座って WSL を落とさない
+                    （Windows のタスクから起こすときに使う）
+EOF
+}
+
+log() {
+  mkdir -p "$STATE_DIR"
+  printf '%s %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$*" >>"$BOOT_LOG"
+  printf '%s\n' "$*" >&2
+}
+
+json_escape() {
+  local s="$1"
+  s=${s//\\/\\\\}
+  s=${s//\"/\\\"}
+  s=${s//$'\t'/ }
+  s=${s//$'\r'/}
+  s=${s//$'\n'/ }
+  printf '%s' "$s"
+}
+
+# ── Windows 側の読み取り ───────────────────────────────────────────
+# powershell.exe の出力は key=value の行にそろえて返す。読めなければ非0。
+read_windows() {
+  command -v powershell.exe >/dev/null 2>&1 || return 1
+  local ps
+  ps=$(
+    cat <<EOF
+\$ErrorActionPreference = 'SilentlyContinue'
+function V(\$path, \$name) {
+  \$k = Get-Item -LiteralPath \$path
+  if (\$k -and (\$k.GetValueNames() -contains \$name)) { \$k.GetValue(\$name) } else { '' }
+}
+'au_options=' + (V '$POLICY_KEY_AU' 'AUOptions')
+'no_auto_reboot_with_logged_on_users=' + (V '$POLICY_KEY_AU' 'NoAutoRebootWithLoggedOnUsers')
+'active_hours_start=' + (V '$UX_KEY' 'ActiveHoursStart')
+'active_hours_end=' + (V '$UX_KEY' 'ActiveHoursEnd')
+'reboot_required=' + (Test-Path -LiteralPath '$REBOOT_REQUIRED_KEY')
+'last_boot=' + (Get-CimInstance Win32_OperatingSystem).LastBootUpTime.ToString('o')
+'task_registered=' + [bool](Get-ScheduledTask -TaskName '$TASK_NAME')
+EOF
+  )
+  timeout 60 powershell.exe -NoProfile -NonInteractive -Command "$ps" 2>/dev/null | tr -d '\r'
+}
+
+herdr_state() {
+  if ! command -v herdr >/dev/null 2>&1; then
+    printf 'missing'
+  elif herdr status server 2>/dev/null | grep -q '^status: running'; then
+    printf 'running'
+  else
+    printf 'stopped'
+  fi
+}
+
+cmd_status() {
+  local json=0
+  [ "${1:-}" = "--json" ] && json=1
+
+  local win readable=true
+  if ! win=$(read_windows) || [ -z "$win" ]; then
+    readable=false
+    win=""
+  fi
+  local au='' nar='' ahs='' ahe='' rr='' lb='' tr=''
+  local line key val
+  while IFS= read -r line; do
+    key=${line%%=*}
+    val=${line#*=}
+    case "$key" in
+      au_options) au=$val ;;
+      no_auto_reboot_with_logged_on_users) nar=$val ;;
+      active_hours_start) ahs=$val ;;
+      active_hours_end) ahe=$val ;;
+      reboot_required) rr=$val ;;
+      last_boot) lb=$val ;;
+      task_registered) tr=$val ;;
+    esac
+  done <<<"$win"
+
+  local boot_id herdr
+  boot_id=$(cat /proc/sys/kernel/random/boot_id 2>/dev/null || true)
+  herdr=$(herdr_state)
+
+  if [ "$json" = 1 ]; then
+    # 値が空（読めなかった・未設定）は null にする
+    jv() { if [ -z "$1" ]; then printf 'null'; else printf '"%s"' "$(json_escape "$1")"; fi; }
+    jb() {
+      case "$1" in
+        True) printf 'true' ;;
+        False) printf 'false' ;;
+        *) printf 'null' ;;
+      esac
+    }
+    printf '{"windows_readable":%s,"au_options":%s,"no_auto_reboot_with_logged_on_users":%s,' \
+      "$readable" "$(jv "$au")" "$(jv "$nar")"
+    printf '"active_hours_start":%s,"active_hours_end":%s,"reboot_required":%s,' \
+      "$(jv "$ahs")" "$(jv "$ahe")" "$(jb "$rr")"
+    printf '"windows_last_boot":%s,"boot_task_registered":%s,"wsl_boot_id":%s,"herdr_server":"%s"}\n' \
+      "$(jv "$lb")" "$(jb "$tr")" "$(jv "$boot_id")" "$herdr"
+    return 0
+  fi
+
+  if [ "$readable" = false ]; then
+    printf 'Windows 側: 読めませんでした（powershell.exe が無い、または失敗）\n'
+  else
+    printf 'Windows 側（読み取りのみ）:\n'
+    printf '  AUOptions                         : %s\n' "${au:-未設定}"
+    printf '  NoAutoRebootWithLoggedOnUsers     : %s\n' "${nar:-未設定}"
+    printf '  アクティブ時間                    : %s 時 〜 %s 時\n' "${ahs:-?}" "${ahe:-?}"
+    printf '  再起動待ち                        : %s\n' "${rr:-?}"
+    printf '  最終起動時刻                      : %s\n' "${lb:-?}"
+    printf '  起動タスク (%s) : %s\n' "$TASK_NAME" "${tr:-?}"
+    if [ "$au" != 4 ] || [ "$nar" != 1 ]; then
+      printf '  → 再起動止めのポリシーは未適用です。「rebootctl setup」を管理者 PowerShell に貼ってください\n'
+    fi
+  fi
+  printf 'WSL 側:\n'
+  printf '  boot_id       : %s\n' "${boot_id:-?}"
+  printf '  Herdr サーバ  : %s\n' "$herdr"
+}
+
+# ── setup（表示だけ。ここでは powershell.exe を呼ばない） ──────────
+cmd_setup() {
+  local distro="${WSL_DISTRO_NAME:-Ubuntu}"
+  cat <<EOF
+# ============================================================
+# rebootctl setup — 管理者 PowerShell に貼るコマンド（このコマンド自体は何も実行しません）
+# ============================================================
+
+# --- 1. 勝手な再起動を減らす（ポリシー） ---
+# Microsoft の文書では、ログオン中の自動再起動を止めるには AUOptions=4 と
+# NoAutoRebootWithLoggedOnUsers=1 の組が要る。Windows 11 では単独で効く保証は無く、
+# あくまで最初の防壁（効かない場合に備えて 2 以降と herdr-resume がある）。
+\$au = '$POLICY_KEY_AU'
+New-Item -Path \$au -Force | Out-Null
+Set-ItemProperty -Path \$au -Name AUOptions -Type DWord -Value 4
+Set-ItemProperty -Path \$au -Name NoAutoRebootWithLoggedOnUsers -Type DWord -Value 1
+
+# 確かめ（管理者でなくてよい。WSL 側で \`rebootctl status\` でも同じ）
+Get-ItemProperty \$au | Select-Object AUOptions, NoAutoRebootWithLoggedOnUsers
+
+# --- 2. 再起動のあと、サインイン無しで WSL と Herdr を起こすタスク（方式 A: 起動時・S4U） ---
+# サインインしていなくても実行される。パスワードは保存しない（S4U）。
+# ネットワーク資格情報が要る処理は S4U では動かないので、起動後の確認を必ず行うこと。
+\$user = "\$env:USERDOMAIN\\\$env:USERNAME"
+\$action = New-ScheduledTaskAction -Execute 'wsl.exe' \`
+  -Argument '-d $distro -- bash -lc "\$HOME/bin/rebootctl boot --hold"'
+\$trigger = New-ScheduledTaskTrigger -AtStartup
+\$trigger.Delay = 'PT30S'
+\$principal = New-ScheduledTaskPrincipal -UserId \$user -LogonType S4U -RunLevel Limited
+\$settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) \`
+  -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
+Register-ScheduledTask -TaskName '$TASK_NAME' -Action \$action -Trigger \$trigger \`
+  -Principal \$principal -Settings \$settings -Force
+
+# 確かめ
+Get-ScheduledTask -TaskName '$TASK_NAME' | Select-Object TaskName, State
+
+# 手で走らせて試す（WSL は落ちません。boot は冪等）
+#   Start-ScheduledTask -TaskName '$TASK_NAME'
+# 外すとき
+#   Unregister-ScheduledTask -TaskName '$TASK_NAME' -Confirm:\$false
+EOF
+}
+
+# ── boot ───────────────────────────────────────────────────────────
+# 取りこぼし（Herdr は再起動のたびに会話を戻す側）。何度呼ばれても害が無いように、
+# 実行中の boot が居れば待たずに抜け、Herdr は動いていなければ起動する。
+workspace_count() {
+  herdr workspace list 2>/dev/null | grep -o '"workspace_id"' | wc -l
+}
+
+cmd_boot() {
+  local hold=0
+  [ "${1:-}" = "--hold" ] && hold=1
+
+  # タスクから呼ばれると PATH が最小になりうる
+  export PATH="$HOME/.local/bin:$HOME/bin:$PATH"
+  mkdir -p "$STATE_DIR"
+
+  if command -v flock >/dev/null 2>&1; then
+    exec 9>"$STATE_DIR/boot.lock"
+    if ! flock -n 9; then
+      log "boot: 別の boot が実行中のため何もしない"
+      [ "$hold" = 1 ] && exec sleep infinity
+      return 0
+    fi
+  fi
+
+  log "boot: 開始 (boot_id=$(cat /proc/sys/kernel/random/boot_id 2>/dev/null || echo unknown))"
+
+  if ! command -v herdr >/dev/null 2>&1; then
+    log "boot: herdr が見つからない。何もせず終える"
+    [ "$hold" = 1 ] && exec sleep infinity
+    return 0
+  fi
+
+  # (1) Herdr のサーバが動いていなければ起動する
+  if [ "$(herdr_state)" = running ]; then
+    log "boot: Herdr サーバは稼働中"
+  else
+    log "boot: Herdr サーバを起動する"
+    setsid nohup herdr server >>"$STATE_DIR/herdr-server.out" 2>&1 </dev/null &
+    local i=0
+    while [ "$i" -lt 30 ] && [ "$(herdr_state)" != running ]; do
+      sleep 1
+      i=$((i + 1))
+    done
+    log "boot: Herdr サーバ ($(herdr_state))"
+  fi
+
+  # (2) 会話（workspace）の復元を待つ。数が2回続けて同じになったら戻り終えたとみなす
+  local waited=0 prev=-1 cur
+  while [ "$waited" -lt "$RESTORE_WAIT" ]; do
+    cur=$(workspace_count)
+    if [ "$cur" -gt 0 ] && [ "$cur" = "$prev" ]; then
+      break
+    fi
+    prev=$cur
+    sleep 3
+    waited=$((waited + 3))
+  done
+  log "boot: workspace 数=${cur:-0}（${waited} 秒待った）"
+
+  # (3) herdr-resume があれば recover（無ければ飛ばす。失敗しても止まらない）
+  if command -v herdr-resume >/dev/null 2>&1; then
+    if herdr-resume recover >>"$BOOT_LOG" 2>&1; then
+      log "boot: herdr-resume recover 完了"
+    else
+      log "boot: herdr-resume recover が失敗（続行）"
+    fi
+  else
+    log "boot: herdr-resume が無いので再開の送信は飛ばす"
+  fi
+
+  # (4) 管制の会話を起こす手順は孫3 が足す
+
+  log "boot: 終了"
+  if [ "$hold" = 1 ]; then
+    # wsl.exe を終わらせない（アイドル停止で WSL ごと落ちるのを防ぐ）
+    exec sleep infinity
+  fi
+}
+
+main() {
+  local cmd="${1:-}"
+  [ "$#" -gt 0 ] && shift
+  case "$cmd" in
+    status) cmd_status "$@" ;;
+    setup) cmd_setup ;;
+    boot) cmd_boot "$@" ;;
+    -h | --help | help | "") usage ;;
+    *)
+      printf 'rebootctl: unknown command: %s\n' "$cmd" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+}
+
+main "$@"

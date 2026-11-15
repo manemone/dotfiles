@@ -231,7 +231,8 @@ links_for_tool() {
         "$HOME/bin/persona" \
         "$HOME/bin/dfup" \
         "$HOME/bin/dfdown" \
-        "$HOME/bin/herdr-resume"
+        "$HOME/bin/herdr-resume" \
+        "$HOME/bin/rebootctl"
       ;;
     claude)
       printf '%s\n' \
