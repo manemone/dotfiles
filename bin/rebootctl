@@ -217,16 +217,65 @@ CONTROL_LABEL="管制"
 CONTROL_NAME="再起動管制"
 CONTROL_PROMPT="control-tower スキルの「起動時の手順」を実行する"
 
+# ラベル「管制」のワークスペースの先頭ペインを "<pane_id> <agent> <agent_status>" で出す（無ければ何も出さない）
+control_pane_info() {
+  command -v python3 >/dev/null 2>&1 || return 0
+  local wl ws pl
+  wl=$(herdr workspace list 2>/dev/null) || return 0
+  ws=$(printf '%s' "$wl" | python3 -c '
+import json, sys
+label = sys.argv[1]
+d = json.load(sys.stdin)
+d = d.get("result", d)
+for w in d.get("workspaces", []):
+    if w.get("label") == label:
+        print(w.get("workspace_id", ""))
+        break
+' "$CONTROL_LABEL" 2>/dev/null) || return 0
+  [ -n "$ws" ] || return 0
+  pl=$(herdr pane list --workspace "$ws" 2>/dev/null) || return 0
+  printf '%s' "$pl" | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+d = d.get("result", d)
+for p in d.get("panes", []):
+    print(p.get("pane_id", ""), p.get("agent") or "-", p.get("agent_status") or "-")
+    break
+' 2>/dev/null || true
+}
+
+# 管制の会話を起こす（無ければ作る）。既にあるときは、Herdr が復元した会話が待つだけで
+# 起動時の手順（通知・巡回の登録）が走らないので、待機中ならその手順を送る。
+# 送るのは idle / done のときだけ（working・blocked には送らない＝承認の代行をしない）。
+# 同じ起動での2重の通知は、スキル側の control-tower.json の印が防ぐ。
 start_control_tower() {
-  if herdr workspace list 2>/dev/null | grep -qF "\"label\":\"$CONTROL_LABEL\""; then
-    log "boot: 管制の会話は既にある（何もしない）"
+  local info pane agent status
+  info=$(control_pane_info)
+  if [ -n "$info" ]; then
+    read -r pane agent status <<<"$info"
+    if [ "$agent" = "-" ]; then
+      # 中の Claude が終了してシェルだけになっている
+      log "boot: 管制のペイン ($pane) にエージェントが居ないので起動し直す"
+      herdr pane run "$pane" "claude --model sonnet --name '$CONTROL_NAME' '$CONTROL_PROMPT'" >/dev/null 2>&1 || return 1
+      return 0
+    fi
+    case "$status" in
+      idle | done)
+        if herdr agent prompt "$pane" "$CONTROL_PROMPT" --wait --timeout 10000 >/dev/null 2>&1; then
+          log "boot: 復元された管制の会話 ($pane) へ起動時の手順を送った"
+        else
+          log "boot: 復元された管制の会話 ($pane) へ送れなかった（再送しない）"
+        fi
+        ;;
+      *) log "boot: 管制の会話 ($pane) は $status なので何も送らない" ;;
+    esac
     return 0
   fi
   if ! command -v claude >/dev/null 2>&1; then
     log "boot: claude が見つからないので管制の会話は起こさない"
     return 0
   fi
-  local out pane
+  local out
   out=$(herdr workspace create --cwd "$HOME" --label "$CONTROL_LABEL" --no-focus 2>/dev/null) || return 1
   pane=$(printf '%s' "$out" | grep -o '"pane_id":"[^"]*"' | head -n1 | cut -d'"' -f4)
   [ -n "$pane" ] || return 1
