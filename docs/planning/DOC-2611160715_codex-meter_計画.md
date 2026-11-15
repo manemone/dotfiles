@@ -19,7 +19,7 @@
 | 孫 | ブランチ | 内容 | 状況 |
 |---|---|---|---|
 | 1 | `cm-01-codex-ingest` | Codex の rollout を `ingest` で取り込み、`usage.message`（provider `openai`）と `quota.sample`（Codex の5時間・週の使用率）を書く。既存の Claude の利用枠の集計・表示から Codex の `quota.sample` を外す | ✅ PR #220 マージ済 |
-| 2 | `cm-02-codex-dash` | `dash` と `report --quota-progress` で Codex の週の利用枠を Claude とは別に表示する（Codex の記録が無いマシンでは今と同じ見た目） | 🔄 実装中 |
+| 2 | `cm-02-codex-dash` | `dash` と `report --quota-progress` で Codex の週の利用枠を Claude とは別に表示する（Codex の記録が無いマシンでは今と同じ見た目） | ✅ PR #221 マージ済 |
 
 依存:
 
@@ -254,6 +254,7 @@ Codex に対応させる（`provider=anthropic` 前提の箇所の見直し）�
   rebase して push した。背景4 の確認を行い、計画書を起草した。ブリーフは転記後に削除した。孫1 を spawn する
 - 2026-11-16: 孫1 を spawn した（`ocw -H --no-commander`、base-ref は `codex-meter`）。孫2 は孫1 のマージ後
 - 2026-11-16: 孫1 の PR #220（レビュー2回目で承認）を司令官がマージした。取り込みの設計は ADR DOC-2611160723。傘で unittest（494件）・`bin/tests/lint.sh`・`pre-commit run --all-files`・`doc-id verify` が通った。承認のレビュー本文は1行目が「前回レビュー: …」で、見出し（`🤖✅ 承認`）は3行目にあった（スキル §2.4 の見出しだけの形の読み方は1行目しか見ないため、目で読んで確かめた）。孫2 を spawn する
+- 2026-11-16: 孫2 の PR #221（レビュー1回目で承認、CI green）を司令官がマージした。傘で unittest（496件）・`bin/tests/lint.sh`・`pre-commit run --all-files`・`doc-id verify` が通った。全孫完了につき、傘→`master` の最終 PR へ進む
 
 ## 孫1用プロンプト:
 
