@@ -28,7 +28,8 @@ Usage: rebootctl <command>
   status [--json]   Windows の再起動ポリシー・アクティブ時間・最終起動時刻・起動タスクの登録・
                     Herdr サーバの生死を読む（何も書き換えない）
   setup             管理者 PowerShell に貼るコマンドを表示する（このコマンドは何も実行しない）
-  boot [--hold]     Herdr のサーバを起こし、会話の復元を待ち、herdr-resume があれば recover を呼ぶ。
+  boot [--hold]     Herdr のサーバを起こし、会話の復元を待ち、herdr-resume があれば recover を呼び、
+                    管制の会話（ラベル「管制」のワークスペース）が無ければ起こす。
                     何度呼んでも害は無い。--hold は最後に居座って WSL を落とさない
                     （Windows のタスクから起こすときに使う）
 EOF
@@ -209,6 +210,30 @@ hold_forever() {
   exec sleep infinity 9>&-
 }
 
+# 管制の会話（skills/control-tower）を、ラベル「管制」の専用ワークスペースに起こす。
+# 同じラベルのワークスペースが既にあれば何もしない（冪等。Herdr が復元したものもここで見つかる）。
+# 失敗しても boot の他の手順を止めない（呼び側が || で受ける）。
+CONTROL_LABEL="管制"
+CONTROL_NAME="再起動管制"
+CONTROL_PROMPT="control-tower スキルの「起動時の手順」を実行する"
+
+start_control_tower() {
+  if herdr workspace list 2>/dev/null | grep -qF "\"label\":\"$CONTROL_LABEL\""; then
+    log "boot: 管制の会話は既にある（何もしない）"
+    return 0
+  fi
+  if ! command -v claude >/dev/null 2>&1; then
+    log "boot: claude が見つからないので管制の会話は起こさない"
+    return 0
+  fi
+  local out pane
+  out=$(herdr workspace create --cwd "$HOME" --label "$CONTROL_LABEL" --no-focus 2>/dev/null) || return 1
+  pane=$(printf '%s' "$out" | grep -o '"pane_id":"[^"]*"' | head -n1 | cut -d'"' -f4)
+  [ -n "$pane" ] || return 1
+  herdr pane run "$pane" "claude --model sonnet --name '$CONTROL_NAME' '$CONTROL_PROMPT'" >/dev/null 2>&1 || return 1
+  log "boot: 管制の会話を起こした ($pane)"
+}
+
 cmd_boot() {
   local hold=0
   [ "${1:-}" = "--hold" ] && hold=1
@@ -273,7 +298,10 @@ cmd_boot() {
     log "boot: herdr-resume が無いので再開の送信は飛ばす"
   fi
 
-  # (4) 管制の会話を起こす手順は孫3 が足す
+  # (4) 管制の会話を起こす（無ければ。失敗しても続行）
+  if ! start_control_tower; then
+    log "boot: 管制の会話を起こせなかった（続行）"
+  fi
 
   log "boot: 終了"
   if [ "$hold" = 1 ]; then

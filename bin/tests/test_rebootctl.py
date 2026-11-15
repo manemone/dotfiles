@@ -43,7 +43,12 @@ case "$1 $2" in
   "status server")
     [ -e {self.tmp}/running ] && echo "status: running" ;;
   "workspace list")
-    if [ -e {self.tmp}/no-workspaces ]; then echo '{{"workspaces":[]}}'; else echo '{{"workspaces":[{{"workspace_id":"w1"}}]}}'; fi ;;
+    if [ -e {self.tmp}/no-workspaces ]; then echo '{{"workspaces":[]}}'
+    elif [ -e {self.tmp}/control ]; then echo '{{"workspaces":[{{"workspace_id":"w1"}},{{"workspace_id":"w2","label":"管制"}}]}}'
+    else echo '{{"workspaces":[{{"workspace_id":"w1"}}]}}'; fi ;;
+  "workspace create")
+    [ -e {self.tmp}/create-fails ] && exit 1
+    touch {self.tmp}/control; echo '{{"result":{{"root_pane":{{"pane_id":"w2:p1"}}}}}}' ;;
   "server "*) ;;
 esac
 case "$1" in
@@ -52,6 +57,7 @@ esac
 exit 0
 """,
         )
+        write_stub(self.stubs / "claude", "exit 0\n")
         write_stub(self.stubs / "powershell.exe", f'echo "powershell $*" >> {self.calls}\n')
 
     def run_ctl(self, *args: str, path_only_stubs: bool = False):
@@ -89,6 +95,24 @@ exit 0
         self.assertIn("herdr-resume が無い", log)
         # 常駐した herdr server がロックを握り続けると、2回目以降の boot が何もしなくなる
         self.assertNotIn("別の boot が実行中", log)
+
+    def test_boot_starts_control_tower_once(self) -> None:
+        for _ in range(3):
+            r = self.run_ctl("boot")
+            self.assertEqual(r.returncode, 0, r.stderr)
+        calls = self.calls_text().splitlines()
+        self.assertEqual(len([c for c in calls if c.startswith("herdr workspace create")]), 1, "管制の会話が二重に立った")
+        runs = [c for c in calls if c.startswith("herdr pane run w2:p1")]
+        self.assertEqual(len(runs), 1)
+        self.assertIn("--model sonnet", runs[0])
+
+    def test_boot_continues_when_control_tower_cannot_start(self) -> None:
+        (self.tmp / "create-fails").touch()
+        r = self.run_ctl("boot")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        log = (self.state / "reboot-recovery" / "boot.log").read_text()
+        self.assertIn("管制の会話を起こせなかった", log)
+        self.assertIn("boot: 終了", log)
 
     def test_boot_completes_when_no_workspaces(self) -> None:
         (self.tmp / "no-workspaces").touch()
