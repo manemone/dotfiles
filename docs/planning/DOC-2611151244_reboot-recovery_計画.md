@@ -26,7 +26,7 @@
 |---|---|---|---|
 | 1 | `rr-01-windows-boot` | `bin/rebootctl` を作る: Windows の再起動ポリシーとアクティブ時間の確認・管理者コマンドの提示、サインイン無しで WSL と Herdr を起こす起動の入口（方式は人間が選ぶ） | 🔄 実装中 |
 | 2 | `rr-02-resume-judge` | `bin/herdr-resume` を作る: 会話ごとの状態を落ちる直前まで記録し、再起動の後に「再開してよい会話」だけへ再開の指示を送り、結果を報告ファイルに書く | ✅ PR #214 マージ済 |
-| 3 | `rr-03-control-tower` | 管制の会話（Herdr 上の常駐 Claude）を作る: 起動時に孫2 の報告をスマホへ通知し、再起動の予告を巡回で知らせ、外から状況を見る・再開・止めるの窓口になる | ⬜ 待機中 |
+| 3 | `rr-03-control-tower` | 管制の会話（Herdr 上の常駐 Claude）を作る: 起動時に孫2 の報告をスマホへ通知し、再起動の予告を巡回で知らせ、外から状況を見る・再開・止めるの窓口になる | 🔄 実装中 |
 
 依存:
 
@@ -35,7 +35,8 @@
   `shared/helpers.sh` の `links_for_tool()` の `bin` の arm と `bin/README.md` 程度。後からマージされる側が傘へ rebase で追随する
 - 孫2 は孫1 の起動の入口を待たない。継ぎ目（設計0 の 3）は計画書で固定してあるので、孫2 は `herdr-resume recover` を
   単体で叩ける形で作り、手で `wsl --shutdown` 相当の状況を模して確かめる
-- 孫3 は**孫1 と孫2 の両方が傘にマージされてから** spawn する（`rebootctl boot` に管制の起動を足し、孫2 の報告ファイルを読むため）
+- 孫3 は孫2 のマージ後、孫1 のマージを待たずに spawn する（2026-11-15 に変更。進行記録）。スキル・通知・Remote Control の確認を先に進め、
+  `bin/rebootctl boot` への手順4 の追加だけは孫1 が傘にマージされてから、傘へ rebase して行う
 
 ## ワークスペースラベル
 
@@ -299,9 +300,10 @@ Herdr の `agent_status`（`idle` / `working` / `blocked` / `done`）は再起�
 （司令官が運用中に分かったこと・人間の決定をここに追記する）
 
 - 2026-11-15: 計画書を起草した。傘は `origin/master`（415751d）から切られている。背景4 の確認を行った（`NoAutoRebootWithLoggedOnUsers`
-  未設定・今朝は 11:58 までサインイン無し）。孫1・孫2 を並列で spawn する。孫3 は孫1・孫2 のマージ後
+  未設定・今朝は 11:58 までサインイン無し）。孫1・孫2 を並列で spawn する。孫3 は孫1・孫2 のマージ後（のちに変更。下記）
 - 2026-11-15: 孫1・孫2 を spawn した（`ocw -H --no-commander`、base-ref は `reboot-recovery`）。ブリーフは転記後に削除した
 - 2026-11-15: 孫2 の PR #214 を司令官がマージした。状態の記録は Claude Code のフック（`claude/hooks/session-state.sh`。全 Claude の会話に効く）、判定と送信は `bin/herdr-resume`（ADR DOC-2611151247。`last-recovery.json` の形式は同 §5）。傘で unittest（477件）・`bin/tests/lint.sh`・`pre-commit run --all-files`・`tests/deploy_smoke.sh`・`doc-id verify` が通った
+- 2026-11-15: 人間の要望（週の利用枠が 16:00 に戻る前に使い切りたい）で並列度を上げるため、孫3 を孫1 のマージを待たずに spawn することにした。孫3 は `rebootctl boot` への追加だけを孫1 のマージ後に行う。品質と作法は変えない。孫1 の PR #215 は孫2 とのコンフリクトで rebase 中
 
 ## 孫1用プロンプト:
 
@@ -544,8 +546,10 @@ PR を作る前に `docs/design/DOC-2608020715_プルリクエストの作法.md
 計画書: `/home/manemone/projects/dotfiles/reboot-recovery/docs/planning/DOC-2611151244_reboot-recovery_計画.md`
 
 **まず計画書の「概要」「背景4」「背景5」「決定的な制約」「スコープ外」「必須の検証ステップ」「テスト方針」「設計0」「設計2」
-「設計3」「進行記録」を読むこと。** 孫1（`bin/rebootctl`）と孫2（`bin/herdr-resume`）は傘にマージ済みなので、両方の ADR と
-`bin/README.md` の節を読み、`last-recovery.json` の形式と `rebootctl status --json` の出力を確かめる。続けて dotfiles の `AGENTS.md`
+「設計3」「進行記録」を読むこと。** 孫2（`bin/herdr-resume`）は傘にマージ済みなので、ADR DOC-2611151247（§5 が `last-recovery.json` の形式）と
+`bin/README.md` の節を読む。**孫1（`bin/rebootctl`、PR #215）は spawn の時点で傘に未マージのことがある。** `gh pr view 215` で状態を確かめ、
+未マージのあいだは `git fetch origin` して `origin/rr-01-windows-boot` の `bin/rebootctl` と ADR を読むだけにし（そのブランチへ切り替えない）、
+`rebootctl status --json` の出力の形を確かめる。続けて dotfiles の `AGENTS.md`
 の作業別の索引から、コミット前（DOC-2610150520）・実装時の注意（DOC-2610150520-c。スキルを足すとき）を読む。
 
 ## 実装開始前の必須手順
@@ -560,7 +564,8 @@ PR を作る前に `docs/design/DOC-2608020715_プルリクエストの作法.md
    再起動の予告の巡回（`CronCreate`、1時間おき程度、同じ予告は繰り返さない）を会話が立ち上がるたびに登録する・外からの依頼
    （状況・再開・止める）の受け方・やらないこと（破壊的操作・承認の代行・外部サービスへの送信）。スキルの配布は
    `skills/deploy.sh` の既存の経路に乗せる（DOC-2610150520-c の「スキルを足すとき」）
-2. `bin/rebootctl boot` に手順4（管制の会話を起こす。既に立っていれば何もしない）を足す。会話名は Claude アプリで一目で分かる
+2. **孫1 が傘にマージされてから**（`gh pr list --head rr-01-windows-boot --state merged` で確かめる。未マージなら手順1・3〜5 を先に進め、
+   その後もマージを待つ）、`git fetch origin` と `git rebase origin/reboot-recovery` で追随し、`bin/rebootctl boot` に手順4（管制の会話を起こす。既に立っていれば何もしない）を足す。会話名は Claude アプリで一目で分かる
    日本語の名前、モデルは Sonnet（設計0 の 5）。Herdr のどのワークスペースに置くかを決め、ADR に書く
 3. 実機で確かめる（WSL や Herdr を落とす操作は自分で叩かない。決定的な制約）: 管制の会話を手で立てて、通知がスマホへ届くこと
    （人間に確かめてもらう）、Claude アプリの Remote Control の一覧に管制の会話と、Herdr が戻した会話が出ること、外から頼んだ
