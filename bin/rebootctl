@@ -28,7 +28,8 @@ Usage: rebootctl <command>
   status [--json]   Windows の再起動ポリシー・アクティブ時間・最終起動時刻・起動タスクの登録・
                     Herdr サーバの生死を読む（何も書き換えない）
   setup             管理者 PowerShell に貼るコマンドを表示する（このコマンドは何も実行しない）
-  boot [--hold]     Herdr のサーバを起こし、会話の復元を待ち、herdr-resume があれば recover を呼ぶ。
+  boot [--hold]     Herdr のサーバを起こし、会話の復元を待ち、herdr-resume があれば recover を呼び、
+                    管制の会話（ラベル「管制」のワークスペース）が無ければ起こす。
                     何度呼んでも害は無い。--hold は最後に居座って WSL を落とさない
                     （Windows のタスクから起こすときに使う）
 EOF
@@ -209,6 +210,82 @@ hold_forever() {
   exec sleep infinity 9>&-
 }
 
+# 管制の会話（skills/control-tower）を、ラベル「管制」の専用ワークスペースに起こす。
+# 同じラベルのワークスペースが既にあれば何もしない（冪等。Herdr が復元したものもここで見つかる）。
+# 失敗しても boot の他の手順を止めない（呼び側が || で受ける）。
+CONTROL_LABEL="管制"
+CONTROL_NAME="再起動管制"
+CONTROL_PROMPT="control-tower スキルの「起動時の手順」を実行する"
+
+# ラベル「管制」のワークスペースの先頭ペインを "<pane_id> <agent> <agent_status>" で出す（無ければ何も出さない）
+control_pane_info() {
+  command -v python3 >/dev/null 2>&1 || return 0
+  local wl ws pl
+  wl=$(herdr workspace list 2>/dev/null) || return 0
+  ws=$(printf '%s' "$wl" | python3 -c '
+import json, sys
+label = sys.argv[1]
+d = json.load(sys.stdin)
+d = d.get("result", d)
+for w in d.get("workspaces", []):
+    if w.get("label") == label:
+        print(w.get("workspace_id", ""))
+        break
+' "$CONTROL_LABEL" 2>/dev/null) || return 0
+  [ -n "$ws" ] || return 0
+  pl=$(herdr pane list --workspace "$ws" 2>/dev/null) || return 0
+  printf '%s' "$pl" | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+d = d.get("result", d)
+for p in d.get("panes", []):
+    print(p.get("pane_id", ""), p.get("agent") or "-", p.get("agent_status") or "-")
+    break
+' 2>/dev/null || true
+}
+
+# 管制の会話を起こす（無ければ作る）。既にあるときは、Herdr が復元した会話が待つだけで
+# 起動時の手順（通知・巡回の登録）が走らないので、待機中ならその手順を送る。
+# 送るのは idle / done のときだけ（working・blocked には送らない＝承認の代行をしない）。
+# 同じ起動での2重の通知は、スキル側の control-tower.json の印が防ぐ。
+start_control_tower() {
+  local info pane agent status out
+  info=$(control_pane_info)
+  if [ -n "$info" ]; then
+    read -r pane agent status <<<"$info"
+    if [ "$agent" = "-" ]; then
+      # 中の Claude が終了してシェルだけになっている
+      log "boot: 管制のペイン ($pane) にエージェントが居ないので起動し直す"
+      herdr pane run "$pane" "claude --model sonnet --name '$CONTROL_NAME' '$CONTROL_PROMPT'" >/dev/null 2>&1 || return 1
+      return 0
+    fi
+    case "$status" in
+      idle | done)
+        # --wait はターンが落ち着くまで待つので、起動時の手順（1ターンで終わらない）では timeout が通常。
+        # 非0は「届いたか未確認」であって「送れなかった」ではない。再送しない
+        if out=$(herdr agent prompt "$pane" "$CONTROL_PROMPT" --wait --timeout 10000 2>&1); then
+          log "boot: 復元された管制の会話 ($pane) へ起動時の手順を送った"
+        elif printf '%s' "$out" | grep -q 'agent_blocked'; then
+          log "boot: 管制の会話 ($pane) は承認待ちで送られなかった"
+        else
+          log "boot: 復元された管制の会話 ($pane) へ起動時の手順を送った（届いたか未確認。再送しない）"
+        fi
+        ;;
+      *) log "boot: 管制の会話 ($pane) は $status なので何も送らない" ;;
+    esac
+    return 0
+  fi
+  if ! command -v claude >/dev/null 2>&1; then
+    log "boot: claude が見つからないので管制の会話は起こさない"
+    return 0
+  fi
+  out=$(herdr workspace create --cwd "$HOME" --label "$CONTROL_LABEL" --no-focus 2>/dev/null) || return 1
+  pane=$(printf '%s' "$out" | grep -o '"pane_id":"[^"]*"' | head -n1 | cut -d'"' -f4)
+  [ -n "$pane" ] || return 1
+  herdr pane run "$pane" "claude --model sonnet --name '$CONTROL_NAME' '$CONTROL_PROMPT'" >/dev/null 2>&1 || return 1
+  log "boot: 管制の会話を起こした ($pane)"
+}
+
 cmd_boot() {
   local hold=0
   [ "${1:-}" = "--hold" ] && hold=1
@@ -273,7 +350,10 @@ cmd_boot() {
     log "boot: herdr-resume が無いので再開の送信は飛ばす"
   fi
 
-  # (4) 管制の会話を起こす手順は孫3 が足す
+  # (4) 管制の会話を起こす（無ければ。失敗しても続行）
+  if ! start_control_tower; then
+    log "boot: 管制の会話を起こせなかった（続行）"
+  fi
 
   log "boot: 終了"
   if [ "$hold" = 1 ]; then

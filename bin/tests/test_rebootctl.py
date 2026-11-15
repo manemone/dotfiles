@@ -43,7 +43,18 @@ case "$1 $2" in
   "status server")
     [ -e {self.tmp}/running ] && echo "status: running" ;;
   "workspace list")
-    if [ -e {self.tmp}/no-workspaces ]; then echo '{{"workspaces":[]}}'; else echo '{{"workspaces":[{{"workspace_id":"w1"}}]}}'; fi ;;
+    if [ -e {self.tmp}/no-workspaces ]; then echo '{{"workspaces":[]}}'
+    elif [ -e {self.tmp}/control ]; then echo '{{"workspaces":[{{"workspace_id":"w1"}},{{"workspace_id":"w2","label":"管制"}}]}}'
+    else echo '{{"workspaces":[{{"workspace_id":"w1"}}]}}'; fi ;;
+  "pane list")
+    if [ -e {self.tmp}/pane-noagent ]; then echo '{{"result":{{"panes":[{{"pane_id":"w2:p1"}}]}}}}'
+    elif [ -e {self.tmp}/pane-blocked ]; then echo '{{"result":{{"panes":[{{"pane_id":"w2:p1","agent":"claude","agent_status":"blocked"}}]}}}}'
+    else echo '{{"result":{{"panes":[{{"pane_id":"w2:p1","agent":"claude","agent_status":"idle"}}]}}}}'; fi ;;
+  "agent prompt")
+    [ -e {self.tmp}/prompt-timeout ] && {{ echo '{{"error":{{"code":"timeout"}}}}'; exit 1; }} ;;
+  "workspace create")
+    [ -e {self.tmp}/create-fails ] && exit 1
+    touch {self.tmp}/control; echo '{{"result":{{"root_pane":{{"pane_id":"w2:p1"}}}}}}' ;;
   "server "*) ;;
 esac
 case "$1" in
@@ -52,6 +63,7 @@ esac
 exit 0
 """,
         )
+        write_stub(self.stubs / "claude", "exit 0\n")
         write_stub(self.stubs / "powershell.exe", f'echo "powershell $*" >> {self.calls}\n')
 
     def run_ctl(self, *args: str, path_only_stubs: bool = False):
@@ -89,6 +101,49 @@ exit 0
         self.assertIn("herdr-resume が無い", log)
         # 常駐した herdr server がロックを握り続けると、2回目以降の boot が何もしなくなる
         self.assertNotIn("別の boot が実行中", log)
+
+    def test_boot_starts_control_tower_once_and_wakes_restored_one(self) -> None:
+        for _ in range(3):
+            r = self.run_ctl("boot")
+            self.assertEqual(r.returncode, 0, r.stderr)
+        calls = self.calls_text().splitlines()
+        self.assertEqual(len([c for c in calls if c.startswith("herdr workspace create")]), 1, "管制の会話が二重に立った")
+        runs = [c for c in calls if c.startswith("herdr pane run w2:p1")]
+        self.assertEqual(len(runs), 1)
+        self.assertIn("--model sonnet", runs[0])
+        # 2回目以降は、復元された（待機中の）会話へ起動時の手順を送る。作り直さない
+        prompts = [c for c in calls if c.startswith("herdr agent prompt w2:p1")]
+        self.assertEqual(len(prompts), 2, "復元された管制の会話へ起動時の手順が送られていない")
+
+    def test_boot_does_not_prompt_blocked_control_tower_and_restarts_dead_one(self) -> None:
+        (self.tmp / "control").touch()
+        (self.tmp / "pane-blocked").touch()
+        r = self.run_ctl("boot")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertNotIn("herdr agent prompt", self.calls_text(), "承認待ちの会話へ送ってはいけない")
+        (self.tmp / "pane-blocked").unlink()
+        (self.tmp / "pane-noagent").touch()
+        r = self.run_ctl("boot")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        runs = [c for c in self.calls_text().splitlines() if c.startswith("herdr pane run w2:p1")]
+        self.assertEqual(len(runs), 1, "エージェントが居ない管制のペインを起動し直していない")
+
+    def test_prompt_timeout_is_logged_as_unconfirmed_not_failed(self) -> None:
+        (self.tmp / "control").touch()
+        (self.tmp / "prompt-timeout").touch()
+        r = self.run_ctl("boot")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        log = (self.state / "reboot-recovery" / "boot.log").read_text()
+        self.assertIn("届いたか未確認", log)
+        self.assertNotIn("送れなかった", log)
+
+    def test_boot_continues_when_control_tower_cannot_start(self) -> None:
+        (self.tmp / "create-fails").touch()
+        r = self.run_ctl("boot")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        log = (self.state / "reboot-recovery" / "boot.log").read_text()
+        self.assertIn("管制の会話を起こせなかった", log)
+        self.assertIn("boot: 終了", log)
 
     def test_boot_completes_when_no_workspaces(self) -> None:
         (self.tmp / "no-workspaces").touch()

@@ -171,6 +171,7 @@ for details. `bin/` changes should additionally be verified with
 │   ├── repo-baseline/         # Applying the repo-baseline copier template
 │   ├── ocw/                   # Points AI agents to `ocw help <topic>` instead of reading bin/ocw
 │   ├── worktree-cleanup/      # Scope-aware worktree cleanup with human approval before deletion
+│   ├── control-tower/         # Always-on reboot control conversation: notifies recovery results, patrols for pending reboots, handles status/resume/stop from the Claude app
 │   ├── deploy.sh              # skills deployment script (all agents, auto-detected)
 │   └── README.md
 ├── codex/

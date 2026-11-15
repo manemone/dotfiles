@@ -18,6 +18,7 @@ AI コーディングエージェント向けのスキル。**Claude Code 専用
 | `repo-baseline` | `templates/repo-baseline/` copier テンプレートを既存リポジトリへ適用する手順と判断ガイド |
 | `ocw` | `ocw` CLI（Git worktree 管理）の存在告知。使い方は `ocw help <topic>` へ誘導するだけで、挙動の事実は書かない |
 | `worktree-cleanup` | 不要になった git ワークツリーの掃除。現在地からスコープ（傘／リポジトリ／herdr全体）を自動決定し、削除候補を一覧提示して人間の承認を得てから `ocw rm` で削除する。ワークツリーが無いのに残った Herdr ワークスペース（孤児）の閉鎖は `orphan` を明示指定する |
+| `control-tower` | 再起動の管制の会話（Herdr に常駐する Claude）の振る舞い。起動時に `herdr-resume` の報告 `last-recovery.json` をスマホへ1回通知し、再起動の予告の巡回を登録し、外からの「状況は」「再開して」「止めて」を受ける。破壊的操作・承認の代行・外部サービスへの送信はしない。`rebootctl boot` が起こす（ADR DOC-2611151326） |
 | `dfxfer` | 共有サーバ上で `dfup`/`dfdown` の受け渡し場所（`~/dfxfer/inbox` / `~/dfxfer/outbox`）を扱うときの知識。「inbox に来てるファイル」「outbox に置いといて」のような指示に対応する |
 
 `pr-review-loop` は各Phaseの境界で `ocw-meter event`（工程計測。

@@ -943,6 +943,13 @@ Windows 側（ポリシー・アクティブ時間・再起動待ち・最終起
 待ち、`herdr-resume` があれば `herdr-resume recover` を呼ぶ。記録は `${XDG_STATE_HOME:-~/.local/state}/reboot-recovery/boot.log`。
 `--hold` は最後に居座って WSL を落とさない（タスク専用）。
 
+最後の手順4で**管制の会話**（スキル `control-tower`。ADR DOC-2611151326）を起こす。Herdr に、ラベル `管制`・cwd `$HOME` の
+ワークスペースを作り、`claude --model sonnet --name 再起動管制` を起動する。ラベル `管制` のワークスペースが既にあれば
+作り直さない（何度呼んでも1つだけ）。Herdr が復元した会話は待つだけなので、待機中ならそのペインへ起動時の手順を送り、
+承認待ちなどには送らず、エージェントが居なければ起動し直す。`claude` が無い・起こせないときは `boot.log` に書いて続行し、
+手順1〜3 は止めない。起動後の会話が `last-recovery.json` をスマホへ通知し、再起動の予告の巡回を登録する。スキルが
+`~/.claude/skills/` に配られていること（`deploy-all.sh`）が前提。
+
 #### 起動の方式 A を確かめる実験（人間が叩く）
 
 `wsl --shutdown` はこのマシンで動いている会話を全部止める。叩く時刻は自分で決めること。
