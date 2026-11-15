@@ -19,7 +19,7 @@
 | 孫 | ブランチ | 内容 | 状況 |
 |---|---|---|---|
 | 1 | `cm-01-codex-ingest` | Codex の rollout を `ingest` で取り込み、`usage.message`（provider `openai`）と `quota.sample`（Codex の5時間・週の使用率）を書く。既存の Claude の利用枠の集計・表示から Codex の `quota.sample` を外す | ✅ PR #220 マージ済 |
-| 2 | `cm-02-codex-dash` | `dash` と `report --quota-progress` で Codex の週の利用枠を Claude とは別に表示する（Codex の記録が無いマシンでは今と同じ見た目） | ⬜ 待機中 |
+| 2 | `cm-02-codex-dash` | `dash` と `report --quota-progress` で Codex の週の利用枠を Claude とは別に表示する（Codex の記録が無いマシンでは今と同じ見た目） | 🔄 実装中 |
 
 依存:
 
