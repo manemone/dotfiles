@@ -954,13 +954,15 @@ Windows 側（ポリシー・アクティブ時間・再起動待ち・最終起
 
 `wsl --shutdown` はこのマシンで動いている会話を全部止める。叩く時刻は自分で決めること。
 
-1. `rebootctl setup` の出力を管理者 PowerShell に貼ってタスクを登録する
+1. `rebootctl setup` の出力を管理者 PowerShell に貼ってタスクを登録する（登録済みなら飛ばす）
 2. 通常の PowerShell で `wsl --shutdown` を打つ
 3. `Start-ScheduledTask -TaskName dotfiles-reboot-recovery` を打つ
 4. 1分ほど待って WSL を開き、`rebootctl status` で Herdr サーバが running か、`boot.log` に「boot: 終了」があるかを見る
 5. **10分以上**待ち、WSL と Herdr サーバがまだ生きているか確かめる
 6. 本物の再起動で、サインインせずに待ち、同じ確認をする（傘の最終 PR の後の宿題）
-7. 外すとき: `Unregister-ScheduledTask -TaskName dotfiles-reboot-recovery -Confirm:$false`
+
+試験をやめてタスクを外すとき（上の手順とは別。順に進めても行き着かない）:
+`Unregister-ScheduledTask -TaskName dotfiles-reboot-recovery -Confirm:$false`
 
 ## 4. Customization
 

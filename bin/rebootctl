@@ -213,7 +213,7 @@ hold_forever() {
 # 管制の会話（skills/control-tower）を、ラベル「管制」の専用ワークスペースに起こす。
 # 同じラベルのワークスペースが既にあれば何もしない（冪等。Herdr が復元したものもここで見つかる）。
 # 失敗しても boot の他の手順を止めない（呼び側が || で受ける）。
-CONTROL_LABEL="管制"
+CONTROL_LABEL="管制" # bin/herdr-resume の CONTROL_LABEL と同じ値（herdr-resume は管制の会話へ送らない）
 CONTROL_NAME="再起動管制"
 CONTROL_PROMPT="control-tower スキルの「起動時の手順」を実行する"
 

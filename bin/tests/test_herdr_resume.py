@@ -63,7 +63,7 @@ STUB = r"""#!/bin/sh
 # 偽の herdr。pane list / workspace list は固定、agent prompt は引数を記録する。
 case "$1 $2" in
   "pane list") cat "$STUB_DIR/panes.json" ;;
-  "workspace list") echo '{"result":{"workspaces":[{"workspace_id":"w1","label":"ws"}]}}' ;;
+  "workspace list") echo '{"result":{"workspaces":[{"workspace_id":"w1","label":"ws"},{"workspace_id":"w9","label":"管制"}]}}' ;;
   "agent prompt") printf '%s\n' "$3" >>"$STUB_DIR/sent.log"; echo '{"ok":true}' ;;
   *) exit 1 ;;
 esac
@@ -107,6 +107,7 @@ class RecoverTest(unittest.TestCase):
             "s-work": {"state": "working", "updated_at": now - 10},
             "s-cron": {"state": "idle", "updated_at": now - 10, "crons": {"c": now - 10}},
             "s-idle": {"state": "idle", "updated_at": now - 10},
+            "s-ct": {"state": "idle", "updated_at": now - 10, "crons": {"c": now - 10}},
             "s-esc": {"state": "working", "updated_at": now - 10, "transcript_path": str(self.t / "esc.jsonl")},
         }.items():
             self.put(sid, r)
@@ -118,6 +119,7 @@ class RecoverTest(unittest.TestCase):
         (self.t / "panes.json").write_text(json.dumps({"result": {"panes": [
             pane("w1:p1", "s-blocked", "idle"), pane("w1:p2", "s-work", "idle"),
             pane("w1:p3", "s-cron", "idle"), pane("w1:p4", "s-idle", "idle"),
+            {**pane("w9:p1", "s-ct", "idle"), "workspace_id": "w9"},
             pane("w1:p5", "s-none", "idle"), pane("w1:p6", "s-esc", "idle"),
             # agent なしで cwd に claude を含むだけのシェルは、起動中の Claude と見なして待たない・載せない
             {"pane_id": "w1:p7", "agent_status": "unknown", "workspace_id": "w1", "cwd": "/x",
@@ -130,7 +132,10 @@ class RecoverTest(unittest.TestCase):
         report = json.loads((self.state / "reboot-recovery" / "last-recovery.json").read_text())
         self.assertEqual({e["pane_id"] for e in report["sent"]}, {"w1:p2", "w1:p3"})
         not_sent = {e["pane_id"]: e for e in report["not_sent"]}
-        self.assertEqual(set(not_sent), {"w1:p1", "w1:p4", "w1:p5", "w1:p6", "w1:p8"})
+        self.assertEqual(set(not_sent), {"w1:p1", "w1:p4", "w1:p5", "w1:p6", "w1:p8", "w9:p1"})
+        # 管制の会話は巡回つき待機中でも送らない（rebootctl boot が起こす）。要確認にもしない
+        self.assertEqual(not_sent["w9:p1"]["code"], "control_tower")
+        self.assertFalse(not_sent["w9:p1"]["needs_human"])
         self.assertTrue(not_sent["w1:p1"]["needs_human"])
         self.assertEqual(not_sent["w1:p6"]["code"], "interrupted")
         self.assertEqual(report["boot_id"], "boot-1")

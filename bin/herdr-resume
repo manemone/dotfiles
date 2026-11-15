@@ -32,6 +32,9 @@ WORKING_MAX_AGE = 24 * 3600
 IDLE_MAX_AGE = CRON_MAX_AGE
 
 SEND_TIMEOUT_MS = 10000
+# 管制の会話のワークスペースのラベル。この会話へは再開を送らない（起こすのは `rebootctl boot` の手順4）。
+# 同じ値が bin/rebootctl の CONTROL_LABEL にもある。変えるときは両方そろえること。
+CONTROL_LABEL = "管制"
 # 起動中の Claude のペインの題名は「ユーザー名: claude --resume <id>」の形。コマンドとしての claude だけに当てる
 # （cwd のパスの一部に claude を含むだけのシェルは対象外）。
 BOOTING_TITLE = re.compile(r"(^|:\s*)claude(\s|$)")
@@ -227,6 +230,10 @@ def build_plan(root, panes, now):
         if p.get("booting"):
             d = {"action": "skip", "kind": None, "code": "not_ready",
                  "reason": "Claude が起動中で、まだエージェントとして認識されていない。送らない", "needs_human": True}
+        elif p["workspace"] == CONTROL_LABEL:
+            d = {"action": "skip", "kind": None, "code": "control_tower",
+                 "reason": "管制の会話。起こして起動時の手順を送るのは rebootctl boot の手順4なので、ここでは送らない",
+                 "needs_human": False}
         elif p["agent"] != "claude":
             d = {"action": "skip", "kind": None, "code": "not_claude",
                  "reason": "Claude 以外のエージェント。判定できないので人間が見る", "needs_human": True}
@@ -285,7 +292,9 @@ def wait_for_panes():
     deadline = time.monotonic() + limit
     while True:
         panes = list_panes()
-        unsettled = [p for p in panes if (p["agent"] == "claude" and p["status"] not in SETTLED) or p.get("booting")]
+        unsettled = [p for p in panes
+                     if p["workspace"] != CONTROL_LABEL
+                     and ((p["agent"] == "claude" and p["status"] not in SETTLED) or p.get("booting"))]
         if not unsettled or time.monotonic() >= deadline:
             return panes
         time.sleep(min(3.0, max(0.0, deadline - time.monotonic())))
