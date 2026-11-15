@@ -26,7 +26,7 @@
 |---|---|---|---|
 | 1 | `rr-01-windows-boot` | `bin/rebootctl` を作る: Windows の再起動ポリシーとアクティブ時間の確認・管理者コマンドの提示、サインイン無しで WSL と Herdr を起こす起動の入口（方式は人間が選ぶ） | ✅ PR #215 マージ済 |
 | 2 | `rr-02-resume-judge` | `bin/herdr-resume` を作る: 会話ごとの状態を落ちる直前まで記録し、再起動の後に「再開してよい会話」だけへ再開の指示を送り、結果を報告ファイルに書く | ✅ PR #214 マージ済 |
-| 3 | `rr-03-control-tower` | 管制の会話（Herdr 上の常駐 Claude）を作る: 起動時に孫2 の報告をスマホへ通知し、再起動の予告を巡回で知らせ、外から状況を見る・再開・止めるの窓口になる | 🔄 実装中 |
+| 3 | `rr-03-control-tower` | 管制の会話（Herdr 上の常駐 Claude）を作る: 起動時に孫2 の報告をスマホへ通知し、再起動の予告を巡回で知らせ、外から状況を見る・再開・止めるの窓口になる | ✅ PR #217 マージ済 |
 
 依存:
 
@@ -305,6 +305,7 @@ Herdr の `agent_status`（`idle` / `working` / `blocked` / `done`）は再起�
 - 2026-11-15: 孫2 の PR #214 を司令官がマージした。状態の記録は Claude Code のフック（`claude/hooks/session-state.sh`。全 Claude の会話に効く）、判定と送信は `bin/herdr-resume`（ADR DOC-2611151247。`last-recovery.json` の形式は同 §5）。傘で unittest（477件）・`bin/tests/lint.sh`・`pre-commit run --all-files`・`tests/deploy_smoke.sh`・`doc-id verify` が通った
 - 2026-11-15: 人間の要望（週の利用枠が 16:00 に戻る前に使い切りたい）で並列度を上げるため、孫3 を孫1 のマージを待たずに spawn することにした。孫3 は `rebootctl boot` への追加だけを孫1 のマージ後に行う。品質と作法は変えない。孫1 の PR #215 は孫2 とのコンフリクトで rebase 中
 - 2026-11-15: 孫1 の PR #215（孫2 とのコンフリクトを rebase で解消して再承認）を司令官がマージした。`bin/rebootctl`（ADR DOC-2611151248）。人間の選択は方式 A（起動時タスク・S4U・パスワードを保存しない）。サインイン無しで WSL・Herdr・Claude が動くかは未確認で、実験の手順は `bin/README.md` §3.7（人間が叩く。結果を進行記録に残す。A が駄目なら B、次に C を再検討）。傘で unittest（481件）・`bin/tests/lint.sh`・`pre-commit run --all-files`・`tests/deploy_smoke.sh`・`doc-id verify` が通った。孫3 は `rebootctl boot` への追加に進める
+- 2026-11-15: 孫3 の PR #217（レビュー3回目で承認）を司令官がマージした。管制の会話はスキル `skills/control-tower/` と `rebootctl boot` の手順4 で起こす（ADR DOC-2611151326。Herdr の専用ワークスペース `管制`・会話名 `再起動管制`・Sonnet・1時間おきの巡回。外からの制御は Claude アプリの Remote Control と `PushNotification` だけ）。傘で unittest（485件）・`bin/tests/lint.sh`・`pre-commit run --all-files`・`tests/deploy_smoke.sh`・`doc-id verify` が通った。全孫がそろったので傘の最終 PR へ進む。最終 PR のあとの人間の宿題: `deploy-all.sh`、管理者 PowerShell で `rebootctl setup` の表示するコマンドを叩く（再起動ポリシーと方式 A の起動タスク）、`bin/README.md` §3.7 の実験と実際の再起動での通しの試験、ADR DOC-2611151326 §6 の未確認4点（スマホへの通知・Remote Control の一覧・外からの「状況」「再開」「止める」・サインイン無しでの管制の会話）
 
 ## 孫1用プロンプト:
 
