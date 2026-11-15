@@ -248,6 +248,11 @@ ocw-meter bind-pr --run <run_id> --pr <n> [--url <url>]
 
 # ~/.claude/projects/*/*.jsonl と、サブエージェントの記録 */*/subagents/agent-*.jsonl を走査し
 # usage.message イベントを生成（冪等・増分）。サブエージェントの分は親の session_id に結びつく
+# あわせて ~/.codex/sessions の Codex の rollout（OCW_METER_CODEX_SESSIONS_DIR で上書き）も走査し、
+# 1応答 = 1件の usage.message（provider=openai・source=codex-rollout・cost_basis=subscription）と、
+# 利用枠（5時間・週）の変化ごとの quota.sample（provider=openai）を書く。無ければ何もしない。
+# Claude の利用枠の集計・表示（report --quota-progress / --window / --month / --pr / dash）は Codex の quota.sample を見ない。
+# 設計の理由は ADR DOC-2611160723（codex-rollout-ingest）
 ocw-meter ingest [--since <rfc3339-ts>]
 
 # 保存済みイベントのschema検証。壊れた行はquarantineへ隔離
