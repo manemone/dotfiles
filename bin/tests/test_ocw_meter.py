@@ -4629,6 +4629,70 @@ class ReportGroupedViewsTests(OcwMeterTestCase):
         daily = json.loads(run_meter(["report", "--daily", "--no-ingest", "--json"], self.home).stdout)
         self.assertEqual(len(daily["daily"]), 14)
 
+    def _seed_codex_quota_samples(self, hours_ago_to_pct, five_pct=None, resets_in_hours=96):
+        """Codex の rollout 由来の quota.sample (provider openai) を別ファイルに足す。"""
+        now = time.time()
+        events = []
+        for hours_ago, pct in hours_ago_to_pct:
+            ts = now - hours_ago * 3600
+            events.append({"event_type": "quota.sample", "schema_version": 1, "completeness": "complete",
+                           "provider": "openai", "source": "codex-rollout", "plan_source": "codex-rollout",
+                           "ts": datetime.fromtimestamp(ts, timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z"),
+                           "idempotency_key": f"cx-{ts}", "event_id": f"cx-{ts}",
+                           "five_hour_used_pct": five_pct, "five_hour_resets_at": int(now + 3600),
+                           "seven_day_used_pct": pct, "seven_day_resets_at": int(now + resets_in_hours * 3600)})
+        (pathlib.Path(self.home) / "events" / "2026-08-02.jsonl").write_text(
+            "".join(json.dumps(e) + "\n" for e in events), encoding="utf-8")
+
+    def test_quota_progress_provider_openai_draws_codex_only_and_default_stays_claude(self):
+        self._seed_quota_samples([(h, 10 + (30 - h)) for h in range(30, 0, -1)])  # Claude: 39% 付近
+        base = self._quota_progress_json()
+        self.assertEqual(base["provider"], "anthropic")
+        self._seed_codex_quota_samples([(h, 60 + (20 - h) / 2) for h in range(20, 0, -1)], five_pct=12.0)
+        self.assertEqual({k: self._quota_progress_json()[k] for k in ("current_pct", "points")},
+                         {k: base[k] for k in ("current_pct", "points")})  # --provider 無しは Claude だけのまま
+        codex = self._quota_progress_json_args(["--provider", "openai"])
+        self.assertEqual((codex["provider"], codex["status"]), ("openai", "ok"))
+        self.assertGreaterEqual(codex["current_pct"], 60)  # Claude の値が混ざらない
+        self.assertEqual(codex["remaining_tokens"], {})  # Codex には 1% あたりのトークンの見積もりが無い
+        text = run_meter(["report", "--quota-progress", "--no-ingest", "--provider", "openai"], self.home).stdout
+        self.assertIn("Codex の週の上限", text)
+        self.assertNotIn("系統", text)
+        self.assertIn("provider: openai", run_meter(["report", "--quota-progress", "--no-ingest", "--plain", "--provider", "openai"], self.home).stdout)
+        for bad in (["--provider", "gemini"], ["--provider"]):
+            self.assertNotEqual(run_meter(["report", "--quota-progress", "--no-ingest", *bad], self.home).returncode, 0, bad)
+        self.assertNotEqual(run_meter(["report", "--daily", "--no-ingest", "--provider", "openai"], self.home).returncode, 0)
+
+    def test_dash_shows_codex_only_when_codex_samples_exist_and_drops_its_chart_last(self):
+        self._seed_quota_samples([(h, h / 4) for h in range(0, 97, 8)])
+        env = {"TZ": "JST-9", "COLUMNS": "100"}
+
+        def dash(lines):
+            result = run_meter(["dash", "--no-ingest"], self.home, {**env, "LINES": str(lines)})
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertLessEqual(len(result.stdout.splitlines()), lines - 1, result.stdout)
+            return result.stdout
+
+        # Codex の記録が無いときは Codex の語が画面のどこにも出ない (今と同じ画面)
+        for lines in (80, 30, 24):
+            self.assertNotIn("Codex", dash(lines))
+        self._seed_codex_quota_samples([(h, 60 + (20 - h) / 2) for h in range(20, 0, -1)], five_pct=12.0)
+        full = dash(80)
+        for text in ("Codex の週の上限の推移", "Codex 5時間の使用率", "Codex 今週の使用率", "週の上限の推移 (見積もり)", "日ごとの消費量"):
+            self.assertIn(text, full)
+        self.assertIn("12%", full)
+        # 高さが足りなければ ヒートマップ → 日ごとの縦棒 → Codex のグラフ の順に省く。Claude のグラフとタイルは残る
+        self.assertNotIn("日ごとの消費量", dash(40))
+        self.assertIn("Codex の週の上限の推移", dash(40))
+        short = dash(30)
+        self.assertNotIn("日ごとのモデル別使用量", short)
+        self.assertIn("Codex の週の上限の推移", short)
+        tiny = dash(26)
+        self.assertNotIn("Codex の週の上限の推移", tiny)
+        self.assertIn("Codex の週のグラフ", tiny)
+        self.assertIn("Codex 5時間の使用率", tiny)
+        self.assertIn("週の上限の推移 (見積もり)", tiny)
+
     def test_dash_rejects_json_plain_unknown_flags_and_watch_without_a_terminal(self):
         for bad in (["--json"], ["--plain"], ["--bogus"], ["--watch", "0"], ["--watch", "x"],
                     ["--watch", "--no-ingest"], ["--watch", "5"]):

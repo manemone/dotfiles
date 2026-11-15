@@ -90,4 +90,14 @@ Codex の行は件数の注記にも出さない。
 ## 4. 影響
 
 - `report --model` / `--daily` / `--heatmap` に Codex のモデルが `openai/<model>` として現れる
-- Codex の利用枠の表示（`dash`・`report --quota-progress --provider openai`）は別の孫で足す
+- Codex の利用枠の表示は §5 のとおり
+
+## 5. Codex の利用枠の表示（`dash`・`report --quota-progress --provider openai`）
+
+- `report --quota-progress --provider <anthropic|openai>`（既定 `anthropic` = 今までと同じ出力）。描画は既存と同じコードで、
+  `quota_periods()` が provider で `quota.sample` を選ぶだけ。`openai` は Codex 由来の行だけを読み、Claude の値は混ざらない。
+  Codex には 1% あたりのトークン数の見積もりが無いので、残りの % のトークン換算の欄は出さず理由を 1 行出す。`--json` / `--plain` に `provider` を出す
+- `dash` は Codex の `quota.sample` が 1 件でもあるときだけ、見出しに Codex のタイルの段（5時間・週の使用率、週のリセットまで。
+  5時間の枠はリセット時刻を過ぎた記録なら —）と、Claude のグラフの下に「Codex の週の上限の推移」を足す。1 件も無ければ画面は変わらない
+- 端末の高さが足りないときは、グラフの高さを詰める（Claude と Codex は同じ行数）→ ヒートマップ → 日ごとの縦棒 → Codex のグラフの順に省く。
+  Codex のタイルは残す（数字は小さく、グラフより先に失う理由が無い）。Claude の週のグラフは今までどおり省かない
