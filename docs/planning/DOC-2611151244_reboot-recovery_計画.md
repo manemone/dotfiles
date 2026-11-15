@@ -25,7 +25,7 @@
 | 孫 | ブランチ | 内容 | 状況 |
 |---|---|---|---|
 | 1 | `rr-01-windows-boot` | `bin/rebootctl` を作る: Windows の再起動ポリシーとアクティブ時間の確認・管理者コマンドの提示、サインイン無しで WSL と Herdr を起こす起動の入口（方式は人間が選ぶ） | 🔄 実装中 |
-| 2 | `rr-02-resume-judge` | `bin/herdr-resume` を作る: 会話ごとの状態を落ちる直前まで記録し、再起動の後に「再開してよい会話」だけへ再開の指示を送り、結果を報告ファイルに書く | 🔄 実装中 |
+| 2 | `rr-02-resume-judge` | `bin/herdr-resume` を作る: 会話ごとの状態を落ちる直前まで記録し、再起動の後に「再開してよい会話」だけへ再開の指示を送り、結果を報告ファイルに書く | ✅ PR #214 マージ済 |
 | 3 | `rr-03-control-tower` | 管制の会話（Herdr 上の常駐 Claude）を作る: 起動時に孫2 の報告をスマホへ通知し、再起動の予告を巡回で知らせ、外から状況を見る・再開・止めるの窓口になる | ⬜ 待機中 |
 
 依存:
@@ -301,6 +301,7 @@ Herdr の `agent_status`（`idle` / `working` / `blocked` / `done`）は再起�
 - 2026-11-15: 計画書を起草した。傘は `origin/master`（415751d）から切られている。背景4 の確認を行った（`NoAutoRebootWithLoggedOnUsers`
   未設定・今朝は 11:58 までサインイン無し）。孫1・孫2 を並列で spawn する。孫3 は孫1・孫2 のマージ後
 - 2026-11-15: 孫1・孫2 を spawn した（`ocw -H --no-commander`、base-ref は `reboot-recovery`）。ブリーフは転記後に削除した
+- 2026-11-15: 孫2 の PR #214 を司令官がマージした。状態の記録は Claude Code のフック（`claude/hooks/session-state.sh`。全 Claude の会話に効く）、判定と送信は `bin/herdr-resume`（ADR DOC-2611151247。`last-recovery.json` の形式は同 §5）。傘で unittest（477件）・`bin/tests/lint.sh`・`pre-commit run --all-files`・`tests/deploy_smoke.sh`・`doc-id verify` が通った
 
 ## 孫1用プロンプト:
 
