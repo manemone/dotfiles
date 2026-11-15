@@ -249,7 +249,7 @@ for p in d.get("panes", []):
 # 送るのは idle / done のときだけ（working・blocked には送らない＝承認の代行をしない）。
 # 同じ起動での2重の通知は、スキル側の control-tower.json の印が防ぐ。
 start_control_tower() {
-  local info pane agent status
+  local info pane agent status out
   info=$(control_pane_info)
   if [ -n "$info" ]; then
     read -r pane agent status <<<"$info"
@@ -261,10 +261,14 @@ start_control_tower() {
     fi
     case "$status" in
       idle | done)
-        if herdr agent prompt "$pane" "$CONTROL_PROMPT" --wait --timeout 10000 >/dev/null 2>&1; then
+        # --wait はターンが落ち着くまで待つので、起動時の手順（1ターンで終わらない）では timeout が通常。
+        # 非0は「届いたか未確認」であって「送れなかった」ではない。再送しない
+        if out=$(herdr agent prompt "$pane" "$CONTROL_PROMPT" --wait --timeout 10000 2>&1); then
           log "boot: 復元された管制の会話 ($pane) へ起動時の手順を送った"
+        elif printf '%s' "$out" | grep -q 'agent_blocked'; then
+          log "boot: 管制の会話 ($pane) は承認待ちで送られなかった"
         else
-          log "boot: 復元された管制の会話 ($pane) へ送れなかった（再送しない）"
+          log "boot: 復元された管制の会話 ($pane) へ起動時の手順を送った（届いたか未確認。再送しない）"
         fi
         ;;
       *) log "boot: 管制の会話 ($pane) は $status なので何も送らない" ;;
@@ -275,7 +279,6 @@ start_control_tower() {
     log "boot: claude が見つからないので管制の会話は起こさない"
     return 0
   fi
-  local out
   out=$(herdr workspace create --cwd "$HOME" --label "$CONTROL_LABEL" --no-focus 2>/dev/null) || return 1
   pane=$(printf '%s' "$out" | grep -o '"pane_id":"[^"]*"' | head -n1 | cut -d'"' -f4)
   [ -n "$pane" ] || return 1

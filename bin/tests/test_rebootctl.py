@@ -50,6 +50,8 @@ case "$1 $2" in
     if [ -e {self.tmp}/pane-noagent ]; then echo '{{"result":{{"panes":[{{"pane_id":"w2:p1"}}]}}}}'
     elif [ -e {self.tmp}/pane-blocked ]; then echo '{{"result":{{"panes":[{{"pane_id":"w2:p1","agent":"claude","agent_status":"blocked"}}]}}}}'
     else echo '{{"result":{{"panes":[{{"pane_id":"w2:p1","agent":"claude","agent_status":"idle"}}]}}}}'; fi ;;
+  "agent prompt")
+    [ -e {self.tmp}/prompt-timeout ] && {{ echo '{{"error":{{"code":"timeout"}}}}'; exit 1; }} ;;
   "workspace create")
     [ -e {self.tmp}/create-fails ] && exit 1
     touch {self.tmp}/control; echo '{{"result":{{"root_pane":{{"pane_id":"w2:p1"}}}}}}' ;;
@@ -125,6 +127,15 @@ exit 0
         self.assertEqual(r.returncode, 0, r.stderr)
         runs = [c for c in self.calls_text().splitlines() if c.startswith("herdr pane run w2:p1")]
         self.assertEqual(len(runs), 1, "エージェントが居ない管制のペインを起動し直していない")
+
+    def test_prompt_timeout_is_logged_as_unconfirmed_not_failed(self) -> None:
+        (self.tmp / "control").touch()
+        (self.tmp / "prompt-timeout").touch()
+        r = self.run_ctl("boot")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        log = (self.state / "reboot-recovery" / "boot.log").read_text()
+        self.assertIn("届いたか未確認", log)
+        self.assertNotIn("送れなかった", log)
 
     def test_boot_continues_when_control_tower_cannot_start(self) -> None:
         (self.tmp / "create-fails").touch()
