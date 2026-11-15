@@ -522,6 +522,13 @@ read by ocw:
   OCW_CHECKER_COMMAND      default: claude --model sonnet
                             command for the UI checker pane; read each time
                             `ocw checker` starts one -- `ocw help checker`
+  CODEX_HOME               default: ~/.codex
+                            where Codex's config.toml lives. ocw adds a
+                            `trust_level = "trusted"` entry for each
+                            worktree it creates (so Codex doesn't ask
+                            "Trust this folder?") and removes it on `ocw
+                            rm`; only entries ocw tagged are removed.
+                            Nothing happens if the directory is absent.
   OCW_NO_VSCODE            unset by default
                             any non-empty value skips launching VS Code
                             in the default (non-Herdr) create mode --
@@ -1270,6 +1277,112 @@ start_pane_agent() {
   OCW_ROLE="$role" OCW_RUN_ID="$run_id" exec bash -c "$line"
 }
 
+# Codex asks "Trust this folder?" once per absolute path, and every worktree
+# is a fresh path. So ocw records a trust entry in Codex's config.toml for the
+# worktrees it creates, and drops it again on `ocw rm`. Only the worktree path
+# ocw itself made is ever trusted -- never a parent dir or the repo root.
+#
+# Entries ocw adds are tagged with a marker comment so removal touches nothing
+# the human wrote. An existing [projects."<path>"] table (the human's own) is
+# never modified. No ~/.codex dir -> Codex isn't in use -> do nothing. All of
+# this is best-effort: a failure here must not break create/rm.
+CODEX_TRUST_MARKER="# ocw-managed: removed by 'ocw rm'"
+
+codex_trust_config_path() {
+  local codex_home="${CODEX_HOME:-$HOME/.codex}"
+
+  [ -d "$codex_home" ] || return 1
+  printf '%s/config.toml\n' "$codex_home"
+}
+
+# TOML basic-string key for a path (escape backslash and double quote).
+codex_trust_header() {
+  local escaped="$1"
+
+  escaped="${escaped//\\/\\\\}"
+  escaped="${escaped//\"/\\\"}"
+  printf '[projects."%s"]\n' "$escaped"
+}
+
+# Codex matches on the real path, and `git worktree list` (what `ocw rm`
+# sees) reports it too, so resolve symlinks while the directory still exists.
+# Callers must therefore run this before the worktree is removed.
+codex_trust_real_path() {
+  (cd -P -- "$1" 2>/dev/null && pwd -P) || printf '%s\n' "$1"
+}
+
+codex_trust_add() {
+  local worktree_dir=""
+  local config=""
+  local header=""
+  local root_header=""
+
+  worktree_dir="$(codex_trust_real_path "$1")"
+  config="$(codex_trust_config_path)" || return 0
+  header="$(codex_trust_header "$worktree_dir")"
+  root_header="$(codex_trust_header "$(codex_trust_real_path "$repo_root")")"
+
+  # The repo root already has a setting (trusted or untrusted): Codex applies
+  # it to the worktree, and adding our own entry could override a human's
+  # `untrusted`. Leave it alone.
+  if [ -f "$config" ] && grep -Fxq -- "$root_header" "$config" 2>/dev/null; then
+    return 0
+  fi
+
+  if [ -f "$config" ] && grep -Fxq -- "${header}" "$config" 2>/dev/null; then
+    return 0
+  fi
+
+  # A file without a trailing newline would glue our marker onto its last line.
+  local lead=""
+  if [ -s "$config" ] && [ -n "$(tail -c 1 "$config")" ]; then
+    lead=$'\n'
+  fi
+
+  printf '%s%s\n%s\ntrust_level = "trusted"\n' \
+    "$lead" "$CODEX_TRUST_MARKER" "$header" >>"$config" 2>/dev/null ||
+    warn "could not add Codex trust entry: ${config}"
+  return 0
+}
+
+# Removes only a block ocw added: marker line + header + `trust_level` line.
+codex_trust_remove() {
+  local worktree_dir=""
+  local config=""
+  local header=""
+  local tmp=""
+
+  worktree_dir="$(codex_trust_real_path "$1")"
+  config="$(codex_trust_config_path)" || return 0
+  [ -f "$config" ] || return 0
+  header="$(codex_trust_header "$worktree_dir")"
+
+  grep -Fxq -- "$CODEX_TRUST_MARKER" "$config" 2>/dev/null || return 0
+
+  tmp="$(mktemp "${config}.ocw.XXXXXX" 2>/dev/null)" || return 0
+  # Values go through ENVIRON, not `awk -v`, which would re-interpret the
+  # backslash escapes already in $header.
+  if OCW_TRUST_MARKER="$CODEX_TRUST_MARKER" OCW_TRUST_HEADER="$header" awk '
+    { lines[NR] = $0 }
+    END {
+      for (i = 1; i <= NR; i++) {
+        if (lines[i] == ENVIRON["OCW_TRUST_MARKER"] &&
+            lines[i + 1] == ENVIRON["OCW_TRUST_HEADER"] &&
+            lines[i + 2] == "trust_level = \"trusted\"") {
+          i += 2
+          continue
+        }
+        print lines[i]
+      }
+    }
+  ' "$config" >"$tmp" 2>/dev/null; then
+    cat "$tmp" >"$config" 2>/dev/null ||
+      warn "could not remove Codex trust entry: ${config}"
+  fi
+  rm -f "$tmp"
+  return 0
+}
+
 rollback_created_worktree() {
   local worktree_dir="$1"
   local branch="$2"
@@ -1292,6 +1405,8 @@ rollback_created_worktree() {
       "$HERDR_SETUP_WORKSPACE_ID" \
       >/dev/null 2>&1
   fi
+
+  codex_trust_remove "$worktree_dir"
 
   if git -C "$repo_root" worktree list --porcelain |
     grep -Fqx "worktree ${worktree_dir}"; then
@@ -1398,6 +1513,8 @@ create_worktree() {
     -b "$branch" \
     "$worktree_dir" \
     "$base_ref"
+
+  codex_trust_add "$worktree_dir"
 
   local run_id=""
   local worktree_git_dir=""
@@ -2025,6 +2142,8 @@ remove_worktree() {
   # -f (ADR §3.8) -- -f is "bypass the rejection", not "declare failure".
   local run_end_outcome="failure"
   [ "$MERGE_CHECK_RESULT" = "merged" ] && run_end_outcome="success"
+
+  codex_trust_remove "$worktree_dir"
 
   if [ "$force" = "true" ]; then
     git -C "$repo_root" \
