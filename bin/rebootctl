@@ -203,6 +203,12 @@ workspace_count() {
   { herdr workspace list 2>/dev/null | grep -o '"workspace_id"' || true; } | wc -l
 }
 
+# wsl.exe を終わらせない居座り。居座る間にロックを握り続けないよう fd 9 を閉じて exec する
+# （居座る出口はすべてここを通す）
+hold_forever() {
+  exec sleep infinity 9>&-
+}
+
 cmd_boot() {
   local hold=0
   [ "${1:-}" = "--hold" ] && hold=1
@@ -215,7 +221,7 @@ cmd_boot() {
     exec 9>"$STATE_DIR/boot.lock"
     if ! flock -n 9; then
       log "boot: 別の boot が実行中のため何もしない"
-      [ "$hold" = 1 ] && exec sleep infinity
+      [ "$hold" = 1 ] && hold_forever
       return 0
     fi
   fi
@@ -224,7 +230,7 @@ cmd_boot() {
 
   if ! command -v herdr >/dev/null 2>&1; then
     log "boot: herdr が見つからない。何もせず終える"
-    [ "$hold" = 1 ] && exec sleep infinity
+    [ "$hold" = 1 ] && hold_forever
     return 0
   fi
 
@@ -273,7 +279,7 @@ cmd_boot() {
   if [ "$hold" = 1 ]; then
     # wsl.exe を終わらせない（アイドル停止で WSL ごと落ちるのを防ぐ）。
     # 居座る間にロックを握り続けないよう fd 9 を閉じてから exec する
-    exec sleep infinity 9>&-
+    hold_forever
   fi
 }
 
