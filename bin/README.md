@@ -12,6 +12,7 @@
 | `persona` | このマシンでの人格のパーソナライズ（口調など。`CLAUDE.machine.md`）を編集し、Codex 向け生成物（`AGENTS.md`）を再生成する単一の入口 |
 | `dfup` | ローカルマシン → 共有サーバのファイルアップロード。`~/dfxfer/<宛先>/out/` に置いたものを、引数なし1コマンドでリモートの `~/dfxfer/inbox/` へ送る |
 | `dfdown` | 共有サーバ → ローカルマシンのファイルダウンロード。リモートの `~/dfxfer/outbox/` の中身を、引数なし1コマンドで `~/dfxfer/<宛先>/in/` へ落とす |
+| `rebootctl` | Windows の勝手な再起動からの復帰の入口。`status` で再起動ポリシー・最終起動時刻・Herdr の生死を読み、`setup` で管理者 PowerShell に貼るコマンドを表示し、`boot` で WSL 起動後に Herdr を起こして会話の再開を呼ぶ |
 
 ## 1. Requirements
 
@@ -64,7 +65,7 @@ which dfdown
 
 The deploy script:
 - Creates `~/bin/` directory if missing
-- Symlinks `ocw`, `claude-ds`, `ocw-meter`, `persona`, `dfup`, and `dfdown` into `~/bin/`
+- Symlinks `ocw`, `claude-ds`, `ocw-meter`, `persona`, `dfup`, `dfdown`, `herdr-resume`, and `rebootctl` into `~/bin/`
   （`dfxfer-lib.sh` は `dfup` / `dfdown` が実体のパスから source する共有ライブラリなので、`~/bin` へは symlink しません）
 
 ## 3. What's Included
@@ -894,6 +895,74 @@ dfdown -n          # rsync の dry-run
 
 `dfdown` は `--delete` も `--remove-source-files` も使わない。**リモートの原本も、
 ローカルに既にあるファイルも、このコマンドが消すことはない。** 片道のコピーに徹している。
+
+### herdr-resume
+
+WSL / Windows の再起動で止まった Claude の会話のうち、**再開してよいものだけ**へ再開の指示を送る（Python 3、標準ライブラリだけ）。
+計画書 DOC-2611151244 の孫2。判定の根拠と記録の方式は ADR DOC-2611151247 を参照。
+
+```bash
+herdr-resume plan      # 判定だけ出す（何も送らない）。--json あり
+herdr-resume recover   # 判定して送り、last-recovery.json を書く。同じ boot_id では1回だけ送る
+```
+
+- 入力は `claude/hooks/session-state.sh`（Claude Code のフック）が書く `${XDG_STATE_HOME:-~/.local/state}/reboot-recovery/sessions/<session_id>.json`
+  と `herdr pane list`。**フックは `claude/settings.json` に登録されるので、配布後はすべての Claude の会話で動く**
+- 判定: 作業中だった・巡回 cron が有効な待機中だった会話には送る。承認待ち・質問待ちだった会話、巡回の無い待機中、記録の無い会話、
+  Claude 以外には送らない（要確認として報告に載せる）。迷ったら送らない
+- 出力: `reboot-recovery/last-recovery.json`（`boot_id`・`windows_last_boot`・`sent`・`not_sent`〈理由と `needs_human`〉）
+- `HERDR_RESUME_BOOT_ID` で `boot_id` を差し替えられる（再起動を模す手での確認用）
+### 3.7 rebootctl — Windows の勝手な再起動からの復帰の入口
+
+Windows Update の再起動で WSL が落ちたあと、人間がサインインしなくても Herdr を起こし、止まった会話の再開へつなぐ。
+採用理由・効く設定と効かない設定・方式の比較は ADR DOC-2611151248。
+
+#### 人間が最初に1回やること
+
+```bash
+rebootctl setup    # 表示だけ。何も実行しない
+```
+
+出力を**管理者 PowerShell** に貼る。(1) 再起動止めのポリシー（`AUOptions=4` と `NoAutoRebootWithLoggedOnUsers=1`）と、
+(2) 起動時のタスク `dotfiles-reboot-recovery`（サインイン無しで `rebootctl boot --hold` を走らせる）が入る。
+タスクは配布された `~/bin/rebootctl` を呼ぶので、先に `deploy-all.sh` で配っておくこと。
+
+#### 確かめ方
+
+```bash
+rebootctl status         # 人が読める形
+rebootctl status --json  # 巡回など機械向け
+```
+
+Windows 側（ポリシー・アクティブ時間・再起動待ち・最終起動時刻・タスクの登録）と WSL 側（`boot_id`・Herdr サーバの生死）を
+読むだけで、何も書き換えない。`powershell.exe` が使えないときも落ちず、読めなかったと出す。
+
+#### boot
+
+`rebootctl boot` はタスクが呼ぶ入口で、手で叩いても安全（冪等）。Herdr のサーバが動いていなければ起動し、会話の復元を
+待ち、`herdr-resume` があれば `herdr-resume recover` を呼ぶ。記録は `${XDG_STATE_HOME:-~/.local/state}/reboot-recovery/boot.log`。
+`--hold` は最後に居座って WSL を落とさない（タスク専用）。
+
+最後の手順4で**管制の会話**（スキル `control-tower`。ADR DOC-2611151326）を起こす。Herdr に、ラベル `管制`・cwd `$HOME` の
+ワークスペースを作り、`claude --model sonnet --name 再起動管制` を起動する。ラベル `管制` のワークスペースが既にあれば
+作り直さない（何度呼んでも1つだけ）。Herdr が復元した会話は待つだけなので、待機中ならそのペインへ起動時の手順を送り、
+承認待ちなどには送らず、エージェントが居なければ起動し直す。`claude` が無い・起こせないときは `boot.log` に書いて続行し、
+手順1〜3 は止めない。起動後の会話が `last-recovery.json` をスマホへ通知し、再起動の予告の巡回を登録する。スキルが
+`~/.claude/skills/` に配られていること（`deploy-all.sh`）が前提。
+
+#### 起動の方式 A を確かめる実験（人間が叩く）
+
+`wsl --shutdown` はこのマシンで動いている会話を全部止める。叩く時刻は自分で決めること。
+
+1. `rebootctl setup` の出力を管理者 PowerShell に貼ってタスクを登録する（登録済みなら飛ばす）
+2. 通常の PowerShell で `wsl --shutdown` を打つ
+3. `Start-ScheduledTask -TaskName dotfiles-reboot-recovery` を打つ
+4. 1分ほど待って WSL を開き、`rebootctl status` で Herdr サーバが running か、`boot.log` に「boot: 終了」があるかを見る
+5. **10分以上**待ち、WSL と Herdr サーバがまだ生きているか確かめる
+6. 本物の再起動で、サインインせずに待ち、同じ確認をする（傘の最終 PR の後の宿題）
+
+試験をやめてタスクを外すとき（上の手順とは別。順に進めても行き着かない）:
+`Unregister-ScheduledTask -TaskName dotfiles-reboot-recovery -Confirm:$false`
 
 ## 4. Customization
 

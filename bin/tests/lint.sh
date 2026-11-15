@@ -20,7 +20,7 @@ list_shell_scripts() {
     \( -path "$repo_root/.git" -o -path "$repo_root/*/.git" \) -prune -o \
     -type f \( -name '*.sh' -o -name 'ocw' -o -name 'claude-ds' \
     -o -name 'ocw-meter' -o -name 'persona' \
-    -o -name 'dfup' -o -name 'dfdown' \) -print0
+    -o -name 'dfup' -o -name 'dfdown' -o -name 'rebootctl' \) -print0
 }
 
 echo "== bash -n =="
@@ -51,7 +51,7 @@ while IFS= read -r -d '' file; do
 done < <(
   find "$repo_root" \
     \( -path "$repo_root/.git" -o -path "$repo_root/*/.git" \) -prune -o \
-    -type f -name '*.py' -print0
+    -type f \( -name '*.py' -o -name 'herdr-resume' \) -print0
 )
 
 echo "== embedded python3 heredoc in bin/ocw-meter =="

@@ -43,6 +43,8 @@ symlink_backup "$DOTFILES_DEPLOY_SRC/bin/ocw-meter" "$BIN_DIR/ocw-meter" || FAIL
 symlink_backup "$DOTFILES_DEPLOY_SRC/bin/dfup" "$BIN_DIR/dfup" || FAIL=1
 symlink_backup "$DOTFILES_DEPLOY_SRC/bin/dfdown" "$BIN_DIR/dfdown" || FAIL=1
 symlink_backup "$DOTFILES_DEPLOY_SRC/bin/persona" "$BIN_DIR/persona" || FAIL=1
+symlink_backup "$DOTFILES_DEPLOY_SRC/bin/herdr-resume" "$BIN_DIR/herdr-resume" || FAIL=1
+symlink_backup "$DOTFILES_DEPLOY_SRC/bin/rebootctl" "$BIN_DIR/rebootctl" || FAIL=1
 
 if [ "$FAIL" -ne 0 ]; then
   log_error "bin deployment completed with errors."

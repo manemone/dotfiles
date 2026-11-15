@@ -9,7 +9,7 @@ Easily deployable, cross-platform dotfiles managed with [mise](https://mise.jdx.
 | **Zsh** | Shell | [Antidote](https://github.com/mattmc3/antidote) |
 | **NeoVim** | Editor | [lazy.nvim](https://github.com/folke/lazy.nvim) |
 | **tmux** | Terminal multiplexer | — (built-in) |
-| **bin** | Custom CLI tools (ocw, claude-ds, ocw-meter, persona, dfup, dfdown) | — (standalone scripts) |
+| **bin** | Custom CLI tools (ocw, claude-ds, ocw-meter, persona, dfup, dfdown, herdr-resume, rebootctl) | — (standalone scripts) |
 | **claude** | Claude Code config | — (built-in) |
 | **skills** | AI agent skills, shared across Claude Code / Codex / OpenCode | — (built-in) |
 | **codex** | Codex CLI global instructions (`AGENTS.md` symlinked from a generated concatenation of `claude/CLAUDE.md` + machine-local personalization) | — (built-in) |
@@ -149,6 +149,7 @@ for details. `bin/` changes should additionally be verified with
 │   ├── persona                # Edit CLAUDE.machine.md + regenerate Codex's AGENTS.md (single entry point)
 │   ├── dfup                   # Upload ~/dfxfer/<host>/out/ to <host>:~/dfxfer/inbox/ (one-way rsync, run locally)
 │   ├── dfdown                 # Download <host>:~/dfxfer/outbox/ to ~/dfxfer/<host>/in/ (one-way rsync, run locally)
+│   ├── rebootctl              # Windows reboot recovery entry (status / setup / boot)
 │   ├── dfxfer-lib.sh          # Shared plumbing for dfup / dfdown (sourced by path, not symlinked into ~/bin)
 │   ├── tests/                 # Python unit tests for ocw-meter etc. (bin/tests/lint.sh + unittest suite)
 │   ├── prices/                # Price tables used for cost calculation
@@ -170,6 +171,7 @@ for details. `bin/` changes should additionally be verified with
 │   ├── repo-baseline/         # Applying the repo-baseline copier template
 │   ├── ocw/                   # Points AI agents to `ocw help <topic>` instead of reading bin/ocw
 │   ├── worktree-cleanup/      # Scope-aware worktree cleanup with human approval before deletion
+│   ├── control-tower/         # Always-on reboot control conversation: notifies recovery results, patrols for pending reboots, handles status/resume/stop from the Claude app
 │   ├── deploy.sh              # skills deployment script (all agents, auto-detected)
 │   └── README.md
 ├── codex/
@@ -328,7 +330,7 @@ See each tool's deploy script for the full list of files it creates.
 
 See each tool's README for detailed configuration and troubleshooting:
 
-- [bin/README.md](bin/README.md) — CLI tools (ocw worktree manager, claude-ds DeepSeek wrapper, ocw-meter observability, persona personalization editor, dfup/dfdown file handoff)
+- [bin/README.md](bin/README.md) — CLI tools (ocw worktree manager, claude-ds DeepSeek wrapper, ocw-meter observability, persona personalization editor, dfup/dfdown file handoff, rebootctl reboot recovery)
 - [claude/README.md](claude/README.md) — Claude Code config, machine-specific customization
 - [skills/README.md](skills/README.md) — AI agent skills and how they reach Claude Code, Codex and OpenCode
 - [codex/README.md](codex/README.md) — Codex CLI global instructions (generated concatenation of claude/CLAUDE.md + machine-local personalization)
