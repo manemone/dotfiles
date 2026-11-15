@@ -43,11 +43,11 @@ case "$1 $2" in
   "status server")
     [ -e {self.tmp}/running ] && echo "status: running" ;;
   "workspace list")
-    echo '{{"workspaces":[{{"workspace_id":"w1"}}]}}' ;;
+    if [ -e {self.tmp}/no-workspaces ]; then echo '{{"workspaces":[]}}'; else echo '{{"workspaces":[{{"workspace_id":"w1"}}]}}'; fi ;;
   "server "*) ;;
 esac
 case "$1" in
-  server) touch {self.tmp}/running ;;
+  server) touch {self.tmp}/running; sleep 5 >/dev/null 2>&1 & ;;
 esac
 exit 0
 """,
@@ -85,7 +85,16 @@ exit 0
             self.assertEqual(r.returncode, 0, r.stderr)
         starts = [line for line in self.calls_text().splitlines() if line == "herdr server"]
         self.assertEqual(len(starts), 1, "Herdr のサーバが二重に起動された")
-        self.assertIn("herdr-resume が無い", (self.state / "reboot-recovery" / "boot.log").read_text())
+        log = (self.state / "reboot-recovery" / "boot.log").read_text()
+        self.assertIn("herdr-resume が無い", log)
+        # 常駐した herdr server がロックを握り続けると、2回目以降の boot が何もしなくなる
+        self.assertNotIn("別の boot が実行中", log)
+
+    def test_boot_completes_when_no_workspaces(self) -> None:
+        (self.tmp / "no-workspaces").touch()
+        r = self.run_ctl("boot")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("boot: 終了", (self.state / "reboot-recovery" / "boot.log").read_text())
 
     def test_status_survives_unreadable_windows(self) -> None:
         # スタブの PATH から powershell.exe を外す（Windows 側が読めない状況）

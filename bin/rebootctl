@@ -7,7 +7,7 @@ set -euo pipefail
 #   rebootctl setup             人間が管理者 PowerShell に貼るコマンドを表示する（実行しない）
 #   rebootctl boot [--hold]     WSL 起動後に Herdr を起こし、会話の再開を呼ぶ（冪等）
 #
-# 設計と判断の根拠は ADR DOC-2611151248（bin/README.md §3.6 に使い方）。
+# 設計と判断の根拠は ADR DOC-2611151248（bin/README.md §3.7 に使い方）。
 # 状態の置き場所は ${XDG_STATE_HOME:-~/.local/state}/reboot-recovery/ に固定
 # （sessions/ と last-recovery.json は herdr-resume、boot.log はこのツールが書く）。
 
@@ -199,7 +199,8 @@ EOF
 # 取りこぼし（Herdr は再起動のたびに会話を戻す側）。何度呼ばれても害が無いように、
 # 実行中の boot が居れば待たずに抜け、Herdr は動いていなければ起動する。
 workspace_count() {
-  herdr workspace list 2>/dev/null | grep -o '"workspace_id"' | wc -l
+  # 0 件・取得失敗でも 0 を返す（set -e / pipefail でスクリプトごと落とさない）
+  { herdr workspace list 2>/dev/null | grep -o '"workspace_id"' || true; } | wc -l
 }
 
 cmd_boot() {
@@ -232,7 +233,8 @@ cmd_boot() {
     log "boot: Herdr サーバは稼働中"
   else
     log "boot: Herdr サーバを起動する"
-    setsid nohup herdr server >>"$STATE_DIR/herdr-server.out" 2>&1 </dev/null &
+    # ロックの fd 9 を引き継がせない（常駐するサーバがロックを握り続けるため）
+    setsid nohup herdr server >>"$STATE_DIR/herdr-server.out" 2>&1 </dev/null 9>&- &
     local i=0
     while [ "$i" -lt 30 ] && [ "$(herdr_state)" != running ]; do
       sleep 1
@@ -269,8 +271,9 @@ cmd_boot() {
 
   log "boot: 終了"
   if [ "$hold" = 1 ]; then
-    # wsl.exe を終わらせない（アイドル停止で WSL ごと落ちるのを防ぐ）
-    exec sleep infinity
+    # wsl.exe を終わらせない（アイドル停止で WSL ごと落ちるのを防ぐ）。
+    # 居座る間にロックを握り続けないよう fd 9 を閉じてから exec する
+    exec sleep infinity 9>&-
   fi
 }
 
