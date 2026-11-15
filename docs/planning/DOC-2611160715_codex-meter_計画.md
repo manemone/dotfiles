@@ -18,7 +18,7 @@
 
 | 孫 | ブランチ | 内容 | 状況 |
 |---|---|---|---|
-| 1 | `cm-01-codex-ingest` | Codex の rollout を `ingest` で取り込み、`usage.message`（provider `openai`）と `quota.sample`（Codex の5時間・週の使用率）を書く。既存の Claude の利用枠の集計・表示から Codex の `quota.sample` を外す | ⬜ 待機中 |
+| 1 | `cm-01-codex-ingest` | Codex の rollout を `ingest` で取り込み、`usage.message`（provider `openai`）と `quota.sample`（Codex の5時間・週の使用率）を書く。既存の Claude の利用枠の集計・表示から Codex の `quota.sample` を外す | 🔄 実装中 |
 | 2 | `cm-02-codex-dash` | `dash` と `report --quota-progress` で Codex の週の利用枠を Claude とは別に表示する（Codex の記録が無いマシンでは今と同じ見た目） | ⬜ 待機中 |
 
 依存:
@@ -252,6 +252,7 @@ Codex に対応させる（`provider=anthropic` 前提の箇所の見直し）�
 
 - 2026-11-16: 傘は `ocw -H` でローカルの `master`（`d68900d`）から切られていたので、`origin/master`（`710449f`）へ
   rebase して push した。背景4 の確認を行い、計画書を起草した。ブリーフは転記後に削除した。孫1 を spawn する
+- 2026-11-16: 孫1 を spawn した（`ocw -H --no-commander`、base-ref は `codex-meter`）。孫2 は孫1 のマージ後
 
 ## 孫1用プロンプト:
 
