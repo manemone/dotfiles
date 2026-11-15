@@ -25,7 +25,7 @@
 | `ts` | string (RFC3339 UTC) | 必須 | 例 `2026-08-01T09:05:00.000Z`。**常にUTC**。日次ファイル名（`events/YYYY-MM-DD.jsonl`）もこの値のUTC日付で決まる（ローカル日付ではない） |
 | `ts_local_offset` | string | 必須 | イベントを記録したマシンのローカルoffset（例 `+09:00`）。集計には使わない参考情報 |
 | `source` | string | 必須（`unknown`許容） | `ocw` / `pr-review-loop` / `transcript` / `statusline` / `codex-rollout` / `unknown`。呼び出し元を明示するが、**実際には多くの呼び出しでこのフラグは渡されずデフォルト値 `unknown` のまま**（下記の実例参照）。値が入っていない＝観測できていない、ではなく「呼び出し側がこのフィールドを渡さなかった」ことを意味する点に注意 |
-| `parser_version` | int \| null | `transcript`/`statusline`由来のみ必須 | 生データ解釈ロジックのバージョン。`usage.message`（ingest由来）は `INGEST_PARSER_VERSION`、`quota.sample`は `STATUSLINE_PARSER_VERSION`（現在`INGEST_PARSER_VERSION`は`2`、`STATUSLINE_PARSER_VERSION`は`1`。`agent_id`の追加で`2`へ上げた。これ以前のingestで書いた`usage.message`は`1`のまま）。それ以外の型は常に `null`（生データの「解釈」を挟まない、CLI引数をそのまま保存するイベントのため） |
+| `parser_version` | int \| null | `transcript`/`statusline`/`codex-rollout`由来のみ必須 | 生データ解釈ロジックのバージョン。`usage.message`（ingest由来）は `INGEST_PARSER_VERSION`、`quota.sample`は `STATUSLINE_PARSER_VERSION`（現在`INGEST_PARSER_VERSION`は`2`、`STATUSLINE_PARSER_VERSION`は`1`。`agent_id`の追加で`2`へ上げた。これ以前のingestで書いた`usage.message`は`1`のまま）。`source: "codex-rollout"` の行（`usage.message` / `quota.sample`）は `CODEX_PARSER_VERSION`（現在`1`。Claude 側の版とは独立）。それ以外の型は常に `null`（生データの「解釈」を挟まない、CLI引数をそのまま保存するイベントのため） |
 | `completeness` | string | 必須 | `complete` / `partial` / `unknown`。**判定基準は §5参照** |
 | `run_id` | string \| null | — | 実行系列ID。`bin/ocw`がworktree作成時にULID風 `<epoch>-<rand>` で採番し `OCW_RUN_ID` 環境変数で各ペインに渡す。非Herdrモードや環境変数未exportの呼び出しでは `null` |
 | `repo` | string \| null | — | `owner/name`。`git remote`から解決 |
@@ -212,8 +212,8 @@ phase.start/phase.endとして発火されない**:
 | `event_type` | 実際のキー | 決定論的か |
 |---|---|---|
 | `usage.message`（`ingest`由来） | `msg:<message.id>` | ✅ 決定論的。同じtranscript行を何度ingestしても1件に収束する（第5.3節の重複行問題への対策） |
-| `usage.message`（Codex の rollout 由来） | `msg:codex:<response_id>`（`token_usage_record`あり）/ `msg:codex:<thread_id>:<累積total_tokens>`（`token_count`のみの旧形式） | ✅ 決定論的（ADR DOC-2611160723） |
-| `quota.sample`（Codex の rollout 由来） | `codexq:<thread_id>:<ordinal>` | ✅ 決定論的。ファイルの先頭から読み直しても同じキーに収束する |
+| `usage.message`（Codex の rollout 由来） | `msg:codex:<response_id>`（`token_usage_record`あり）/ `msg:codex:<thread_id>:<累積total_tokens>:<直近の応答のtotal_tokens>`（`token_count`のみの旧形式） | ✅ 決定論的（ADR DOC-2611160723） |
+| `quota.sample`（Codex の rollout 由来） | `codexq:<thread_id>:<ordinal>`（`ordinal` が無い旧形式は `<timestamp>`） | ✅ 決定論的。ファイルの先頭から読み直しても同じキーに収束する |
 | `pr.bind` | `bind:<run_id>:<pr_number>` | ✅ 決定論的（`ocw-meter bind-pr`のCLIコードと`pr-review-loop`の呼び出し双方が明示的に指定） |
 | `meter.error` | `meter-error:<stage>:<YYYY-MM-DD>` | ✅ 決定論的（1日1stage1件に自然にまとまる。自己診断が同じ理由で1日に何度も記録されないようにするため） |
 | `run.start` / `run.end` / `phase.start` / `phase.end` / `review.round` / `human.intervention` | `auto:<event_id>`（`event_id`はランダムuuid4） | ❌ **ランダム。呼び出し側が`--idempotency-key`を明示的に渡さない限り重複排除は効かない。** `skills/pr-review-loop/SKILL.md`・`bin/ocw`のいずれもこれらの型に`--idempotency-key`を渡していない（実際のコードを確認済み） |

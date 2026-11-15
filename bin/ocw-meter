@@ -7003,7 +7003,8 @@ def new_codex_file_state():
     return {
         "thread_id": None, "session_id": None, "provider": CODEX_PROVIDER_DEFAULT,
         "agent_id": None, "is_sidechain": False, "cwd": None, "model": None,
-        "effort": None, "records_mode": False, "prev_total": None, "last_quota": None,
+        "effort": None, "records_mode": False, "prev_total": None, "prev_last": None,
+        "last_quota": None,
     }
 
 
@@ -7108,13 +7109,14 @@ def codex_process_line(state, obj):
             total = _codex_int(total_usage.get("total_tokens")) if isinstance(total_usage, dict) else None
             last_total = _codex_int(last.get("total_tokens")) if isinstance(last, dict) else None
             if total is not None and last_total is not None:
-                prev = state["prev_total"]
-                state["prev_total"] = total
-                # 累積が増えた行だけが新しい応答。ファイル先頭の累積が直近の
-                # 応答より大きいのは fork が親スレッドから引き継いだ値なので
-                # 数えない（累積が巻き戻ったときは total == last で数える）。
-                if total != prev and (prev is not None or total == last_total):
-                    used = candidate(f"codex:{state['thread_id']}:{total}", last, state["thread_id"])
+                prev, prev_last = state["prev_total"], state["prev_last"]
+                state["prev_total"], state["prev_last"] = total, last_total
+                # 累積も直近の応答も前の行と同じ行だけが再送。どちらかが変われば
+                # 新しい応答（累積が更新されず直近だけ変わる行がある）。ファイル
+                # 先頭の累積が直近の応答より大きいのは fork が親スレッドから
+                # 引き継いだ値なので数えない（巻き戻ったときは total == last）。
+                if (total != prev or last_total != prev_last) and (prev is not None or total == last_total):
+                    used = candidate(f"codex:{state['thread_id']}:{total}:{last_total}", last, state["thread_id"])
         return used, quota
     return None, None
 

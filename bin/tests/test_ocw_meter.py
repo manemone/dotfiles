@@ -126,6 +126,8 @@ def run_meter(args, home, extra_env=None, timeout=30, cwd=None):
     # 残高の取得は DeepSeek の API への通信なので、既定では切る
     # （残高のテストだけが自分で有効にして loopback のサーバーを向ける）。
     env["OCW_METER_BALANCE"] = "0"
+    # CODEX_HOME 等が環境にあっても実物の rollout を読まない（Codex のテストだけが上書きする）。
+    env["OCW_METER_CODEX_SESSIONS_DIR"] = "/nonexistent-ocw-meter-test-codex-sessions"
     if extra_env:
         env.update(extra_env)
     return subprocess.run(
@@ -145,6 +147,7 @@ def run_meter_on_pty(args, home, extra_env=None):
     env.pop("NO_COLOR", None)
     env["OCW_METER_AUTO_INGEST"] = "0"
     env["OCW_METER_BALANCE"] = "0"
+    env["OCW_METER_CODEX_SESSIONS_DIR"] = "/nonexistent-ocw-meter-test-codex-sessions"
     env.update(extra_env or {})
     proc = subprocess.Popen([str(OCW_METER), *args], cwd=str(REPO_ROOT),
                             env=env, stdout=slave, stderr=subprocess.DEVNULL)
@@ -6200,6 +6203,8 @@ class CodexRolloutIngestTests(OcwMeterTestCase):
             self._token_count("2026-11-16T00:00:04.000Z", 4, u1, {"total_tokens": 6050}, self._rate_limits(2.0, 2.0)),
             self._token_count("2026-11-16T00:00:05.000Z", 5, u1, {"total_tokens": 6050}, self._rate_limits(2.0, 2.0)),  # 同じ累積の再送
             self._token_count("2026-11-16T00:00:06.000Z", 6, u2, {"total_tokens": 8130}, {"limit_id": "codex", "primary": {"used_percent": 3.0, "window_minutes": 10080, "resets_at": 1800000000}}),
+            # 累積は変わらず直近の応答だけ変わった行（別の応答。累積の更新が遅れる）。
+            self._token_count("2026-11-16T00:00:06.500Z", 7, u1, {"total_tokens": 8130}, None),
         ]
         old_path = self._write("old-thread", old)
         # 新形式: token_usage_record が1応答1行。token_count は使用量に数えない。guardian は sidechain として記録。
@@ -6214,8 +6219,8 @@ class CodexRolloutIngestTests(OcwMeterTestCase):
         result = self._ingest()
         self.assertEqual(result.returncode, 0, result.stderr)
         usage = {e["message_id"]: e for e in self._events("usage.message")}
-        self.assertEqual(set(usage), {"codex:old-thread:6050", "codex:old-thread:8130", "codex:resp-1"})
-        first = usage["codex:old-thread:6050"]
+        self.assertEqual(set(usage), {"codex:old-thread:6050:1050", "codex:old-thread:8130:2080", "codex:old-thread:8130:1050", "codex:resp-1"})
+        first = usage["codex:old-thread:6050:1050"]
         self.assertEqual((first["provider"], first["model"], first["source"], first["cost_basis"], first["cost_estimate_usd"]),
                          ("openai", "gpt-5.4", "codex-rollout", "subscription", None))
         self.assertEqual((first["input_tokens"], first["cache_read_input_tokens"], first["cache_creation_input_tokens"],
@@ -6242,8 +6247,8 @@ class CodexRolloutIngestTests(OcwMeterTestCase):
         self.assertEqual(self._ingest().returncode, 0)
         self.assertEqual((len(self._events("usage.message")), len(self._events("quota.sample"))), before)
         self._write("old-thread", [
-            self._token_count("2026-11-16T00:00:07.000Z", 7, u2, {"total_tokens": 8130}, self._rate_limits(3.0, 3.0)),  # 再送
-            self._token_count("2026-11-16T00:00:08.000Z", 8, u1, {"total_tokens": 9180}, self._rate_limits(4.0, 3.0)),
+            self._token_count("2026-11-16T00:00:07.000Z", 8, u2, {"total_tokens": 8130}, self._rate_limits(3.0, 3.0)),  # 再送
+            self._token_count("2026-11-16T00:00:08.000Z", 9, u1, {"total_tokens": 9180}, self._rate_limits(4.0, 3.0)),
         ], mode="a")
         self.assertEqual(self._ingest().returncode, 0)
         self.assertEqual(len(self._events("usage.message")), before[0] + 1)
