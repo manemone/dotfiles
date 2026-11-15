@@ -287,14 +287,14 @@ def wait_for_panes():
     再起動の直後は、会話を読み込み中のペインが unknown / working だったり、まだ agent と
     認識されていなかったりする。ここで判定すると全部 pane_not_idle になり、boot_id を使い切る。
     上限に達したらそのまま判定する（落ち着かなかったものは送らず、報告に載る）。
+    管制の会話のペインも待つ。送信の対象からは外すが、直後の `rebootctl boot` の手順4が
+    読み込みの済んだ管制のペインへ起動時の手順を送る前提になっているため。
     """
     limit = float(os.environ.get("HERDR_RESUME_SETTLE_SECONDS", "180"))
     deadline = time.monotonic() + limit
     while True:
         panes = list_panes()
-        unsettled = [p for p in panes
-                     if p["workspace"] != CONTROL_LABEL
-                     and ((p["agent"] == "claude" and p["status"] not in SETTLED) or p.get("booting"))]
+        unsettled = [p for p in panes if (p["agent"] == "claude" and p["status"] not in SETTLED) or p.get("booting")]
         if not unsettled or time.monotonic() >= deadline:
             return panes
         time.sleep(min(3.0, max(0.0, deadline - time.monotonic())))
