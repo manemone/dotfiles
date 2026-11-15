@@ -126,6 +126,8 @@ def run_meter(args, home, extra_env=None, timeout=30, cwd=None):
     # 残高の取得は DeepSeek の API への通信なので、既定では切る
     # （残高のテストだけが自分で有効にして loopback のサーバーを向ける）。
     env["OCW_METER_BALANCE"] = "0"
+    # CODEX_HOME 等が環境にあっても実物の rollout を読まない（Codex のテストだけが上書きする）。
+    env["OCW_METER_CODEX_SESSIONS_DIR"] = "/nonexistent-ocw-meter-test-codex-sessions"
     if extra_env:
         env.update(extra_env)
     return subprocess.run(
@@ -145,6 +147,7 @@ def run_meter_on_pty(args, home, extra_env=None):
     env.pop("NO_COLOR", None)
     env["OCW_METER_AUTO_INGEST"] = "0"
     env["OCW_METER_BALANCE"] = "0"
+    env["OCW_METER_CODEX_SESSIONS_DIR"] = "/nonexistent-ocw-meter-test-codex-sessions"
     env.update(extra_env or {})
     proc = subprocess.Popen([str(OCW_METER), *args], cwd=str(REPO_ROOT),
                             env=env, stdout=slave, stderr=subprocess.DEVNULL)
@@ -2624,6 +2627,8 @@ class SymlinkInvocationTests(OcwMeterTestCase):
         env = dict(os.environ)
         env["OCW_METER_HOME"] = str(self.home)
         env["OCW_METER_CLAUDE_PROJECTS_DIR"] = str(self.projects_dir)
+        # HOME は実物のままなので、実際の ~/.codex/sessions を読まないよう空の場所へ向ける。
+        env["OCW_METER_CODEX_SESSIONS_DIR"] = str(pathlib.Path(self.tmpdir.name) / "no-codex-sessions")
         env["OCW_METER_INGEST_USE_GH"] = "0"
         env.pop("OCW_METER_PRICE_DIR", None)
         for key in ("OCW_RUN_ID", "OCW_ROLE", "HERDR_WORKSPACE_ID", "HERDR_PANE_ID"):
@@ -4624,6 +4629,70 @@ class ReportGroupedViewsTests(OcwMeterTestCase):
         daily = json.loads(run_meter(["report", "--daily", "--no-ingest", "--json"], self.home).stdout)
         self.assertEqual(len(daily["daily"]), 14)
 
+    def _seed_codex_quota_samples(self, hours_ago_to_pct, five_pct=None, resets_in_hours=96):
+        """Codex の rollout 由来の quota.sample (provider openai) を別ファイルに足す。"""
+        now = time.time()
+        events = []
+        for hours_ago, pct in hours_ago_to_pct:
+            ts = now - hours_ago * 3600
+            events.append({"event_type": "quota.sample", "schema_version": 1, "completeness": "complete",
+                           "provider": "openai", "source": "codex-rollout", "plan_source": "codex-rollout",
+                           "ts": datetime.fromtimestamp(ts, timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z"),
+                           "idempotency_key": f"cx-{ts}", "event_id": f"cx-{ts}",
+                           "five_hour_used_pct": five_pct, "five_hour_resets_at": int(now + 3600),
+                           "seven_day_used_pct": pct, "seven_day_resets_at": int(now + resets_in_hours * 3600)})
+        (pathlib.Path(self.home) / "events" / "2026-08-02.jsonl").write_text(
+            "".join(json.dumps(e) + "\n" for e in events), encoding="utf-8")
+
+    def test_quota_progress_provider_openai_draws_codex_only_and_default_stays_claude(self):
+        self._seed_quota_samples([(h, 10 + (30 - h)) for h in range(30, 0, -1)])  # Claude: 39% 付近
+        base = self._quota_progress_json()
+        self.assertEqual(base["provider"], "anthropic")
+        self._seed_codex_quota_samples([(h, 60 + (20 - h) / 2) for h in range(20, 0, -1)], five_pct=12.0)
+        self.assertEqual({k: self._quota_progress_json()[k] for k in ("current_pct", "points")},
+                         {k: base[k] for k in ("current_pct", "points")})  # --provider 無しは Claude だけのまま
+        codex = self._quota_progress_json_args(["--provider", "openai"])
+        self.assertEqual((codex["provider"], codex["status"]), ("openai", "ok"))
+        self.assertGreaterEqual(codex["current_pct"], 60)  # Claude の値が混ざらない
+        self.assertEqual(codex["remaining_tokens"], {})  # Codex には 1% あたりのトークンの見積もりが無い
+        text = run_meter(["report", "--quota-progress", "--no-ingest", "--provider", "openai"], self.home).stdout
+        self.assertIn("Codex の週の上限", text)
+        self.assertNotIn("系統", text)
+        self.assertIn("provider: openai", run_meter(["report", "--quota-progress", "--no-ingest", "--plain", "--provider", "openai"], self.home).stdout)
+        for bad in (["--provider", "gemini"], ["--provider"]):
+            self.assertNotEqual(run_meter(["report", "--quota-progress", "--no-ingest", *bad], self.home).returncode, 0, bad)
+        self.assertNotEqual(run_meter(["report", "--daily", "--no-ingest", "--provider", "openai"], self.home).returncode, 0)
+
+    def test_dash_shows_codex_only_when_codex_samples_exist_and_drops_its_chart_last(self):
+        self._seed_quota_samples([(h, h / 4) for h in range(0, 97, 8)])
+        env = {"TZ": "JST-9", "COLUMNS": "100"}
+
+        def dash(lines):
+            result = run_meter(["dash", "--no-ingest"], self.home, {**env, "LINES": str(lines)})
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertLessEqual(len(result.stdout.splitlines()), lines - 1, result.stdout)
+            return result.stdout
+
+        # Codex の記録が無いときは Codex の語が画面のどこにも出ない (今と同じ画面)
+        for lines in (80, 30, 24):
+            self.assertNotIn("Codex", dash(lines))
+        self._seed_codex_quota_samples([(h, 60 + (20 - h) / 2) for h in range(20, 0, -1)], five_pct=12.0)
+        full = dash(80)
+        for text in ("Codex の週の上限の推移", "Codex 5時間の使用率", "Codex 今週の使用率", "週の上限の推移 (見積もり)", "日ごとの消費量"):
+            self.assertIn(text, full)
+        self.assertIn("12%", full)
+        # 高さが足りなければ ヒートマップ → 日ごとの縦棒 → Codex のグラフ の順に省く。Claude のグラフとタイルは残る
+        self.assertNotIn("日ごとの消費量", dash(40))
+        self.assertIn("Codex の週の上限の推移", dash(40))
+        short = dash(30)
+        self.assertNotIn("日ごとのモデル別使用量", short)
+        self.assertIn("Codex の週の上限の推移", short)
+        tiny = dash(26)
+        self.assertNotIn("Codex の週の上限の推移", tiny)
+        self.assertIn("Codex の週のグラフ", tiny)
+        self.assertIn("Codex 5時間の使用率", tiny)
+        self.assertIn("週の上限の推移 (見積もり)", tiny)
+
     def test_dash_rejects_json_plain_unknown_flags_and_watch_without_a_terminal(self):
         for bad in (["--json"], ["--plain"], ["--bogus"], ["--watch", "0"], ["--watch", "x"],
                     ["--watch", "--no-ingest"], ["--watch", "5"]):
@@ -6140,6 +6209,174 @@ class SessionAttributionTests(OcwMeterTestCase):
         self.assertEqual(json_result.returncode, 0, json_result.stderr)
         data = json.loads(json_result.stdout)
         self.assertFalse(any(key.startswith("attribution") for key in data))
+
+
+class CodexRolloutIngestTests(OcwMeterTestCase):
+    """Codex の rollout の取り込み（ADR DOC-2611160723）。合成した最小の
+    rollout を使う。実物は会話本文とアカウント ID を含むのでリポに入れない。"""
+
+    def setUp(self):
+        super().setUp()
+        self.codex_dir = pathlib.Path(self.tmpdir.name) / "codex-sessions"
+        self.no_claude = pathlib.Path(self.tmpdir.name) / "no-claude-projects"
+
+    @staticmethod
+    def _line(ts, ordinal, type_, payload):
+        return json.dumps({"timestamp": ts, "ordinal": ordinal, "type": type_, "payload": payload})
+
+    @staticmethod
+    def _usage(inp, cached, out, reasoning, write=0):
+        return {"input_tokens": inp, "cached_input_tokens": cached, "cache_write_input_tokens": write,
+                "output_tokens": out, "reasoning_output_tokens": reasoning, "total_tokens": inp + out}
+
+    def _rate_limits(self, five, seven, resets=1800000000):
+        return {"limit_id": "codex", "primary": {"used_percent": five, "window_minutes": 300, "resets_at": resets},
+                "secondary": {"used_percent": seven, "window_minutes": 10080, "resets_at": resets + 600000}}
+
+    def _token_count(self, ts, ordinal, last, total, rate_limits):
+        return self._line(ts, ordinal, "event_msg", {
+            "type": "token_count", "rate_limits": rate_limits,
+            "info": {"last_token_usage": last, "total_token_usage": total}})
+
+    def _write(self, name, lines, mode="w"):
+        path = self.codex_dir / "2026" / "11" / "16" / f"rollout-2026-11-16T00-00-00-{name}.jsonl"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, mode, encoding="utf-8") as fh:
+            fh.write("".join(line + "\n" for line in lines))
+        return path
+
+    def _meta(self, thread, version, source="cli", cwd="/nonexistent/codex-cwd"):
+        return self._line("2026-11-16T00:00:00.000Z", 0, "session_meta", {
+            "id": thread, "session_id": thread, "cwd": cwd, "cli_version": version, "model_provider": "openai",
+            "source": source, "creator_user_id": "ACCOUNT-ID-MUST-NOT-LEAK", "base_instructions": {"text": "SECRET-INSTRUCTIONS"}})
+
+    def _ingest(self, args=None):
+        return run_ingest(self.home, self.no_claude, args=args, extra_env={"OCW_METER_CODEX_SESSIONS_DIR": str(self.codex_dir)})
+
+    def _events(self, event_type):
+        return [e for e in read_events(self.home) if e.get("event_type") == event_type]
+
+    def test_rollout_maps_usage_and_quota_without_double_counting_forks_or_leaking_content(self):
+        # 旧形式（token_count のみ）: 先頭の累積 5000 は fork が親から引き継いだ値なので数えない。
+        u1, u2 = self._usage(1000, 600, 50, 20), self._usage(2000, 1500, 80, 30)
+        old = [
+            self._meta("old-thread", "0.150.1"),
+            self._line("2026-11-16T00:00:01.000Z", 1, "turn_context", {"model": "gpt-5.4", "effort": "high", "cwd": "/nonexistent/codex-cwd"}),
+            self._token_count("2026-11-16T00:00:02.000Z", 2, self._usage(300, 0, 10, 0), {"total_tokens": 5000}, self._rate_limits(1.0, 2.0)),
+            self._line("2026-11-16T00:00:03.000Z", 3, "response_item", {"content": "SECRET-BODY"}),
+            self._token_count("2026-11-16T00:00:04.000Z", 4, u1, {"total_tokens": 6050}, self._rate_limits(2.0, 2.0)),
+            self._token_count("2026-11-16T00:00:05.000Z", 5, u1, {"total_tokens": 6050}, self._rate_limits(2.0, 2.0)),  # 同じ累積の再送
+            self._token_count("2026-11-16T00:00:06.000Z", 6, u2, {"total_tokens": 8130}, {"limit_id": "codex", "primary": {"used_percent": 3.0, "window_minutes": 10080, "resets_at": 1800000000}}),
+            # 累積は変わらず直近の応答だけ変わった行（別の応答。累積の更新が遅れる）。
+            self._token_count("2026-11-16T00:00:06.500Z", 7, u1, {"total_tokens": 8130}, None),
+        ]
+        old_path = self._write("old-thread", old)
+        # 新形式: token_usage_record が1応答1行。token_count は使用量に数えない。guardian は sidechain として記録。
+        new = [
+            self._meta("new-thread", "0.167.0", source={"subagent": {"other": "guardian"}}),
+            self._line("2026-11-16T00:01:00.000Z", 1, "turn_context", {"model": "codex-auto-review", "cwd": "/nonexistent/codex-cwd"}),
+            self._line("2026-11-16T00:01:01.000Z", 2, "token_usage_record", {"response_id": "resp-1", "thread_id": "new-thread", "usage": self._usage(900, 400, 40, 10, write=7)}),
+            self._token_count("2026-11-16T00:01:01.002Z", 3, self._usage(900, 400, 40, 10), {"total_tokens": 940}, None),
+        ]
+        self._write("new-thread", new)
+
+        result = self._ingest()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        usage = {e["message_id"]: e for e in self._events("usage.message")}
+        self.assertEqual(set(usage), {"codex:old-thread:6050:1050", "codex:old-thread:8130:2080", "codex:old-thread:8130:1050", "codex:resp-1"})
+        first = usage["codex:old-thread:6050:1050"]
+        self.assertEqual((first["provider"], first["model"], first["source"], first["cost_basis"], first["cost_estimate_usd"]),
+                         ("openai", "gpt-5.4", "codex-rollout", "subscription", None))
+        self.assertEqual((first["input_tokens"], first["cache_read_input_tokens"], first["cache_creation_input_tokens"],
+                          first["output_tokens"], first["reasoning_tokens"]), (400, 600, 0, 50, 20))
+        self.assertEqual(first["session_id"], "old-thread")
+        guardian = usage["codex:resp-1"]
+        self.assertEqual((guardian["input_tokens"], guardian["cache_creation_input_tokens"], guardian["is_sidechain"], guardian["agent_id"], guardian["model"]),
+                         (500, 7, True, "guardian", "codex-auto-review"))
+
+        # quota.sample: 変わった行だけ。window_minutes で5時間枠と週枠を見分ける。
+        samples = sorted(self._events("quota.sample"), key=lambda e: e["ts"])
+        self.assertEqual([(s["five_hour_used_pct"], s["seven_day_used_pct"]) for s in samples],
+                         [(1.0, 2.0), (2.0, 2.0), (None, 3.0)])
+        self.assertTrue(all(s["provider"] == "openai" and s["source"] == "codex-rollout" for s in samples))
+        self.assertEqual(samples[0]["five_hour_resets_at"], 1800000000)
+
+        raw = "".join(p.read_text() for p in (self.home / "events").glob("*.jsonl"))
+        self.assertNotIn("SECRET-BODY", raw)
+        self.assertNotIn("SECRET-INSTRUCTIONS", raw)
+        self.assertNotIn("ACCOUNT-ID-MUST-NOT-LEAK", raw)
+
+        # 冪等: もう一度走らせても増えない。追記分だけが増分で取り込まれ、累積は前回の続きから数える。
+        before = (len(self._events("usage.message")), len(self._events("quota.sample")))
+        self.assertEqual(self._ingest().returncode, 0)
+        self.assertEqual((len(self._events("usage.message")), len(self._events("quota.sample"))), before)
+        self._write("old-thread", [
+            self._token_count("2026-11-16T00:00:07.000Z", 8, u2, {"total_tokens": 8130}, self._rate_limits(3.0, 3.0)),  # 再送
+            self._token_count("2026-11-16T00:00:08.000Z", 9, u1, {"total_tokens": 9180}, self._rate_limits(4.0, 3.0)),
+        ], mode="a")
+        self.assertEqual(self._ingest().returncode, 0)
+        self.assertEqual(len(self._events("usage.message")), before[0] + 1)
+        # ファイルが縮んで先頭から読み直されても、同じ応答は増えない。
+        self._write("old-thread", old)
+        self.assertEqual(self._ingest().returncode, 0)
+        self.assertEqual(len(self._events("usage.message")), before[0] + 1)
+        self.assertTrue(old_path.exists())
+
+    def test_codex_quota_samples_never_reach_the_claude_quota_views(self):
+        now = time.time()
+        resets = int(now + 72 * 3600)
+        claude = [{"event_type": "quota.sample", "schema_version": 1, "completeness": "complete", "provider": "anthropic",
+                   "ts": datetime.fromtimestamp(now - h * 3600, timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z"),
+                   "idempotency_key": f"c-{h}", "event_id": f"c-{h}", "plan_source": "statusline",
+                   "seven_day_used_pct": 10 + (30 - h), "seven_day_resets_at": resets} for h in range(30, 0, -1)]
+        events_dir = self.home / "events"
+        events_dir.mkdir(parents=True)
+        (events_dir / "2026-08-01.jsonl").write_text("".join(json.dumps(e) + "\n" for e in claude), encoding="utf-8")
+        args = ["report", "--quota-progress", "--no-ingest", "--json"]
+        before = run_meter(args, self.home)
+        self.assertEqual(before.returncode, 0, before.stderr)
+
+        stamp = datetime.fromtimestamp(now - 1800, timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+        self._write("quota-thread", [
+            self._meta("quota-thread", "0.150.1"),
+            self._line(stamp, 1, "turn_context", {"model": "gpt-5.4"}),
+            self._token_count(stamp, 2, self._usage(10, 0, 1, 0), {"total_tokens": 11},
+                              {"limit_id": "codex", "secondary": {"used_percent": 95.0, "window_minutes": 10080, "resets_at": resets}}),
+        ])
+        self.assertEqual(self._ingest().returncode, 0)
+        self.assertEqual(len(self._events("quota.sample")), 31)
+        after = run_meter(args, self.home)
+
+        def view(out):  # 現在時刻や ingest の鮮度の欄は実行ごとに変わるので、グラフの中身だけを比べる
+            data = json.loads(out.stdout)
+            return {k: data[k] for k in ("status", "current_pct", "points")}
+
+        self.assertEqual(view(after), view(before))
+        self.assertEqual(view(after)["current_pct"], 39)
+
+        # report 側の session_id による run_id の補完にも入らない。使い回した worktree の新しい run
+        # （run.start が後）へ、その前に動かした Codex の使用量が帰属しない。
+        worktree = make_ocw_style_worktree(self.tmpdir.name, run_id="RUN-NEW-999")
+        run_meter(["event", "run.start", "--idempotency-key", "reuse-run-start", "--run-id", "RUN-NEW-999",
+                   "--ts", "2026-11-16T12:00:00.000Z", "--base-ref", "origin/main", "--command", "codex"], self.home)
+        run_meter(["event", "pr.bind", "--idempotency-key", "reuse-bind", "--run-id", "RUN-NEW-999",
+                   "--pr-number", "999", "--pr-url", "https://example.invalid/pull/999"], self.home)
+        early = "2026-11-16T00:00:00.000Z"
+        self._write("reuse-thread", [
+            self._meta("reuse-thread", "0.150.1", cwd=str(worktree)),
+            self._line(early, 1, "turn_context", {"model": "gpt-5.4"}),
+            self._token_count(early, 2, self._usage(10, 0, 1, 0), {"total_tokens": 11}, self._rate_limits(5.0, 6.0)),
+        ])
+        self.assertEqual(self._ingest().returncode, 0)
+        self.assertIsNone(next(e for e in self._events("usage.message") if e["session_id"] == "reuse-thread")["run_id"])
+        counts = json.loads(run_meter(["report", "--json", "--no-ingest"], self.home).stdout)["attribution_run_id_counts"]
+        self.assertEqual(counts["session_id"], 0)
+
+    def test_ingest_without_a_codex_directory_behaves_as_before(self):
+        result = self._ingest()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("codex", result.stdout.lower())
+        self.assertEqual(result.stderr, "")
 
 
 if __name__ == "__main__":

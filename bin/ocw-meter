@@ -33,7 +33,7 @@ usage:
   ocw-meter report --window [--pr <n>] [--repo <owner>/<name>] [--no-ingest] [--json|--plain]
   ocw-meter report --since <rfc3339-ts> [--until <rfc3339-ts>] [--model|--role] [--pr <n>] [--periods <n>] [--no-ingest] [--json|--plain]
   ocw-meter report --quota-per-pct [--periods <n>] [--no-ingest] [--json|--plain]
-  ocw-meter report --quota-progress [--periods <n>] [--compare-weeks <n>] [--no-ingest] [--json|--plain]
+  ocw-meter report --quota-progress [--provider <anthropic|openai>] [--periods <n>] [--compare-weeks <n>] [--no-ingest] [--json|--plain]
   ocw-meter report --daily [--days <n>] [--rows] [--no-ingest] [--json|--plain]
   ocw-meter report --heatmap [--weeks <n>] [--no-ingest] [--json|--plain]
   ocw-meter report --month [YYYY-MM] [--repo <owner>/<name>] [--no-ingest] [--json|--plain]
@@ -73,6 +73,18 @@ subcommands:
     non-zero on unexpected failure (like validate/report, not
     fail-open like event/bind-pr — a silently-broken ingest would make
     every downstream cost number meaningless).
+
+    Codex CLI rollouts (~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl; see
+    OCW_METER_CODEX_SESSIONS_DIR) are scanned in the same run when that
+    directory exists (nothing happens, and nothing is printed, when it does
+    not). Each response becomes one `usage.message` (provider `openai`,
+    source `codex-rollout`, cost_basis `subscription`: Codex is used on a
+    flat-rate plan, so there is no dollar estimate), and every change in the
+    rollout's rate limits becomes one `quota.sample` (provider `openai`;
+    5-hour and weekly windows, told apart by window length). Only token
+    counts, rate limits, model, cwd and ids are read — never the
+    conversation. The Claude quota views (report --quota-progress / --window /
+    --month / --pr, dash) ignore the Codex samples.
 
     --since is a READ-ONLY filter: a run using it does NOT advance the
     persisted cursor, so nothing filtered out this way is ever lost —
@@ -160,7 +172,13 @@ subcommands:
     combined with --pr/--phase/--model/--role/--window/--month/
     --reconcile/--since/--until. See the ADR on quota-per-pct.
 
-  report --quota-progress [--periods <n>] [--compare-weeks <n>]
+  report --quota-progress [--provider <anthropic|openai>] [--periods <n>] [--compare-weeks <n>]
+    --provider picks whose weekly limit is drawn: anthropic (default, the
+    statusLine samples, as before) or openai (Codex: the rate_limits read
+    from ~/.codex/sessions by ingest). The two never mix. For openai the
+    remaining % is not converted into tokens (there is no tokens-per-1%
+    estimate for Codex) and --periods has no effect; --json / --plain
+    carry "provider".
     This week's weekly-limit % over time: seven_day_used_pct of the
     latest seven_day_resets_at period (reset-7d .. reset) as a
     character chart (0/50/100% and date ticks, "▲" = now), with an
@@ -236,7 +254,11 @@ subcommands:
     ingests first (--no-ingest skips; an ingest failure never stops it and
     shows in the notes). The heights follow the terminal: the charts are
     squeezed first, and if that is not enough the heatmap, then the daily
-    columns, are left out (a warning line says so). --watch redraws every
+    columns, then the Codex chart, are left out (a warning line says so).
+    Only when at least one Codex quota.sample exists, the header gains a
+    row of Codex tiles (5-hour %, weekly %, time to the weekly reset) and a
+    "Codex の週の上限の推移" chart appears under the Claude one; with none,
+    the screen is unchanged. --watch redraws every
     <seconds> (default 300; ingest again each time, counted from the end of
     the previous draw so runs never overlap; on a failed ingest the stored
     data is drawn and the notes say so). It clears the screen with ANSI
@@ -422,6 +444,12 @@ environment:
     default: $HOME/.claude/projects
     Where `ingest` looks for `<slug>/<session-id>.jsonl` transcripts
     and `<slug>/<session-id>/subagents/agent-*.jsonl` sub-agent transcripts.
+
+  OCW_METER_CODEX_SESSIONS_DIR
+    default: $CODEX_HOME/sessions, or $HOME/.codex/sessions when CODEX_HOME
+    is unset
+    Where `ingest` looks for Codex CLI rollout files
+    (YYYY/MM/DD/rollout-*.jsonl). Missing directory = nothing to ingest.
 
   OCW_METER_PRICE_DIR
     default: <this script's directory>/prices
@@ -683,7 +711,7 @@ _TRUE_STRINGS = frozenset({"true", "1", "yes"})
 _FALSE_STRINGS = frozenset({"false", "0", "no"})
 
 COMPLETENESS_ENUM = ("complete", "partial", "unknown")
-SOURCE_ENUM = ("ocw", "pr-review-loop", "transcript", "statusline", "unknown")
+SOURCE_ENUM = ("ocw", "pr-review-loop", "transcript", "statusline", "codex-rollout", "unknown")
 
 # Per-event-type required payload fields, plan §8.2/§8.3. Only the event
 # types this phase's prompt lists as in-scope get enforced; an
@@ -2682,7 +2710,7 @@ def report_capacity_list_price(scope_quota_events, contributions):
     total = 0.0
     session_ids = set()
     for e in scope_quota_events:
-        if e.get("event_type") != "quota.sample":
+        if not is_claude_quota_sample(e):
             continue
         provider = e.get("provider")
         if provider != "anthropic":
@@ -2781,7 +2809,9 @@ def pr_review_summary(pr_events, quota_contributions):
         if e.get("event_type") != "usage.message":
             continue
         if e.get("cost_basis") == "subscription":
-            capacity_message_count += 1
+            # 数えるのは Claude の利用枠（Codex の定額の枠は別。ADR DOC-2611160723）
+            if not is_codex_event(e):
+                capacity_message_count += 1
             continue
         cost = e.get("cost_estimate_usd")
         if isinstance(cost, (int, float)):
@@ -2793,11 +2823,11 @@ def pr_review_summary(pr_events, quota_contributions):
     # 帰属したサンプルのみでmax used_pctを出す。
     five_hour_vals = [
         e["five_hour_used_pct"] for e in pr_events
-        if e.get("event_type") == "quota.sample" and isinstance(e.get("five_hour_used_pct"), (int, float))
+        if is_claude_quota_sample(e) and isinstance(e.get("five_hour_used_pct"), (int, float))
     ]
     seven_day_vals = [
         e["seven_day_used_pct"] for e in pr_events
-        if e.get("event_type") == "quota.sample" and isinstance(e.get("seven_day_used_pct"), (int, float))
+        if is_claude_quota_sample(e) and isinstance(e.get("seven_day_used_pct"), (int, float))
     ]
 
     return {
@@ -2906,6 +2936,7 @@ def report_by_model(usage_events):
 QUOTA_FAMILIES = ("opus", "sonnet", "haiku", "fable")
 QUOTA_BUCKET_HOURS = (3, 6, 12)
 QUOTA_DEFAULT_PERIODS = 2
+QUOTA_PROVIDER_DEFAULT = "anthropic"   # report --quota-progress --provider の既定 (もう一方は "openai" = Codex)
 # A family is "unmeasurable" (not given a number) unless all hold:
 QUOTA_MIN_ACTIVE_BUCKETS = 6    # buckets with the family's usage, at the coarsest size
 QUOTA_MIN_ATTRIBUTED_PCT = 3.0  # weekly-% the fit attributes to the family, smallest size
@@ -2982,13 +3013,15 @@ def nnls(rows, targets, n_vars):
     return best
 
 
-def quota_periods(valid_events, n_periods):
+def quota_periods(valid_events, n_periods, provider=QUOTA_PROVIDER_DEFAULT):
     """The latest `n_periods` distinct `seven_day_resets_at` values with
     their quota.sample time series [(epoch, seven_day_used_pct), ...].
-    The percentage is account-wide, so samples of every session merge."""
+    The percentage is account-wide, so samples of every session merge.
+    `provider` picks whose samples are read: "anthropic" (statusLine,
+    the default) or "openai" (Codex rollout); the two never mix."""
     series = {}
     for e in valid_events:
-        if e.get("event_type") != "quota.sample":
+        if not is_quota_sample_of(e, provider):
             continue
         pct, resets = e.get("seven_day_used_pct"), e.get("seven_day_resets_at")
         ts = parse_ts(e.get("ts"))
@@ -3473,13 +3506,13 @@ def _weekly_average_at(weeks, elapsed):
     return (round(sum(vals) / len(vals), 1), len(vals)) if vals else (None, 0)
 
 
-def quota_weekly_average(valid_events, current_resets, now, n_weeks):
+def quota_weekly_average(valid_events, current_resets, now, n_weeks, provider=QUOTA_PROVIDER_DEFAULT):
     """The comparison against past weeks: the average, on a common
     time-since-week-start axis, of the latest `n_weeks` finished weeks
     before the current one. Fewer weeks than asked are averaged as they
     are; none gives status "no_past_weeks" (not an error)."""
     out = {"weeks_requested": n_weeks, "step_hours": QUOTA_AVG_STEP_HOURS}
-    periods = quota_periods(valid_events, n_weeks + 1)
+    periods = quota_periods(valid_events, n_weeks + 1, provider)
     weeks = [(r, rows) for r, rows in periods.items() if r < current_resets and r <= now][-n_weeks:]
     out["weeks_used"] = len(weeks)
     out["weeks"] = [{"seven_day_resets_at": r, "week_start": _iso_epoch(r - 7 * 86400),
@@ -3500,19 +3533,28 @@ def quota_weekly_average(valid_events, current_resets, now, n_weeks):
             "at_reset": {"avg_pct": at_reset, "weeks": count_reset}}
 
 
-def quota_progress(valid_events, now, estimate, compare_weeks=0):
+QUOTA_PROVIDER_LABELS = {"anthropic": "Claude", "openai": "Codex"}
+QUOTA_NO_SAMPLE_MESSAGES = {
+    "anthropic": "quota.sample が無い（statusLine の記録がまだ無い）",
+    "openai": "Codex の quota.sample が無い（~/.codex/sessions の rollout からの取り込みがまだ無い）",
+}
+
+
+def quota_progress(valid_events, now, estimate, compare_weeks=0, provider=QUOTA_PROVIDER_DEFAULT):
     """(result, rows): the latest weekly period's % series, the 100% outlook
     and the remaining % in weighted tokens per family. `rows` (every sample,
     running max) is for the chart only; `result` is what --json prints.
-    `compare_weeks` > 0 adds "weekly_average" (see quota_weekly_average)."""
-    periods = quota_periods(valid_events, 1)
+    `compare_weeks` > 0 adds "weekly_average" (see quota_weekly_average).
+    `provider` picks the samples ("anthropic" / "openai"); for "openai" there
+    is no tokens-per-1% estimate, so "remaining_tokens" is empty."""
+    periods = quota_periods(valid_events, 1, provider)
     if not periods:
-        return {"status": "no_week", "message": "quota.sample が無い（statusLine の記録がまだ無い）"}, []
+        return {"status": "no_week", "provider": provider, "message": QUOTA_NO_SAMPLE_MESSAGES[provider]}, []
     resets, rows = next(iter(periods.items()))
     if resets <= now:
-        return {"status": "no_week", "seven_day_resets_at": resets,
+        return {"status": "no_week", "provider": provider, "seven_day_resets_at": resets,
                 "message": f"今の週の quota.sample が無い（最新の週は {_local_md_hm(resets)} にリセット済み）"}, []
-    week = {"seven_day_resets_at": resets, "week_start": _iso_epoch(resets - 7 * 86400),
+    week = {"provider": provider, "seven_day_resets_at": resets, "week_start": _iso_epoch(resets - 7 * 86400),
             "week_end": _iso_epoch(resets), "samples": len(rows)}
     if len(rows) < 2:
         return {"status": "insufficient", **week,
@@ -3539,7 +3581,7 @@ def quota_progress(valid_events, now, estimate, compare_weeks=0):
               "projection": _quota_projection(rows, resets, now),
               "remaining_pct": remaining, "remaining_tokens": tokens}
     if compare_weeks > 0:
-        result["weekly_average"] = quota_weekly_average(valid_events, resets, now, compare_weeks)
+        result["weekly_average"] = quota_weekly_average(valid_events, resets, now, compare_weeks, provider)
     return result, rows
 
 
@@ -3674,8 +3716,29 @@ def _quota_legend(proj, avg, short=False):
     return "   ".join(legend)
 
 
+def _pretty_remaining_tokens(result):
+    print(section(f"残り {fmt_pct(result['remaining_pct'])} をトークンに直すと (見積もり)"))
+    table_rows, notes = [], []
+    for family, row in result["remaining_tokens"].items():
+        color = _MODEL_FAMILY_COLOR.get(family)
+        name = (family, color) if color else family
+        if row["status"] == "estimated":
+            table_rows.append([name, fmt_tokens(row["weighted_tokens"]), fmt_tokens(row["raw_tokens"])])
+        else:
+            table_rows.append([name, "—", "—"])
+            notes.append(f"{family}: 測れない — {row['reason']}")
+    lines, dropped = render_table(["系統", "残り weighted", "残り raw"], table_rows)
+    print("\n".join(lines))
+    if dropped:
+        print("  " + paint(f"({'・'.join(dropped)} は幅が足りず省略。--plain で全部)", "dim"))
+    for n in notes:
+        print("  " + paint(n, "yellow"))
+
+
 def _pretty_quota_progress(result, rows, footer_freshness):
-    print(section("週の上限が 100% に届くまでの推移 (見積もり)"))
+    provider = result.get("provider", QUOTA_PROVIDER_DEFAULT)
+    codex = provider == CODEX_PROVIDER_DEFAULT
+    print(section("Codex の週の上限が 100% に届くまでの推移 (見積もり)" if codex else "週の上限が 100% に届くまでの推移 (見積もり)"))
     if result["status"] != "ok":
         print("  " + paint(result["message"], "yellow"))
     else:
@@ -3700,22 +3763,11 @@ def _pretty_quota_progress(result, rows, footer_freshness):
         elif avg and avg["weeks_used"] < avg["weeks_requested"]:
             print("  " + paint(f"区切りの終わった週が {avg['weeks_used']} 週しか無く、その分での平均"
                               f"（{avg['weeks_requested']} 週を指定）", "dim"))
-        print(section(f"残り {fmt_pct(result['remaining_pct'])} をトークンに直すと (見積もり)"))
-        table_rows, notes = [], []
-        for family, row in result["remaining_tokens"].items():
-            color = _MODEL_FAMILY_COLOR.get(family)
-            name = (family, color) if color else family
-            if row["status"] == "estimated":
-                table_rows.append([name, fmt_tokens(row["weighted_tokens"]), fmt_tokens(row["raw_tokens"])])
-            else:
-                table_rows.append([name, "—", "—"])
-                notes.append(f"{family}: 測れない — {row['reason']}")
-        lines, dropped = render_table(["系統", "残り weighted", "残り raw"], table_rows)
-        print("\n".join(lines))
-        if dropped:
-            print("  " + paint(f"({'・'.join(dropped)} は幅が足りず省略。--plain で全部)", "dim"))
-        for n in notes:
-            print("  " + paint(n, "yellow"))
+        if codex:
+            print("  " + paint(f"残り {fmt_pct(result['remaining_pct'])}。トークンへの換算は Claude のモデル系列だけ"
+                              "（Codex の 1% が何トークンかは見積もらない）", "dim"))
+        else:
+            _pretty_remaining_tokens(result)
     print("  " + paint(f"見積もりであり、止める・替える制御には使わない。weighted = {WEIGHTED_FORMULA}", "dim"))
     _pretty_notes(None, footer_freshness)
     print("  " + paint("点列などの数値は --plain / --json で見られます。", "dim"))
@@ -3729,6 +3781,7 @@ def print_quota_progress(result, rows, as_json, footer_freshness):
         _pretty_quota_progress(result, rows, footer_freshness)
         return
     print("週の上限が 100% に届くまでの推移（見積もり）:")
+    print(f"  provider: {result.get('provider', QUOTA_PROVIDER_DEFAULT)}")
     print(f"  status: {result['status']}")
     if result["status"] != "ok":
         print(f"  message: {result['message']}")
@@ -3763,6 +3816,8 @@ def print_quota_progress(result, rows, as_json, footer_freshness):
                 print(f"    summary: {_weekly_average_none_message(wa)}")
         print(f"  remaining_pct: {result['remaining_pct']}")
         print("  remaining_tokens:")
+        if not result["remaining_tokens"]:
+            print("    Codex の 1% が何トークンかは見積もらない（Claude のモデル系列だけ）")
         for family, row in result["remaining_tokens"].items():
             if row["status"] == "estimated":
                 print(f"    {family}: weighted={row['weighted_tokens']} raw={row['raw_tokens']}")
@@ -4089,33 +4144,72 @@ def _dash_header_tiles(result, now):
     return tiles
 
 
-def dash_layout(budget, quota_ok, notes_lines, spills=None):
+def _codex_five_hour_pct(valid_events, now):
+    """Codex の 5 時間の枠の今の使用率。リセット時刻を過ぎた記録は今の値ではないので None (タイルは — )。"""
+    best = None
+    for e in valid_events:
+        if not is_quota_sample_of(e, CODEX_PROVIDER_DEFAULT):
+            continue
+        pct, resets, ts = e.get("five_hour_used_pct"), e.get("five_hour_resets_at"), parse_ts(e.get("ts"))
+        if (isinstance(pct, (int, float)) and isinstance(resets, int) and ts is not None and resets > now
+                and (best is None or ts.timestamp() >= best[0])):
+            best = (ts.timestamp(), pct)
+    return None if best is None else best[1]
+
+
+def _dash_codex_tiles(valid_events, codex_result, now):
+    """Codex のタイル (5 時間・週の使用率とリセットまで)。値が無いものは —。"""
+    five = _codex_five_hour_pct(valid_events, now)
+    ok = codex_result["status"] == "ok"
+    week = codex_result["current_pct"] if ok else None
+
+    def pct_text(v):
+        return paint("—", "dim") if v is None else paint(fmt_pct(v), "bold", _pct_color(v))
+    tiles = [("pct", "Codex 5時間の使用率", pct_text(five)), ("reset", "Codex 今週の使用率", pct_text(week))]
+    if ok:
+        tiles.append(("diff", "Codex 週のリセットまで", paint(fmt_duration(codex_result["seven_day_resets_at"] - now), "bold")))
+    return tiles
+
+
+def dash_layout(budget, quota_ok, notes_lines, spills=None, codex=None):
     """高さ budget (行数。None なら詰めない) への配分。パネルごとに枠の 2 行がかかる。
-    まずグラフの高さを最小まで詰め、それでも入らなければヒートマップ → 日ごとの縦棒の順に省く。
-    spills: パネルごとの「補足が上の罫線に入らず本文へ回る行数」(header / quota / daily / heatmap)。
-    -> {"quota_rows", "daily_rows", "daily", "heatmap", "omitted", "overflow"}"""
+    まずグラフの高さを最小まで詰め、それでも入らなければヒートマップ → 日ごとの縦棒 → Codex のグラフの順に省く
+    (Codex のタイルは見出しに残る。Claude の週のグラフは省かない)。
+    spills: パネルごとの「補足が上の罫線に入らず本文へ回る行数」(header / quota / codex / daily / heatmap)。
+    codex: Codex の quota.sample が無ければ None (配分は Claude だけのときと同じ)、あれば True (グラフを描ける) /
+    False (描けず 1 行のメッセージ)。Codex があると見出しにタイルの 2 段が増える。
+    -> {"quota_rows", "daily_rows", "daily", "heatmap", "codex", "omitted", "overflow"}"""
     spills = spills or {}
-    q_min, q_max = DASH_QUOTA_ROWS if quota_ok else (0, 0)
     d_min, d_max = DASH_DAILY_ROWS
     quota_fixed = 2 + (2 if quota_ok else 1)  # 枠 + 軸 2 行 / 枠 + メッセージ
-    plans = [(True, True, []), (True, False, ["ヒートマップ"]), (False, False, ["ヒートマップ", "日ごとの縦棒"])]
-    for daily, heatmap, omitted in plans:
-        need = (DASH_HEADER_LINES + spills.get("header", 0) + (1 if omitted else 0) + (2 + notes_lines)
-                + quota_fixed + spills.get("quota", 0) + q_min
+    header = DASH_HEADER_LINES + (2 if codex is not None else 0)
+    plans = [(True, True, codex is not None, []), (True, False, codex is not None, ["ヒートマップ"]),
+             (False, False, codex is not None, ["ヒートマップ", "日ごとの縦棒"])]
+    if codex is not None:
+        plans.append((False, False, False, ["ヒートマップ", "日ごとの縦棒", "Codex の週のグラフ"]))
+    for daily, heatmap, show_codex, omitted in plans:
+        charts = int(quota_ok) + int(show_codex and codex is True)  # 行数を伸縮できるグラフの数
+        q_min, q_max = DASH_QUOTA_ROWS if charts else (0, 0)
+        need = (header + spills.get("header", 0) + (1 if omitted else 0) + (2 + notes_lines)
+                + quota_fixed + spills.get("quota", 0) + (q_min if quota_ok else 0)
+                + ((2 + (2 if codex else 1) + spills.get("codex", 0) + (q_min if codex else 0)) if show_codex else 0)
                 + (2 + d_min + 3 + spills.get("daily", 0) if daily else 0)
                 + (2 + DASH_HEATMAP_LINES + spills.get("heatmap", 0) if heatmap else 0))
-        if budget is None or need <= budget or (daily, heatmap) == (False, False):
+        if budget is None or need <= budget or plans[-1][:3] == (daily, heatmap, show_codex):
             overflow = budget is not None and need > budget
             break
     extra = 10 ** 6 if budget is None else max(0, budget - need)
     q_rows, d_rows = q_min, d_min
-    while extra > 0 and (q_rows < q_max or (daily and d_rows < d_max)):
-        if q_rows < q_max:
-            q_rows, extra = q_rows + 1, extra - 1
+    while extra > 0:  # 伸ばせるグラフ (Claude と Codex は同じ行数) と日ごとの縦棒へ 1 行ずつ
+        grew = False
+        if q_rows < q_max and extra >= charts:
+            q_rows, extra, grew = q_rows + 1, extra - charts, True
         if extra > 0 and daily and d_rows < d_max:
-            d_rows, extra = d_rows + 1, extra - 1
+            d_rows, extra, grew = d_rows + 1, extra - 1, True
+        if not grew:
+            break
     return {"quota_rows": q_rows, "daily_rows": d_rows, "daily": daily, "heatmap": heatmap,
-            "omitted": omitted, "overflow": overflow}
+            "codex": show_codex, "omitted": omitted, "overflow": overflow}
 
 
 def _dash_daily_legend(report, width):
@@ -4151,6 +4245,11 @@ def dash_lines(valid_events, footer_completeness, footer_freshness, now, height,
     usage_events = [e for e in valid_events if e.get("event_type") == "usage.message"]
     result, rows = quota_progress(valid_events, now, {"families": {}}, QUOTA_COMPARE_WEEKS)
     quota_ok = result["status"] == "ok"
+    # Codex の quota.sample が 1 件でもあるときだけ Codex の週のグラフとタイルを足す (無ければ今と同じ画面)
+    codex_result = codex_rows = None
+    if any(is_quota_sample_of(e, CODEX_PROVIDER_DEFAULT) for e in valid_events):
+        codex_result, codex_rows = quota_progress(valid_events, now, {"families": {}}, QUOTA_COMPARE_WEEKS, CODEX_PROVIDER_DEFAULT)
+    codex_ok = None if codex_result is None else codex_result["status"] == "ok"
     notes = _notes_lines(footer_completeness, footer_freshness)
     cw = width - 4  # パネルの中身の幅
 
@@ -4184,6 +4283,12 @@ def dash_lines(valid_events, footer_completeness, footer_freshness, now, height,
         avg = avg if avg and avg["status"] == "ok" else None
         proj = result["projection"]
         heads["quota"] = ("週の上限の推移 (見積もり)", [_quota_legend(proj, avg), _quota_legend(proj, avg, short=True)])
+    c_avg = c_proj = None
+    if codex_ok:
+        c_avg = codex_result.get("weekly_average")
+        c_avg = c_avg if c_avg and c_avg["status"] == "ok" else None
+        c_proj = codex_result["projection"]
+        heads["codex"] = ("Codex の週の上限の推移 (見積もり)", [_quota_legend(c_proj, c_avg), _quota_legend(c_proj, c_avg, short=True)])
     daily_aside = paint(f"直近 {daily_report['days']} 日 / 重み付きトークン", "dim")
     if dropped:
         daily_aside = paint(f"古い {dropped} 日を省略", "yellow") + paint(" · ", "dim") + daily_aside
@@ -4191,13 +4296,15 @@ def dash_lines(valid_events, footer_completeness, footer_freshness, now, height,
     heads["heatmap"] = ("日ごとの消費量", [paint(f"直近 {weeks} 週 / 重み付きトークン", "dim")])
     placed = {k: _fit_aside(t, c, width) for k, (t, c) in heads.items()}
     layout = dash_layout(None if height is None else height - 1, quota_ok, len(notes),
-                         {k: 1 for k, (_a, spill) in placed.items() if spill})
+                         {k: 1 for k, (_a, spill) in placed.items() if spill}, codex_ok)
 
     def framed(key, body):
         aside, spill = placed[key]
         return panel(heads[key][0], aside, body + ([spill] if spill else []), width)
 
     head_body = dash_tiles(_dash_header_tiles(result, now), cw)
+    if codex_result is not None:
+        head_body += dash_tiles(_dash_codex_tiles(valid_events, codex_result, now), cw)
     if layout["omitted"]:
         head_body.append(paint(f"⚠ 端末の高さ ({height} 行) が足りないため省略: " + "、".join(layout["omitted"]), "yellow"))
     lines = framed("header", head_body)
@@ -4208,6 +4315,13 @@ def dash_lines(valid_events, footer_completeness, footer_freshness, now, height,
         lines.extend(framed("quota", body))
     else:
         lines.extend(panel("週の上限の推移 (見積もり)", None, [paint(result["message"], "yellow")], width))
+    if layout["codex"]:
+        if codex_ok:
+            body = render_quota_chart(codex_rows, c_proj, codex_result["seven_day_resets_at"], now, c_avg, height=layout["quota_rows"],
+                                      width=max(10, cw - label_w - 2), label_w=label_w)
+            lines.extend(framed("codex", body))
+        else:
+            lines.extend(panel("Codex の週の上限の推移 (見積もり)", None, [paint(codex_result["message"], "yellow")], width))
 
     if layout["daily"]:
         grid, _dropped = daily_columns(daily_report["daily"], top, styles, has_other, layout["daily_rows"], cw, label_w=label_w + 1)  # +1: 他は ラベル 空白 軸の線 の並びで、縦棒は空白が無い
@@ -4428,7 +4542,7 @@ def report_by_window(valid_events, repo, quota_contributions):
     (possibly narrowed) `valid_events` again."""
     windows = {}
     for e in valid_events:
-        if e.get("event_type") != "quota.sample":
+        if not is_claude_quota_sample(e):
             continue
         wid = e.get("window_id")
         if wid is None:
@@ -4660,7 +4774,9 @@ def report_month_cash_and_capacity(valid_events, month):
     capacity_message_count = 0
     for e in usage_month:
         if e.get("cost_basis") == "subscription":
-            capacity_message_count += 1
+            # 数えるのは Claude の利用枠（Codex の定額の枠は別。ADR DOC-2611160723）
+            if not is_codex_event(e):
+                capacity_message_count += 1
             continue
         cost = e.get("cost_estimate_usd")
         if isinstance(cost, (int, float)):
@@ -4669,7 +4785,7 @@ def report_month_cash_and_capacity(valid_events, month):
 
     quota_month = [
         e for e in valid_events
-        if e.get("event_type") == "quota.sample" and isinstance(e.get("ts"), str) and e["ts"].startswith(month)
+        if is_claude_quota_sample(e) and isinstance(e.get("ts"), str) and e["ts"].startswith(month)
     ]
     five_hour_vals = [e["five_hour_used_pct"] for e in quota_month if isinstance(e.get("five_hour_used_pct"), (int, float))]
     seven_day_vals = [e["seven_day_used_pct"] for e in quota_month if isinstance(e.get("seven_day_used_pct"), (int, float))]
@@ -4893,7 +5009,7 @@ def pr_five_hour_window_completion(pr_events, all_events):
 
     window_ids = set()
     for e in all_events:
-        if e.get("event_type") != "quota.sample":
+        if not is_claude_quota_sample(e):
             continue
         window_id = e.get("window_id")
         if window_id is None:
@@ -5117,6 +5233,7 @@ def cmd_report(args):
     quota_per_pct = False
     quota_progress_flag = False
     compare_weeks = None
+    quota_provider = None
     periods = None
     daily = False
     days = None
@@ -5175,6 +5292,15 @@ def cmd_report(args):
                 compare_weeks = -1
             if compare_weeks < 0:
                 print(f"error: --compare-weeks expects an integer of 0 or more, got '{args[i + 1]}'", file=sys.stderr)
+                return 1
+            i += 2
+        elif token == "--provider":
+            if i + 1 >= len(args):
+                print("error: --provider requires a value (anthropic or openai)", file=sys.stderr)
+                return 1
+            quota_provider = args[i + 1]
+            if quota_provider not in QUOTA_PROVIDER_LABELS:
+                print(f"error: --provider expects anthropic or openai, got '{quota_provider}'", file=sys.stderr)
                 return 1
             i += 2
         elif token == "--periods":
@@ -5274,6 +5400,9 @@ def cmd_report(args):
     REPORT_PLAIN = plain
     if compare_weeks is not None and not quota_progress_flag:
         print("error: --compare-weeks only applies to --quota-progress", file=sys.stderr)
+        return 1
+    if quota_provider is not None and not quota_progress_flag:
+        print("error: --provider only applies to --quota-progress", file=sys.stderr)
         return 1
     if daily:
         conflict = next((flag for flag, on in (
@@ -5458,9 +5587,12 @@ def cmd_report(args):
         return 0
 
     if quota_progress_flag:
-        result, rows = quota_progress(valid_events, time.time(),
-                                      estimate_quota_per_pct(valid_events, periods or QUOTA_DEFAULT_PERIODS),
-                                      QUOTA_COMPARE_WEEKS if compare_weeks is None else compare_weeks)
+        quota_provider = quota_provider or QUOTA_PROVIDER_DEFAULT
+        # Codex には 1% あたりのトークン数の見積もりが無い (Claude のモデル系列だけ)
+        estimate = ({"families": {}} if quota_provider == CODEX_PROVIDER_DEFAULT
+                    else estimate_quota_per_pct(valid_events, periods or QUOTA_DEFAULT_PERIODS))
+        result, rows = quota_progress(valid_events, time.time(), estimate,
+                                      QUOTA_COMPARE_WEEKS if compare_weeks is None else compare_weeks, quota_provider)
         print_quota_progress(result, rows, as_json, footer_freshness)
         return 0
 
@@ -6235,7 +6367,7 @@ def read_new_lines(file_path, prev_entry):
     complete = chunk[: last_nl + 1] if last_nl != -1 else b""
     new_offset = start_offset + len(complete)
     lines = [line for line in complete.split(b"\n") if line.strip()]
-    return {"lines": lines, "new_offset": new_offset, "stat": stat_info}
+    return {"lines": lines, "new_offset": new_offset, "start_offset": start_offset, "stat": stat_info}
 
 
 def quarantine_ingest_line(paths, source_file, reason, byte_length):
@@ -6413,7 +6545,8 @@ def resolve_herdr_role_map():
 def _accumulate_session_attr_sample(raw, event):
     """Feeds one already-decoded event into `raw` (session_id -> {"run_id":
     [(ts, value), ...], "role": [...]}, unsorted) if it's a quota.sample
-    carrying a session_id. Shared by the ingest-side single-pass scan
+    carrying a session_id. Codex rollout 由来（provider openai）は run.start
+    逆転チェックを通っていないので補完に使わない（ADR §2.6）。Shared by the ingest-side single-pass scan
     (`load_local_pr_binds_and_run_starts`, which decodes lines itself) and
     the report-side scan (`session_attrs_from_events`, over already-decoded
     `valid_events`) so the extraction rule lives in exactly one place.
@@ -6422,7 +6555,7 @@ def _accumulate_session_attr_sample(raw, event):
     a quota.sample can carry one without the other (OCW_RUN_ID set but
     OCW_ROLE unset, or vice versa — see record_quota_sample), so requiring
     both together would throw away usable half-samples."""
-    if event.get("event_type") != "quota.sample":
+    if not is_claude_quota_sample(event):
         return
     session_id = event.get("session_id")
     if not isinstance(session_id, str) or not session_id:
@@ -6652,7 +6785,7 @@ def build_usage_event(candidate, price_tables, today_str, role_map, binds, run_s
     output_tokens = usage.get("output_tokens")
 
     model = normalize_model_name(candidate["model"])
-    provider = infer_provider(model)
+    provider = candidate.get("provider") or infer_provider(model)
     ts_dt = parse_ts(candidate["timestamp"])
     # PR #27 review round 1 finding 4 (plan §17 R5): the price table must
     # be chosen by the MESSAGE's own date, not the date `ingest` happens
@@ -6663,17 +6796,21 @@ def build_usage_event(candidate, price_tables, today_str, role_map, binds, run_s
     # §5.5 forbids; it's picking the WRONG table on first write).
     price_date_str = ts_dt.strftime("%Y-%m-%d") if ts_dt is not None else today_str
     price_table = select_price_table(price_tables, price_date_str)
-    cost_estimate, price_version, price_effective, cost_basis, time_of_day_basis = compute_cost(
-        model,
-        {
-            "input_tokens": input_tokens,
-            "cache_read_input_tokens": cache_read,
-            "cache_creation_input_tokens": cache_creation,
-            "output_tokens": output_tokens,
-        },
-        price_table,
-        ts_dt,
-    )
+    if candidate.get("subscription"):
+        # Codex（ChatGPT の定額の枠）: 定価換算はしない（Claude と同じ扱い）。
+        cost_estimate, price_version, price_effective, cost_basis, time_of_day_basis = None, None, None, "subscription", None
+    else:
+        cost_estimate, price_version, price_effective, cost_basis, time_of_day_basis = compute_cost(
+            model,
+            {
+                "input_tokens": input_tokens,
+                "cache_read_input_tokens": cache_read,
+                "cache_creation_input_tokens": cache_creation,
+                "output_tokens": output_tokens,
+            },
+            price_table,
+            ts_dt,
+        )
 
     session_id = candidate["session_id"]
     role_info = role_map.get(session_id) if session_id else None
@@ -6758,8 +6895,8 @@ def build_usage_event(candidate, price_tables, today_str, role_map, binds, run_s
         "event_type": "usage.message",
         "ts": candidate["timestamp"] or iso_utc(datetime.now(timezone.utc)),
         "ts_local_offset": local_offset_str(),
-        "source": "transcript",
-        "parser_version": INGEST_PARSER_VERSION,
+        "source": candidate.get("source", "transcript"),
+        "parser_version": CODEX_PARSER_VERSION if candidate.get("source") == CODEX_SOURCE else INGEST_PARSER_VERSION,
         "completeness": completeness,
         "run_id": run_id,
         # 孫5プロンプト §3: どの経路で解決したか(direct/session_id/未解決)
@@ -6787,7 +6924,7 @@ def build_usage_event(candidate, price_tables, today_str, role_map, binds, run_s
         "cache_read_input_tokens": cache_read if isinstance(cache_read, (int, float)) else None,
         "cache_creation_input_tokens": cache_creation if isinstance(cache_creation, (int, float)) else None,
         "output_tokens": output_tokens if isinstance(output_tokens, (int, float)) else None,
-        "reasoning_tokens": None,  # U5 / P2 未確定（孫0 P2待ち）— 推測しない
+        "reasoning_tokens": candidate.get("reasoning_tokens"),  # Claude は U5 / P2 未確定（孫0 P2待ち）— 推測しない。Codex は rollout の値
         "is_sidechain": candidate["is_sidechain"] if isinstance(candidate["is_sidechain"], bool) else None,
         "agent_id": candidate["agent_id"] if isinstance(candidate["agent_id"], str) else None,
         "effort": candidate["effort"],
@@ -6936,6 +7073,213 @@ def bulk_write_events(paths, events):
     return counts
 
 
+# ── ingest: Codex rollout -> usage.message / quota.sample ──────────────
+#
+# ADR DOC-2611160723（codex-rollout-ingest）を参照。Codex CLI の
+# rollout (`~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`) から、設計0で
+# 決めたフィールドだけを読む（会話本文の `response_item` やアカウントID
+# 類は読まない）。
+
+CODEX_PROVIDER_DEFAULT = "openai"
+CODEX_SOURCE = "codex-rollout"
+CODEX_PARSER_VERSION = 1
+# `token_usage_record`（1応答1行）が出る最初の Codex バージョン。これ未満は
+# `event_msg` の `token_count` から使用量を取る。
+CODEX_RECORD_MIN_VERSION = (0, 155)
+
+
+def codex_sessions_dir():
+    env = os.environ.get("OCW_METER_CODEX_SESSIONS_DIR")
+    if env:
+        return pathlib.Path(env)
+    codex_home = os.environ.get("CODEX_HOME")
+    if codex_home:
+        return pathlib.Path(codex_home) / "sessions"
+    home = os.environ.get("HOME")
+    return pathlib.Path(home) / ".codex" / "sessions" if home else None
+
+
+def _codex_version_tuple(version):
+    if not isinstance(version, str):
+        return None
+    m = re.match(r"(\d+)\.(\d+)", version)
+    return (int(m.group(1)), int(m.group(2))) if m else None
+
+
+def _codex_int(value):
+    return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
+
+
+def new_codex_file_state():
+    return {
+        "thread_id": None, "session_id": None, "provider": CODEX_PROVIDER_DEFAULT,
+        "agent_id": None, "is_sidechain": False, "cwd": None, "model": None,
+        "effort": None, "records_mode": False, "prev_total": None, "prev_last": None,
+        "last_quota": None,
+    }
+
+
+def _codex_quota_fields(rate_limits):
+    """`rate_limits` -> (five_hour_pct, five_hour_resets, seven_day_pct,
+    seven_day_resets). primary/secondary の位置ではなく window_minutes で
+    5時間枠(300)と週枠(10080)を見分け、それ以外の長さの枠は捨てる。
+    `limit_id` が codex 以外（モデル別の枠など）の行は混ぜない。"""
+    if not isinstance(rate_limits, dict):
+        return None
+    if rate_limits.get("limit_id") not in (None, "codex"):
+        return None
+    out = {300: (None, None), 10080: (None, None)}
+    for key in ("primary", "secondary"):
+        window = rate_limits.get(key)
+        if not isinstance(window, dict) or window.get("window_minutes") not in out:
+            continue
+        pct, resets = window.get("used_percent"), window.get("resets_at")
+        pct = pct if isinstance(pct, (int, float)) and not isinstance(pct, bool) else None
+        resets = resets if isinstance(resets, int) and not isinstance(resets, bool) else None
+        out[window["window_minutes"]] = (pct, resets)
+    if all(v is None for pair in out.values() for v in pair):
+        return None
+    return list(out[300] + out[10080])
+
+
+def codex_process_line(state, obj):
+    """Folds one rollout line into `state` (persisted per file in the
+    ingest cursor so an incremental read keeps its context) and returns
+    (usage_candidate_or_None, quota_fields_or_None)."""
+    obj_type = obj.get("type")
+    payload = obj.get("payload")
+    if not isinstance(payload, dict):
+        return None, None
+    ts = obj.get("timestamp")
+
+    if obj_type == "session_meta":
+        for key, field in (("id", "thread_id"), ("session_id", "session_id"), ("cwd", "cwd")):
+            if isinstance(payload.get(key), str) and payload[key]:
+                state[field] = payload[key]
+        if isinstance(payload.get("model_provider"), str) and payload["model_provider"]:
+            state["provider"] = payload["model_provider"]
+        version = _codex_version_tuple(payload.get("cli_version"))
+        if version is not None:
+            state["records_mode"] = state["records_mode"] or version >= CODEX_RECORD_MIN_VERSION
+        source = payload.get("source")
+        if isinstance(source, dict) and isinstance(source.get("subagent"), dict):
+            other = source["subagent"].get("other")
+            state["is_sidechain"] = True
+            state["agent_id"] = other if isinstance(other, str) and other else "subagent"
+        return None, None
+
+    if obj_type == "turn_context":
+        if isinstance(payload.get("model"), str) and payload["model"]:
+            state["model"] = payload["model"]
+        if isinstance(payload.get("effort"), str):
+            state["effort"] = payload["effort"]
+        if isinstance(payload.get("cwd"), str) and payload["cwd"]:
+            state["cwd"] = payload["cwd"]
+        return None, None
+
+    def candidate(message_id, usage, thread_id):
+        input_total = _codex_int(usage.get("input_tokens"))
+        cached = _codex_int(usage.get("cached_input_tokens")) or 0
+        return {
+            "message_id": message_id, "timestamp": ts, "provider": state["provider"],
+            "source": CODEX_SOURCE, "model": state["model"], "subscription": True,
+            "usage": {
+                "input_tokens": max(input_total - cached, 0) if input_total is not None else None,
+                "cache_read_input_tokens": cached,
+                "cache_creation_input_tokens": _codex_int(usage.get("cache_write_input_tokens")) or 0,
+                "output_tokens": _codex_int(usage.get("output_tokens")),
+            },
+            "reasoning_tokens": _codex_int(usage.get("reasoning_output_tokens")),
+            "session_id": thread_id, "git_branch": None, "cwd": state["cwd"],
+            "is_sidechain": state["is_sidechain"], "agent_id": state["agent_id"],
+            "effort": state["effort"], "stop_reason": None,
+        }
+
+    if obj_type == "token_usage_record":
+        state["records_mode"] = True
+        usage = payload.get("usage")
+        response_id = payload.get("response_id")
+        if not isinstance(usage, dict) or not isinstance(response_id, str) or not response_id:
+            return None, None
+        thread_id = payload.get("thread_id") if isinstance(payload.get("thread_id"), str) else state["thread_id"]
+        return candidate(f"codex:{response_id}", usage, thread_id), None
+
+    if obj_type == "event_msg" and payload.get("type") == "token_count":
+        quota = None
+        fields = _codex_quota_fields(payload.get("rate_limits"))
+        if fields is not None and fields != state["last_quota"]:
+            state["last_quota"] = fields
+            quota = {"timestamp": ts, "ordinal": obj.get("ordinal"), "thread_id": state["thread_id"],
+                     "session_id": state["thread_id"], "cwd": state["cwd"], "provider": state["provider"],
+                     "five_hour_used_pct": fields[0], "five_hour_resets_at": fields[1],
+                     "seven_day_used_pct": fields[2], "seven_day_resets_at": fields[3]}
+        used = None
+        info = payload.get("info")
+        if not state["records_mode"] and isinstance(info, dict):
+            last, total_usage = info.get("last_token_usage"), info.get("total_token_usage")
+            total = _codex_int(total_usage.get("total_tokens")) if isinstance(total_usage, dict) else None
+            last_total = _codex_int(last.get("total_tokens")) if isinstance(last, dict) else None
+            if total is not None and last_total is not None:
+                prev, prev_last = state["prev_total"], state["prev_last"]
+                state["prev_total"], state["prev_last"] = total, last_total
+                # 累積も直近の応答も前の行と同じ行だけが再送。どちらかが変われば
+                # 新しい応答（累積が更新されず直近だけ変わる行がある）。ファイル
+                # 先頭の累積が直近の応答より大きいのは fork が親スレッドから
+                # 引き継いだ値なので数えない（巻き戻ったときは total == last）。
+                if (total != prev or last_total != prev_last) and (prev is not None or total == last_total):
+                    used = candidate(f"codex:{state['thread_id']}:{total}:{last_total}", last, state["thread_id"])
+        return used, quota
+    return None, None
+
+
+def build_codex_quota_event(q, run_id_cache, repo_cache):
+    worktree = q["cwd"]
+    run_id = resolve_run_id_via_ocw_run_id_file(worktree, run_id_cache)
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "event_id": str(uuid.uuid4()),
+        "idempotency_key": f"codexq:{q['thread_id']}:{q['ordinal'] if q['ordinal'] is not None else q['timestamp']}",
+        "event_type": "quota.sample",
+        "ts": q["timestamp"] or iso_utc(datetime.now(timezone.utc)),
+        "ts_local_offset": local_offset_str(),
+        "source": CODEX_SOURCE,
+        "parser_version": CODEX_PARSER_VERSION,
+        "completeness": "complete" if q["five_hour_used_pct"] is not None and q["seven_day_used_pct"] is not None else "partial",
+        "run_id": run_id,
+        "repo": repo_slug_for_cwd(worktree, repo_cache),
+        "worktree": worktree,
+        "branch": None, "head_sha": None, "workspace_id": None, "pane_id": None,
+        "role": "unknown",
+        "session_id": q["session_id"],
+        "provider": q["provider"],
+        "model": None, "phase": None, "round": None, "pr_number": None, "pr_url": None,
+        "five_hour_used_pct": q["five_hour_used_pct"],
+        "five_hour_resets_at": q["five_hour_resets_at"],
+        "seven_day_used_pct": q["seven_day_used_pct"],
+        "seven_day_resets_at": q["seven_day_resets_at"],
+        "plan_source": CODEX_SOURCE,
+    }
+
+
+def is_codex_event(event):
+    return event.get("provider") == CODEX_PROVIDER_DEFAULT or event.get("source") == CODEX_SOURCE
+
+
+def is_claude_quota_sample(event):
+    """利用枠の集計・表示が見る `quota.sample` は Claude 側（statusLine）の
+    ものだけ。Codex の rollout 由来（provider `openai`）は別の枠なので混ぜない。
+    provider が null の古いサンプルは今までどおり Claude 側として数える。"""
+    return event.get("event_type") == "quota.sample" and not is_codex_event(event)
+
+
+def is_quota_sample_of(event, provider):
+    """`provider` ("anthropic" / "openai") 側の `quota.sample` か。Claude 側は
+    is_claude_quota_sample (Codex 由来を除く)、Codex 側は Codex 由来だけ。"""
+    if provider == CODEX_PROVIDER_DEFAULT:
+        return event.get("event_type") == "quota.sample" and is_codex_event(event)
+    return is_claude_quota_sample(event)
+
+
 # ── subcommand: ingest ──────────────────────────────────────────────────
 
 def perform_ingest(root, since_dt=None):
@@ -7053,6 +7397,57 @@ def perform_ingest(root, since_dt=None):
             "offset": result["new_offset"],
         }
 
+    # Codex の rollout（ADR DOC-2611160723）。記録の置き場が無いマシンでは
+    # 何もしない（エラーも警告も出さない）。
+    codex_dir = codex_sessions_dir()
+    codex_files = sorted(codex_dir.glob("*/*/*/rollout-*.jsonl")) if codex_dir is not None and codex_dir.is_dir() else []
+    codex_usage = {}
+    codex_quota = {}
+    codex_files_with_new_data = 0
+    for file_path in codex_files:
+        key = str(file_path)
+        prev_entry = cursor_files.get(key)
+        result = read_new_lines(file_path, prev_entry)
+        if result is None:
+            continue
+        if result["lines"]:
+            codex_files_with_new_data += 1
+        # ファイルが差し替わった・縮んだ（先頭から読み直す）ときは、前回の
+        # 状態（累積トークン・モデルなど）も捨てて作り直す。
+        saved_state = prev_entry.get("codex") if isinstance(prev_entry, dict) else None
+        if result["start_offset"] == 0 or not isinstance(saved_state, dict):
+            state = new_codex_file_state()
+        else:
+            state = {**new_codex_file_state(), **saved_state}
+        for raw_line in result["lines"]:
+            try:
+                obj = json.loads(raw_line.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                quarantine_this_run(paths, since_dt, file_path, "malformed Codex rollout line", len(raw_line))
+                quarantined_count += 1
+                continue
+            if not isinstance(obj, dict):
+                continue
+            used, quota = codex_process_line(state, obj)
+            for item in (used, quota):
+                if item is None:
+                    continue
+                if since_dt is not None:
+                    line_ts = parse_ts(item["timestamp"])
+                    if line_ts is not None and line_ts < since_dt:
+                        continue
+                if item is used:
+                    codex_usage[item["message_id"]] = item
+                else:
+                    codex_quota[(item["thread_id"], item["ordinal"], item["timestamp"])] = item
+        new_cursor_files[key] = {
+            "inode": result["stat"]["inode"],
+            "size": result["stat"]["size"],
+            "mtime": result["stat"]["mtime"],
+            "offset": result["new_offset"],
+            "codex": state,
+        }
+
     role_map = resolve_herdr_role_map()
     binds, run_starts, session_attrs = load_local_pr_binds_and_run_starts(paths)
     price_tables = load_price_tables(price_table_dir())
@@ -7068,8 +7463,9 @@ def perform_ingest(root, since_dt=None):
 
     events = [
         build_usage_event(candidate, price_tables, today_str, role_map, binds, run_starts, pr_link_map, gh_cache, run_id_cache, repo_cache, session_attrs)
-        for candidate in candidates.values()
+        for candidate in [*candidates.values(), *codex_usage.values()]
     ]
+    events.extend(build_codex_quota_event(q, run_id_cache, repo_cache) for q in codex_quota.values())
 
     write_counts = bulk_write_events(paths, events) if events else {"written": 0, "replaced": 0}
 
@@ -7123,6 +7519,10 @@ def perform_ingest(root, since_dt=None):
         "files_scanned": files_scanned,
         "files_with_new_data": files_with_new_data,
         "distinct_message_ids": len(candidates),
+        "codex_files_scanned": len(codex_files),
+        "codex_files_with_new_data": codex_files_with_new_data,
+        "codex_usage_messages": len(codex_usage),
+        "codex_quota_samples": len(codex_quota),
         "written": write_counts["written"],
         "replaced": write_counts["replaced"],
         "quarantined": quarantined_count,
@@ -7150,6 +7550,12 @@ def cmd_ingest(args):
     print(f"distinct message.id in this run:     {result['distinct_message_ids']}")
     print(f"usage.message written (new):         {result['written']}")
     print(f"usage.message replaced (re-run/dup):  {result['replaced']}")
+    if result["codex_files_scanned"]:
+        # written / replaced には Codex の usage.message と quota.sample も含まれる。
+        print(f"codex rollout files scanned:         {result['codex_files_scanned']}")
+        print(f"codex rollout files with new data:   {result['codex_files_with_new_data']}")
+        print(f"codex usage.message in this run:     {result['codex_usage_messages']}")
+        print(f"codex quota.sample in this run:      {result['codex_quota_samples']}")
     if not result["since_used"]:
         print(f"transcript lines quarantined:         {result['quarantined']}")
     else:

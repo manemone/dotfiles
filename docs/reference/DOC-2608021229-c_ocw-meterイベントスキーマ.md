@@ -24,8 +24,8 @@
 | `event_type` | string | 必須 | §2の一覧のいずれか。表に無い型も forward-compatible として保存される（拒否しない） |
 | `ts` | string (RFC3339 UTC) | 必須 | 例 `2026-08-01T09:05:00.000Z`。**常にUTC**。日次ファイル名（`events/YYYY-MM-DD.jsonl`）もこの値のUTC日付で決まる（ローカル日付ではない） |
 | `ts_local_offset` | string | 必須 | イベントを記録したマシンのローカルoffset（例 `+09:00`）。集計には使わない参考情報 |
-| `source` | string | 必須（`unknown`許容） | `ocw` / `pr-review-loop` / `transcript` / `statusline` / `unknown`。呼び出し元を明示するが、**実際には多くの呼び出しでこのフラグは渡されずデフォルト値 `unknown` のまま**（下記の実例参照）。値が入っていない＝観測できていない、ではなく「呼び出し側がこのフィールドを渡さなかった」ことを意味する点に注意 |
-| `parser_version` | int \| null | `transcript`/`statusline`由来のみ必須 | 生データ解釈ロジックのバージョン。`usage.message`（ingest由来）は `INGEST_PARSER_VERSION`、`quota.sample`は `STATUSLINE_PARSER_VERSION`（現在`INGEST_PARSER_VERSION`は`2`、`STATUSLINE_PARSER_VERSION`は`1`。`agent_id`の追加で`2`へ上げた。これ以前のingestで書いた`usage.message`は`1`のまま）。それ以外の型は常に `null`（生データの「解釈」を挟まない、CLI引数をそのまま保存するイベントのため） |
+| `source` | string | 必須（`unknown`許容） | `ocw` / `pr-review-loop` / `transcript` / `statusline` / `codex-rollout` / `unknown`。呼び出し元を明示するが、**実際には多くの呼び出しでこのフラグは渡されずデフォルト値 `unknown` のまま**（下記の実例参照）。値が入っていない＝観測できていない、ではなく「呼び出し側がこのフィールドを渡さなかった」ことを意味する点に注意 |
+| `parser_version` | int \| null | `transcript`/`statusline`/`codex-rollout`由来のみ必須 | 生データ解釈ロジックのバージョン。`usage.message`（ingest由来）は `INGEST_PARSER_VERSION`、`quota.sample`は `STATUSLINE_PARSER_VERSION`（現在`INGEST_PARSER_VERSION`は`2`、`STATUSLINE_PARSER_VERSION`は`1`。`agent_id`の追加で`2`へ上げた。これ以前のingestで書いた`usage.message`は`1`のまま）。`source: "codex-rollout"` の行（`usage.message` / `quota.sample`）は `CODEX_PARSER_VERSION`（現在`1`。Claude 側の版とは独立）。それ以外の型は常に `null`（生データの「解釈」を挟まない、CLI引数をそのまま保存するイベントのため） |
 | `completeness` | string | 必須 | `complete` / `partial` / `unknown`。**判定基準は §5参照** |
 | `run_id` | string \| null | — | 実行系列ID。`bin/ocw`がworktree作成時にULID風 `<epoch>-<rand>` で採番し `OCW_RUN_ID` 環境変数で各ペインに渡す。非Herdrモードや環境変数未exportの呼び出しでは `null` |
 | `repo` | string \| null | — | `owner/name`。`git remote`から解決 |
@@ -69,7 +69,7 @@ quarantineしない設計。計画書§9.1「未知フィールドは保持す�
 | `review.round` | `skills/pr-review-loop/SKILL.md`（Phase 4、判定確定時） | `round`, `verdict`, `findings_count` | ✅ 実装済み。`verdict`は`approved`/`changes_requested`/`ambiguous`のみ |
 | `human.intervention` | `skills/pr-review-loop/SKILL.md`（規約上の停止条件に到達したとき） | `reason` | ✅ 実装済み |
 | `usage.message` | `ocw-meter ingest`（transcript走査） | `message_id`, `input_tokens`, `cache_read_input_tokens`, `cache_creation_input_tokens`, `output_tokens`, `cost_basis` | ✅ 実装済み。**`phase`/`round`は常に`null`**（上記参照） |
-| `quota.sample` | `ocw-meter snapshot-quota`（statusLineコマンドとして呼ばれる） | `plan_source` | ✅ 実装済み |
+| `quota.sample` | `ocw-meter snapshot-quota`（statusLineコマンドとして呼ばれる） | `plan_source` | ✅ 実装済み 。Codex の rollout 由来は`ocw-meter ingest`が書く（`source: "codex-rollout"`・`provider: "openai"`・`plan_source: "codex-rollout"`。Claude の利用枠の集計・表示は見ない。ADR DOC-2611160723） |
 | `block.start` | （未実装） | `cause` | ❌ **未実装** — スキーマ（`EVENT_PAYLOAD_REQUIRED`のenum制約含む）は定義されているが、これを発火する呼び出しはリポジトリ内のどこにも存在しない。計画書§8.2で「best-effort」と明記された通り、5時間枠blockedの検出は現状statusLineの`rate_limits`スナップショットからの間接推測（`quota.sample`側）のみで、専用イベントとしては未収集 |
 | `block.end` | （未実装） | `cause` | ❌ 同上 |
 | `meter.error` | `ocw-meter`自身の自己診断（lock timeout、worktree誤設定検知、ingest中の予期しない例外等） | `stage` | ✅ 実装済み。**`events/`ではなく`state/meter-errors.jsonl`という別ファイルに書かれる**（`report`のquarantine件数とは別カウントで表示される） |
@@ -143,6 +143,7 @@ phase.start/phase.endとして発火されない**:
 | フィールド | 型 | 由来 |
 |---|---|---|
 | `message_id` | string | transcriptの`message.id`。重複排除キーの元（§3） |
+| （Codex 由来の値の写し方） | — | provider `openai`・`source: "codex-rollout"`・`cost_basis: "subscription"`。`input_tokens`はOpenAIの`input_tokens`から`cached_input_tokens`を引いた値（OpenAIの入力はキャッシュ分を含むため）、`cache_read_input_tokens`=`cached_input_tokens`、`cache_creation_input_tokens`=`cache_write_input_tokens`、`output_tokens`は推論分を含んだまま、`reasoning_tokens`はその内訳（合計に足さない）。ADR DOC-2611160723 |
 | `input_tokens` | int \| null | `usage.input_tokens` = cache **miss** トークン |
 | `cache_read_input_tokens` | int \| null | cache **hit** トークン |
 | `cache_creation_input_tokens` | int \| null | Anthropicのみ非0。DeepSeekは常に0 |
@@ -211,6 +212,8 @@ phase.start/phase.endとして発火されない**:
 | `event_type` | 実際のキー | 決定論的か |
 |---|---|---|
 | `usage.message`（`ingest`由来） | `msg:<message.id>` | ✅ 決定論的。同じtranscript行を何度ingestしても1件に収束する（第5.3節の重複行問題への対策） |
+| `usage.message`（Codex の rollout 由来） | `msg:codex:<response_id>`（`token_usage_record`あり）/ `msg:codex:<thread_id>:<累積total_tokens>:<直近の応答のtotal_tokens>`（`token_count`のみの旧形式） | ✅ 決定論的（ADR DOC-2611160723） |
+| `quota.sample`（Codex の rollout 由来） | `codexq:<thread_id>:<ordinal>`（`ordinal` が無い旧形式は `<timestamp>`） | ✅ 決定論的。ファイルの先頭から読み直しても同じキーに収束する |
 | `pr.bind` | `bind:<run_id>:<pr_number>` | ✅ 決定論的（`ocw-meter bind-pr`のCLIコードと`pr-review-loop`の呼び出し双方が明示的に指定） |
 | `meter.error` | `meter-error:<stage>:<YYYY-MM-DD>` | ✅ 決定論的（1日1stage1件に自然にまとまる。自己診断が同じ理由で1日に何度も記録されないようにするため） |
 | `run.start` / `run.end` / `phase.start` / `phase.end` / `review.round` / `human.intervention` | `auto:<event_id>`（`event_id`はランダムuuid4） | ❌ **ランダム。呼び出し側が`--idempotency-key`を明示的に渡さない限り重複排除は効かない。** `skills/pr-review-loop/SKILL.md`・`bin/ocw`のいずれもこれらの型に`--idempotency-key`を渡していない（実際のコードを確認済み） |

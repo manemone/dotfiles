@@ -248,6 +248,11 @@ ocw-meter bind-pr --run <run_id> --pr <n> [--url <url>]
 
 # ~/.claude/projects/*/*.jsonl と、サブエージェントの記録 */*/subagents/agent-*.jsonl を走査し
 # usage.message イベントを生成（冪等・増分）。サブエージェントの分は親の session_id に結びつく
+# あわせて ~/.codex/sessions の Codex の rollout（OCW_METER_CODEX_SESSIONS_DIR で上書き）も走査し、
+# 1応答 = 1件の usage.message（provider=openai・source=codex-rollout・cost_basis=subscription）と、
+# 利用枠（5時間・週）の変化ごとの quota.sample（provider=openai）を書く。無ければ何もしない。
+# Claude の利用枠の集計・表示（report --quota-progress / --window / --month / --pr / dash）は Codex の quota.sample を見ない。
+# 設計の理由は ADR DOC-2611160723（codex-rollout-ingest）
 ocw-meter ingest [--since <rfc3339-ts>]
 
 # 保存済みイベントのschema検証。壊れた行はquarantineへ隔離
@@ -310,9 +315,12 @@ ocw-meter report --quota-per-pct [--periods <n>] [--no-ingest] [--json|--plain]
 # 「今の時点」の行には、平均の同じ時点の値との差と、平均の週末（リセット時点）の値を添える。--compare-weeks は --quota-progress とだけ併用できる。
 # --json は % が変わった点の列・見込み・換算（--compare-weeks 0 でなければ weekly_average: 平均の点列・使った週・週数も）、
 # --plain は同じ数値の key: value。--periods は換算に使う見積もりの期間数。
+# --provider <anthropic|openai> で誰の週の利用枠を描くかを選ぶ（既定 anthropic = 今までと同じ出力）。openai は Codex の
+# rollout から取り込んだ quota.sample だけで推移を描き、Claude の値は混ざらない。Codex には 1% あたりのトークン数の見積もりが無いので
+# 残りの % のトークン換算の欄は出さず（理由を 1 行出す）、--periods も効かない。--json / --plain には provider が出る。
 # 見積もりであり、止める・モデルを替える制御には使わない（ADR DOC-2610310237 §5）。
 # --pr / --phase / --model / --role / --window / --month / --reconcile / --since / --until / --quota-per-pct とは併用不可
-ocw-meter report --quota-progress [--periods <n>] [--compare-weeks <n>] [--no-ingest] [--json|--plain]
+ocw-meter report --quota-progress [--provider <anthropic|openai>] [--periods <n>] [--compare-weeks <n>] [--no-ingest] [--json|--plain]
 
 # 日ごとのモデル別使用量: 直近 N 日（既定 14、今日を含む）を、日付を横軸にした縦の積み上げ棒で描く（古い日が左、月曜に印と MM/DD）。
 # 日の境目はローカル時刻（UTC ではない）。量は重み付きトークン（--quota-per-pct と同じ式）。
@@ -333,7 +341,10 @@ ocw-meter report --heatmap [--weeks <n>] [--no-ingest] [--json|--plain]
 
 # 一画面のダッシュボード（人間向け）: 週の上限の推移（直近 4 週の平均の線つき）・日ごとのモデル別の縦棒・消費のヒートマップを縦に並べる。
 # 各グラフは report --quota-progress / --daily / --heatmap と同じ描画で、端末の高さ・幅に合わせる。
-# 高さが足りないときはグラフの高さを詰め、それでも足りなければヒートマップ → 日ごとの縦棒の順に省いて、省いたことを 1 行出す
+# Codex の quota.sample が 1 件でもあるときだけ、見出しに Codex の 5 時間・週の使用率とリセットまでのタイルの段と、Codex の週の
+# 利用枠のグラフ（「Codex の週の上限の推移」。Claude のグラフの下）が足される。1 件も無ければ画面は今までと同じ。
+# 高さが足りないときはグラフの高さを詰め、それでも足りなければヒートマップ → 日ごとの縦棒 → Codex のグラフの順に省いて、省いたことを 1 行出す
+# （Codex のタイルは残り、Claude の週のグラフは省かない）
 # （パイプ・ファイルなど高さが取れないときは詰めない）。report と同じく先頭で ingest し（--no-ingest で飛ばせる）、失敗しても止まらず注記に出る。
 # --watch [秒] は既定 300 秒ごとに ingest して描き直す（ANSI のエスケープで画面を消す。描き終わってから数えるので ingest が長くても重ならない。
 # 失敗しても保存済みの集計で描く）。端末でないときの --watch はエラー、Ctrl-C は終了コード 0。
