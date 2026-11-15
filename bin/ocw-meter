@@ -6545,7 +6545,8 @@ def resolve_herdr_role_map():
 def _accumulate_session_attr_sample(raw, event):
     """Feeds one already-decoded event into `raw` (session_id -> {"run_id":
     [(ts, value), ...], "role": [...]}, unsorted) if it's a quota.sample
-    carrying a session_id. Shared by the ingest-side single-pass scan
+    carrying a session_id. Codex rollout 由来（provider openai）は run.start
+    逆転チェックを通っていないので補完に使わない（ADR §2.6）。Shared by the ingest-side single-pass scan
     (`load_local_pr_binds_and_run_starts`, which decodes lines itself) and
     the report-side scan (`session_attrs_from_events`, over already-decoded
     `valid_events`) so the extraction rule lives in exactly one place.
@@ -6554,7 +6555,7 @@ def _accumulate_session_attr_sample(raw, event):
     a quota.sample can carry one without the other (OCW_RUN_ID set but
     OCW_ROLE unset, or vice versa — see record_quota_sample), so requiring
     both together would throw away usable half-samples."""
-    if event.get("event_type") != "quota.sample":
+    if not is_claude_quota_sample(event):
         return
     session_id = event.get("session_id")
     if not isinstance(session_id, str) or not session_id:
@@ -6671,7 +6672,7 @@ def load_local_pr_binds_and_run_starts(paths):
                 ts = parse_ts(obj.get("ts"))
                 if ts is not None:
                     run_starts[run_id] = ts
-            elif event_type == "quota.sample" and is_claude_quota_sample(obj):
+            elif event_type == "quota.sample":
                 _accumulate_session_attr_sample(session_attrs_raw, obj)
     return binds, run_starts, _finalize_session_attrs(session_attrs_raw)
 

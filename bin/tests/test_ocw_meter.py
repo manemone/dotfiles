@@ -6354,6 +6354,24 @@ class CodexRolloutIngestTests(OcwMeterTestCase):
         self.assertEqual(view(after), view(before))
         self.assertEqual(view(after)["current_pct"], 39)
 
+        # report 側の session_id による run_id の補完にも入らない。使い回した worktree の新しい run
+        # （run.start が後）へ、その前に動かした Codex の使用量が帰属しない。
+        worktree = make_ocw_style_worktree(self.tmpdir.name, run_id="RUN-NEW-999")
+        run_meter(["event", "run.start", "--idempotency-key", "reuse-run-start", "--run-id", "RUN-NEW-999",
+                   "--ts", "2026-11-16T12:00:00.000Z", "--base-ref", "origin/main", "--command", "codex"], self.home)
+        run_meter(["event", "pr.bind", "--idempotency-key", "reuse-bind", "--run-id", "RUN-NEW-999",
+                   "--pr-number", "999", "--pr-url", "https://example.invalid/pull/999"], self.home)
+        early = "2026-11-16T00:00:00.000Z"
+        self._write("reuse-thread", [
+            self._meta("reuse-thread", "0.150.1", cwd=str(worktree)),
+            self._line(early, 1, "turn_context", {"model": "gpt-5.4"}),
+            self._token_count(early, 2, self._usage(10, 0, 1, 0), {"total_tokens": 11}, self._rate_limits(5.0, 6.0)),
+        ])
+        self.assertEqual(self._ingest().returncode, 0)
+        self.assertIsNone(next(e for e in self._events("usage.message") if e["session_id"] == "reuse-thread")["run_id"])
+        counts = json.loads(run_meter(["report", "--json", "--no-ingest"], self.home).stdout)["attribution_run_id_counts"]
+        self.assertEqual(counts["session_id"], 0)
+
     def test_ingest_without_a_codex_directory_behaves_as_before(self):
         result = self._ingest()
         self.assertEqual(result.returncode, 0, result.stderr)
