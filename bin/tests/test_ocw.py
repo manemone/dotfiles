@@ -201,6 +201,9 @@ def run_ocw(args, cwd, meter_on_path=False, meter_home=None, extra_env=None, pat
     env = {
         "PATH": ":".join(path_dirs),
         "HOME": os.environ.get("HOME", "/root"),
+        # ocw edits Codex's config.toml; never let a test reach the real one.
+        # A nonexistent dir makes ocw skip the Codex step entirely.
+        "CODEX_HOME": "/nonexistent-ocw-test-codex-home",
     }
     if meter_home is not None:
         env["OCW_METER_HOME"] = str(meter_home)
@@ -565,6 +568,67 @@ class RunIdAndMeterEventsTests(OcwTestCase):
         ends = [e for e in events if e["event_type"] == "run.end" and e["run_id"] == run_id]
         self.assertEqual(len(ends), 1, events)
         self.assertEqual(ends[0]["outcome"], "failure")
+
+
+class CodexTrustTests(OcwTestCase):
+    """ocw adds a Codex trust entry per worktree and removes only its own."""
+
+    def setUp(self):
+        super().setUp()
+        self.codex_home = pathlib.Path(self.tmpdir.name) / "codex-home"
+        self.config = self.codex_home / "config.toml"
+
+    def ocw(self, *args):
+        return run_ocw(
+            list(args), self.repo_root, meter_home=self.meter_home,
+            extra_env={"CODEX_HOME": str(self.codex_home)},
+        )
+
+    def worktree_path(self, result):
+        return re.search(r"^worktree:\s+(.+)$", result.stdout, re.M).group(1)
+
+    def test_add_is_idempotent_keeps_existing_and_rm_removes_only_own(self):
+        self.codex_home.mkdir()
+        original = '[tui]\nx = 1\n\n[projects."/human/own"]\ntrust_level = "trusted"'
+        self.config.write_text(original)  # no trailing newline on purpose
+
+        result = self.ocw("widget-maker")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        wt = self.worktree_path(result)
+        header = f'[projects."{wt}"]'
+        text = self.config.read_text()
+        self.assertTrue(text.startswith(original + "\n"))
+        self.assertEqual(text.count(header), 1)
+
+        result = self.ocw("rm", "-f", "widget-maker")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.config.read_text().rstrip("\n"), original)
+
+    def test_existing_human_entry_for_same_path_is_untouched(self):
+        self.codex_home.mkdir()
+        wt = str(pathlib.Path(self.worktree_dir_for("widget-maker")))
+        content = f'[projects."{wt}"]\ntrust_level = "untrusted"\n'
+        self.config.write_text(content)
+        result = self.ocw("widget-maker")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.config.read_text(), content)
+        result = self.ocw("rm", "-f", "widget-maker")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.config.read_text(), content)
+
+    def worktree_dir_for(self, name):
+        # Dry knowledge of the default layout is avoided: create once, read the path, remove.
+        result = self.ocw(name)
+        wt = self.worktree_path(result)
+        self.ocw("rm", "-f", name)
+        if self.config.exists():
+            self.config.unlink()
+        return wt
+
+    def test_skipped_when_codex_dir_absent(self):
+        result = self.ocw("widget-maker")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(self.codex_home.exists())
 
 
 class RunIdPersistenceFailOpenTests(OcwTestCase):
