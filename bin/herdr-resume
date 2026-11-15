@@ -1,0 +1,301 @@
+#!/usr/bin/env python3
+"""herdr-resume — WSL / Windows の再起動で止まった Claude の会話のうち、再開してよいものだけへ再開を送る。
+
+  herdr-resume plan      判定だけ出す（何も送らない）
+  herdr-resume recover   判定して送り、last-recovery.json を書く。同じ boot_id では1回だけ送る
+
+入力: claude/hooks/session-state.sh が書く sessions/<session_id>.json（落ちる直前の状態）と、
+      `herdr pane list`（再起動後のペイン。agent_session.value が Claude の session_id）。
+出力: ${XDG_STATE_HOME:-~/.local/state}/reboot-recovery/last-recovery.json（recover のみ）。
+
+判定（decide）は入力から出力を返す純粋な関数。迷ったら送らない。
+計画書 DOC-2611151244 設計2、ADR DOC-2611151247 を参照。
+標準ライブラリだけ。
+"""
+
+import argparse
+import json
+import os
+import subprocess
+import sys
+import tempfile
+import time
+from pathlib import Path
+
+REPORT_VERSION = 1
+# CronCreate の巡回は7日で期限切れ（ツールの仕様）。それより古い巡回は無効とみなす。
+CRON_MAX_AGE = 7 * 24 * 3600
+# 作業中の記録が古すぎるときは、記録が当てにならない（途中で別の理由で止まった等）。
+WORKING_MAX_AGE = 24 * 3600
+# 待機中の記録の古さの上限（巡回の有効期限に合わせる）。
+IDLE_MAX_AGE = CRON_MAX_AGE
+
+SEND_TIMEOUT_MS = 10000
+
+RESUME_TEXT = (
+    "Windows（または WSL）の再起動で、この会話の作業は途中で中断されました。"
+    "再起動の直前に行っていた操作（push・PR 作成・マージ・ファイルの書き込みなど）が"
+    "完了したかを、git の状態や gh などで確かめてから、中断した作業の続きを進めてください。"
+    "CronCreate で登録していた巡回は再起動で消えているので、登録していたなら計画書・復帰メモの手順で"
+    "登録し直してください。人間の承認が要る操作は、これまでどおり承認を待ってください。"
+)
+
+CRON_TEXT = (
+    "Windows（または WSL）の再起動で、この会話は待機中のまま止まっていました。"
+    "CronCreate で登録していた巡回は再起動で消えているので、計画書・復帰メモの手順に従って"
+    "巡回を登録し直し、巡回の仕事を続けてください。"
+    "再起動の直前の操作が完了していたかも、必要なら git の状態や gh などで確かめてください。"
+    "人間の承認が要る操作は、これまでどおり承認を待ってください。"
+)
+
+
+def state_root(env=None):
+    env = os.environ if env is None else env
+    base = env.get("XDG_STATE_HOME") or os.path.join(env.get("HOME", "~"), ".local", "state")
+    return Path(os.path.expanduser(base)) / "reboot-recovery"
+
+
+def decide(record, pane_status, now):
+    """1つの Claude の会話の再開判定。純粋な関数。
+
+    record: sessions/<id>.json の中身（無ければ None）
+    pane_status: 再起動後の Herdr の agent_status（"idle" など）
+    now: UNIX 秒
+    戻り値: dict(action="send"|"skip", kind="resume"|"cron"|None, code, reason, needs_human)
+    """
+
+    def skip(code, reason, human):
+        return {"action": "skip", "kind": None, "code": code, "reason": reason, "needs_human": human}
+
+    def send(kind, code, reason):
+        return {"action": "send", "kind": kind, "code": code, "reason": reason, "needs_human": False}
+
+    # 承認待ち・質問待ちは、記録でも Herdr の現在の状態でも、何より先に止める。
+    if pane_status == "blocked":
+        return skip("blocked_now", "Herdr 上で承認待ち・質問待ちになっている", True)
+    if not isinstance(record, dict) or not record.get("state"):
+        return skip("no_record", "状態の記録が無い。判定できないので人間が見る", True)
+    state = record["state"]
+    updated = record.get("updated_at")
+    if not isinstance(updated, (int, float)) or updated > now + 60:
+        return skip("bad_record", "記録の時刻が読めない。判定できないので人間が見る", True)
+    age = now - updated
+
+    if state == "blocked":
+        return skip("was_blocked", "落ちる直前は人間の承認待ち・質問待ちだった", True)
+    if state == "ended":
+        return skip("ended", "人間が終えた会話", False)
+    if pane_status != "idle":
+        # 戻った直後は idle のはず。working なら既に動いている、unknown などは状態が読めない。
+        return skip("pane_not_idle", "再起動後のペインが待機中でない（%s）。送らない" % pane_status, True)
+
+    if state == "working":
+        if age > WORKING_MAX_AGE:
+            return skip("stale", "作業中の記録が古すぎる。判定できないので人間が見る", True)
+        return send("resume", "was_working", "作業中に落ちた")
+    if state == "idle":
+        if age > IDLE_MAX_AGE:
+            return skip("stale", "待機中の記録が古すぎる。判定できないので人間が見る", True)
+        crons = record.get("crons")
+        if isinstance(crons, dict) and any(
+            isinstance(t, (int, float)) and now - t <= CRON_MAX_AGE for t in crons.values()
+        ):
+            return send("cron", "idle_with_cron", "待機中で、有効な巡回があった")
+        return skip("idle_no_cron", "待機中で巡回も無い（人間の返答待ちか完了）", False)
+    return skip("bad_record", "記録の状態が読めない（%s）。人間が見る" % state, True)
+
+
+def run(cmd, timeout=30):
+    return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, check=False)
+
+
+def herdr_json(args):
+    p = run(["herdr", *args])
+    if p.returncode != 0:
+        raise RuntimeError("herdr %s: %s" % (" ".join(args), (p.stderr or p.stdout).strip()[:200]))
+    return json.loads(p.stdout)
+
+
+def list_panes():
+    """Claude のペインの一覧。[{pane_id, session_id, status, workspace, cwd}]"""
+    panes = herdr_json(["pane", "list"])["result"]["panes"]
+    labels = {}
+    try:
+        for w in herdr_json(["workspace", "list"])["result"]["workspaces"]:
+            labels[w["workspace_id"]] = w.get("label")
+    except (RuntimeError, ValueError, KeyError):
+        pass
+    out = []
+    for p in panes:
+        if p.get("agent") != "claude":
+            if p.get("agent"):
+                out.append({"pane_id": p["pane_id"], "session_id": None, "agent": p["agent"],
+                            "status": p.get("agent_status"), "workspace": labels.get(p.get("workspace_id")),
+                            "cwd": p.get("cwd")})
+            continue
+        sess = p.get("agent_session") or {}
+        out.append({"pane_id": p["pane_id"], "session_id": sess.get("value"), "agent": "claude",
+                    "status": p.get("agent_status"), "workspace": labels.get(p.get("workspace_id")),
+                    "cwd": p.get("cwd")})
+    return out
+
+
+def load_record(root, session_id):
+    if not session_id:
+        return None
+    try:
+        with open(root / "sessions" / (session_id + ".json"), encoding="utf-8") as f:
+            rec = json.load(f)
+        return rec if isinstance(rec, dict) else None
+    except (OSError, ValueError):
+        return None
+
+
+def current_boot_id():
+    forced = os.environ.get("HERDR_RESUME_BOOT_ID")
+    if forced:
+        return forced
+    try:
+        return Path("/proc/sys/kernel/random/boot_id").read_text().strip()
+    except OSError:
+        return None
+
+
+def windows_last_boot():
+    """Windows の最終起動時刻（ISO 8601）。取れなければ None（通知の添え物なので失敗しても進む）。"""
+    forced = os.environ.get("HERDR_RESUME_WINDOWS_BOOT")
+    if forced is not None:
+        return forced or None
+    try:
+        p = run(["powershell.exe", "-NoProfile", "-Command",
+                 "(Get-CimInstance Win32_OperatingSystem).LastBootUpTime.ToString('o')"], timeout=20)
+        return p.stdout.strip() or None if p.returncode == 0 else None
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+def build_plan(root, panes, now):
+    items = []
+    for p in panes:
+        base = {"pane_id": p["pane_id"], "session_id": p["session_id"], "workspace": p["workspace"],
+                "cwd": p["cwd"]}
+        if p["agent"] != "claude":
+            d = {"action": "skip", "kind": None, "code": "not_claude",
+                 "reason": "Claude 以外のエージェント。判定できないので人間が見る", "needs_human": True}
+        else:
+            d = decide(load_record(root, p["session_id"]), p["status"], now)
+        items.append({**base, **d})
+    return items
+
+
+def atomic_write(path, obj):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=".tmp-")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(obj, f, ensure_ascii=False, indent=2)
+            f.write("\n")
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def send_prompt(pane_id, text):
+    """再開を1回だけ送る。timeout / stalled でも再送しない（届いているかもしれない）。"""
+    try:
+        p = run(["herdr", "agent", "prompt", pane_id, text, "--wait", "--timeout", str(SEND_TIMEOUT_MS)],
+                timeout=SEND_TIMEOUT_MS // 1000 + 20)
+    except (OSError, subprocess.SubprocessError) as e:
+        return "unconfirmed", str(e)[:200]
+    out = (p.stdout + p.stderr).strip()
+    if p.returncode == 0:
+        return "sent", ""
+    if "agent_blocked" in out:
+        return "refused_blocked", "送信前に承認待ちと判明したので送っていない"
+    # timeout / agent_prompt_stalled など。届いたかは分からないので再送しない。
+    return "unconfirmed", out[:200]
+
+
+def recover(root, now, boot_id, win_boot):
+    report_path = root / "last-recovery.json"
+    try:
+        prev = json.loads(report_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        prev = None
+    if boot_id and isinstance(prev, dict) and prev.get("boot_id") == boot_id:
+        prev["already_recovered"] = True
+        return prev
+
+    plan = build_plan(root, list_panes(), now)
+    report = {"version": REPORT_VERSION, "boot_id": boot_id, "windows_last_boot": win_boot,
+              "recovered_at": now, "status": "in_progress", "sent": [], "not_sent": []}
+    # 送る前に印を付ける。途中で落ちて再実行されても、同じ boot_id では2度送らない。
+    atomic_write(report_path, report)
+
+    for it in plan:
+        if it["action"] != "send":
+            report["not_sent"].append({k: it[k] for k in
+                                       ("pane_id", "session_id", "workspace", "cwd", "code", "reason", "needs_human")})
+            continue
+        text = RESUME_TEXT if it["kind"] == "resume" else CRON_TEXT
+        result, detail = send_prompt(it["pane_id"], text)
+        entry = {k: it[k] for k in ("pane_id", "session_id", "workspace", "cwd")}
+        entry.update({"kind": it["kind"], "reason": it["reason"], "result": result})
+        if detail:
+            entry["detail"] = detail
+        if result == "refused_blocked":
+            entry.update({"code": "blocked_now", "needs_human": True})
+            report["not_sent"].append(entry)
+        else:
+            report["sent"].append(entry)
+    report["status"] = "done"
+    atomic_write(report_path, report)
+    return report
+
+
+def print_summary(items):
+    for it in items:
+        mark = "送る  " if it["action"] == "send" else "送らない"
+        print("%s %-8s %-14s %s  (%s)" % (mark, it["pane_id"], it["code"], it["reason"],
+                                           it.get("workspace") or it.get("cwd") or ""))
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(prog="herdr-resume", description=__doc__.split("\n")[0])
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    for name in ("plan", "recover"):
+        sp = sub.add_parser(name)
+        sp.add_argument("--json", action="store_true", help="JSON で出す")
+    args = ap.parse_args(argv)
+
+    root = state_root()
+    now = int(time.time())
+    try:
+        if args.cmd == "plan":
+            items = build_plan(root, list_panes(), now)
+            if args.json:
+                print(json.dumps({"boot_id": current_boot_id(), "items": items}, ensure_ascii=False, indent=2))
+            else:
+                print_summary(items)
+            return 0
+        report = recover(root, now, current_boot_id(), windows_last_boot())
+    except (RuntimeError, OSError, ValueError, subprocess.SubprocessError) as e:
+        print("herdr-resume: %s" % e, file=sys.stderr)
+        return 1
+    if args.json:
+        print(json.dumps(report, ensure_ascii=False, indent=2))
+    else:
+        if report.get("already_recovered"):
+            print("この起動（boot_id）では回復済み。何も送っていない。")
+        print("送った: %d 件 / 送らなかった: %d 件（要確認 %d 件）" % (
+            len(report["sent"]), len(report["not_sent"]),
+            sum(1 for x in report["not_sent"] if x.get("needs_human"))))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

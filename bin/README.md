@@ -64,7 +64,7 @@ which dfdown
 
 The deploy script:
 - Creates `~/bin/` directory if missing
-- Symlinks `ocw`, `claude-ds`, `ocw-meter`, `persona`, `dfup`, and `dfdown` into `~/bin/`
+- Symlinks `ocw`, `claude-ds`, `ocw-meter`, `persona`, `dfup`, `dfdown`, and `herdr-resume` into `~/bin/`
   （`dfxfer-lib.sh` は `dfup` / `dfdown` が実体のパスから source する共有ライブラリなので、`~/bin` へは symlink しません）
 
 ## 3. What's Included
@@ -894,6 +894,23 @@ dfdown -n          # rsync の dry-run
 
 `dfdown` は `--delete` も `--remove-source-files` も使わない。**リモートの原本も、
 ローカルに既にあるファイルも、このコマンドが消すことはない。** 片道のコピーに徹している。
+
+### herdr-resume
+
+WSL / Windows の再起動で止まった Claude の会話のうち、**再開してよいものだけ**へ再開の指示を送る（Python 3、標準ライブラリだけ）。
+計画書 DOC-2611151244 の孫2。判定の根拠と記録の方式は ADR DOC-2611151247 を参照。
+
+```bash
+herdr-resume plan      # 判定だけ出す（何も送らない）。--json あり
+herdr-resume recover   # 判定して送り、last-recovery.json を書く。同じ boot_id では1回だけ送る
+```
+
+- 入力は `claude/hooks/session-state.sh`（Claude Code のフック）が書く `${XDG_STATE_HOME:-~/.local/state}/reboot-recovery/sessions/<session_id>.json`
+  と `herdr pane list`。**フックは `claude/settings.json` に登録されるので、配布後はすべての Claude の会話で動く**
+- 判定: 作業中だった・巡回 cron が有効な待機中だった会話には送る。承認待ち・質問待ちだった会話、巡回の無い待機中、記録の無い会話、
+  Claude 以外には送らない（要確認として報告に載せる）。迷ったら送らない
+- 出力: `reboot-recovery/last-recovery.json`（`boot_id`・`windows_last_boot`・`sent`・`not_sent`〈理由と `needs_human`〉）
+- `HERDR_RESUME_BOOT_ID` で `boot_id` を差し替えられる（再起動を模す手での確認用）
 
 ## 4. Customization
 

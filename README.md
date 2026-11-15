@@ -9,7 +9,7 @@ Easily deployable, cross-platform dotfiles managed with [mise](https://mise.jdx.
 | **Zsh** | Shell | [Antidote](https://github.com/mattmc3/antidote) |
 | **NeoVim** | Editor | [lazy.nvim](https://github.com/folke/lazy.nvim) |
 | **tmux** | Terminal multiplexer | — (built-in) |
-| **bin** | Custom CLI tools (ocw, claude-ds, ocw-meter, persona, dfup, dfdown) | — (standalone scripts) |
+| **bin** | Custom CLI tools (ocw, claude-ds, ocw-meter, persona, dfup, dfdown, herdr-resume) | — (standalone scripts) |
 | **claude** | Claude Code config | — (built-in) |
 | **skills** | AI agent skills, shared across Claude Code / Codex / OpenCode | — (built-in) |
 | **codex** | Codex CLI global instructions (`AGENTS.md` symlinked from a generated concatenation of `claude/CLAUDE.md` + machine-local personalization) | — (built-in) |
