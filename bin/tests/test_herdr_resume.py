@@ -118,14 +118,19 @@ class RecoverTest(unittest.TestCase):
         (self.t / "panes.json").write_text(json.dumps({"result": {"panes": [
             pane("w1:p1", "s-blocked", "idle"), pane("w1:p2", "s-work", "idle"),
             pane("w1:p3", "s-cron", "idle"), pane("w1:p4", "s-idle", "idle"),
-            pane("w1:p5", "s-none", "idle"), pane("w1:p6", "s-esc", "idle")]}}))
+            pane("w1:p5", "s-none", "idle"), pane("w1:p6", "s-esc", "idle"),
+            # agent なしで cwd に claude を含むだけのシェルは、起動中の Claude と見なして待たない・載せない
+            {"pane_id": "w1:p7", "agent_status": "unknown", "workspace_id": "w1", "cwd": "/x",
+             "terminal_title": "~/projects/dotfiles/master/claude/hooks"},
+            {"pane_id": "w1:p8", "agent_status": "unknown", "workspace_id": "w1", "cwd": "/x",
+             "terminal_title": "u: claude --resume abc"}]}}))
         self.run_cmd("recover", "--json")
         sent = (self.t / "sent.log").read_text().splitlines()
         self.assertEqual(len(sent), 2)  # 作業中と巡回あり待機中だけ
         report = json.loads((self.state / "reboot-recovery" / "last-recovery.json").read_text())
         self.assertEqual({e["pane_id"] for e in report["sent"]}, {"w1:p2", "w1:p3"})
         not_sent = {e["pane_id"]: e for e in report["not_sent"]}
-        self.assertEqual(set(not_sent), {"w1:p1", "w1:p4", "w1:p5", "w1:p6"})
+        self.assertEqual(set(not_sent), {"w1:p1", "w1:p4", "w1:p5", "w1:p6", "w1:p8"})
         self.assertTrue(not_sent["w1:p1"]["needs_human"])
         self.assertEqual(not_sent["w1:p6"]["code"], "interrupted")
         self.assertEqual(report["boot_id"], "boot-1")

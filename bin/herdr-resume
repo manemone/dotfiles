@@ -16,6 +16,7 @@
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -31,6 +32,9 @@ WORKING_MAX_AGE = 24 * 3600
 IDLE_MAX_AGE = CRON_MAX_AGE
 
 SEND_TIMEOUT_MS = 10000
+# 起動中の Claude のペインの題名は「ユーザー名: claude --resume <id>」の形。コマンドとしての claude だけに当てる
+# （cwd のパスの一部に claude を含むだけのシェルは対象外）。
+BOOTING_TITLE = re.compile(r"(^|:\s*)claude(\s|$)")
 
 RESUME_TEXT = (
     "Windows（または WSL）の再起動で、この会話の作業は途中で中断されました。"
@@ -164,7 +168,7 @@ def list_panes():
     for p in panes:
         if p.get("agent") != "claude":
             title = p.get("terminal_title") or ""
-            if not p.get("agent") and "claude" in title:
+            if not p.get("agent") and BOOTING_TITLE.search(title):
                 # Claude を起動中（まだ Herdr が agent と認識していない）かもしれないペイン
                 out.append({"pane_id": p["pane_id"], "session_id": None, "agent": None, "booting": True,
                             "status": p.get("agent_status"), "workspace": labels.get(p.get("workspace_id")),
