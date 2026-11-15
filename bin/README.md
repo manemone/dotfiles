@@ -134,7 +134,7 @@ ocw help all     # 全 topic を連結
 **Codex の信頼設定。** `ocw` はワークツリーを作るとき、`~/.codex/config.toml`（`CODEX_HOME` があればそちら）へ
 そのワークツリーのパスだけの `trust_level = "trusted"` を追記し、`ocw rm` で自分が足した分だけ消す
 （目印の注釈行で見分ける）。Codex は信頼をパスごとに覚えるため、これが無いとワークツリーごとに
-「Trust this folder?」が出て止まる。`~/.codex` が無ければ何もしない。既に同じパスの項目があれば触らない。
+「Trust this folder?」が出て止まる。`~/.codex` が無ければ何もしない。既に同じパスの項目、またはリポジトリ根の項目（`untrusted` を含む）があれば足さない。
 `codex/deploy.sh` と `deploy-all.sh` は `config.toml` を書かないので、足した項目は消えない。
 
 ### UI 確認役に頼む（`ocw checker`）

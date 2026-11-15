@@ -625,6 +625,45 @@ class CodexTrustTests(OcwTestCase):
             self.config.unlink()
         return wt
 
+    def test_repo_root_setting_blocks_adding_worktree_entry(self):
+        self.codex_home.mkdir()
+        content = f'[projects."{self.repo_root}"]\ntrust_level = "untrusted"\n'
+        self.config.write_text(content)
+        result = self.ocw("widget-maker")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.config.read_text(), content)
+
+    def test_symlinked_worktree_dir_uses_real_path_and_rm_removes_it(self):
+        self.codex_home.mkdir()
+        base = pathlib.Path(self.tmpdir.name)
+        (base / "real").mkdir()
+        (base / "link").symlink_to(base / "real")
+        git_config = subprocess.run(
+            ["git", "config", "ocw.worktreeDir", f"{base}/link/wt-{{name}}"],
+            cwd=self.repo_root, capture_output=True, text=True)
+        self.assertEqual(git_config.returncode, 0, git_config.stderr)
+        result = self.ocw("widget-maker")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        real = str((base / "real").resolve() / "wt-widget-maker")
+        self.assertIn(f'[projects."{real}"]', self.config.read_text())
+        result = self.ocw("rm", "-f", "widget-maker")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("ocw-managed", self.config.read_text())
+
+    def test_path_with_quote_and_backslash_is_removed(self):
+        self.codex_home.mkdir()
+        base = pathlib.Path(self.tmpdir.name) / 'we"ird\\dir'
+        base.mkdir()
+        subprocess.run(
+            ["git", "config", "ocw.worktreeDir", f"{base}/wt-{{name}}"],
+            cwd=self.repo_root, check=True)
+        result = self.ocw("widget-maker")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("ocw-managed", self.config.read_text())
+        result = self.ocw("rm", "-f", "widget-maker")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("ocw-managed", self.config.read_text())
+
     def test_skipped_when_codex_dir_absent(self):
         result = self.ocw("widget-maker")
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -917,6 +956,7 @@ class VscodeAutoLaunchRegressionTests(OcwTestCase):
         env = {
             "PATH": f"{detect_dir}:{':'.join(BASE_PATH_DIRS)}",
             "HOME": os.environ.get("HOME", "/root"),
+            "CODEX_HOME": "/nonexistent-ocw-test-codex-home",
         }
         result = subprocess.run(
             [str(OCW), "widget-maker"],

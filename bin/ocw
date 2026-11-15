@@ -1304,13 +1304,30 @@ codex_trust_header() {
   printf '[projects."%s"]\n' "$escaped"
 }
 
+# Codex matches on the real path, and `git worktree list` (what `ocw rm`
+# sees) reports it too, so resolve symlinks while the directory still exists.
+# Callers must therefore run this before the worktree is removed.
+codex_trust_real_path() {
+  (cd -P -- "$1" 2>/dev/null && pwd -P) || printf '%s\n' "$1"
+}
+
 codex_trust_add() {
-  local worktree_dir="$1"
+  local worktree_dir=""
   local config=""
   local header=""
+  local root_header=""
 
+  worktree_dir="$(codex_trust_real_path "$1")"
   config="$(codex_trust_config_path)" || return 0
   header="$(codex_trust_header "$worktree_dir")"
+  root_header="$(codex_trust_header "$(codex_trust_real_path "$repo_root")")"
+
+  # The repo root already has a setting (trusted or untrusted): Codex applies
+  # it to the worktree, and adding our own entry could override a human's
+  # `untrusted`. Leave it alone.
+  if [ -f "$config" ] && grep -Fxq -- "$root_header" "$config" 2>/dev/null; then
+    return 0
+  fi
 
   if [ -f "$config" ] && grep -Fxq -- "${header}" "$config" 2>/dev/null; then
     return 0
@@ -1330,11 +1347,12 @@ codex_trust_add() {
 
 # Removes only a block ocw added: marker line + header + `trust_level` line.
 codex_trust_remove() {
-  local worktree_dir="$1"
+  local worktree_dir=""
   local config=""
   local header=""
   local tmp=""
 
+  worktree_dir="$(codex_trust_real_path "$1")"
   config="$(codex_trust_config_path)" || return 0
   [ -f "$config" ] || return 0
   header="$(codex_trust_header "$worktree_dir")"
@@ -1342,11 +1360,14 @@ codex_trust_remove() {
   grep -Fxq -- "$CODEX_TRUST_MARKER" "$config" 2>/dev/null || return 0
 
   tmp="$(mktemp "${config}.ocw.XXXXXX" 2>/dev/null)" || return 0
-  if awk -v marker="$CODEX_TRUST_MARKER" -v header="$header" '
+  # Values go through ENVIRON, not `awk -v`, which would re-interpret the
+  # backslash escapes already in $header.
+  if OCW_TRUST_MARKER="$CODEX_TRUST_MARKER" OCW_TRUST_HEADER="$header" awk '
     { lines[NR] = $0 }
     END {
       for (i = 1; i <= NR; i++) {
-        if (lines[i] == marker && lines[i + 1] == header &&
+        if (lines[i] == ENVIRON["OCW_TRUST_MARKER"] &&
+            lines[i + 1] == ENVIRON["OCW_TRUST_HEADER"] &&
             lines[i + 2] == "trust_level = \"trusted\"") {
           i += 2
           continue
@@ -1385,14 +1406,14 @@ rollback_created_worktree() {
       >/dev/null 2>&1
   fi
 
+  codex_trust_remove "$worktree_dir"
+
   if git -C "$repo_root" worktree list --porcelain |
     grep -Fqx "worktree ${worktree_dir}"; then
     git -C "$repo_root" \
       worktree remove --force "$worktree_dir" \
       >/dev/null 2>&1
   fi
-
-  codex_trust_remove "$worktree_dir"
 
   if git -C "$repo_root" \
     show-ref --verify --quiet "refs/heads/${branch}"; then
@@ -2122,6 +2143,8 @@ remove_worktree() {
   local run_end_outcome="failure"
   [ "$MERGE_CHECK_RESULT" = "merged" ] && run_end_outcome="success"
 
+  codex_trust_remove "$worktree_dir"
+
   if [ "$force" = "true" ]; then
     git -C "$repo_root" \
       worktree remove --force "$worktree_dir"
@@ -2133,8 +2156,6 @@ remove_worktree() {
     git -C "$repo_root" \
       worktree remove "$worktree_dir"
   fi
-
-  codex_trust_remove "$worktree_dir"
 
   # show-ref first: an unborn-branch worktree (`git worktree add -b <name>
   # --orphan`, or one created against an empty bare repo) reports a real
