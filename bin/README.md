@@ -12,6 +12,7 @@
 | `persona` | このマシンでの人格のパーソナライズ（口調など。`CLAUDE.machine.md`）を編集し、Codex 向け生成物（`AGENTS.md`）を再生成する単一の入口 |
 | `dfup` | ローカルマシン → 共有サーバのファイルアップロード。`~/dfxfer/<宛先>/out/` に置いたものを、引数なし1コマンドでリモートの `~/dfxfer/inbox/` へ送る |
 | `dfdown` | 共有サーバ → ローカルマシンのファイルダウンロード。リモートの `~/dfxfer/outbox/` の中身を、引数なし1コマンドで `~/dfxfer/<宛先>/in/` へ落とす |
+| `rebootctl` | Windows の勝手な再起動からの復帰の入口。`status` で再起動ポリシー・最終起動時刻・Herdr の生死を読み、`setup` で管理者 PowerShell に貼るコマンドを表示し、`boot` で WSL 起動後に Herdr を起こして会話の再開を呼ぶ |
 
 ## 1. Requirements
 
@@ -64,7 +65,7 @@ which dfdown
 
 The deploy script:
 - Creates `~/bin/` directory if missing
-- Symlinks `ocw`, `claude-ds`, `ocw-meter`, `persona`, `dfup`, `dfdown`, and `herdr-resume` into `~/bin/`
+- Symlinks `ocw`, `claude-ds`, `ocw-meter`, `persona`, `dfup`, `dfdown`, `herdr-resume`, and `rebootctl` into `~/bin/`
   （`dfxfer-lib.sh` は `dfup` / `dfdown` が実体のパスから source する共有ライブラリなので、`~/bin` へは symlink しません）
 
 ## 3. What's Included
@@ -911,6 +912,48 @@ herdr-resume recover   # 判定して送り、last-recovery.json を書く。同
   Claude 以外には送らない（要確認として報告に載せる）。迷ったら送らない
 - 出力: `reboot-recovery/last-recovery.json`（`boot_id`・`windows_last_boot`・`sent`・`not_sent`〈理由と `needs_human`〉）
 - `HERDR_RESUME_BOOT_ID` で `boot_id` を差し替えられる（再起動を模す手での確認用）
+### 3.7 rebootctl — Windows の勝手な再起動からの復帰の入口
+
+Windows Update の再起動で WSL が落ちたあと、人間がサインインしなくても Herdr を起こし、止まった会話の再開へつなぐ。
+採用理由・効く設定と効かない設定・方式の比較は ADR DOC-2611151248。
+
+#### 人間が最初に1回やること
+
+```bash
+rebootctl setup    # 表示だけ。何も実行しない
+```
+
+出力を**管理者 PowerShell** に貼る。(1) 再起動止めのポリシー（`AUOptions=4` と `NoAutoRebootWithLoggedOnUsers=1`）と、
+(2) 起動時のタスク `dotfiles-reboot-recovery`（サインイン無しで `rebootctl boot --hold` を走らせる）が入る。
+タスクは配布された `~/bin/rebootctl` を呼ぶので、先に `deploy-all.sh` で配っておくこと。
+
+#### 確かめ方
+
+```bash
+rebootctl status         # 人が読める形
+rebootctl status --json  # 巡回など機械向け
+```
+
+Windows 側（ポリシー・アクティブ時間・再起動待ち・最終起動時刻・タスクの登録）と WSL 側（`boot_id`・Herdr サーバの生死）を
+読むだけで、何も書き換えない。`powershell.exe` が使えないときも落ちず、読めなかったと出す。
+
+#### boot
+
+`rebootctl boot` はタスクが呼ぶ入口で、手で叩いても安全（冪等）。Herdr のサーバが動いていなければ起動し、会話の復元を
+待ち、`herdr-resume` があれば `herdr-resume recover` を呼ぶ。記録は `${XDG_STATE_HOME:-~/.local/state}/reboot-recovery/boot.log`。
+`--hold` は最後に居座って WSL を落とさない（タスク専用）。
+
+#### 起動の方式 A を確かめる実験（人間が叩く）
+
+`wsl --shutdown` はこのマシンで動いている会話を全部止める。叩く時刻は自分で決めること。
+
+1. `rebootctl setup` の出力を管理者 PowerShell に貼ってタスクを登録する
+2. 通常の PowerShell で `wsl --shutdown` を打つ
+3. `Start-ScheduledTask -TaskName dotfiles-reboot-recovery` を打つ
+4. 1分ほど待って WSL を開き、`rebootctl status` で Herdr サーバが running か、`boot.log` に「boot: 終了」があるかを見る
+5. **10分以上**待ち、WSL と Herdr サーバがまだ生きているか確かめる
+6. 本物の再起動で、サインインせずに待ち、同じ確認をする（傘の最終 PR の後の宿題）
+7. 外すとき: `Unregister-ScheduledTask -TaskName dotfiles-reboot-recovery -Confirm:$false`
 
 ## 4. Customization
 
