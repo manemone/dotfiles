@@ -168,6 +168,7 @@ for details. `bin/` changes should additionally be verified with
 │   ├── pr-group-request/      # Preparing your own (multi-repo) PR group for review by others
 │   ├── umbrella-orchestrator/ # Umbrella-branch grandchild lifecycle
 │   ├── umbrella-handoff/      # Consultation-to-commander handoff automation
+│   ├── figma-design-workflow/ # Working an external Figma source in an umbrella: roles, per-item flow, safety, patterns, audit script, handoff to implementation
 │   ├── repo-baseline/         # Applying the repo-baseline copier template
 │   ├── ocw/                   # Points AI agents to `ocw help <topic>` instead of reading bin/ocw
 │   ├── worktree-cleanup/      # Scope-aware worktree cleanup with human approval before deletion
