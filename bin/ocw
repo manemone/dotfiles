@@ -39,6 +39,7 @@ usage:
   ocw new [-H|--herdr] [--no-commander] [--label <text>] <worktree-name> [base-ref]
   ocw rm <worktree-name>
   ocw rm -f <worktree-name>
+  ocw docker-orphans [--rm]
   ocw agent [commander|implementer|reviewer]
   ocw self-compact <instruction>
   ocw checker <dir> [--wait <sec>]
@@ -305,8 +306,24 @@ the merge check itself still always runs.
 on success, in order: closes any Herdr workspace whose cwd matches; `git
 worktree remove` ('--force' under -f); force-deletes the branch (`branch
 -D`, since the checks above already covered what `-d`'s own weaker check
-would ask); rmdir's now-empty parent dirs up to the cleanup boundary
-(`ocw help config`); emits run.end if a run_id was found.
+would ask); tears down the worktree's docker compose project (see below);
+rmdir's now-empty parent dirs up to the cleanup boundary (`ocw help
+config`); emits run.end if a run_id was found.
+
+docker: after `git worktree remove` succeeds, `ocw rm` runs `docker compose
+-p <project> down -v --rmi local --remove-orphans` for each compose project
+that belongs to the worktree -- running containers are stopped, and named
+volumes (DB data included) and locally built images are deleted. A project
+belongs to it when a container (stopped ones too) carries a
+`com.docker.compose.project.working_dir` label equal to the worktree path,
+or when the worktree's compose file names it. A project name that other
+containers use from a different directory is skipped with a warning. No
+docker, an unreachable daemon, or a failed teardown never stops the removal.
+
+`ocw docker-orphans` lists compose projects whose working directory no
+longer exists (worktrees removed without `ocw rm`); `--rm` tears them down
+the same way. Containers without the label (plain `docker run`) and
+projects with no container left are not found.
 TOPIC
 }
 
@@ -2028,6 +2045,209 @@ cleanup_empty_parents() {
   done
 }
 
+# --- Docker teardown (ocw rm / ocw docker-orphans) --------------------------
+#
+# A compose project started inside a worktree outlives it: the containers,
+# named volumes (DB data included) and locally built images stay behind.
+# compose labels every one of them with `com.docker.compose.project`, and
+# every container also with the directory it was started from
+# (`...project.working_dir`), so a project can be torn down by name alone,
+# without its compose file: `docker compose -p <name> down -v --rmi local
+# --remove-orphans` also removes `docker compose run` leftovers and the
+# images of profile-gated services. Everything here is fail-open: no docker,
+# an unreachable daemon, or a failed teardown never blocks removing the
+# worktree itself.
+
+DOCKER_PROJECT_LABEL="com.docker.compose.project"
+DOCKER_WORKDIR_LABEL="com.docker.compose.project.working_dir"
+
+# The directories compose records (working_dir) are paths on the machine that
+# ran compose, and every check here (does that directory still exist, is it
+# this worktree) is made on this machine. Against a daemon that does not share
+# our filesystem (DOCKER_HOST / the current context pointing at tcp:// or
+# ssh://) those paths mean nothing, so such a daemon is treated as unusable
+# rather than risk removing someone else's running project.
+docker_usable() {
+  local host=""
+
+  command -v docker >/dev/null 2>&1 || return 1
+  docker ps -q >/dev/null 2>&1 || return 1
+
+  # Same precedence as docker itself: DOCKER_CONTEXT beats DOCKER_HOST, which
+  # beats the stored current context.
+  if [ -n "${DOCKER_CONTEXT:-}" ]; then
+    host="$(docker context inspect --format '{{.Endpoints.docker.Host}}' \
+      "$DOCKER_CONTEXT" 2>/dev/null || true)"
+    [ -n "$host" ] || host="context:${DOCKER_CONTEXT}"
+  elif [ -n "${DOCKER_HOST:-}" ]; then
+    host="$DOCKER_HOST"
+  else
+    host="$(docker context inspect --format '{{.Endpoints.docker.Host}}' \
+      2>/dev/null || true)"
+  fi
+  case "$host" in
+    "" | unix://*) return 0 ;;
+  esac
+  warn "skipping docker cleanup: daemon at ${host} is not local"
+  return 1
+}
+
+# Project name compose would use for the compose file that lives directly in
+# <dir>. Compose looks for a file in the current directory first and only
+# walks up to the parents when there is none, so asking it from a directory
+# without its own file would return a parent's (unrelated) project name.
+docker_config_name_in_dir() {
+  local dir="$1"
+  local f=""
+
+  for f in compose.yaml compose.yml docker-compose.yaml docker-compose.yml; do
+    [ -f "${dir}/${f}" ] || continue
+    # -f pins the file: without it compose also honours COMPOSE_FILE from a
+    # `.env` in <dir>, which can point at a parent's file.
+    (cd "$dir" && env -u COMPOSE_FILE -u COMPOSE_PATH_SEPARATOR \
+      -u COMPOSE_PROFILES -u COMPOSE_PROJECT_NAME \
+      docker compose -f "${dir}/${f}" --project-directory "$dir" \
+      config --format yaml 2>/dev/null |
+      sed -n 's/^name: //p')
+    return 0
+  done
+}
+
+# Distinct "<project>TAB<working_dir>" pairs over all containers (stopped
+# included) that compose created.
+docker_compose_containers() {
+  docker ps -a --filter "label=${DOCKER_PROJECT_LABEL}" \
+    --format "{{.Label \"${DOCKER_PROJECT_LABEL}\"}}"$'\t'"{{.Label \"${DOCKER_WORKDIR_LABEL}\"}}" \
+    2>/dev/null | sort -u
+}
+
+docker_teardown_project() {
+  # Compose must see only the project name given with -p: a stray
+  # COMPOSE_FILE / profile in the caller's environment, or a compose file in
+  # the current directory, would change which services/images it matches.
+  (cd / && env -u COMPOSE_FILE -u COMPOSE_PATH_SEPARATOR -u COMPOSE_PROFILES \
+    -u COMPOSE_PROJECT_NAME \
+    docker compose -p "$1" down -v --rmi local --remove-orphans >/dev/null 2>&1)
+}
+
+# Prints the compose project names that belong to <worktree_dir> and to
+# nothing else. A name is skipped (with a warning) when any of its containers
+# was started from a different directory -- two checkouts named alike share
+# the default project name, and one must not take the other's data along.
+docker_projects_for_dir() {
+  local dir="$1"
+  local real=""
+  local pairs=""
+  local candidates=""
+  local name=""
+  local other=""
+
+  docker_usable || return 0
+  real="$(realpath_m "$dir")"
+  pairs="$(docker_compose_containers)"
+
+  candidates="$(
+    printf '%s\n' "$pairs" |
+      awk -F '\t' -v a="$dir" -v b="$real" '$2 == a || $2 == b { print $1 }'
+    docker_config_name_in_dir "$dir"
+  )"
+  candidates="$(printf '%s\n' "$candidates" | sed '/^$/d' | sort -u)"
+
+  while IFS= read -r name; do
+    [ -n "$name" ] || continue
+    other="$(
+      printf '%s\n' "$pairs" |
+        awk -F '\t' -v n="$name" -v a="$dir" -v b="$real" \
+          '$1 == n && $2 != "" && $2 != a && $2 != b { print $2; exit }'
+    )"
+    if [ -n "$other" ]; then
+      warn "skipping docker compose project '${name}': also used by ${other}"
+      continue
+    fi
+    printf '%s\n' "$name"
+  done <<EOF
+${candidates}
+EOF
+}
+
+# Takes the project names newline-separated (as docker_projects_for_dir
+# prints them).
+docker_teardown_projects() {
+  local name=""
+
+  while IFS= read -r name; do
+    [ -n "$name" ] || continue
+    echo "docker:    removing compose project: ${name}"
+    docker_teardown_project "$name" ||
+      warn "failed to remove docker compose project: ${name}"
+  done <<EOF
+$1
+EOF
+}
+
+# Compose projects none of whose containers point at a directory that still
+# exists. Containers without a working_dir label (plain `docker run`) are
+# never considered. Prints "<project>TAB<working_dir>".
+docker_orphan_projects() {
+  local pairs=""
+  local project=""
+  local dir=""
+  local live=$'\n'
+  local gone=""
+
+  docker_usable || return 0
+
+  # A project with even one container whose directory still exists is alive.
+  pairs="$(docker_compose_containers)"
+  while IFS=$'\t' read -r project dir; do
+    [ -n "$project" ] && [ -n "$dir" ] || continue
+    if [ -d "$dir" ]; then
+      live="${live}${project}"$'\n'
+    else
+      gone="${gone}${project}"$'\t'"${dir}"$'\n'
+    fi
+  done <<EOF
+${pairs}
+EOF
+
+  while IFS=$'\t' read -r project dir; do
+    [ -n "$project" ] || continue
+    case "$live" in
+      *$'\n'"${project}"$'\n'*) continue ;;
+    esac
+    printf '%s\t%s\n' "$project" "$dir"
+  done <<EOF
+${gone}
+EOF
+}
+
+docker_orphans() {
+  local do_remove="false"
+  local orphans=""
+
+  case "${1:-}" in
+    "") ;;
+    --rm) do_remove="true" ;;
+    *) die "usage: ocw docker-orphans [--rm]" ;;
+  esac
+  [ "$#" -le 1 ] || die "too many arguments for docker-orphans"
+
+  docker_usable || die "docker is not available"
+
+  orphans="$(docker_orphan_projects)"
+  [ -n "$orphans" ] || {
+    echo "no orphaned docker compose projects"
+    return 0
+  }
+
+  if [ "$do_remove" = "true" ]; then
+    docker_teardown_projects "$(printf '%s\n' "$orphans" | cut -f1 | sort -u)"
+  else
+    printf '%s\n' "$orphans"
+    echo "(list only; \`ocw docker-orphans --rm\` removes them, volumes included)" >&2
+  fi
+}
+
 remove_worktree() {
   local force="false"
 
@@ -2138,6 +2358,11 @@ remove_worktree() {
 
   close_herdr_workspaces_for_checkout "$worktree_dir"
 
+  # Names are collected while the worktree (and its compose file) still
+  # exist; the teardown itself waits until `git worktree remove` has succeeded.
+  local docker_projects=""
+  docker_projects="$(docker_projects_for_dir "$worktree_dir")"
+
   # outcome now follows the merge determination above, not the presence of
   # -f (ADR §3.8) -- -f is "bypass the rejection", not "declare failure".
   local run_end_outcome="failure"
@@ -2156,6 +2381,8 @@ remove_worktree() {
     git -C "$repo_root" \
       worktree remove "$worktree_dir"
   fi
+
+  docker_teardown_projects "$docker_projects"
 
   # show-ref first: an unborn-branch worktree (`git worktree add -b <name>
   # --orphan`, or one created against an empty bare repo) reports a real
@@ -2549,6 +2776,11 @@ case "$cmd" in
       die "too many arguments for agent"
 
     start_pane_agent "$@"
+    ;;
+
+  docker-orphans)
+    shift
+    docker_orphans "$@"
     ;;
 
   rm | remove)
