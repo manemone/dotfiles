@@ -18,10 +18,10 @@
 
 | 孫 | ブランチ | 内容 | 状況 |
 |---|---|---|---|
-| 1 | `fd-01-skeleton` | スキルの骨組み: `SKILL.md`（入口・体制・1件の流れ・ユーザーとのやり取り・Figma の安全・references の索引）、ADR、`skills/README.md` とルート `README.md` の行 | 🔄 実装中 |
-| 2 | `fd-02-process-patterns` | 進め方のパターン（`references/patterns-process.md`）と記録の書き方（`references/record.md`） | ⬜ 待機中 |
-| 3 | `fd-03-visual-patterns-audit` | 見た目の決まりのパターン（`references/patterns-visual.md`）と点検スクリプトの雛形・使い方（`references/audit-template.js` `references/audit.md`） | ⬜ 待機中 |
-| 4 | `fd-04-impl-handoff` | 実装への受け渡し（`references/handoff-to-impl.md`） | ⬜ 待機中 |
+| 1 | `fd-01-skeleton` | スキルの骨組み: `SKILL.md`（入口・体制・1件の流れ・ユーザーとのやり取り・Figma の安全・references の索引）、ADR、`skills/README.md` とルート `README.md` の行 | ✅ PR #225 マージ済 |
+| 2 | `fd-02-process-patterns` | 進め方のパターン（`references/patterns-process.md`）と記録の書き方（`references/record.md`） | 🔄 実装中 |
+| 3 | `fd-03-visual-patterns-audit` | 見た目の決まりのパターン（`references/patterns-visual.md`）と点検スクリプトの雛形・使い方（`references/audit-template.js` `references/audit.md`） | 🔄 実装中 |
+| 4 | `fd-04-impl-handoff` | 実装への受け渡し（`references/handoff-to-impl.md`） | 🔄 実装中 |
 | 5 | `fd-05-pitfalls-links` | よく指摘されること・Figma の落とし穴（`references/pitfalls.md`）と、既存スキルからの参照・スキル全体の通し読み | ⬜ 待機中 |
 
 依存:
@@ -182,7 +182,7 @@
 | `skills/figma-design-workflow/references/audit-template.js` | 点検スクリプトの雛形（決まりの表を先頭に置き、差し替えられる形） | 孫3 |
 | `skills/figma-design-workflow/references/handoff-to-impl.md` | 実装への受け渡し（差分の洗い出し→束→分担ボードの issue→各人の AI へのプロンプト→issue での調整→実装側からの問い） | 孫4 |
 | `skills/figma-design-workflow/references/pitfalls.md` | よく指摘されること（ユーザーから）と Figma の落とし穴（実際に踏んだ物）の一覧。パターンの本文と重複させず、該当する節へ引く | 孫5 |
-| `docs/adr/DOC-*_figma-design-workflow-skill.md` | ADR（設計0 の 7） | 孫1 |
+| `docs/adr/DOC-2611161826_figma-design-workflow-skill.md` | ADR（設計0 の 7） | 孫1 |
 | `skills/README.md`・ルート `README.md` | スキル一覧の行・ツリーの行（二層の両方） | 孫1 |
 | 既存スキル（umbrella-orchestrator・pr-review-loop・ui-review・task-intake）の `SKILL.md` | このスキルへの短い参照 | 孫5 |
 
@@ -266,6 +266,7 @@ spawn・マージの手順と関心が違う／Figma を使わない傘には不
   （容量・inode とも 100%）になって止まり、空きができてから再開した。ブリーフは転記後に削除した。孫1 を spawn する
 - 2026-11-16: このマシンでは `doc-id` に `LC_ALL=C.UTF-8` が要り、`git push` に gh の認証の一回指定が要った
   （「必須の検証ステップ」に書いた）
+- 2026-11-16: 孫1 の PR #225（レビュー1回目で承認、CI green）を司令官がマージした。ADR は DOC-2611161826。傘で `pre-commit run --all-files`・`doc-id verify`・照合（`origin/master` との差分）が通った。孫1 のワークツリーとブランチはマージ前に（容量の掃除で）既に消えていたため、`ocw rm` は使えず、残った Herdr のワークスペースだけ閉じた（会話の ID は取れなかった）。孫2・孫3・孫4 を同時に spawn する
 
 ## 孫1用プロンプト:
 
