@@ -108,6 +108,11 @@ case "$1" in
     ;;
   compose)
     shift
+    if [ "$1" = "-f" ]; then
+      [ -z "$DOCKER_SHIM_CONFIG_LOG" ] || echo "$@" >> "$DOCKER_SHIM_CONFIG_LOG"
+      [ -z "$DOCKER_SHIM_CONFIG_NAME" ] || echo "name: $DOCKER_SHIM_CONFIG_NAME"
+      exit 0
+    fi
     if [ "$1" = "config" ]; then
       [ -z "$DOCKER_SHIM_CONFIG_NAME" ] || echo "name: $DOCKER_SHIM_CONFIG_NAME"
       exit 0
@@ -780,10 +785,24 @@ class DockerTeardownTests(OcwTestCase):
     def test_rm_uses_the_compose_name_of_a_file_inside_the_worktree(self):
         wt = self.create("widget-maker")
         (pathlib.Path(wt) / "compose.yaml").write_text("services: {}\n")
+        cfg = pathlib.Path(self.tmpdir.name) / "docker-config.log"
+        self.env["DOCKER_SHIM_CONFIG_LOG"] = str(cfg)
         self.env["DOCKER_SHIM_CONFIG_NAME"] = "named-in-file"
         result = self.ocw("rm", "-f", "widget-maker")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.calls(), [self.TEARDOWN.format("named-in-file")])
+        # The file is pinned with -f, so a `.env` COMPOSE_FILE cannot swap it.
+        self.assertIn(f"-f {wt}/compose.yaml", cfg.read_text())
+
+    def test_orphans_docker_context_overrides_docker_host(self):
+        self.ps.write_text("prod\t/srv/apps/production\n")
+        self.env["DOCKER_HOST"] = "unix:///var/run/docker.sock"
+        self.env["DOCKER_CONTEXT"] = "production"
+        self.env["DOCKER_SHIM_CONTEXT_HOST"] = "ssh://prod-host"
+        result = self.ocw("docker-orphans", "--rm")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self.calls(), [])
+        self.assertIn("not local", result.stderr)
 
     def test_orphans_refuses_a_daemon_that_is_not_local(self):
         self.ps.write_text("prod\t/srv/apps/production\n")

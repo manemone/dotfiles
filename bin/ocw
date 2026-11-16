@@ -2073,8 +2073,15 @@ docker_usable() {
   command -v docker >/dev/null 2>&1 || return 1
   docker ps -q >/dev/null 2>&1 || return 1
 
-  host="${DOCKER_HOST:-}"
-  if [ -z "$host" ]; then
+  # Same precedence as docker itself: DOCKER_CONTEXT beats DOCKER_HOST, which
+  # beats the stored current context.
+  if [ -n "${DOCKER_CONTEXT:-}" ]; then
+    host="$(docker context inspect --format '{{.Endpoints.docker.Host}}' \
+      "$DOCKER_CONTEXT" 2>/dev/null || true)"
+    [ -n "$host" ] || host="context:${DOCKER_CONTEXT}"
+  elif [ -n "${DOCKER_HOST:-}" ]; then
+    host="$DOCKER_HOST"
+  else
     host="$(docker context inspect --format '{{.Endpoints.docker.Host}}' \
       2>/dev/null || true)"
   fi
@@ -2095,9 +2102,12 @@ docker_config_name_in_dir() {
 
   for f in compose.yaml compose.yml docker-compose.yaml docker-compose.yml; do
     [ -f "${dir}/${f}" ] || continue
+    # -f pins the file: without it compose also honours COMPOSE_FILE from a
+    # `.env` in <dir>, which can point at a parent's file.
     (cd "$dir" && env -u COMPOSE_FILE -u COMPOSE_PATH_SEPARATOR \
       -u COMPOSE_PROFILES -u COMPOSE_PROJECT_NAME \
-      docker compose config --format yaml 2>/dev/null |
+      docker compose -f "${dir}/${f}" --project-directory "$dir" \
+      config --format yaml 2>/dev/null |
       sed -n 's/^name: //p')
     return 0
   done
