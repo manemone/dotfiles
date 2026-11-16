@@ -195,6 +195,8 @@ for (const st of await figma.getLocalTextStylesAsync()) {
 const page = await figma.getNodeByIdAsync(PAGE_ID);
 await figma.setCurrentPageAsync(page);
 const screens = page.children.filter((n) => n.type === 'FRAME' && n.name.startsWith(SCREEN_PREFIX));
+// 対象が 0 件だと、何も走査せずに「違反なし」と同じ形の結果が返る。設定の間違い・画面の改名・ページの取り違えを合格に見せないため、止める
+if (screens.length === 0) throw new Error(`no screens matched SCREEN_PREFIX "${SCREEN_PREFIX}" on the page: audit not performed`);
 
 // アイコンと字の重なり: カードごとの見えている字（root の内側で、どの祖先も隠れていない物）
 const cardTexts = new Map();
@@ -277,6 +279,14 @@ for (const screen of screens) {
           if (f.type === 'SOLID' && f.visible !== false && !(f.boundVariables && f.boundVariables.color)) push(bucket, 'unbound', n, c.card, `text ${hex(f.color)}`);
           await checkRole(bucket, n, c.card, 'fills', f);
           countTranslucent('text', f, n);
+        }
+      }
+      // 字に付けた線は、塗りと同じ共通の点検（結び・役割・半透明）に通す。字の塗りは上で数えたので、ここでは線だけ
+      if (Array.isArray(n.strokes)) {
+        for (const f of n.strokes) {
+          if (f.type === 'SOLID' && f.visible !== false && !(f.boundVariables && f.boundVariables.color)) push(bucket, 'unbound', n, c.card, `stroke ${hex(f.color)}`);
+          await checkRole(bucket, n, c.card, 'strokes', f);
+          countTranslucent('stroke', f, n);
         }
       }
     } else {

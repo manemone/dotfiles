@@ -29,7 +29,7 @@
 4. 返り値の形:
    - `screens[]`: 画面ごとの `{id, name, rules}`。`rules` は決まりごとの `{count, kinds, samples}`
      （`kinds` は値の種類と数、`samples` は代表のノード id とカードの名前）
-   - `totals`: 決まりごとの合計。**合格は全部 0**
+   - `totals`: 決まりごとの合計。**合格は全部 0**。ただし `screens[]` が空なら点検していない（対象の画面が 0 件のときは、雛形がエラーで止まる）ので合格にしない
    - `snapped`・`lengthPadding`・`positionPadding`・`bandPadding`・`clippedOverflow`: 違反に数えず、数だけ返す物
      （実装で寄せる値・長さに使う余白・位置の指定の余白・帯の余白・親で切れて見えないはみ出し）
    - `reference`: 参考の数（`handmade`・`halt`）。違反の合計には入れない
