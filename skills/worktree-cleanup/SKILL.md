@@ -187,8 +187,16 @@ main チェックアウトはどのスコープでも消さない。
 以下のワークツリーが削除候補です:
 - worktree-cleanup-01-merge-detection (PR #78 マージ済み) → /path/to/...
 - ocw-usage-01-help-topics (PR #72 マージ済み) → /path/to/...
+※ `ocw rm` はこれらの docker compose プロジェクトも消します（動いているコンテナは止め、
+  ボリューム＝DB の中身とローカルビルドのイメージも削除）。
 削除してよいですか？
 ```
+
+`ocw rm` は、対象ワークツリーの compose プロジェクト（`com.docker.compose.project.working_dir`
+ラベルが一致するコンテナ、または compose ファイルの `name:`）を `docker compose -p <名>
+down -v --rmi local --remove-orphans` で片付ける。**DB の中身は戻らない**ため、一覧には
+必ずこの注記を出す。docker が無い・デーモンに繋がらない場合は何もせずワークツリーだけ
+消える。別ディレクトリのコンテナと同名のプロジェクトは警告を出してスキップされる。
 
 **承認が得られるまで `ocw rm` を一切実行しない。**
 
@@ -327,6 +335,14 @@ for ws, panes in by_ws.items():
 ```bash
 herdr workspace close <workspace_id>
 ```
+
+### 6.4 孤児の Docker 資源
+
+`ocw rm` を通らずにワークツリーが消えた場合、その compose プロジェクトの docker 資源も
+残る。`ocw docker-orphans` が、作業ディレクトリ（`working_dir` ラベル）が実在しない
+プロジェクトを一覧する（読み取りのみ）。§6.3 と同じく、一覧を人間に見せ、DB の中身も
+消えることを伝えて承認を得てから `ocw docker-orphans --rm` で消す。**`--rm` は一覧の
+全件が対象で、個別選択はできない。** 承認前に実行しない。
 
 ## 7. 落とし穴
 

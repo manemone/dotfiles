@@ -83,6 +83,38 @@ _code_shim_path.write_text(
 )
 _code_shim_path.chmod(0o755)
 
+# `ocw rm` / `ocw docker-orphans` talk to docker. Without this shim every test
+# would query whatever daemon the developer's machine runs. The fake answers
+# from environment variables so a test chooses exactly what "docker" sees:
+#   DOCKER_SHIM_DOWN=1      daemon unreachable (the default in run_ocw())
+#   DOCKER_SHIM_PS=<file>   what `docker ps -a ...` prints (one tab-separated
+#                           "<project>\t<working_dir>" per line)
+#   DOCKER_SHIM_LOG=<file>  every `docker compose ...` call is appended here
+_DOCKER_SHIM_DIR = tempfile.mkdtemp(prefix="ocw-test-docker-shim-")
+atexit.register(shutil.rmtree, _DOCKER_SHIM_DIR, ignore_errors=True)
+_docker_shim_path = pathlib.Path(_DOCKER_SHIM_DIR) / "docker"
+_docker_shim_path.write_text(
+    """#!/bin/sh
+[ -z "$DOCKER_SHIM_DOWN" ] || exit 1
+case "$1" in
+  ps)
+    [ "$2" = "-q" ] && exit 0
+    [ -z "$DOCKER_SHIM_PS" ] || cat "$DOCKER_SHIM_PS"
+    exit 0
+    ;;
+  compose)
+    shift
+    [ "$1" = "-p" ] || exit 1
+    echo "$@" >> "$DOCKER_SHIM_LOG"
+    exit 0
+    ;;
+esac
+exit 1
+""",
+    encoding="utf-8",
+)
+_docker_shim_path.chmod(0o755)
+
 RUN_LINE_RE = re.compile(r"^run:\s+(\S+)$", re.MULTILINE)
 REPO_LINE_RE = re.compile(r"^repo:\s+(\S+)$", re.MULTILINE)
 BRANCH_LINE_RE = re.compile(r"^branch:\s+(\S+)$", re.MULTILINE)
@@ -193,7 +225,7 @@ def run_ocw(args, cwd, meter_on_path=False, meter_home=None, extra_env=None, pat
     # sit in /usr/local/bin. path_prepend (git shims) still takes priority
     # over both — those shim directories only ever contain `git`, so `code`
     # lookups fall through to _CODE_SHIM_DIR regardless.
-    path_dirs = [_CODE_SHIM_DIR, *BASE_PATH_DIRS]
+    path_dirs = [_CODE_SHIM_DIR, _DOCKER_SHIM_DIR, *BASE_PATH_DIRS]
     if meter_on_path:
         path_dirs.insert(0, str(REPO_ROOT / "bin"))
     if path_prepend:
@@ -204,6 +236,8 @@ def run_ocw(args, cwd, meter_on_path=False, meter_home=None, extra_env=None, pat
         # ocw edits Codex's config.toml; never let a test reach the real one.
         # A nonexistent dir makes ocw skip the Codex step entirely.
         "CODEX_HOME": "/nonexistent-ocw-test-codex-home",
+        # Docker is "unreachable" unless a test opts in (see _DOCKER_SHIM_DIR).
+        "DOCKER_SHIM_DOWN": "1",
     }
     if meter_home is not None:
         env["OCW_METER_HOME"] = str(meter_home)
@@ -668,6 +702,78 @@ class CodexTrustTests(OcwTestCase):
         result = self.ocw("widget-maker")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertFalse(self.codex_home.exists())
+
+
+class DockerTeardownTests(OcwTestCase):
+    """`ocw rm` removes the worktree's compose project; `ocw docker-orphans`
+    finds the ones whose directory is already gone."""
+
+    TEARDOWN = "-p {} down -v --rmi local --remove-orphans"
+
+    def setUp(self):
+        super().setUp()
+        base = pathlib.Path(self.tmpdir.name)
+        self.ps = base / "docker-ps.txt"
+        self.log = base / "docker-compose.log"
+        self.env = {
+            "DOCKER_SHIM_DOWN": "",
+            "DOCKER_SHIM_PS": str(self.ps),
+            "DOCKER_SHIM_LOG": str(self.log),
+        }
+
+    def ocw(self, *args):
+        return run_ocw(list(args), self.repo_root, meter_home=self.meter_home,
+                       extra_env=self.env)
+
+    def calls(self):
+        return self.log.read_text().splitlines() if self.log.exists() else []
+
+    def create(self, name):
+        result = self.ocw(name)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return re.search(r"^worktree:\s+(.+)$", result.stdout, re.M).group(1)
+
+    def test_rm_tears_down_only_the_projects_of_that_worktree(self):
+        wt = self.create("widget-maker")
+        self.ps.write_text(f"widget-maker\t{wt}\nunrelated\t/elsewhere/other\n")
+        result = self.ocw("rm", "-f", "widget-maker")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.calls(), [self.TEARDOWN.format("widget-maker")])
+        self.assertFalse(pathlib.Path(wt).exists())
+
+    def test_rm_skips_a_project_name_shared_with_another_directory(self):
+        wt = self.create("widget-maker")
+        self.ps.write_text(f"widget-maker\t{wt}\nwidget-maker\t/other/repo/widget-maker\n")
+        result = self.ocw("rm", "-f", "widget-maker")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.calls(), [])
+        self.assertIn("also used by /other/repo/widget-maker", result.stderr)
+
+    def test_rm_still_removes_the_worktree_when_docker_is_unreachable(self):
+        wt = self.create("widget-maker")
+        self.ps.write_text(f"widget-maker\t{wt}\n")
+        self.env["DOCKER_SHIM_DOWN"] = "1"
+        result = self.ocw("rm", "-f", "widget-maker")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.calls(), [])
+        self.assertFalse(pathlib.Path(wt).exists())
+
+    def test_orphans_lists_only_projects_whose_directories_are_gone(self):
+        live = pathlib.Path(self.tmpdir.name) / "alive"
+        live.mkdir()
+        self.ps.write_text(
+            f"gone\t/no/such/dir\nalive\t{live}\n"
+            f"mixed\t/no/such/dir\nmixed\t{live}\nplain-run\t\n")
+        result = self.ocw("docker-orphans")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), "gone\t/no/such/dir")
+        self.assertEqual(self.calls(), [])
+
+    def test_orphans_rm_removes_each_orphan_once(self):
+        self.ps.write_text("gone\t/no/such/dir\ngone\t/no/such/dir2\n")
+        result = self.ocw("docker-orphans", "--rm")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.calls(), [self.TEARDOWN.format("gone")])
 
 
 class RunIdPersistenceFailOpenTests(OcwTestCase):

@@ -107,6 +107,7 @@ ocw new --herdr my-feature origin/main
 # worktree 削除
 ocw rm my-feature
 ocw rm -f my-feature  # 強制削除（マージ済み判定による拒否・未コミット変更のチェックを迂回する）
+ocw docker-orphans     # 作業ツリーが無いのに残っている compose プロジェクトを一覧（--rm で削除）
 
 # worktree 一覧
 ocw ls
