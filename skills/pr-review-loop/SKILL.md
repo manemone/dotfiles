@@ -17,6 +17,9 @@ Herdrワークスペース内の `reviewer` ペインと連携してPRレビュ�
 `ocw-meter` が存在しない環境でも本スキルは完全に動作する。
 計測はレビュー判定に一切影響しない。
 
+Figma の変更の PR は、リポの差分に変更が出ない。差分でなく記録（前後の数・絵）で見る。見方は
+`figma-design-workflow` の `references/record.md`。
+
 相手が他人の PR をレビュワーとしてレビューするなら `pr-group-review`、自分の PR 群の
 レビューを他人に頼む準備は `pr-group-request` を使う（本スキルは他人から返ってきた指摘への対応に使う）。
 

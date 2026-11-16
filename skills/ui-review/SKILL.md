@@ -15,6 +15,8 @@ description: "画面を触る PR を、作った人とは別の目で確認す�
 下敷きは design-review（MIT）と Playwright スクリプト式の webapp-testing。使ったもの・削ったものと理由は
 ADR DOC-2611040233 にある。
 
+なお、Figma の作り込み（正本を書き換える作業）はこのスキルの対象外。`figma-design-workflow` を使う。
+
 ## いつ回すか
 
 次の 2 つが両方そろうときだけ。どちらかが欠けたら、このスキルは回さない（今までどおりコードだけのレビュー）。
