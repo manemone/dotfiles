@@ -303,10 +303,10 @@ though the branch really is merged.
 -f/--force skips the two rejections above (uncommitted changes, unmerged);
 the merge check itself still always runs.
 
-on success, in order: closes any Herdr workspace whose cwd matches; `git
-worktree remove` ('--force' under -f); force-deletes the branch (`branch
--D`, since the checks above already covered what `-d`'s own weaker check
-would ask); tears down the worktree's docker compose project (see below);
+on success, in order: closes any Herdr workspace whose cwd matches; tears
+down the worktree's docker compose project (see below); `git worktree
+remove` ('--force' under -f); force-deletes the branch (`branch -D`, since
+the checks above already covered what `-d`'s own weaker check would ask);
 rmdir's now-empty parent dirs up to the cleanup boundary (`ocw help
 config`); emits run.end if a run_id was found.
 
@@ -2386,7 +2386,13 @@ remove_worktree() {
   if ! git -C "$repo_root" worktree remove "${remove_args[@]}"; then
     if [ -n "$(find "$worktree_dir" -not -uid "$(id -u)" -print -quit 2>/dev/null)" ]; then
       warn "the worktree holds files owned by another user (a container may have written them as root): ${worktree_dir}"
-      warn "delete the directory by hand, then run \`git worktree prune\`"
+      # git has already dropped the worktree registration by now, so prune
+      # has nothing to do; the branch is what is left to delete.
+      if [ -n "$branch" ]; then
+        warn "delete the directory by hand, then run \`git branch -D ${branch}\`"
+      else
+        warn "delete the directory by hand"
+      fi
     fi
     return 1
   fi
