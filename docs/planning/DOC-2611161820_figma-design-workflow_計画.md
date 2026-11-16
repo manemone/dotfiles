@@ -22,7 +22,7 @@
 | 2 | `fd-02-process-patterns` | 進め方のパターン（`references/patterns-process.md`）と記録の書き方（`references/record.md`） | ✅ PR #227 マージ済 |
 | 3 | `fd-03-visual-patterns-audit` | 見た目の決まりのパターン（`references/patterns-visual.md`）と点検スクリプトの雛形・使い方（`references/audit-template.js` `references/audit.md`） | ✅ PR #228 マージ済 |
 | 4 | `fd-04-impl-handoff` | 実装への受け渡し（`references/handoff-to-impl.md`） | ✅ PR #226 マージ済 |
-| 5 | `fd-05-pitfalls-links` | よく指摘されること・Figma の落とし穴（`references/pitfalls.md`）と、既存スキルからの参照・スキル全体の通し読み | 🔄 実装中 |
+| 5 | `fd-05-pitfalls-links` | よく指摘されること・Figma の落とし穴（`references/pitfalls.md`）と、既存スキルからの参照・スキル全体の通し読み | ✅ PR #229 マージ済 |
 
 依存:
 
@@ -274,6 +274,7 @@ spawn・マージの手順と関心が違う／Figma を使わない傘には不
 - 2026-11-16: 孫4 の PR #226（承認 HEAD 939b2cb、CI green）を司令官がマージした。傘で `pre-commit run --all-files`・`doc-id verify`・照合が通った。人間の指示で、これ以降の孫のレビュワーは Codex（モデル `gpt-6.1-sol`）にする（`OCW_REVIEWER_COMMAND`）
 - 2026-11-16: 孫2 の PR #227（承認 HEAD c5dd93f）・孫3 の PR #228（承認 HEAD 7fab51b）を司令官がマージした（どちらも CI green）。傘での検証は通った。孫2〜4 のワークツリーはマージ時に消えていたので、Herdr のワークスペースだけ閉じた。孫5 を spawn した（レビュワーは `codex -m gpt-6.1-sol -a never -s workspace-write -c sandbox_workspace_write.network_access=true`）
 - 2026-11-16: 依頼主から、材料の文書に「残りの差分を人で分けて一気に実装する流れ」「人間の承認が要る操作」と指摘3つが足されたと知らせがあった。背景5 に i〜l を足し、孫4 はマージ済みなので孫5 の「やること」に入れた
+- 2026-11-16: 孫5 の PR #229（承認 HEAD eca137b、CI green、レビュワーは Codex）を司令官がマージした。傘で `pre-commit run --all-files`・`doc-id verify`・照合が通った。全孫がマージされたので、傘→`master` の最終 PR に進む
 
 ## 孫1用プロンプト:
 
