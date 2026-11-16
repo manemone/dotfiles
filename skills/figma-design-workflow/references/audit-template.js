@@ -100,9 +100,13 @@ const SCRIM_NAME_RE = /^Scrim$/;
 // 半透明の塗り・線の、決まった数。内訳がこれより減ったら translucentDrop に数える（totals に入る）。
 // 変数への結び直しや変数の値の書き換えで、塗りの不透明度が 1 に戻ることがある。画面を変えて半透明を足した・消した時は、ここも直す。
 // 数は必ず「書く前」に点検して取り、ここに写す（後の数どうしで比べると、戻った所を見逃す）。
-const TRANSLUCENT_EXPECTED = { // 例（内訳の形は 'fill #rrggbb 不透明度' か 'stroke #rrggbb 不透明度'）
+const TRANSLUCENT_EXPECTED = { // 例（内訳の形は 'fill #rrggbb 不透明度'・'stroke #rrggbb 不透明度'・字の塗りは 'text #rrggbb 不透明度'）
   'fill #000000 0.5': 1,
 };
+
+// まだ決めていない決まりの名前。ここに書いた決まりは数えない（0 のまま）。
+// 段の表（TYPE_SCALE・SPACING_SCALE・RADIUS_SCALE・NUMBER_STEPS）を空にすると全部が違反になるので、使わない決まりはここで外す
+const SKIP_RULES = []; // 例: ['type', 'lineHeight', 'number']
 
 // 決まりごとの例外（ノード id）。「決まりの例外として残す」と決めた物をここに足す。理由はコメントに書く
 const EXCEPTIONS = {
@@ -142,8 +146,17 @@ async function varName(id) {
 const result = { screens: [], totals: {}, snapped: { spacing: 0, radius: 0 }, lengthPadding: 0, positionPadding: 0, bandPadding: 0, clippedOverflow: 0, translucent: { count: 0, kinds: {}, samples: [] } };
 for (const r of RULES) result.totals[r] = 0;
 
+// 半透明の塗り・線・字の塗りの数と内訳（kind は 'fill' / 'stroke' / 'text'）
+function countTranslucent(kind, f, node) {
+  if (f.type !== 'SOLID' || f.visible === false || f.opacity === undefined || f.opacity >= 1) return;
+  const k = `${kind} ${hex(f.color)} ${Math.round(f.opacity * 100) / 100}`;
+  result.translucent.count += 1;
+  result.translucent.kinds[k] = (result.translucent.kinds[k] || 0) + 1;
+  if (result.translucent.samples.length < SAMPLES * 4) result.translucent.samples.push(`${node.id} ${k}`);
+}
+
 function push(bucket, rule, node, card, detail) {
-  if (EXCEPTIONS[rule].includes(node.id)) return;
+  if (SKIP_RULES.includes(rule) || EXCEPTIONS[rule].includes(node.id)) return;
   const b = bucket[rule];
   b.count += 1;
   const key = detail || '';
@@ -263,6 +276,7 @@ for (const screen of screens) {
         for (const f of s.fills || []) {
           if (f.type === 'SOLID' && f.visible !== false && !(f.boundVariables && f.boundVariables.color)) push(bucket, 'unbound', n, c.card, `text ${hex(f.color)}`);
           await checkRole(bucket, n, c.card, 'fills', f);
+          countTranslucent('text', f, n);
         }
       }
     } else {
@@ -273,12 +287,7 @@ for (const screen of screens) {
           if (f.type === 'SOLID' && f.visible !== false && !(f.boundVariables && f.boundVariables.color)) push(bucket, 'unbound', n, c.card, `${kind} ${hex(f.color)}`);
           await checkRole(bucket, n, c.card, kind === 'fill' ? 'fills' : 'strokes', f);
           // 半透明の塗り・線（数と内訳）。透明度を持たない変数に結ぶと・その値を書き換えると opacity が 1 に戻るので、決まった数と比べる
-          if (f.type === 'SOLID' && f.visible !== false && f.opacity !== undefined && f.opacity < 1) {
-            const k = `${kind} ${hex(f.color)} ${Math.round(f.opacity * 100) / 100}`;
-            result.translucent.count += 1;
-            result.translucent.kinds[k] = (result.translucent.kinds[k] || 0) + 1;
-            if (result.translucent.samples.length < SAMPLES * 4) result.translucent.samples.push(`${n.id} ${k}`);
-          }
+          countTranslucent(kind, f, n);
         }
       }
     }

@@ -33,7 +33,7 @@
    - `snapped`・`lengthPadding`・`positionPadding`・`bandPadding`・`clippedOverflow`: 違反に数えず、数だけ返す物
      （実装で寄せる値・長さに使う余白・位置の指定の余白・帯の余白・親で切れて見えないはみ出し）
    - `reference`: 参考の数（`handmade`・`halt`）。違反の合計には入れない
-   - `translucent`: 半透明の塗り・線の数と内訳。`drop` に、決まった数より減った内訳が出る。`totals.translucentDrop` が 0 でなければ、
+   - `translucent`: 半透明の塗り・線・字の塗りの数と内訳（内訳の頭は `fill` / `stroke` / `text`）。`drop` に、決まった数より減った内訳が出る。`totals.translucentDrop` が 0 でなければ、
      不透明度が 1 に戻った所がある
 
 ## 決まりの表の差し替え方
@@ -50,9 +50,12 @@
 | `ROLE_*` | 変数の名前の組（役割）と、置いてよい層の種類 |
 | `ICON_*`・`TABLE_ROW_RE` | アイコンの置き場の型。使わなければ `ICON_COMPONENT` を `null` に |
 | `SCRIM_NAME_RE`・`TRANSLUCENT_EXPECTED` | 幕の名前（無ければ `null`）と、半透明の決まった数 |
+| `SKIP_RULES` | まだ決めていない決まりの名前（数えない。例 `['type']`） |
 | `EXCEPTIONS` | 決まりごとの例外のノード id |
 
-決まりのうち使わない物は、設定を空にするか、表の値を何にも当たらない値にして 0 のままにする。必要な決まりが雛形に無ければ、
+決まりのうち使わない物は、設定を空にしても 0 になるとは限らない。範囲を選ぶ設定（`CARD_COMPONENTS`・`ICON_COMPONENT`・`SCRIM_NAME_RE`）は、空か `null` で 0 になる。
+段の表（`TYPE_SCALE`・`SPACING_SCALE`・`RADIUS_SCALE`・`NUMBER_STEPS`）は「表に無い値を違反に数える」ので、空にすると全部が違反になる。
+まだ決めていない決まりは、`SKIP_RULES` に名前を書いて数えないようにする。必要な決まりが雛形に無ければ、
 同じ形（走査の中で `push(bucket, '決まりの名前', ...)` を呼び、`EXCEPTIONS` に空の配列を足す）で足す。
 
 **除外は名前で書く。** 大きさで除外すると、別の物まで見逃す。
