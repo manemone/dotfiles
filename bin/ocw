@@ -310,7 +310,7 @@ would ask); tears down the worktree's docker compose project (see below);
 rmdir's now-empty parent dirs up to the cleanup boundary (`ocw help
 config`); emits run.end if a run_id was found.
 
-docker: after `git worktree remove` succeeds, `ocw rm` runs `docker compose
+docker: once the checks above pass, before `git worktree remove`, `ocw rm` runs `docker compose
 -p <project> down -v --rmi local --remove-orphans` for each compose project
 that belongs to the worktree -- running containers are stopped, and named
 volumes (DB data included) and locally built images are deleted. A project
@@ -319,6 +319,9 @@ belongs to it when a container (stopped ones too) carries a
 or when the worktree's compose file names it. A project name that other
 containers use from a different directory is skipped with a warning. No
 docker, an unreachable daemon, or a failed teardown never stops the removal.
+It runs before the remove so that a remove failing on files a container wrote
+as root still leaves no compose project behind; `ocw rm` then says so and
+leaves the directory for you to delete.
 
 `ocw docker-orphans` lists compose projects whose working directory no
 longer exists (worktrees removed without `ocw rm`); `--rm` tears them down
@@ -2358,10 +2361,14 @@ remove_worktree() {
 
   close_herdr_workspaces_for_checkout "$worktree_dir"
 
-  # Names are collected while the worktree (and its compose file) still
-  # exist; the teardown itself waits until `git worktree remove` has succeeded.
+  # Every check that can refuse the removal has passed, so the containers are
+  # spent: tear the compose projects down now, before `git worktree remove`.
+  # If the remove then fails (root-owned files written by a container, say),
+  # the Docker side is already gone instead of left running with no worktree.
+  # Names are collected first, while the worktree's compose file still exists.
   local docker_projects=""
   docker_projects="$(docker_projects_for_dir "$worktree_dir")"
+  docker_teardown_projects "$docker_projects"
 
   # outcome now follows the merge determination above, not the presence of
   # -f (ADR §3.8) -- -f is "bypass the rejection", not "declare failure".
@@ -2370,19 +2377,19 @@ remove_worktree() {
 
   codex_trust_remove "$worktree_dir"
 
-  if [ "$force" = "true" ]; then
-    git -C "$repo_root" \
-      worktree remove --force "$worktree_dir"
-  else
-    # Plain (non---force) `worktree remove` still refuses on uncommitted
-    # changes -- redundant with the status --porcelain check above, but
-    # left as a second independent guard rather than routed through
-    # --force here too.
-    git -C "$repo_root" \
-      worktree remove "$worktree_dir"
+  local remove_args=("$worktree_dir")
+  [ "$force" = "true" ] && remove_args=(--force "$worktree_dir")
+  # Plain (non---force) `worktree remove` still refuses on uncommitted
+  # changes -- redundant with the status --porcelain check above, but
+  # left as a second independent guard rather than routed through
+  # --force here too.
+  if ! git -C "$repo_root" worktree remove "${remove_args[@]}"; then
+    if [ -n "$(find "$worktree_dir" -not -uid "$(id -u)" -print -quit 2>/dev/null)" ]; then
+      warn "the worktree holds files owned by another user (a container may have written them as root): ${worktree_dir}"
+      warn "delete the directory by hand, then run \`git worktree prune\`"
+    fi
+    return 1
   fi
-
-  docker_teardown_projects "$docker_projects"
 
   # show-ref first: an unborn-branch worktree (`git worktree add -b <name>
   # --orphan`, or one created against an empty bare repo) reports a real
