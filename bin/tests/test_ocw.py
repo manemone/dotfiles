@@ -754,6 +754,24 @@ class DockerTeardownTests(OcwTestCase):
         self.assertEqual(self.calls(), [self.TEARDOWN.format("widget-maker")])
         self.assertFalse(pathlib.Path(wt).exists())
 
+    def test_rm_tears_down_docker_even_when_the_worktree_remove_fails(self):
+        if os.geteuid() == 0:
+            self.skipTest("root ignores directory permissions")
+        wt = self.create("widget-maker")
+        self.ps.write_text(f"widget-maker\t{wt}\n")
+        # A read-only parent makes `git worktree remove` fail on the final
+        # rmdir, the way root-owned container files make it fail.
+        parent = pathlib.Path(wt).parent
+        # The docker shim's log sits in this same directory; make it exist
+        # (and stay appendable) before the directory goes read-only.
+        self.log.touch()
+        parent.chmod(0o500)
+        self.addCleanup(lambda: parent.exists() and parent.chmod(0o700))
+        result = self.ocw("rm", "-f", "widget-maker")
+        self.assertNotEqual(result.returncode, 0)
+        parent.chmod(0o700)
+        self.assertEqual(self.calls(), [self.TEARDOWN.format("widget-maker")])
+
     def test_rm_skips_a_project_name_shared_with_another_directory(self):
         wt = self.create("widget-maker")
         self.ps.write_text(f"widget-maker\t{wt}\nwidget-maker\t/other/repo/widget-maker\n")
