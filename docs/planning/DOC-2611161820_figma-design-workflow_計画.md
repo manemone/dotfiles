@@ -21,7 +21,7 @@
 | 1 | `fd-01-skeleton` | スキルの骨組み: `SKILL.md`（入口・体制・1件の流れ・ユーザーとのやり取り・Figma の安全・references の索引）、ADR、`skills/README.md` とルート `README.md` の行 | ✅ PR #225 マージ済 |
 | 2 | `fd-02-process-patterns` | 進め方のパターン（`references/patterns-process.md`）と記録の書き方（`references/record.md`） | 🔄 実装中 |
 | 3 | `fd-03-visual-patterns-audit` | 見た目の決まりのパターン（`references/patterns-visual.md`）と点検スクリプトの雛形・使い方（`references/audit-template.js` `references/audit.md`） | 🔄 実装中 |
-| 4 | `fd-04-impl-handoff` | 実装への受け渡し（`references/handoff-to-impl.md`） | 🔄 実装中 |
+| 4 | `fd-04-impl-handoff` | 実装への受け渡し（`references/handoff-to-impl.md`） | ✅ PR #226 マージ済 |
 | 5 | `fd-05-pitfalls-links` | よく指摘されること・Figma の落とし穴（`references/pitfalls.md`）と、既存スキルからの参照・スキル全体の通し読み | ⬜ 待機中 |
 
 依存:
@@ -267,6 +267,7 @@ spawn・マージの手順と関心が違う／Figma を使わない傘には不
 - 2026-11-16: このマシンでは `doc-id` に `LC_ALL=C.UTF-8` が要り、`git push` に gh の認証の一回指定が要った
   （「必須の検証ステップ」に書いた）
 - 2026-11-16: 孫1 の PR #225（レビュー1回目で承認、CI green）を司令官がマージした。ADR は DOC-2611161826。傘で `pre-commit run --all-files`・`doc-id verify`・照合（`origin/master` との差分）が通った。孫1 のワークツリーとブランチはマージ前に（容量の掃除で）既に消えていたため、`ocw rm` は使えず、残った Herdr のワークスペースだけ閉じた（会話の ID は取れなかった）。孫2・孫3・孫4 を同時に spawn する
+- 2026-11-16: 孫4 の PR #226（承認 HEAD 939b2cb、CI green）を司令官がマージした。傘で `pre-commit run --all-files`・`doc-id verify`・照合が通った。人間の指示で、これ以降の孫のレビュワーは Codex（モデル `gpt-6.1-sol`）にする（`OCW_REVIEWER_COMMAND`）
 
 ## 孫1用プロンプト:
 
