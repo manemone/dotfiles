@@ -18,7 +18,7 @@
 
 | 孫 | ブランチ | 内容 | 状況 |
 |---|---|---|---|
-| 1 | `fd-01-skeleton` | スキルの骨組み: `SKILL.md`（入口・体制・1件の流れ・ユーザーとのやり取り・Figma の安全・references の索引）、ADR、`skills/README.md` とルート `README.md` の行 | ⬜ 待機中 |
+| 1 | `fd-01-skeleton` | スキルの骨組み: `SKILL.md`（入口・体制・1件の流れ・ユーザーとのやり取り・Figma の安全・references の索引）、ADR、`skills/README.md` とルート `README.md` の行 | 🔄 実装中 |
 | 2 | `fd-02-process-patterns` | 進め方のパターン（`references/patterns-process.md`）と記録の書き方（`references/record.md`） | ⬜ 待機中 |
 | 3 | `fd-03-visual-patterns-audit` | 見た目の決まりのパターン（`references/patterns-visual.md`）と点検スクリプトの雛形・使い方（`references/audit-template.js` `references/audit.md`） | ⬜ 待機中 |
 | 4 | `fd-04-impl-handoff` | 実装への受け渡し（`references/handoff-to-impl.md`） | ⬜ 待機中 |
@@ -149,6 +149,9 @@
   照合リストはリポの外のファイルで、材料を読んで新しい固有名詞（人名・画面名など）に気づいたら足してよい。
   リストに無くても、材料にしか出てこない名前・画面名・具体値を書いていないかを自分で読み直す
 - 詳細は AGENTS.md「コミット前の必須ステップ」と DOC-2610150520
+- **このマシンの push**: リモートが https で git の認証ヘルパーが未設定のため、素の `git push` は
+  `could not read Username` で落ちる。設定ファイルは変えず、その1回だけ gh の認証を使う:
+  `git -c credential.helper= -c 'credential.helper=!gh auth git-credential' push -u origin <ブランチ>`
 
 ## テスト方針（dotfiles AGENTS.md「テスト方針」と DOC-2610150520-a に従う）
 
@@ -261,6 +264,8 @@ spawn・マージの手順と関心が違う／Figma を使わない傘には不
 - 2026-11-16: 傘は `origin/master`（`5cc46c3`）の上。ブリーフを material に計画書を起草した。材料のパスと公開リポの
   照合リストはリポの外（`~/.local/state/umbrella/figma-design-workflow/`）に置いた。起草の途中で `/home` が満杯
   （容量・inode とも 100%）になって止まり、空きができてから再開した。ブリーフは転記後に削除した。孫1 を spawn する
+- 2026-11-16: このマシンでは `doc-id` に `LC_ALL=C.UTF-8` が要り、`git push` に gh の認証の一回指定が要った
+  （「必須の検証ステップ」に書いた）
 
 ## 孫1用プロンプト:
 
