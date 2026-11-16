@@ -187,18 +187,27 @@ GitHub が `APPROVE` / `REQUEST_CHANGES` を受け付けないため、レビュ
 3. **SHA は前方一致で比較する。** 対象HEADは短縮7桁のことも
    フル40桁のこともあり、単純な文字列一致では取りこぼす
 4. **`判定:` 行が無い形式がある。** 承認が見出しにしか現れず
-   （`🤖✅ 承認` / `🤖🔍 レビュー指摘` のような1行目だけ）、本文に `判定:` が
+   （`🤖✅ 承認` / `🤖🔍 レビュー指摘` のような見出しだけ）、本文に `判定:` が
    1つも出てこないことがある。`判定:` だけを探す実装は**承認を丸ごと取りこぼす**
    （実測: 同一の傘の中で、`判定:` 付きの回と無しの回が混在した）
+5. **見出しは1行目とは限らない。** 再レビューでは1行目が
+   `前回レビュー: #N（全X件中Y件解決、…）`、空行のあと3行目が `🤖✅ 承認` という形がある
+   （実測: tanoken #366 の再レビュー2件。pr-review-loop が「前回レビュー」を本文の
+   先頭に書くよう決めていたため、Codex のレビュー役がその通りに書いた。Claude のレビュー役は
+   #358・#362 の再レビューでも見出しを1行目に置いていた）。見出しを1行目だけで探すと
+   承認を取りこぼし、ひとつ前の変更要求が「最後の判定」に見える。
+   `前回レビュー:` の行は `承認` や `レビュー指摘` の字を含みうるので、**この行を飛ばして**
+   最初の行を見出しとして読む
 
 ```python
 plain = re.sub(r'[*`]', '', body)
 lines = plain.strip().splitlines()
+heads = [l for l in lines if l.strip() and not l.strip().startswith('前回レビュー')]  # 前回レビュー行を飛ばす
 m = re.search(r'判定\s*[:：]\s*(\S+)', plain)
 if m:                                   # 通常形: 本文に 判定: がある
     verdict = '承認' if m.group(1).startswith('承認') else '変更要求'
-elif lines and re.search(r'✅|🔍|承認|レビュー指摘', lines[0]):  # 見出しだけの形
-    head = lines[0]
+elif heads and re.search(r'✅|🔍|承認|レビュー指摘', heads[0]):  # 見出しだけの形
+    head = heads[0]
     verdict = '変更要求' if ('🔍' in head or 'レビュー指摘' in head) else '承認'
 else:                                   # どちらの形でも読めない
     verdict = None
@@ -206,10 +215,10 @@ m = re.search(r'HEAD\s*[:：]\s*([0-9a-f]{7,40})', plain)
 ok = m and (latest_sha.startswith(m.group(1)) or m.group(1).startswith(latest_sha))
 ```
 
-`body` が空文字列（本文なしのインラインコメント）の場合、`lines` は空リストになる。
-`lines[0]` にそのまま添字アクセスすると `IndexError` になる（本文なしは
+`body` が空文字列（本文なしのインラインコメント）の場合、`heads` は空リストになる。
+`heads[0]` にそのまま添字アクセスすると `IndexError` になる（本文なしは
 17件中13件という**最頻出のケース**なので、ここで落ちると全件走査が止まる）。
-`elif lines and ...` の短絡評価で空リストを弾き、`verdict = None`（＝次段落の
+`elif heads and ...` の短絡評価で空リストを弾き、`verdict = None`（＝次段落の
 「どちらの形でも読めなかった」状態）へ落とす。
 
 `'承認' in head` のような部分一致だけで判定すると、「前回の承認を取り消します」
