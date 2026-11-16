@@ -102,8 +102,16 @@ case "$1" in
     [ -z "$DOCKER_SHIM_PS" ] || cat "$DOCKER_SHIM_PS"
     exit 0
     ;;
+  context)
+    [ -z "$DOCKER_SHIM_CONTEXT_HOST" ] || echo "$DOCKER_SHIM_CONTEXT_HOST"
+    exit 0
+    ;;
   compose)
     shift
+    if [ "$1" = "config" ]; then
+      [ -z "$DOCKER_SHIM_CONFIG_NAME" ] || echo "name: $DOCKER_SHIM_CONFIG_NAME"
+      exit 0
+    fi
     [ "$1" = "-p" ] || exit 1
     echo "$@" >> "$DOCKER_SHIM_LOG"
     exit 0
@@ -757,6 +765,33 @@ class DockerTeardownTests(OcwTestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.calls(), [])
         self.assertFalse(pathlib.Path(wt).exists())
+
+    def test_rm_ignores_a_compose_name_from_outside_the_worktree(self):
+        # No compose file in the worktree: compose would walk up to a parent's
+        # file and answer with that project's name. Its leftover volumes must
+        # not be taken along.
+        wt = self.create("widget-maker")
+        self.env["DOCKER_SHIM_CONFIG_NAME"] = "parents-project"
+        result = self.ocw("rm", "-f", "widget-maker")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.calls(), [])
+        self.assertFalse(pathlib.Path(wt).exists())
+
+    def test_rm_uses_the_compose_name_of_a_file_inside_the_worktree(self):
+        wt = self.create("widget-maker")
+        (pathlib.Path(wt) / "compose.yaml").write_text("services: {}\n")
+        self.env["DOCKER_SHIM_CONFIG_NAME"] = "named-in-file"
+        result = self.ocw("rm", "-f", "widget-maker")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.calls(), [self.TEARDOWN.format("named-in-file")])
+
+    def test_orphans_refuses_a_daemon_that_is_not_local(self):
+        self.ps.write_text("prod\t/srv/apps/production\n")
+        self.env["DOCKER_SHIM_CONTEXT_HOST"] = "ssh://prod-host"
+        result = self.ocw("docker-orphans", "--rm")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self.calls(), [])
+        self.assertIn("not local", result.stderr)
 
     def test_orphans_lists_only_projects_whose_directories_are_gone(self):
         live = pathlib.Path(self.tmpdir.name) / "alive"

@@ -2061,8 +2061,46 @@ cleanup_empty_parents() {
 DOCKER_PROJECT_LABEL="com.docker.compose.project"
 DOCKER_WORKDIR_LABEL="com.docker.compose.project.working_dir"
 
+# The directories compose records (working_dir) are paths on the machine that
+# ran compose, and every check here (does that directory still exist, is it
+# this worktree) is made on this machine. Against a daemon that does not share
+# our filesystem (DOCKER_HOST / the current context pointing at tcp:// or
+# ssh://) those paths mean nothing, so such a daemon is treated as unusable
+# rather than risk removing someone else's running project.
 docker_usable() {
-  command -v docker >/dev/null 2>&1 && docker ps -q >/dev/null 2>&1
+  local host=""
+
+  command -v docker >/dev/null 2>&1 || return 1
+  docker ps -q >/dev/null 2>&1 || return 1
+
+  host="${DOCKER_HOST:-}"
+  if [ -z "$host" ]; then
+    host="$(docker context inspect --format '{{.Endpoints.docker.Host}}' \
+      2>/dev/null || true)"
+  fi
+  case "$host" in
+    "" | unix://*) return 0 ;;
+  esac
+  warn "skipping docker cleanup: daemon at ${host} is not local"
+  return 1
+}
+
+# Project name compose would use for the compose file that lives directly in
+# <dir>. Compose looks for a file in the current directory first and only
+# walks up to the parents when there is none, so asking it from a directory
+# without its own file would return a parent's (unrelated) project name.
+docker_config_name_in_dir() {
+  local dir="$1"
+  local f=""
+
+  for f in compose.yaml compose.yml docker-compose.yaml docker-compose.yml; do
+    [ -f "${dir}/${f}" ] || continue
+    (cd "$dir" && env -u COMPOSE_FILE -u COMPOSE_PATH_SEPARATOR \
+      -u COMPOSE_PROFILES -u COMPOSE_PROJECT_NAME \
+      docker compose config --format yaml 2>/dev/null |
+      sed -n 's/^name: //p')
+    return 0
+  done
 }
 
 # Distinct "<project>TAB<working_dir>" pairs over all containers (stopped
@@ -2101,10 +2139,7 @@ docker_projects_for_dir() {
   candidates="$(
     printf '%s\n' "$pairs" |
       awk -F '\t' -v a="$dir" -v b="$real" '$2 == a || $2 == b { print $1 }'
-    if [ -d "$dir" ]; then
-      (cd "$dir" && docker compose config --format yaml 2>/dev/null |
-        sed -n 's/^name: //p')
-    fi
+    docker_config_name_in_dir "$dir"
   )"
   candidates="$(printf '%s\n' "$candidates" | sed '/^$/d' | sort -u)"
 
