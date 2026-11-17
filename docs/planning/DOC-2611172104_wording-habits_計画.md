@@ -27,7 +27,7 @@ AI（主に Claude Code）が書く日本語に、持ち主が何十回も指摘
 |---|---|---|---|---|
 | 1 | dotfiles | `wh-01-research` | 調査（正規表現による計測と仕組みの候補）。推奨案は背景5 の理由で取り下げ | ✅ PR #232 マージ済 |
 | 2 | dotfiles | `wh-02-standard` | 基準と計測: 基準の文書・`claude/CLAUDE.md` の指示文・向きを持った規則の修正・読まれる頻度の計測と各リポの書き直し対象・モデル判定の基準値・調査結果の修正・ADR | ✅ PR #233 マージ済 |
-| 3 | dotfiles | `wh-03-skills-core` | 書き直し: `skills/umbrella-orchestrator/` と `skills/pr-review-loop/` | 🔄 実装中 |
+| 3 | dotfiles | `wh-03-skills-core` | 書き直し: `skills/umbrella-orchestrator/` と `skills/pr-review-loop/` | ✅ PR #234 マージ済 |
 | 4 | dotfiles | `wh-04-skills-rest` | 書き直し: 孫3 以外の `skills/` | ⬜ 待機中 |
 | 5 | dotfiles | `wh-05-docs` | 書き直し: `AGENTS.md`・`docs/design/`・`docs/reference/`・`docs/README.md`・各 README・`templates/repo-baseline/`・`bin/` のヘルプの文面（孫2 の対象リストの範囲） | ⬜ 待機中 |
 | 6 | lorahaus | `wh-06-lorahaus` | 書き直し: lorahaus（孫2 の対象リストの範囲） | 🔄 実装中 |
@@ -301,6 +301,8 @@ dotfiles 以外は非公開リポ。**dotfiles（公開）の文書・コミッ�
 - 2026-11-18: 孫3 の対象（2つのスキル）は読まれる回数の上位で、残りの判断に左右されないため、持ち主の指示で孫3 を spawn した。
   孫4・孫5 の扱いと判定のサンプルの確認は持ち主の返事待ち
 - 2026-11-18: 孫6（lorahaus）・孫7（sheaf）も、対象リストが孫4・孫5 の判断に左右されないため spawn した（同時3本）
+- 2026-11-18: 孫3 の PR #234（承認 HEAD 80aa67d、CI green、レビュー1回目で承認）を司令官がマージした。2ファイル +91/-91。
+  傘で `pre-commit run --all-files`・`doc-id verify` が通った
 
 ## 孫1用プロンプト:
 
