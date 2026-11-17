@@ -26,7 +26,7 @@ AI（主に Claude Code）が書く日本語に、持ち主が何十回も指摘
 | 孫 | リポ | ブランチ | 内容 | 状況 |
 |---|---|---|---|---|
 | 1 | dotfiles | `wh-01-research` | 調査（正規表現による計測と仕組みの候補）。推奨案は背景5 の理由で取り下げ | ✅ PR #232 マージ済 |
-| 2 | dotfiles | `wh-02-standard` | 基準と計測: 基準の文書・`claude/CLAUDE.md` の指示文・向きを持った規則の修正・読まれる頻度の計測と各リポの書き直し対象・モデル判定の基準値・調査結果の修正・ADR | 🔄 実装中 |
+| 2 | dotfiles | `wh-02-standard` | 基準と計測: 基準の文書・`claude/CLAUDE.md` の指示文・向きを持った規則の修正・読まれる頻度の計測と各リポの書き直し対象・モデル判定の基準値・調査結果の修正・ADR | ✅ PR #233 マージ済 |
 | 3 | dotfiles | `wh-03-skills-core` | 書き直し: `skills/umbrella-orchestrator/` と `skills/pr-review-loop/` | ⬜ 待機中 |
 | 4 | dotfiles | `wh-04-skills-rest` | 書き直し: 孫3 以外の `skills/` | ⬜ 待機中 |
 | 5 | dotfiles | `wh-05-docs` | 書き直し: `AGENTS.md`・`docs/design/`・`docs/reference/`・`docs/README.md`・各 README・`templates/repo-baseline/`・`bin/` のヘルプの文面（孫2 の対象リストの範囲） | ⬜ 待機中 |
@@ -295,6 +295,9 @@ dotfiles 以外は非公開リポ。**dotfiles（公開）の文書・コミッ�
 - 2026-11-17: 孫1 の推奨案（正規表現の `Stop` hook）を持ち主に提示したところ、背景5 の指摘を受けた。司令官が癖の本質の理解を
   持ち主と合わせ（背景2）、指示文で抑える方法の外部の事例を調査し（背景6）、再注入を試算した（背景7）。持ち主の決定
   （背景3）に沿って計画書を書き直し、旧版の孫2（仕組みの導入）を孫2〜11 に置き換えた
+- 2026-11-18: 孫2 の PR #233（承認 HEAD f0ac52e、CI green、レビュー3回目で承認）を司令官がマージした。基準の文書は DOC-2611172307、
+  ADR は DOC-2611172307-a、基準値は DOC-2611172119 §9。傘で `pre-commit run --all-files`・`doc-id verify` が通った。
+  書き直し対象（targets/）と判定のサンプルを持ち主に提示し、了承待ち。孫3 以降は了承まで spawn しない
 
 ## 孫1用プロンプト:
 
