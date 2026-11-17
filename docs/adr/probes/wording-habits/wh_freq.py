@@ -30,7 +30,7 @@ PROJ_ROOT = os.path.join(HOME, 'projects') + os.sep
 EXCLUDE_REL = re.compile(r'^docs/(adr|planning)/')
 SKILL_DEPLOYED = re.compile(r'^' + re.escape(HOME) + r'/\.claude/skills/([^/]+)/(.*)$')
 LINK_REPO = 'dotfiles'
-# 配布される claude/CLAUDE.md は全会話が読むので、順位の分母に入れると他が埋もれる。この傘の孫2 が書き直すので対象にも入れない
+# 配布される claude/CLAUDE.md は全会話が読むので、順位の分母に入れると他が埋もれる。対象にも入れない（既存の節の書き直しの担当は、孫2 の PR で司令官に報告した）
 SKIP_REL = {'claude/CLAUDE.md'}
 _skill_known = {}
 

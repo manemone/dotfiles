@@ -6,8 +6,8 @@
 # 流れ:
 #   1. ~/.claude/projects/*/*.jsonl から、持ち主に表示される本文（final・text）と送る文（send）を集める（wh.py の iter_texts を使う）
 #   2. 一定の長さのものから、乱数の種を固定して無作為に N 件を抜く（同じ引数なら同じ件が選ばれる）
-#   3. 複数件をまとめて1回の `claude -p` で判定する。一時ディレクトリで、会話を保存せず、ツールを使わせない
-#      （実 $HOME の設定は書き換えない）
+#   3. 複数件をまとめて1回の `claude -p` で判定する。一時の作業ディレクトリと一時の設定ディレクトリで、会話を保存せず、
+#      ツールを使わせない。CLAUDE.md（プロジェクトのものも ~/.claude/ のものも）は読ませない（実 $HOME の設定は書き換えない）
 #   4. 割合と費用の合計を出す。判定の妥当性の確認用に、約20件を本文と理由つきでリポの外へ置く
 #
 # 使い方:
@@ -94,8 +94,19 @@ def judge_batch(items, system, model, budget):
     body = '\n\n'.join('### id=%d\n%s' % (i, it['text']) for i, it in items)
     cmd = ['claude', '-p', '--model', model, '--output-format', 'json', '--no-session-persistence',
            '--system-prompt', system, '--tools', '', '--disable-slash-commands', '--max-budget-usd', str(budget)]
-    with tempfile.TemporaryDirectory() as tmp:  # 一時ディレクトリで実行（プロジェクトの CLAUDE.md 等を拾わない）
-        p = subprocess.run(cmd, input=body, capture_output=True, text=True, cwd=tmp, timeout=300)
+    # 一時ディレクトリで実行する。作業ディレクトリだけでなく設定ディレクトリ（CLAUDE_CONFIG_DIR）も一時のものにして、
+    # プロジェクトの CLAUDE.md とユーザーの ~/.claude/CLAUDE.md（と人格の import）を判定役の文脈に入れない。
+    # 入れると、配布で ~/.claude/CLAUDE.md が変わった前後で判定の条件が変わり、基準値と比べられなくなる。
+    # 認証は、実設定の資格情報ファイルへの symlink だけを一時の設定ディレクトリに置いて通す（実設定は書き換えない）
+    with tempfile.TemporaryDirectory() as tmp:
+        cfg, work = os.path.join(tmp, 'cfg'), os.path.join(tmp, 'work')
+        os.makedirs(cfg)
+        os.makedirs(work)
+        cred = os.path.expanduser('~/.claude/.credentials.json')
+        if os.path.exists(cred):
+            os.symlink(cred, os.path.join(cfg, '.credentials.json'))
+        env = dict(os.environ, CLAUDE_CONFIG_DIR=cfg)
+        p = subprocess.run(cmd, input=body, capture_output=True, text=True, cwd=work, env=env, timeout=300)
     if p.returncode != 0:
         raise RuntimeError(p.stderr[-300:])
     out = json.loads(p.stdout)
