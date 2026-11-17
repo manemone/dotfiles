@@ -26,7 +26,7 @@ AI（主に Claude Code）が書く日本語に、持ち主が何十回も指摘
 | 孫 | リポ | ブランチ | 内容 | 状況 |
 |---|---|---|---|---|
 | 1 | dotfiles | `wh-01-research` | 調査（正規表現による計測と仕組みの候補）。推奨案は背景5 の理由で取り下げ | ✅ PR #232 マージ済 |
-| 2 | dotfiles | `wh-02-standard` | 基準と計測: 基準の文書・`claude/CLAUDE.md` の指示文・向きを持った規則の修正・読まれる頻度の計測と各リポの書き直し対象・モデル判定の基準値・調査結果の修正・ADR | ⬜ 待機中 |
+| 2 | dotfiles | `wh-02-standard` | 基準と計測: 基準の文書・`claude/CLAUDE.md` の指示文・向きを持った規則の修正・読まれる頻度の計測と各リポの書き直し対象・モデル判定の基準値・調査結果の修正・ADR | 🔄 実装中 |
 | 3 | dotfiles | `wh-03-skills-core` | 書き直し: `skills/umbrella-orchestrator/` と `skills/pr-review-loop/` | ⬜ 待機中 |
 | 4 | dotfiles | `wh-04-skills-rest` | 書き直し: 孫3 以外の `skills/` | ⬜ 待機中 |
 | 5 | dotfiles | `wh-05-docs` | 書き直し: `AGENTS.md`・`docs/design/`・`docs/reference/`・`docs/README.md`・各 README・`templates/repo-baseline/`・`bin/` のヘルプの文面（孫2 の対象リストの範囲） | ⬜ 待機中 |
