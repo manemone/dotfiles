@@ -32,7 +32,7 @@ AI（主に Claude Code）が書く日本語に、持ち主が何十回も指摘
 | 5 | dotfiles | `wh-05-docs` | 書き直し: `AGENTS.md`・`docs/design/`・`docs/reference/`・`docs/README.md`・各 README・`templates/repo-baseline/`・`bin/` のヘルプの文面（孫2 の対象リストの範囲） | ⬜ 待機中 |
 | 6 | lorahaus | `wh-06-lorahaus` | 書き直し: lorahaus（孫2 の対象リストの範囲） | 🔄 実装中 |
 | 7 | sheaf | `wh-07-sheaf` | 書き直し: sheaf（同上） | 🔄 実装中 |
-| 8 | modeldex | `wh-08-modeldex` | 書き直し: modeldex（同上） | ⬜ 待機中 |
+| 8 | modeldex | `wh-08-modeldex` | 書き直し: modeldex（同上） | 🔄 実装中 |
 | 9 | iosci | `wh-09-iosci` | 書き直し: iosci（同上） | ⬜ 待機中 |
 | 10 | pixidex | `wh-10-pixidex` | 書き直し: pixidex（同上） | ⬜ 待機中 |
 | 11 | （リポの外） | — | メモリ: 全リポの目次（`MEMORY.md`）と、向きを持った規則・全面禁止に広げた記録の書き直し案（設計0 の 5） | ⬜ 待機中 |
@@ -303,6 +303,7 @@ dotfiles 以外は非公開リポ。**dotfiles（公開）の文書・コミッ�
 - 2026-11-18: 孫6（lorahaus）・孫7（sheaf）も、対象リストが孫4・孫5 の判断に左右されないため spawn した（同時3本）
 - 2026-11-18: 孫3 の PR #234（承認 HEAD 80aa67d、CI green、レビュー1回目で承認）を司令官がマージした。2ファイル +91/-91。
   傘で `pre-commit run --all-files`・`doc-id verify` が通った
+- 2026-11-18: 孫3 の枠が空いたので孫8（modeldex）を spawn した
 
 ## 孫1用プロンプト:
 
