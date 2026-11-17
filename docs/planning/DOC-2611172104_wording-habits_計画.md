@@ -30,8 +30,8 @@ AI（主に Claude Code）が書く日本語に、持ち主が何十回も指摘
 | 3 | dotfiles | `wh-03-skills-core` | 書き直し: `skills/umbrella-orchestrator/` と `skills/pr-review-loop/` | 🔄 実装中 |
 | 4 | dotfiles | `wh-04-skills-rest` | 書き直し: 孫3 以外の `skills/` | ⬜ 待機中 |
 | 5 | dotfiles | `wh-05-docs` | 書き直し: `AGENTS.md`・`docs/design/`・`docs/reference/`・`docs/README.md`・各 README・`templates/repo-baseline/`・`bin/` のヘルプの文面（孫2 の対象リストの範囲） | ⬜ 待機中 |
-| 6 | lorahaus | `wh-06-lorahaus` | 書き直し: lorahaus（孫2 の対象リストの範囲） | ⬜ 待機中 |
-| 7 | sheaf | `wh-07-sheaf` | 書き直し: sheaf（同上） | ⬜ 待機中 |
+| 6 | lorahaus | `wh-06-lorahaus` | 書き直し: lorahaus（孫2 の対象リストの範囲） | 🔄 実装中 |
+| 7 | sheaf | `wh-07-sheaf` | 書き直し: sheaf（同上） | 🔄 実装中 |
 | 8 | modeldex | `wh-08-modeldex` | 書き直し: modeldex（同上） | ⬜ 待機中 |
 | 9 | iosci | `wh-09-iosci` | 書き直し: iosci（同上） | ⬜ 待機中 |
 | 10 | pixidex | `wh-10-pixidex` | 書き直し: pixidex（同上） | ⬜ 待機中 |
@@ -300,6 +300,7 @@ dotfiles 以外は非公開リポ。**dotfiles（公開）の文書・コミッ�
   書き直し対象（targets/）と判定のサンプルを持ち主に提示し、了承待ち。孫3 以降は了承まで spawn しない
 - 2026-11-18: 孫3 の対象（2つのスキル）は読まれる回数の上位で、残りの判断に左右されないため、持ち主の指示で孫3 を spawn した。
   孫4・孫5 の扱いと判定のサンプルの確認は持ち主の返事待ち
+- 2026-11-18: 孫6（lorahaus）・孫7（sheaf）も、対象リストが孫4・孫5 の判断に左右されないため spawn した（同時3本）
 
 ## 孫1用プロンプト:
 
