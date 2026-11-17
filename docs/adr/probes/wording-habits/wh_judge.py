@@ -90,6 +90,16 @@ def collect(args, since, until):
     return pool, seen
 
 
+def oauth_token():
+    """実設定の資格情報から、アクセストークンだけを読む（ファイルは書き換えない）。"""
+    path = os.path.expanduser('~/.claude/.credentials.json')
+    try:
+        with open(path) as fp:
+            return json.load(fp)['claudeAiOauth']['accessToken']
+    except (OSError, ValueError, KeyError) as e:
+        sys.exit('資格情報を読めない（%s）: %s' % (path, type(e).__name__))
+
+
 def judge_batch(items, system, model, budget):
     body = '\n\n'.join('### id=%d\n%s' % (i, it['text']) for i, it in items)
     cmd = ['claude', '-p', '--model', model, '--output-format', 'json', '--no-session-persistence',
@@ -97,15 +107,14 @@ def judge_batch(items, system, model, budget):
     # 一時ディレクトリで実行する。作業ディレクトリだけでなく設定ディレクトリ（CLAUDE_CONFIG_DIR）も一時のものにして、
     # プロジェクトの CLAUDE.md とユーザーの ~/.claude/CLAUDE.md（と人格の import）を判定役の文脈に入れない。
     # 入れると、配布で ~/.claude/CLAUDE.md が変わった前後で判定の条件が変わり、基準値と比べられなくなる。
-    # 認証は、実設定の資格情報ファイルへの symlink だけを一時の設定ディレクトリに置いて通す（実設定は書き換えない）
+    # 認証は、実設定のアクセストークンを環境変数 CLAUDE_CODE_OAUTH_TOKEN で渡す。資格情報のファイルは一時の設定ディレクトリに置かない。
+    # symlink で渡すと、判定役がトークンを更新したとき、更新後の資格情報が一時ディレクトリにだけ書かれて消え、実ファイルが古いまま残る
+    # （書き込みは symlink をたどらず、置き換えで行われる）。環境変数なら判定役は資格情報を保存せず、期限切れなら更新せずエラーで止まる
     with tempfile.TemporaryDirectory() as tmp:
         cfg, work = os.path.join(tmp, 'cfg'), os.path.join(tmp, 'work')
         os.makedirs(cfg)
         os.makedirs(work)
-        cred = os.path.expanduser('~/.claude/.credentials.json')
-        if os.path.exists(cred):
-            os.symlink(cred, os.path.join(cfg, '.credentials.json'))
-        env = dict(os.environ, CLAUDE_CONFIG_DIR=cfg)
+        env = dict(os.environ, CLAUDE_CONFIG_DIR=cfg, CLAUDE_CODE_OAUTH_TOKEN=oauth_token())
         p = subprocess.run(cmd, input=body, capture_output=True, text=True, cwd=work, env=env, timeout=300)
     if p.returncode != 0:
         raise RuntimeError(p.stderr[-300:])

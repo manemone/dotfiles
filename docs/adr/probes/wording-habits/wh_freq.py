@@ -11,7 +11,7 @@
 #
 # 使い方:
 #   python3 wh_freq.py --since 2026-10-20 --until 2026-11-17 --share 0.8
-#   python3 wh_freq.py --repo lorahaus --out-dir ~/.local/state/umbrella/wording-habits/targets
+#   python3 wh_freq.py --repo <リポ名> --out-dir ~/.local/state/umbrella/wording-habits/targets --alias <旧名>=<現名>
 #   python3 wh_freq.py --repo dotfiles --ext md,jinja,sh --top 60
 # 孫3 以降が対象を決めるときと、導入後に読まれ方が変わったかを見るときに、同じ引数で期間だけ変えて再実行できる。
 # 出力にはファイル名が入る。他リポの出力はリポの外（--out-dir）へ書き、公開する文書には集計値だけを写す。
@@ -32,6 +32,11 @@ SKILL_DEPLOYED = re.compile(r'^' + re.escape(HOME) + r'/\.claude/skills/([^/]+)/
 LINK_REPO = 'dotfiles'
 # 配布される claude/CLAUDE.md は全会話が読むので、順位の分母に入れると他が埋もれる。対象にも入れない（既存の節の書き直しの担当は、孫2 の PR で司令官に報告した）
 SKIP_REL = {'claude/CLAUDE.md'}
+# 作業ツリーが ~/projects/<リポ>/<グループ>/<作業ツリー>/ の形で入るグループのディレクトリ名（ocw のブランチ接頭辞 ai/ など）。
+# 外さないと、グループ名が作業ツリー名になり、同じファイルが作業ツリーごとに別の行として数えられる。--group-dirs で変える
+GROUP_DIRS = {'ai'}
+# リポ名を変えたときの旧名 → 現名（旧名の作業ツリーのパスを現名に数える）。名前は公開しない文書に書かないので、--alias 旧名=現名 で渡す
+REPO_ALIAS = {}
 _skill_known = {}
 
 
@@ -47,7 +52,11 @@ def split_repo_path(path):
     if path.startswith(PROJ_ROOT):
         parts = path[len(PROJ_ROOT):].split('/', 2)
         if len(parts) == 3:
-            return parts[0], parts[2]
+            repo = REPO_ALIAS.get(parts[0], parts[0])
+            if parts[1] in GROUP_DIRS:
+                sub = parts[2].split('/', 1)
+                return (repo, sub[1]) if len(sub) == 2 else None
+            return repo, parts[2]
     m = SKILL_DEPLOYED.match(path)
     if m and is_dotfiles_skill(m.group(1)):
         return LINK_REPO, 'skills/%s/%s' % (m.group(1), m.group(2))
@@ -100,10 +109,15 @@ def scan_session(path, since, until):
 
 
 def find_chars(repo, rel, cache):
-    """文字数は、そのリポの存在する作業ツリーのうち最も新しく更新されたものから取る。"""
+    """文字数は、そのリポ（旧名の作業ツリーも含む）の存在する作業ツリーのうち最も新しく更新されたものから取る。"""
     key = (repo, rel)
     if key not in cache:
-        cands = glob.glob(os.path.join(PROJ_ROOT, repo, '*', rel))
+        dirs = [repo] + [o for o, n in REPO_ALIAS.items() if n == repo]
+        cands = []
+        for d in dirs:
+            cands += glob.glob(os.path.join(PROJ_ROOT, d, '*', rel))
+            for g in GROUP_DIRS:
+                cands += glob.glob(os.path.join(PROJ_ROOT, d, g, '*', rel))
         cands = [c for c in cands if os.path.isfile(c)]
         if cands:
             newest = max(cands, key=os.path.getmtime)
@@ -123,7 +137,12 @@ def main():
     ap.add_argument('--top', type=int, default=0, help='候補のうち上位だけを出す（0 なら全部）')
     ap.add_argument('--out-dir', help='リポごとの表を <リポ名>.md として書く先（リポの外のディレクトリ）。省略なら標準出力へ集計だけ')
     ap.add_argument('--exclude-project', help='除くプロジェクトのディレクトリ名の正規表現')
+    ap.add_argument('--group-dirs', default='ai', help='作業ツリーをまとめるグループのディレクトリ名のコンマ区切り（~/projects/<リポ>/<グループ>/<作業ツリー>/）')
+    ap.add_argument('--alias', action='append', default=[], help='旧名=現名。リポ名を変えた前の作業ツリーのパスを現名に数える（複数指定可）')
     a = ap.parse_args()
+    GROUP_DIRS.clear()
+    GROUP_DIRS.update(g for g in a.group_dirs.split(',') if g)
+    REPO_ALIAS.update(x.split('=', 1) for x in a.alias)
     since, until = parse_time(a.since), parse_time(a.until)
     exts = set(a.ext.split(','))
     ex = re.compile(a.exclude_project) if a.exclude_project else None
