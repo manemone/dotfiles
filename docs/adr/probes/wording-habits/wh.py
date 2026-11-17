@@ -69,7 +69,18 @@ def week_of(dt):
 
 
 HERDR_SEND = re.compile(r'herdr\s+(?:agent\s+prompt|pane\s+(?:run|send-text))')
-GH_POST = re.compile(r'gh\s+pr\s+(?:create|comment|edit)|gh\s+api\s+\S*(?:reviews|comments|replies)')
+GH_PR_POST = re.compile(r'gh\s+pr\s+(?:create|comment|edit)\b')
+GH_API = re.compile(r'gh\s+api\b')
+GH_API_PATH = re.compile(r'(?:reviews|comments|replies)\b')
+# 書き込みの印: -X/--method の POST・PATCH・PUT、-f/-F/--field/--raw-field、--input（オプションの順序に依らない）
+GH_API_WRITE = re.compile(r'(?:-X|--method)[\s=]+(?:POST|PATCH|PUT)\b|\s(?:-f|-F|--field|--raw-field|--input)\b', re.I)
+
+
+def is_gh_post(cmd):
+    """PR の作成・コメント・編集、またはレビュー・コメント・返信への gh api の書き込みか（読み取りは除く）。"""
+    if GH_PR_POST.search(cmd):
+        return True
+    return bool(GH_API.search(cmd) and GH_API_PATH.search(cmd) and GH_API_WRITE.search(cmd))
 
 
 def is_user_prompt(d):
@@ -124,7 +135,7 @@ def iter_texts(path, channels, since, until):
                     cmd = str(inp.get('command', ''))
                     if 'herdr' in channels and HERDR_SEND.search(cmd):
                         yield t, 'herdr', cmd
-                    if 'gh' in channels and GH_POST.search(cmd):
+                    if 'gh' in channels and is_gh_post(cmd):
                         yield t, 'gh', cmd
     if last:
         yield last
