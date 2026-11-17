@@ -10,6 +10,7 @@
 |---|---|---|
 | このリポジトリのルールを知る | [../AGENTS.md](../AGENTS.md) | 最重要ルール・ディレクトリ構成・デプロイの仕組みなど |
 | PR を出す前に読む | [design/DOC-2608020715_プルリクエストの作法.md](design/DOC-2608020715_プルリクエストの作法.md) | 説明文の構成・コメントのプレフィクス・ブランチ構成 |
+| 文章（返事・指示・PR 本文・文書）を書く前に読む | [design/DOC-2611172307_AIが書く文章の言葉.md](design/DOC-2611172307_AIが書く文章の言葉.md) | 読み手の名前で書く・決まり文句の代わりに中身を書く・指摘を場面の話として受け取る |
 | シェルを書く前に読む | [design/DOC-2608020715-a_シェルスクリプトコーディング方針.md](design/DOC-2608020715-a_シェルスクリプトコーディング方針.md) | POSIX sh / bash の使い分け、bashism の回避 |
 | `AGENTS.md` の芯と詳細の分け方を知る（分けた詳細の置き場を知る） | [design/DOC-2610150522_AGENTS.mdの芯と詳細の分け方.md](design/DOC-2610150522_AGENTS.mdの芯と詳細の分け方.md) | 芯に残す基準・参照の書き方・他リポへの適用手順 |
 | デプロイの仕組み（世代・状態ファイル・退避）を知る | [design/DOC-2610150520-b_デプロイの仕組み.md](design/DOC-2610150520-b_デプロイの仕組み.md) | `AGENTS.md` から移した詳細 |
@@ -21,6 +22,7 @@
 | なぜ承認と CI を切り離し、CI をマージの前に司令官が見張るようにしたかを知る | [adr/DOC-2611151330_ci-wait-after-approval.md](adr/DOC-2611151330_ci-wait-after-approval.md) | `ci_gate` / `child_pr_ci` の宣言・マージ条件への CI の追加・依存の無い孫を先に進める歯止め・却下した案 |
 | なぜ画面を触る PR の確認を汎用スキル `ui-review` にしたかを知る | [adr/DOC-2611040233_ui-review-skill.md](adr/DOC-2611040233_ui-review-skill.md) | 既存の画面レビューの下敷きと不採用の理由・リポ側の入口の形・レビュー役専用の確認役ペイン |
 | なぜ `ocw-meter` の ingest を statusLine から自動で走らせるようにしたかを知る | [adr/DOC-2611010254_auto-ingest.md](adr/DOC-2611010254_auto-ingest.md) | statusLine 起点・間隔・ロック・`quota.sample` への影響の実測と、hook / OS のスケジューラを採らなかった理由 |
+| なぜ AI の言葉の癖を、基準の文書・指示文・読まれる文書の書き直しで抑え、モデルの文脈判定で測るようにしたかを知る | [adr/DOC-2611172307-a_言葉の基準と計測の方法.md](adr/DOC-2611172307-a_言葉の基準と計測の方法.md) | 正規表現の hook・語のリスト・毎ターンの再注入を採らなかった理由、Codex・OpenCode に届く範囲、基準値の測り方 |
 | なぜスキルを複数の AI エージェントへ配るようにしたかを知る | [adr/DOC-2608272128_skills-multi-agent-distribution.md](adr/DOC-2608272128_skills-multi-agent-distribution.md) | `skills/` の切り出し・配布先エージェントの決め方・却下した案 |
 | なぜ Codex / OpenCode のグローバル指示を `claude/CLAUDE.md` から配るようにしたかを知る | [adr/DOC-2609072334_codex-opencode-global-instructions-distribution.md](adr/DOC-2609072334_codex-opencode-global-instructions-distribution.md) | `codex/` `opencode/` の新設・単一ソース symlink 方式・却下した案 |
 | なぜ git 操作の許可ポリシーを今の形にしたかを知る | [adr/DOC-2609121719_git-operation-permission-policy.md](adr/DOC-2609121719_git-operation-permission-policy.md) | `main`/`master` へのマージだけを人間に残す線引きと、PreToolUse フックの担保範囲を `gh pr merge` の base 判定1点に絞った決定、却下した案 |

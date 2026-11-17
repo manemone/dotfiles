@@ -10,7 +10,7 @@
 #
 # 使い方:
 #   python3 wh.py --since 2026-10-20 --until 2026-11-17 --by week
-#   python3 wh.py --since 2026-11-10 --by project --exclude-project 'wording|wh-0'
+#   python3 wh.py --since 2026-11-10 --by project --exclude-project 'wording|wh-[0-9]+'
 #   python3 wh.py --channel text,send,memory --by none
 # 孫2 の前後比較には、同じ引数で期間だけ変えて2回回す。
 import argparse, collections, datetime, glob, json, os, re, sys
