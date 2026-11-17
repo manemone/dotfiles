@@ -31,7 +31,7 @@ AI（主に Claude Code）が書く日本語に、持ち主が何十回も指摘
 | 4 | dotfiles | `wh-04-skills-rest` | 書き直し: 孫3 以外の `skills/` | ⬜ 待機中 |
 | 5 | dotfiles | `wh-05-docs` | 書き直し: `AGENTS.md`・`docs/design/`・`docs/reference/`・`docs/README.md`・各 README・`templates/repo-baseline/`・`bin/` のヘルプの文面（孫2 の対象リストの範囲） | ⬜ 待機中 |
 | 6 | lorahaus | `wh-06-lorahaus` | 書き直し: lorahaus（孫2 の対象リストの範囲） | 🔄 実装中 |
-| 7 | sheaf | `wh-07-sheaf` | 書き直し: sheaf（同上） | 🔄 実装中 |
+| 7 | sheaf | `wh-07-sheaf` | 書き直し: sheaf（同上） | ⏳ 人間のマージ待ち (PR sheaf#287) |
 | 8 | modeldex | `wh-08-modeldex` | 書き直し: modeldex（同上） | 🔄 実装中 |
 | 9 | iosci | `wh-09-iosci` | 書き直し: iosci（同上） | ⬜ 待機中 |
 | 10 | pixidex | `wh-10-pixidex` | 書き直し: pixidex（同上） | ⬜ 待機中 |
@@ -304,6 +304,8 @@ dotfiles 以外は非公開リポ。**dotfiles（公開）の文書・コミッ�
 - 2026-11-18: 孫3 の PR #234（承認 HEAD 80aa67d、CI green、レビュー1回目で承認）を司令官がマージした。2ファイル +91/-91。
   傘で `pre-commit run --all-files`・`doc-id verify` が通った
 - 2026-11-18: 孫3 の枠が空いたので孫8（modeldex）を spawn した
+- 2026-11-18: 孫7 の PR sheaf#287 が HEAD ce38e1f で承認された（内容の指摘0件）。CI は GitHub Actions の支払いエラーでジョブが起動せず赤、手元の pre-commit は通過。
+  private リポ（lorahaus・sheaf・modeldex）の CI は同じ理由で動かない。マージは持ち主
 
 ## 孫1用プロンプト:
 
