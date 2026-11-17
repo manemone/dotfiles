@@ -18,7 +18,7 @@ import argparse, collections, datetime, glob, json, os, re, sys
 # 悪癖1 の和語に開いた言い換え。各語の誤検出（普通の用法）は、前後の文字の条件で外してある。
 OPEN = {
     '確かめ': r'確かめ',
-    '直し': r'(?<![りきみじけえびちぎしせてれい見手立])直し(?![たい合])',  # 〜し直す型（やり直し・見直し・書き直し・立て直し・回し直しなど）を除く
+    '直し': r'(?<![りきみじけえびちぎしせてれい見手立])直し',  # 〜し直す型（やり直し・見直し・書き直し・立て直し・回し直しなど）を除く
     '測り': r'(?<![計観予推目])測り(?!知)',
     '割り出し': r'(?:割り出[しす]|(?:原因|内訳|費用)を割[るっ])',
     '控え': r'控え[をがにはので]',  # 控えめ・控える・控えて（差し控え）を除く
@@ -68,14 +68,37 @@ def week_of(dt):
     return (d - datetime.timedelta(days=d.weekday())).isoformat()
 
 
+HERDR_SEND = re.compile(r'herdr\s+(?:agent\s+prompt|pane\s+(?:run|send-text))')
+GH_POST = re.compile(r'gh\s+pr\s+(?:create|comment|edit)|gh\s+api\s+\S*(?:reviews|comments|replies)')
+
+
+def is_user_prompt(d):
+    """ツール結果ではなく、人間の入力で始まる user 行か（ターンの区切り）。"""
+    c = (d.get('message') or {}).get('content')
+    if isinstance(c, str):
+        return True
+    return isinstance(c, list) and any(isinstance(b, dict) and b.get('type') == 'text' for b in c)
+
+
 def iter_texts(path, channels, since, until):
-    """(時刻, チャンネル, 本文) を返す。"""
+    """(時刻, チャンネル, 本文) を返す。
+    チャンネル: text=返事の本文のブロックすべて / final=各ターン（人間の入力から次の入力まで）の最後の本文
+    〔Stop hook が点検できる範囲〕/ send=SendMessage の本文 / memory=メモリへの書き込み /
+    herdr=herdr の prompt・pane run・send-text を打つ Bash のコマンド全体 /
+    gh=PR の作成・コメント・レビュー投稿を打つ Bash のコマンド全体（--body-file の中身は含まない）。"""
+    last = None
     for line in open(path, errors='ignore'):
-        if '"type":"assistant"' not in line:
+        is_user = '"type":"user"' in line
+        if not is_user and '"type":"assistant"' not in line:
             continue
         try:
             d = json.loads(line)
         except ValueError:
+            continue
+        if d.get('type') == 'user' and 'final' in channels and is_user_prompt(d):
+            if last:
+                yield last
+            last = None
             continue
         if d.get('type') != 'assistant' or not d.get('timestamp'):
             continue
@@ -85,14 +108,26 @@ def iter_texts(path, channels, since, until):
         for b in (d.get('message') or {}).get('content') or []:
             if not isinstance(b, dict):
                 continue
-            if b.get('type') == 'text' and 'text' in channels:
-                yield t, 'text', b.get('text', '')
+            if b.get('type') == 'text':
+                if 'text' in channels:
+                    yield t, 'text', b.get('text', '')
+                if 'final' in channels:
+                    last = (t, 'final', b.get('text', ''))
             elif b.get('type') == 'tool_use':
                 inp = b.get('input') or {}
-                if b.get('name') == 'SendMessage' and 'send' in channels:
+                name = b.get('name')
+                if name == 'SendMessage' and 'send' in channels:
                     yield t, 'send', str(inp.get('message', ''))
-                elif b.get('name') in ('Write', 'Edit') and 'memory' in channels and '/memory/' in str(inp.get('file_path', '')):
+                elif name in ('Write', 'Edit') and 'memory' in channels and '/memory/' in str(inp.get('file_path', '')):
                     yield t, 'memory', str(inp.get('content') or inp.get('new_string') or '')
+                elif name == 'Bash':
+                    cmd = str(inp.get('command', ''))
+                    if 'herdr' in channels and HERDR_SEND.search(cmd):
+                        yield t, 'herdr', cmd
+                    if 'gh' in channels and GH_POST.search(cmd):
+                        yield t, 'gh', cmd
+    if last:
+        yield last
 
 
 def main():
@@ -100,7 +135,7 @@ def main():
     ap.add_argument('--since', help='ISO 8601。省略なら制限なし')
     ap.add_argument('--until', help='ISO 8601（この時刻を含まない）')
     ap.add_argument('--by', choices=['none', 'week', 'project', 'channel', 'word'], default='none')
-    ap.add_argument('--channel', default='text', help='text,send,memory のコンマ区切り')
+    ap.add_argument('--channel', default='text', help='text,final,send,memory,herdr,gh のコンマ区切り（意味は iter_texts の説明）')
     ap.add_argument('--exclude-project', help='除くプロジェクトのディレクトリ名の正規表現（語を話題にした会話を外す）')
     ap.add_argument('--include-project', help='対象にするプロジェクトの正規表現')
     ap.add_argument('--keep-quotes', action='store_true', help='「」の中も数える')
