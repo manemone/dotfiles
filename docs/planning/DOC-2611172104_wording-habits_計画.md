@@ -34,7 +34,7 @@ AI（主に Claude Code）が書く日本語に、持ち主が何十回も指摘
 | 7 | sheaf | `wh-07-sheaf` | 書き直し: sheaf（同上） | ⏳ 人間のマージ待ち (PR sheaf#287) |
 | 8 | modeldex | `wh-08-modeldex` | 書き直し: modeldex（同上） | ⏳ 人間のマージ待ち (PR modeldex#151) |
 | 9 | iosci | `wh-09-iosci` | 書き直し: iosci（同上） | 🔄 実装中 |
-| 10 | pixidex | `wh-10-pixidex` | 書き直し: pixidex（同上） | ⬜ 待機中 |
+| 10 | pixidex | `wh-10-pixidex` | 書き直し: pixidex（同上） | 🔄 実装中 |
 | 11 | （リポの外） | — | メモリ: 全リポの目次（`MEMORY.md`）と、向きを持った規則・全面禁止に広げた記録の書き直し案（設計0 の 5） | ⬜ 待機中 |
 
 依存:
@@ -308,6 +308,8 @@ dotfiles 以外は非公開リポ。**dotfiles（公開）の文書・コミッ�
   private リポ（lorahaus・sheaf・modeldex）の CI は同じ理由で動かない。マージは持ち主
 - 2026-11-18: 孫7 が人間のマージ待ちになり枠が空いたので孫9（iosci）を spawn した
 - 2026-11-18: 孫8 の PR modeldex#151 が HEAD dfe3f4e で承認された（レビュー2回目）。CI は支払いエラーで赤。マージは持ち主
+- 2026-11-18: 孫10（pixidex）の前に衝突を確認した。pixidex の `AGENTS.md`・`CLAUDE.md` を触るリモートのブランチは全部マージ済みで、
+  進行中の傘（gen-speed など）のブランチは触っていない。孫10 を spawn した
 
 ## 孫1用プロンプト:
 
