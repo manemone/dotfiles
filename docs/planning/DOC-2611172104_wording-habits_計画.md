@@ -33,7 +33,7 @@ AI（主に Claude Code）が書く日本語に、持ち主が何十回も指摘
 | 6 | lorahaus | `wh-06-lorahaus` | 書き直し: lorahaus（孫2 の対象リストの範囲） | 🔄 実装中 |
 | 7 | sheaf | `wh-07-sheaf` | 書き直し: sheaf（同上） | ⏳ 人間のマージ待ち (PR sheaf#287) |
 | 8 | modeldex | `wh-08-modeldex` | 書き直し: modeldex（同上） | ⏳ 人間のマージ待ち (PR modeldex#151) |
-| 9 | iosci | `wh-09-iosci` | 書き直し: iosci（同上） | 🔄 実装中 |
+| 9 | iosci | `wh-09-iosci` | 書き直し: iosci（同上） | ⏳ 人間のマージ待ち (PR iosci#131) |
 | 10 | pixidex | `wh-10-pixidex` | 書き直し: pixidex（同上） | ⏳ 人間のマージ待ち (PR pixidex#448) |
 | 11 | （リポの外） | — | メモリ: 全リポの目次（`MEMORY.md`）と、向きを持った規則・全面禁止に広げた記録の書き直し案（設計0 の 5） | ⬜ 待機中 |
 
@@ -311,6 +311,9 @@ dotfiles 以外は非公開リポ。**dotfiles（公開）の文書・コミッ�
 - 2026-11-18: 孫10（pixidex）の前に衝突を確認した。pixidex の `AGENTS.md`・`CLAUDE.md` を触るリモートのブランチは全部マージ済みで、
   進行中の傘（gen-speed など）のブランチは触っていない。孫10 を spawn した
 - 2026-11-18: 孫10 の PR pixidex#448 が HEAD 94fe479 で承認された（+4/-4）。CI は支払いエラーで赤。マージは持ち主
+- 2026-11-18: 孫9 の PR iosci#131 が HEAD 405a3cd で承認された（レビュー2回目、+19/-19）。CI は支払いエラーで赤。マージは持ち主
+- 2026-11-18: 孫6（lorahaus）は書き直し済みだが、origin/main でも落ちる rspec 6件（Linux に opencv-python-headless の wheel が無い）で
+  pre-commit が止まり、未コミット。`--no-verify` は auto mode に拒否された。rspec を飛ばすかを持ち主に確認中
 
 ## 孫1用プロンプト:
 
