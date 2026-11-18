@@ -237,6 +237,6 @@ PR を作る前に
 [docs/design/DOC-2610150520-c_実装時の注意.md](docs/design/DOC-2610150520-c_実装時の注意.md)
 を読むこと。** 特に次の2点は常に守る。
 
-- `shared/helpers.sh` の `links_for_tool()` に arm を足し忘れると `uninstall.sh` / `--status` から静かに漏れる
+- `shared/helpers.sh` の `links_for_tool()` に arm を足し忘れると `uninstall.sh` / `--status` から警告なしに漏れる
   （`skills` は `skill_links()` が一次情報源）
 - `docs/` の文書への地の文での言及には、説明的ファイル名だけでなく DOC-ID を明示する
