@@ -40,7 +40,7 @@
   "session_id": "756f06ff-28b8-412d-92db-cbd9dcece939",
   "session_name": "AI LLMコスト可視化の実装とPR作成",
   "prompt_id": "42f6cd60-9b99-4ad2-8c04-db12cf255f12",
-  "cwd": "/home/manemone/projects/lora-dataset-forge/sweep-throughput",
+  "cwd": "/home/manemone/projects/<リポ名>/sweep-throughput",
   "transcript_path": "/home/manemone/.claude/projects/<slug>/756f06ff-....jsonl",
   "version": "2.1.220",
   "effort": { "level": "medium" },
@@ -50,11 +50,11 @@
   "output_style": { "name": "default" },
   "model": { "id": "claude-opus-5", "display_name": "Opus 5" },
   "workspace": {
-    "current_dir": "/home/manemone/projects/lora-dataset-forge/sweep-throughput",
-    "project_dir": "/home/manemone/projects/lora-dataset-forge/sweep-throughput",
+    "current_dir": "/home/manemone/projects/<リポ名>/sweep-throughput",
+    "project_dir": "/home/manemone/projects/<リポ名>/sweep-throughput",
     "added_dirs": [],
     "git_worktree": "sweep-throughput",
-    "repo": { "host": "github.com", "owner": "manemone", "name": "lora-dataset-forge" }
+    "repo": { "host": "github.com", "owner": "manemone", "name": "<リポ名>" }
   },
   "cost": {
     "total_cost_usd": 0,

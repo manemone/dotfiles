@@ -21,7 +21,7 @@ dotfiles の `templates/repo-baseline/` は copier テンプレートで、決�
 `tools/doc-id/test/` が minitest なのは、Ruby 以外のリポジトリでも `Gemfile` 無しで
 `ruby tools/doc-id/test/doc_id_test.rb` が動くようにするための**道具の都合**であり、
 撒いた先のリポジトリのテストの規約ではない。過去に、これに合わせて AI が確認なしで
-minitest を選び、持ち主が後から RSpec に直したことがある（modeldex・pixidex）。
+minitest を選び、持ち主が後から RSpec に直したことが、2つのリポジトリであった。
 Ruby のリポジトリのテストの既定は RSpec である（ADR DOC-2610110216）。
 
 ## 1. 前提の確認
@@ -141,7 +141,7 @@ update が終わったら、結果の差分を **人間に見せてからコミ�
 （ルートの `copier.yml` が無い版を書くと、copier がリポジトリ全体をテンプレートとして撒いて落ちる）。
 最初の1回の移行には専用の手順（橋渡しのコミット。ADR DOC-2610110435 §4）が要るので、
 dotfiles の `docs/reference/DOC-2610110507_repo-baseline旧形からの移行手順.md`（移行の手順書
-DOC-2610110507）に従う。手順書には、modeldex・pixidex・sheaf それぞれの撒いた版・`language` の
+DOC-2610110507）に従う。手順書には、撒いた3リポジトリそれぞれの撒いた版・`language` の
 答え方・衝突しやすいファイル・移行の時期がある。ただし**移行を始めるかどうか（特に `language` の
 決定と時期）は持ち主が決める**ので、見つけたら自分で始めず、人間に報告して指示を仰ぐ。
 

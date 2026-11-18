@@ -66,11 +66,11 @@ Herdr があると自動化度が上がるが、必須ではない。
 | 孫 | リポ | ブランチ | 内容 | 状況 |
 |---|---|---|---|---|
 | 1 | analysis | `ms-01-eval-design` | 評価設計 | ✅ PR #80 マージ済 |
-| 2 | kenko | `ms-02-model-swap` | モデル差し替え | ⏳ 人間のマージ待ち (PR me/kenko#45) |
+| 2 | example-product | `ms-02-model-swap` | モデル差し替え | ⏳ 人間のマージ待ち (PR me/example-product#45) |
 | 3 | analysis | `ms-03-eval-run` | 評価と記録 | ⬜ 待機中 |
 ```
 
-（傘・司令官は `analysis` にあり、孫2 だけが他リポ `kenko` の孫である例）
+（傘・司令官は `analysis` にあり、孫2 だけが他リポ `example-product` の孫である例）
 
 - **「リポ」列が無い計画書は、全孫が傘と同じリポとして扱う。** 以下の他リポ向けの手順は
   一切使わず、これまでどおりの手順で動く（既存の計画書を書き換える必要はない）
@@ -86,7 +86,7 @@ Herdr があると自動化度が上がるが、必須ではない。
   | 名前 | メインワークツリー | owner/name | 既定ブランチ |
   |---|---|---|---|
   | analysis | `/Users/me/work/analysis/main` | `me/analysis` | `master` |
-  | kenko | `/Users/me/work/kenko/main` | `me/kenko` | `main` |
+  | example-product | `/Users/me/work/example-product/main` | `me/example-product` | `main` |
   ```
 
   「メインワークツリー」は絶対パスで書く（そのリポの `git worktree list --porcelain` の
@@ -351,7 +351,7 @@ gh pr view <PR番号> -R <owner/name> --json baseRefName,reviews,commits
 ```
 
 「リポ」列（§2.1）がある計画書では、他リポの孫の行にリポ名を添える
-（例: `⏳ 2: [kenko] ms-02-model-swap  人間のマージ待ち me/kenko#45`）。
+（例: `⏳ 2: [example-product] ms-02-model-swap  人間のマージ待ち me/example-product#45`）。
 
 ### 3.2 `/spawn <grandchild>`
 

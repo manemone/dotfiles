@@ -31,11 +31,7 @@ Claude Code の auto mode の分類器（soft_deny の「External System Writes�
 |---|---|---|---|---|
 | 1 | dotfiles | `rpc-01-post-procedure` | `pr-review-loop` の GitHub への書き込み手順を決め（ファイル書き込みツール + 単体コマンド）、gh の許可ルールを配布物 `claude/settings.json` へ移し、スレッド解決の扱いを決める。ADR を書く | ✅ PR #185 マージ済 |
 | 2 | dotfiles | `rpc-02-automode-allow` | 配布物 `claude/settings.json` に `autoMode`（`"$defaults"` 付きの `allow`）を足し、machine 設定とのマージでの扱いを決める。`claude auto-mode critique` に通す | ✅ PR #186 マージ済（人間が採用） |
-| 3 | pixidex | `rpc-03-post-rules` | 設計3 の判定で要ると決まったときだけ | ➖ 不要（設計3 の4項目に当たらない。ask/deny に孫1 の形に当たるもの無し・投稿手順やスレッド解決の決まり無し・`gh api` の書き込みの形の使用無し） |
-| 4 | modeldex | `rpc-04-post-rules` | 同上 | ➖ 不要（設計3 の4項目に当たらない。ask/deny に孫1 の形に当たるもの無し・投稿手順やスレッド解決の決まり無し・`gh api` の書き込みの形の使用無し） |
-| 5 | iosci | `rpc-05-post-rules` | 同上 | ➖ 不要（設計3 の4項目に当たらない。ask/deny に孫1 の形に当たるもの無し・投稿手順やスレッド解決の決まり無し・`gh api` の書き込みの形の使用無し。規約の `gh pr comment --attach` は実装 AI がスクリーンショットを貼る別用途で、孫1 の allow にも ask にも当たらない） |
-| 6 | lora-dataset-forge | `rpc-06-post-rules` | 同上 | ➖ 不要（設計3 の4項目に当たらない。ask/deny に孫1 の形に当たるもの無し・投稿手順やスレッド解決の決まり無し・`gh api` の書き込みの形の使用無し） |
-| 7 | sheaf | `rpc-07-post-rules` | 同上 | ➖ 不要（設計3 の4項目に当たらない。ask/deny に孫1 の形に当たるもの無し・投稿手順やスレッド解決の決まり無し・`gh api` の書き込みの形の使用無し） |
+| 3〜7 | dotfiles 以外の5リポ（各1本。リポは孫ごとに別） | `rpc-0N-post-rules` | 設計3 の判定で要ると決まったときだけ | ➖ 5本とも不要（設計3 の4項目に当たらない。ask/deny に孫1 の形に当たるもの無し・投稿手順やスレッド解決の決まり無し・`gh api` の書き込みの形の使用無し。規約の `gh pr comment --attach` は実装 AI がスクリーンショットを貼る別用途で、孫1 の allow にも ask にも当たらない） |
 
 状況値の追加: 要らないと判定した孫は `➖ 不要（<理由>）` と書き、spawn しない。
 
@@ -55,27 +51,22 @@ Claude Code の auto mode の分類器（soft_deny の「External System Writes�
 
 このリポ（dotfiles）は公開リポで、他は全部非公開なので、owner/name は値ではなく解決方法を書く
 （`umbrella-orchestrator` §2.1）。司令官はそのリポのメインワークツリーへ `cd` してから叩いて値を得る。
-進捗テーブルの状況値も `owner/name` の代わりに「名前」列の短い名前で書く（例: `⏳ 人間のマージ待ち (PR pixidex#12)`）。
+進捗テーブルの状況値も `owner/name` は書かず、PR 番号だけで書く（例: `⏳ 人間のマージ待ち (PR #12)`）。
 
-| 名前 | メインワークツリー | owner/name | 既定ブランチ |
-|---|---|---|---|
-| dotfiles | `/home/manemone/projects/dotfiles/master` | `manemone/dotfiles` | `master` |
-| pixidex | `/home/manemone/projects/pixidex/main` | メインワークツリーで `gh repo view --json nameWithOwner -q .nameWithOwner` を叩いた値 | `main` |
-| modeldex | `/home/manemone/projects/modeldex/main` | 同上 | `main` |
-| iosci | `/home/manemone/projects/iosci/main` | 同上 | `main` |
-| lora-dataset-forge | `/home/manemone/projects/lora-dataset-forge/main` | 同上 | `main` |
-| sheaf | `/home/manemone/projects/sheaf/main` | 同上 | `main` |
+dotfiles のメインワークツリーは `/home/manemone/projects/dotfiles/master`（`manemone/dotfiles`、既定ブランチ `master`）。
+dotfiles 以外の5リポは、それぞれ `/home/manemone/projects/<リポ名>/main` がメインワークツリーで、owner/name は
+メインワークツリーで `gh repo view --json nameWithOwner -q .nameWithOwner` を叩いた値、既定ブランチは `main`。
 
 各リポで守るべき規約の在処は、それぞれの `AGENTS.md`（dotfiles は作業別の索引の DOC-2610150520 系も）。
-pixidex・modeldex・iosci・sheaf は `.claude/pr-review.yml`（`convention_docs` に PR の作法とレビューの観点の
-文書を列挙）も持つ。lora-dataset-forge は `.claude/pr-review.yml` を持たない（2026-10-31 に `origin/main` で確認。
-ブリーフは sheaf も持たないとしていたが、`origin/main` には有った）。
+他の5リポのうち4リポは `.claude/pr-review.yml`（`convention_docs` に PR の作法とレビューの観点の
+文書を列挙）も持つ。残る1リポは `.claude/pr-review.yml` を持たない（2026-10-31 に `origin/main` で確認。
+ブリーフは別の1リポも持たないとしていたが、`origin/main` には有った）。
 司令官は他リポのメインワークツリーで `git fetch origin` と `ocw` と読み取り（`git show origin/main:<path>` 等）
 だけを叩き、`git checkout` / `git merge` / `git pull` は叩かない。
 
 ## ワークスペースラベル
 
-接頭辞は `ocw label-prefix`（lora-dataset-forge だけ `LDF`、他はリポ名と同じ）。
+接頭辞は `ocw label-prefix`（他の5リポのうち1リポだけ、リポ名とは別の略称の接頭辞を使う。他はリポ名と同じ）。
 
 - 傘: `dotfiles :: 投稿が分類器に止まる`
 - 孫1: `dotfiles :: 投稿が分類器に止まる 孫1 書き込み手順を決める`
@@ -108,8 +99,7 @@ pixidex・modeldex・iosci・sheaf は `.claude/pr-review.yml`（`convention_doc
   ヒアドキュメント・`cd …;` を使った複合コマンドや、ruby で JSON を組み立てて `--input` で送る形などがある。
   投稿形式そのもの（マーカー・投稿先・スレッド解決・再レビュー手順）は、各リポの `.claude/pr-review.yml` の
   `convention_docs` が決める作りになっている（SKILL.md「規約優先順位」）
-- **各リポの規約文書は、投稿のコマンドもスレッドの解決も定めていない。** pixidex・modeldex・iosci・sheaf・
-  lora-dataset-forge の `docs/design/`・`AGENTS.md`・`.claude/pr-review.yml` を `origin/main` で
+- **各リポの規約文書は、投稿のコマンドもスレッドの解決も定めていない。** 他の5リポの `docs/design/`・`AGENTS.md`・`.claude/pr-review.yml` を `origin/main` で
   `gh api` / `gh pr review` / `gh pr comment` / `resolveReviewThread` / ヒアドキュメント / `--input` /
   `--body-file` で探して、1件も無かった。つまり壊れ方はリポの規約ではなく、AI がその場で組み立てる形にある
 - `~/.claude/settings.json`（このマシンの生成物）の `permissions.allow` には次がある:
@@ -121,8 +111,8 @@ pixidex・modeldex・iosci・sheaf は `.claude/pr-review.yml`（`convention_doc
   **これらの gh のルールは、配布物 `claude/settings.json` にも machine 設定（`settings.machine.json`）にも無い。**
   過去にこのマシンの生成物へ足されたものが、`claude/deploy.sh` の「既存の `permissions.allow` を引き継ぐ」
   処理で残っているだけである。ほかのマシンには無い
-- 各リポの `.claude/settings.json`（`origin/main`）の gh の許可: pixidex・modeldex・lora-dataset-forge・sheaf は
-  `Bash(gh pr:*)` と `Bash(gh api:*)` を持つ。iosci は `gh issue list/view` と `gh pr view/list/checks` など
+- 各リポの `.claude/settings.json`（`origin/main`）の gh の許可: 他の5リポのうち4リポは
+  `Bash(gh pr:*)` と `Bash(gh api:*)` を持つ。残る1リポは `gh issue list/view` と `gh pr view/list/checks` など
   読み取りだけで、書き込みの許可は無い
 - auto mode の分類器の既定規則（`claude auto-mode defaults` で全文が読める。v2.1.314）の要点:
   - soft_deny の「External System Writes」は、PR への新しいコメント投稿（`gh pr comment`、`issues/{n}/comments`・
@@ -142,7 +132,7 @@ pixidex・modeldex・iosci・sheaf は `.claude/pr-review.yml`（`convention_doc
 一時物で、転記後に削除した。再集計の方法は 4.1）。
 
 - PR へのコメント・review の投稿は、10/28 までほぼ止められていなかった（10/16 と 10/20 に 1 件ずつ程度）。
-  10/29〜30 の 2 日で 9 件止められた（同じ 2 日の投稿は約 280 件）。pixidex と lora-dataset-forge の両方で起きている
+  10/29〜30 の 2 日で 9 件止められた（同じ 2 日の投稿は約 280 件）。2つのリポで起きている
 - 直近 6 日で、止められた投稿と、レビューを頼んだメッセージの届き方を突き合わせた:
   - 別セッションのメッセージで依頼が届いたセッション: 39 件中 5 件、約 13%
   - それ以外（`herdr agent prompt` で貼られた依頼を含む）: 359 件中 5 件、約 1.4%
@@ -396,7 +386,7 @@ pixidex・modeldex・iosci・sheaf は `.claude/pr-review.yml`（`convention_doc
 - 2026-10-31: 孫2 を spawn
 - 2026-10-31: 孫2 の `autoMode.allow` を含むコミットが分類器（Self-Modification）に止められた。孫2 は回避せず停止し、人間の対応のあと PR #186 を作成
 - 2026-10-31: 孫2 PR #186 を人間が採用し、マージ。傘で pre-commit・doc-id verify・deploy_smoke を通した。次は設計3 の判定（孫3〜7）
-- 2026-10-31: 設計3 の判定を5リポの `origin/main` で読み取りだけで行い、孫3〜7 を全部 ➖ 不要にした。どのリポも `permissions.ask` / `deny` に `gh` の行が無く、`gh api` の PUT・PATCH・DELETE・`--method`・merge の形を使う箇所も無いので、孫1 の ask で新たに確認が出る用途は見当たらない。投稿手順・スレッド解決・一時ファイルの置き場所の決まりも孫1 の形と食い違わない。リポ側の `Bash(gh api:*)` / `Bash(gh pr:*)` は、孫1 の ADR が置き換えを勧めていないので触らない。iosci の規約にある `gh pr comment --attach` は、実装 AI が自分の PR にスクリーンショットを貼る別の用途で、孫1 の allow にも ask にも当たらない
+- 2026-10-31: 設計3 の判定を5リポの `origin/main` で読み取りだけで行い、孫3〜7 を全部 ➖ 不要にした。どのリポも `permissions.ask` / `deny` に `gh` の行が無く、`gh api` の PUT・PATCH・DELETE・`--method`・merge の形を使う箇所も無いので、孫1 の ask で新たに確認が出る用途は見当たらない。投稿手順・スレッド解決・一時ファイルの置き場所の決まりも孫1 の形と食い違わない。リポ側の `Bash(gh api:*)` / `Bash(gh pr:*)` は、孫1 の ADR が置き換えを勧めていないので触らない。他のリポの規約にある `gh pr comment --attach` は、実装 AI が自分の PR にスクリーンショットを貼る別の用途で、孫1 の allow にも ask にも当たらない
 
 ## 孫1用プロンプト:
 
@@ -682,7 +672,7 @@ git fetch origin と git log --oneline -1 origin/main で、作業ブランチ�
 
 ````markdown
 # 傘ブランチ: review-post-classifier（dotfiles）
-# リポ: pixidex（メインワークツリー /home/manemone/projects/pixidex/main）
+# リポ: 孫3 の担当リポ（dotfiles 以外の非公開リポ。メインワークツリー /home/manemone/projects/<リポ名>/main）
 # 孫ブランチ: rpc-03-post-rules
 # ターゲット: main（このリポの既定ブランチ。マージは人間）
 
@@ -697,7 +687,7 @@ git fetch origin と git log --oneline -1 origin/main で、作業ブランチ�
 
 ````markdown
 # 傘ブランチ: review-post-classifier（dotfiles）
-# リポ: modeldex（メインワークツリー /home/manemone/projects/modeldex/main）
+# リポ: 孫4 の担当リポ（dotfiles 以外の非公開リポ。メインワークツリー /home/manemone/projects/<リポ名>/main）
 # 孫ブランチ: rpc-04-post-rules
 # ターゲット: main（このリポの既定ブランチ。マージは人間）
 
@@ -712,7 +702,7 @@ git fetch origin と git log --oneline -1 origin/main で、作業ブランチ�
 
 ````markdown
 # 傘ブランチ: review-post-classifier（dotfiles）
-# リポ: iosci（メインワークツリー /home/manemone/projects/iosci/main）
+# リポ: 孫5 の担当リポ（dotfiles 以外の非公開リポ。メインワークツリー /home/manemone/projects/<リポ名>/main）
 # 孫ブランチ: rpc-05-post-rules
 # ターゲット: main（このリポの既定ブランチ。マージは人間）
 
@@ -727,7 +717,7 @@ git fetch origin と git log --oneline -1 origin/main で、作業ブランチ�
 
 ````markdown
 # 傘ブランチ: review-post-classifier（dotfiles）
-# リポ: lora-dataset-forge（メインワークツリー /home/manemone/projects/lora-dataset-forge/main）
+# リポ: 孫6 の担当リポ（dotfiles 以外の非公開リポ。メインワークツリー /home/manemone/projects/<リポ名>/main）
 # 孫ブランチ: rpc-06-post-rules
 # ターゲット: main（このリポの既定ブランチ。マージは人間）
 
@@ -743,7 +733,7 @@ git fetch origin と git log --oneline -1 origin/main で、作業ブランチ�
 
 ````markdown
 # 傘ブランチ: review-post-classifier（dotfiles）
-# リポ: sheaf（メインワークツリー /home/manemone/projects/sheaf/main）
+# リポ: 孫7 の担当リポ（dotfiles 以外の非公開リポ。メインワークツリー /home/manemone/projects/<リポ名>/main）
 # 孫ブランチ: rpc-07-post-rules
 # ターゲット: main（このリポの既定ブランチ。マージは人間）
 

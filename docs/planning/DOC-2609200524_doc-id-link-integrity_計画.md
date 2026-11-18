@@ -8,7 +8,7 @@
 `tools/doc-id`（と、その配布元の複製 `templates/repo-baseline/template/tools/doc-id`）には、
 未採番文書（ファイル名が `DOC-DOCID_PLACEHOLDER_...`）どうしが互いにリンクしている状態で
 1本ずつ `assign` すると**リンク切れを作り、しかも `verify` がそれを見逃す**不具合がある。
-repo-baseline で `tools/doc-id` を配った iosci リポジトリで実際に 22 件のリンク切れが起き、
+repo-baseline で `tools/doc-id` を配った別のリポジトリで実際に 22 件のリンク切れが起き、
 `verify` も pre-commit もすべて通っていた。
 
 この傘では、原因となっている3つの穴（`assign` の書き換えすぎ・`spec` ディレクトリの
@@ -40,16 +40,9 @@ repo-baseline で `tools/doc-id` を配った iosci リポジトリで実際に 
 
 ---
 
-## 背景1: 人間の問題意識（逐語）
+## 背景1: 人間の問題意識
 
-相談AI（iosci リポジトリの作業セッション）が、doc-id の不具合を「dotfiles は範囲外なので
-記録だけにする」と報告したときの人間の発言:
-
-> 5: は？なんだそれは。なぜ直さない
-
-相談AIが確認を取らずに dotfiles で修正作業を始めてしまい、中断・撤去した後の人間の発言:
-
-> マージした。dotfiles のほうは消して。やってほしいが、傘ブランチで司令官を置くべきだ。
+別のリポジトリの作業セッションで、相談AIが doc-id の不具合を「dotfiles は範囲外なので記録だけにする」と報告したところ、人間は直すよう求めた。相談AIが確認を取らずに dotfiles で修正を始めてしまったため中断・撤去し、人間が**傘ブランチで司令官を置いて進める**よう指示した。
 
 ## 背景2: 人間が確定させた決定事項（覆さないこと）
 
@@ -59,7 +52,7 @@ repo-baseline で `tools/doc-id` を配った iosci リポジトリで実際に 
 
 ## 背景3: 既存の穴（再現済み・原因特定済み）
 
-発生状況: iosci リポジトリ（repo-baseline テンプレートで `tools/doc-id` を配布済み）で、
+発生状況: 別のリポジトリ（repo-baseline テンプレートで `tools/doc-id` を配布済み）で、
 `docs/` 配下に未採番の文書を十数本作り、互いに Markdown リンクで参照した状態で1本ずつ
 `doc-id assign` したところ、リンク切れが 22 件発生した。`doc-id verify` と pre-commit は
 すべて通っていた。
@@ -72,7 +65,7 @@ repo-baseline で `tools/doc-id` を配った iosci リポジトリで実際に 
 - `tools/doc-id/lib/doc_id/tool.rb` の `rename_with_content_replacement` が
   `content.gsub(/#{Regexp.escape old_doc_id}(?!-[\da-z])/, doc_id)` で、採番するファイルの
   中にある `DOC-DOCID_PLACEHOLDER` を**すべて**置換している
-- iosci での例: `店舗情報.md` を採番すると、その中の「未確定事項」文書へのリンク（まだ
+- 別のリポジトリでの例: `店舗情報.md` を採番すると、その中の「未確定事項」文書へのリンク（まだ
   プレースホルダのまま）が、店舗情報の新しい DOC-ID に化けて存在しないファイルを指す:
 
   ```text
@@ -97,7 +90,7 @@ repo-baseline で `tools/doc-id` を配った iosci リポジトリで実際に 
 
 - `tools/doc-id/lib/doc_id/tool.rb` の `EXCLUDED_DIR_NAMES = %w[test tests spec]` を、
   `scanner.rb` の `excluded_path?` がパスの**全セグメント**に適用している。テストコード
-  （テストフィクスチャに意図的な壊れ参照が含まれうる）を除外するつもりが、iosci の
+  （テストフィクスチャに意図的な壊れ参照が含まれうる）を除外するつもりが、別のリポジトリの
   仕様書ディレクトリ `docs/spec/` にも効いた
 - 結果: `docs/spec/` 内の文書にある参照が、`assign` の参照更新（`replace_all_doc_id_refs`）
   から漏れた（同じ文書で2回再現）。`verify`（`find_broken_refs`）の検査からも漏れる
@@ -126,7 +119,7 @@ repo-baseline で `tools/doc-id` を配った iosci リポジトリで実際に 
   2. **参照スタイルのリンク定義**（`[label]: ../tracking/DOC-<ID>_未確定事項.md`）。
      `check_md_links` の正規表現はインラインリンクしか拾わず、残りは 1 と同じ扱いになる
   3. **`docs/spec/` 等、穴2で除外されたディレクトリの中の参照**（穴2の修正で解消する）
-- **iosci の 22 件が上のどの書き方だったかは未確認である**（iosci のリポジトリはこの
+- **別のリポジトリの 22 件が上のどの書き方だったかは未確認である**（別のリポジトリはこの
   マシンに無く、司令官は現物を見られない）。「インラインリンクで書いていたのに
   `verify` が通った」のなら別の原因がありうるが、手元のコードと再現ではその経路を
   見つけられなかった。孫3は上の 1・2 を塞ぐ。インラインリンクなのに見逃す経路を
@@ -134,7 +127,7 @@ repo-baseline で `tools/doc-id` を配った iosci リポジトリで実際に 
 
 ## 背景4: 実測値
 
-- 2026-09-20、iosci の `docs/` 配下で発生。リンク切れ 22 件（穴1による）、参照更新漏れ
+- 2026-09-20、別のリポジトリの `docs/` 配下で発生。リンク切れ 22 件（穴1による）、参照更新漏れ
   2 回（穴2による。いずれも次の同じ文書）:
 
   ```text
@@ -235,7 +228,7 @@ repo-baseline で `tools/doc-id` を配った iosci リポジトリで実際に 
 
 ## スコープ外（孫が勝手に入れないこと）
 
-- iosci など、repo-baseline を配布済みのリポジトリの `tools/doc-id` への反映（各リポジトリ
+- 別のリポジトリなど、repo-baseline を配布済みのリポジトリの `tools/doc-id` への反映（各リポジトリ
   側で別途行う。copier update が使えないため手動）
 - 傘のスキル（`umbrella-handoff` / `umbrella-orchestrator`）の変更
 - `doc-id` の新しいサブコマンドやオプションの追加（例: 壊れたリンクを自動修復する機能）
@@ -318,7 +311,7 @@ git checkout -b doc-id-link-integrity-01-assign-self-ref
 
 - 未採番の文書 A・B が互いにリンクしている状態で A を採番しても、A の中の B への
   プレースホルダリンクは書き換わらず、その後 B を採番すると A・B 双方のリンクが
-  正しい新ファイル名を指す（**iosci で 22 件のリンク切れを出した実バグ。この regression は
+  正しい新ファイル名を指す（**別のリポジトリで 22 件のリンク切れを出した実バグ。この regression は
   必ず自動テストで固定する**）
 - 採番するファイル自身の中の自己参照（`.md` 付き・無し）は従来どおり新 ID に置換される
 - 採番するファイル自身の中の、説明的ファイル名を伴わない裸の `DOC-DOCID_PLACEHOLDER` は
@@ -407,7 +400,7 @@ git checkout -b doc-id-link-integrity-02-docs-spec-scan
 保護されていること。
 
 - `docs/spec/` 配下の文書にある参照が、`assign` の参照更新の対象になり、`verify` の
-  検査対象にもなる（**iosci で参照更新漏れを2回出した実バグ。この regression は必ず
+  検査対象にもなる（**別のリポジトリで参照更新漏れを2回出した実バグ。この regression は必ず
   自動テストで固定する**）
 - `docs/` の外にある `test/` `tests/` `spec/`（テストコード・フィクスチャ）は、従来どおり
   参照更新からも検証からも除外される（既存テスト
@@ -503,7 +496,7 @@ git checkout -b doc-id-link-integrity-03-verify-path
 保護されていること。
 
 - ID は実在するが説明的ファイル名が違う `DOC-<ID>_<名前>.md` を、インラインコードや
-  地の文に書くと `verify` が検出する（**iosci で `verify` が 22 件のリンク切れを見逃した
+  地の文に書くと `verify` が検出する（**別のリポジトリで `verify` が 22 件のリンク切れを見逃した
   実バグ。この regression は必ず自動テストで固定する**）
 - 参照スタイルのリンク定義の壊れたパスを `verify` が検出する
 - 正しい参照（インラインコード・地の文・参照スタイル・インラインリンク）は検出しない

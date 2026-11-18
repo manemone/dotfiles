@@ -221,11 +221,11 @@ class DestinationResolutionTest(DfxferTestBase):
     """計画書 1.3 の宛先決定規則。決まらないときは必ず止まる。"""
 
     def test_single_entry_list_needs_no_default(self):
-        self._seed_file("toybox")
-        proc = self._run(DFUP, env={"DFXFER_HOSTS": "toybox"})
+        self._seed_file("devbox")
+        proc = self._run(DFUP, env={"DFXFER_HOSTS": "devbox"})
 
         self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertIn("toybox:dfxfer/inbox/", self._logged_args())
+        self.assertIn("devbox:dfxfer/inbox/", self._logged_args())
 
     def test_explicit_host_wins_and_needs_no_list(self):
         self._seed_file("work-box")
@@ -237,13 +237,13 @@ class DestinationResolutionTest(DfxferTestBase):
     def test_unresolvable_destinations_abort_with_setup_guidance(self):
         """宛先が決まらない3通り。どれも転送せずに止まり、何を設定すれば
         よいかが（export 付きで）伝わること。"""
-        self._seed_file("toybox")
+        self._seed_file("devbox")
         cases = {
             "no config at all": {},
             "whitespace-only list": {"DFXFER_HOSTS": "   "},
-            "ambiguous list": {"DFXFER_HOSTS": "toybox work-box"},
+            "ambiguous list": {"DFXFER_HOSTS": "devbox work-box"},
             "default not in list": {
-                "DFXFER_HOSTS": "toybox work-box",
+                "DFXFER_HOSTS": "devbox work-box",
                 "DFXFER_HOST": "typo-box",
             },
         }
@@ -267,11 +267,11 @@ class RsyncResolutionTest(DfxferTestBase):
         終了していた（`set -o pipefail` 下でバージョン確認のパイプラインが
         失敗し、それを受ける代入ごと落ちるため）。~/.zshrc.local に一度
         書いたきり忘れる設定なので、黙って落ちると原因に辿り着けない。"""
-        self._seed_file("toybox")
+        self._seed_file("devbox")
         proc = self._run(
             DFUP,
             env={
-                "DFXFER_HOSTS": "toybox",
+                "DFXFER_HOSTS": "devbox",
                 "DFXFER_RSYNC": str(self.tmp / "does-not-exist"),
             },
         )
@@ -288,8 +288,8 @@ class IconvTest(DfxferTestBase):
     ICONV = "--iconv=UTF-8-MAC,UTF-8"
 
     def test_macos_with_rsync_3x_converts_filenames(self):
-        self._seed_file("toybox")
-        proc = self._run(DFUP, env={"DFXFER_HOSTS": "toybox"}, macos=True)
+        self._seed_file("devbox")
+        proc = self._run(DFUP, env={"DFXFER_HOSTS": "devbox"}, macos=True)
 
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertIn(self.ICONV, self._logged_args())
@@ -297,8 +297,8 @@ class IconvTest(DfxferTestBase):
     def test_linux_never_converts_filenames(self):
         """Linux ローカルの名前は既に NFC。変換を挟むと逆に壊れるうえ、
         壊れ方が静かで気づけない。"""
-        self._seed_file("toybox")
-        proc = self._run(DFUP, env={"DFXFER_HOSTS": "toybox"}, macos=False)
+        self._seed_file("devbox")
+        proc = self._run(DFUP, env={"DFXFER_HOSTS": "devbox"}, macos=False)
 
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertNotIn(self.ICONV, self._logged_args())
@@ -306,10 +306,10 @@ class IconvTest(DfxferTestBase):
     def test_macos_with_old_rsync_warns_but_still_transfers(self):
         """macOS 同梱の rsync は 2.6.9 で --iconv を持たない。ここで
         エラー終了させない、というのが計画書 5.1 の確定事項。"""
-        self._seed_file("toybox")
+        self._seed_file("devbox")
         proc = self._run(
             DFUP,
-            env={"DFXFER_HOSTS": "toybox"},
+            env={"DFXFER_HOSTS": "devbox"},
             macos=True,
             rsync_version="2.6.9",
         )
@@ -318,14 +318,14 @@ class IconvTest(DfxferTestBase):
         self.assertNotIn(self.ICONV, self._logged_args())
         self.assertIn("brew install rsync", proc.stderr)
         self.assertIn("port install rsync", proc.stderr)
-        self.assertIn("toybox:dfxfer/inbox/", self._logged_args())
+        self.assertIn("devbox:dfxfer/inbox/", self._logged_args())
 
     def test_linux_with_old_rsync_stays_quiet(self):
         """Linux では --iconv が要らないので、古い rsync でも警告しない。"""
-        self._seed_file("toybox")
+        self._seed_file("devbox")
         proc = self._run(
             DFUP,
-            env={"DFXFER_HOSTS": "toybox"},
+            env={"DFXFER_HOSTS": "devbox"},
             macos=False,
             rsync_version="2.6.9",
         )
@@ -338,8 +338,8 @@ class DfupInvocationTest(DfxferTestBase):
     """dfup が組み立てる rsync コマンドラインそのもの。"""
 
     def test_sends_out_dir_contents_upward_without_destructive_flags(self):
-        self._seed_file("toybox")
-        proc = self._run(DFUP, env={"DFXFER_HOSTS": "toybox"})
+        self._seed_file("devbox")
+        proc = self._run(DFUP, env={"DFXFER_HOSTS": "devbox"})
         args = self._logged_args()
 
         self.assertEqual(proc.returncode, 0, proc.stderr)
@@ -348,7 +348,7 @@ class DfupInvocationTest(DfxferTestBase):
         # 「ディレクトリの中身」を意味し、out/ 自体を入れ子にしない。
         self.assertEqual(
             args[-2:],
-            [f"{self.base_dir}/toybox/out/", "toybox:dfxfer/inbox/"],
+            [f"{self.base_dir}/devbox/out/", "devbox:dfxfer/inbox/"],
         )
 
         # 消す方向のフラグが1つも無いこと。混入すると原本またはリモートの
@@ -368,8 +368,8 @@ class DfupInvocationTest(DfxferTestBase):
         self.assertIn("--exclude=._*", args)
 
     def test_extra_arguments_pass_through_to_rsync(self):
-        self._seed_file("toybox")
-        proc = self._run(DFUP, "-n", env={"DFXFER_HOSTS": "toybox"})
+        self._seed_file("devbox")
+        proc = self._run(DFUP, "-n", env={"DFXFER_HOSTS": "devbox"})
         args = self._logged_args()
 
         self.assertEqual(proc.returncode, 0, proc.stderr)
@@ -385,15 +385,15 @@ class DfupInvocationTest(DfxferTestBase):
         （既存のどのテストも fake ssh 経由の rsync スタブへ差し替えているため、
         rsync が実際に何階層まで作れるかは一切検証されておらず、この欠陥は
         どのテストにも捕まらなかった）。"""
-        self._seed_file("toybox")
+        self._seed_file("devbox")
         self.assertFalse((self.remote_home / "dfxfer" / "inbox").exists())
 
-        proc = self._run(DFUP, env={"DFXFER_HOSTS": "toybox"})
+        proc = self._run(DFUP, env={"DFXFER_HOSTS": "devbox"})
 
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(
             self._logged_ssh_args(),
-            ["toybox", "sh", "-s", "--", "dfxfer/inbox"],
+            ["devbox", "sh", "-s", "--", "dfxfer/inbox"],
         )
         self.assertTrue((self.remote_home / "dfxfer" / "inbox").is_dir())
         self.assertIn("did not exist yet", proc.stdout)
@@ -401,22 +401,22 @@ class DfupInvocationTest(DfxferTestBase):
     def test_dry_run_does_not_touch_the_remote(self):
         """regression: `-n` は「何も変更しない」という約束のはずが、dfdown の
         リモート受け皿作成と同じ理由で、dfup 側の作成もこの約束を破りうる。"""
-        self._seed_file("toybox")
-        proc = self._run(DFUP, "-n", env={"DFXFER_HOSTS": "toybox"})
+        self._seed_file("devbox")
+        proc = self._run(DFUP, "-n", env={"DFXFER_HOSTS": "devbox"})
 
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(self._logged_ssh_args(), [])
         self.assertFalse((self.remote_home / "dfxfer").exists())
 
     def test_remote_dir_is_overridable(self):
-        self._seed_file("toybox")
+        self._seed_file("devbox")
         proc = self._run(
             DFUP,
-            env={"DFXFER_HOSTS": "toybox", "DFXFER_REMOTE_UP_DIR": "custom-dir"},
+            env={"DFXFER_HOSTS": "devbox", "DFXFER_REMOTE_UP_DIR": "custom-dir"},
         )
 
         self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertIn("toybox:custom-dir/", self._logged_args())
+        self.assertIn("devbox:custom-dir/", self._logged_args())
 
     def test_legacy_remote_dir_var_is_rejected_with_guidance(self):
         """regression: DFXFER_REMOTE_DIR は up/down 分離前の変数名で、
@@ -430,10 +430,10 @@ class DfupInvocationTest(DfxferTestBase):
         言わず、DFXFER_REMOTE_DIR を消せとは言っていなかった。案内どおり
         新変数を追加しても DFXFER_REMOTE_DIR は残ったままなので、
         一字一句同じメッセージで再び止まる。「削除しろ」まで言うこと。"""
-        self._seed_file("toybox")
+        self._seed_file("devbox")
         proc = self._run(
             DFUP,
-            env={"DFXFER_HOSTS": "toybox", "DFXFER_REMOTE_DIR": "handoff"},
+            env={"DFXFER_HOSTS": "devbox", "DFXFER_REMOTE_DIR": "handoff"},
         )
 
         self.assertNotEqual(proc.returncode, 0)
@@ -451,7 +451,7 @@ class DfupInvocationTest(DfxferTestBase):
         proc2 = self._run(
             DFUP,
             env={
-                "DFXFER_HOSTS": "toybox",
+                "DFXFER_HOSTS": "devbox",
                 "DFXFER_REMOTE_DIR": "handoff",
                 "DFXFER_REMOTE_UP_DIR": "handoff",
             },
@@ -463,10 +463,10 @@ class DfupInvocationTest(DfxferTestBase):
     def test_creates_local_dirs_and_reports_when_there_is_nothing_to_send(self):
         """初回実行で mkdir を人間にさせない。中身が無いときは黙って
         終わらず、どこへ置けばよいかを言う。"""
-        out_dir = self.base_dir / "toybox" / "out"
+        out_dir = self.base_dir / "devbox" / "out"
         self.assertFalse(out_dir.exists())
 
-        proc = self._run(DFUP, env={"DFXFER_HOSTS": "toybox"})
+        proc = self._run(DFUP, env={"DFXFER_HOSTS": "devbox"})
 
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertTrue(out_dir.is_dir())
@@ -480,7 +480,7 @@ class DfdownInvocationTest(DfxferTestBase):
     （計画書「検証方針」）。"""
 
     def test_pulls_remote_downloads_downward_without_destructive_flags(self):
-        proc = self._run(DFDOWN, env={"DFXFER_HOSTS": "toybox"})
+        proc = self._run(DFDOWN, env={"DFXFER_HOSTS": "devbox"})
         args = self._logged_args()
 
         self.assertEqual(proc.returncode, 0, proc.stderr)
@@ -489,7 +489,7 @@ class DfdownInvocationTest(DfxferTestBase):
         # ローカルの中身でリモートを上書きしに行く、静かに起きて戻せない事故になる。
         self.assertEqual(
             args[-2:],
-            ["toybox:dfxfer/outbox/", f"{self.base_dir}/toybox/in/"],
+            ["devbox:dfxfer/outbox/", f"{self.base_dir}/devbox/in/"],
         )
 
         # 消す方向のフラグが1つも無いこと。混入するとリモートの原本、または
@@ -506,7 +506,7 @@ class DfdownInvocationTest(DfxferTestBase):
         dfdown が既存のどの宛先に対しても失敗する。"""
         self.assertFalse((self.remote_home / "dfxfer" / "outbox").exists())
 
-        proc = self._run(DFDOWN, env={"DFXFER_HOSTS": "toybox"})
+        proc = self._run(DFDOWN, env={"DFXFER_HOSTS": "devbox"})
 
         self.assertEqual(proc.returncode, 0, proc.stderr)
         # host / sh / -s / -- / <dir>: the script itself travels over stdin
@@ -515,7 +515,7 @@ class DfdownInvocationTest(DfxferTestBase):
         # dfxfer_ensure_remote_dir's comment on why.
         self.assertEqual(
             self._logged_ssh_args(),
-            ["toybox", "sh", "-s", "--", "dfxfer/outbox"],
+            ["devbox", "sh", "-s", "--", "dfxfer/outbox"],
         )
         self.assertTrue((self.remote_home / "dfxfer" / "outbox").is_dir())
         # 新規作成した回だけ、人間が気づけるよう一言出す（regression:
@@ -528,7 +528,7 @@ class DfdownInvocationTest(DfxferTestBase):
         「作った」と報告しない。"""
         (self.remote_home / "dfxfer" / "outbox").mkdir(parents=True)
 
-        proc = self._run(DFDOWN, env={"DFXFER_HOSTS": "toybox"})
+        proc = self._run(DFDOWN, env={"DFXFER_HOSTS": "devbox"})
 
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertNotIn("did not exist yet", proc.stdout)
@@ -542,7 +542,7 @@ class DfdownInvocationTest(DfxferTestBase):
         気づけないまま exit 0 になる。"""
         proc = self._run(
             DFDOWN,
-            env={"DFXFER_HOSTS": "toybox", "DFXFER_REMOTE_DOWN_DIR": "downlaods"},
+            env={"DFXFER_HOSTS": "devbox", "DFXFER_REMOTE_DOWN_DIR": "downlaods"},
         )
 
         self.assertEqual(proc.returncode, 0, proc.stderr)
@@ -553,7 +553,7 @@ class DfdownInvocationTest(DfxferTestBase):
         """regression: `-n` は「何も変更しない」という約束のはずが、
         リモート受け皿ディレクトリの作成だけは無条件に実行されていた。
         dry-run では ssh 自体を一切呼ばない。"""
-        proc = self._run(DFDOWN, "-n", env={"DFXFER_HOSTS": "toybox"})
+        proc = self._run(DFDOWN, "-n", env={"DFXFER_HOSTS": "devbox"})
 
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(self._logged_ssh_args(), [])
@@ -570,14 +570,14 @@ class DfdownInvocationTest(DfxferTestBase):
             DFDOWN,
             "-f",
             "- *.png",
-            env={"DFXFER_HOSTS": "toybox"},
+            env={"DFXFER_HOSTS": "devbox"},
         )
 
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertNotIn("Dry run", proc.stdout)
         self.assertEqual(
             self._logged_ssh_args(),
-            ["toybox", "sh", "-s", "--", "dfxfer/outbox"],
+            ["devbox", "sh", "-s", "--", "dfxfer/outbox"],
         )
 
     def test_remote_mkdir_failure_aborts_before_any_transfer(self):
@@ -585,19 +585,19 @@ class DfdownInvocationTest(DfxferTestBase):
         （中途半端に転送を試みて分かりにくいエラーを重ねない）。"""
         proc = self._run(
             DFDOWN,
-            env={"DFXFER_HOSTS": "toybox", "SSH_STUB_EXIT_CODE": "1"},
+            env={"DFXFER_HOSTS": "devbox", "SSH_STUB_EXIT_CODE": "1"},
         )
 
         self.assertNotEqual(proc.returncode, 0)
         self.assertEqual(self._logged_args(), [])
-        self.assertIn("toybox:dfxfer/outbox", proc.stderr)
+        self.assertIn("devbox:dfxfer/outbox", proc.stderr)
 
     def test_creates_local_receive_dir_when_missing(self):
         """初回実行で mkdir を人間にさせない（計画書 1.2）。"""
-        in_dir = self.base_dir / "toybox" / "in"
+        in_dir = self.base_dir / "devbox" / "in"
         self.assertFalse(in_dir.exists())
 
-        proc = self._run(DFDOWN, env={"DFXFER_HOSTS": "toybox"})
+        proc = self._run(DFDOWN, env={"DFXFER_HOSTS": "devbox"})
 
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertTrue(in_dir.is_dir())
@@ -606,7 +606,7 @@ class DfdownInvocationTest(DfxferTestBase):
         """スタブは実際にファイルを落とさないので、in/ は空のまま残る —
         「動いたのか分からない」状態にならないよう一言出す（孫1の
         「Nothing to send」と対になる文言）。"""
-        proc = self._run(DFDOWN, env={"DFXFER_HOSTS": "toybox"})
+        proc = self._run(DFDOWN, env={"DFXFER_HOSTS": "devbox"})
 
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertIn("Nothing came down", proc.stdout)
@@ -619,7 +619,7 @@ class DfdownInvocationTest(DfxferTestBase):
         リモートが本当に空だった回でも「Nothing came down」が出なくなり、
         利用者は今回何も来なかったことに気づけなかった。判定基準は
         必ず「今回の転送で何件動いたか」（rsync --stats の出力）でなければならない。"""
-        in_dir = self.base_dir / "toybox" / "in"
+        in_dir = self.base_dir / "devbox" / "in"
         in_dir.mkdir(parents=True)
         (in_dir / "leftover-from-a-previous-pull.txt").write_text(
             "hello\n", encoding="utf-8"
@@ -627,7 +627,7 @@ class DfdownInvocationTest(DfxferTestBase):
 
         # 今回は何も転送しなかった体（RSYNC_STUB_TRANSFERRED 未設定 = 0件）。
         # in/ 自体は非空だが、それでも「Nothing came down」が出ること。
-        proc = self._run(DFDOWN, env={"DFXFER_HOSTS": "toybox"})
+        proc = self._run(DFDOWN, env={"DFXFER_HOSTS": "devbox"})
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertIn("Nothing came down", proc.stdout)
 
@@ -635,7 +635,7 @@ class DfdownInvocationTest(DfxferTestBase):
         # 「Nothing came down」は出ないこと。
         proc = self._run(
             DFDOWN,
-            env={"DFXFER_HOSTS": "toybox", "RSYNC_STUB_TRANSFERRED": "1"},
+            env={"DFXFER_HOSTS": "devbox", "RSYNC_STUB_TRANSFERRED": "1"},
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertNotIn("Nothing came down", proc.stdout)
@@ -649,7 +649,7 @@ class DfdownInvocationTest(DfxferTestBase):
         （転送自体は成功しているのに、利用者はこのエラーを見て不安になる）。"""
         proc = self._run(
             DFDOWN,
-            env={"DFXFER_HOSTS": "toybox", "RSYNC_STUB_TRANSFERRED": "1,200"},
+            env={"DFXFER_HOSTS": "devbox", "RSYNC_STUB_TRANSFERRED": "1,200"},
         )
 
         self.assertEqual(proc.returncode, 0, proc.stderr)
@@ -669,7 +669,7 @@ class DfdownInvocationTest(DfxferTestBase):
         緑になっていた）。"""
         proc = self._run(
             DFDOWN,
-            env={"DFXFER_HOSTS": "toybox", "RSYNC_STUB_TRANSFERRED": "3"},
+            env={"DFXFER_HOSTS": "devbox", "RSYNC_STUB_TRANSFERRED": "3"},
             rsync_version="2.6.9",
         )
 
@@ -686,7 +686,7 @@ class DfdownInvocationTest(DfxferTestBase):
         stub = self._write_exec(self.tmp / "openrsync", OPENRSYNC_STUB)
         proc = self._run(
             DFDOWN,
-            env={"DFXFER_HOSTS": "toybox", "DFXFER_RSYNC": str(stub)},
+            env={"DFXFER_HOSTS": "devbox", "DFXFER_RSYNC": str(stub)},
         )
         args = self._logged_args()
 
@@ -695,13 +695,13 @@ class DfdownInvocationTest(DfxferTestBase):
         # 転送そのものは通常どおり組み立てられていること。
         self.assertEqual(
             args[-2:],
-            ["toybox:dfxfer/outbox/", f"{self.base_dir}/toybox/in/"],
+            ["devbox:dfxfer/outbox/", f"{self.base_dir}/devbox/in/"],
         )
         self.assertNotIn("Nothing came down", proc.stdout)
-        self.assertIn(str(self.base_dir / "toybox" / "in"), proc.stdout)
+        self.assertIn(str(self.base_dir / "devbox" / "in"), proc.stdout)
 
     def test_extra_arguments_pass_through_to_rsync(self):
-        proc = self._run(DFDOWN, "-n", env={"DFXFER_HOSTS": "toybox"})
+        proc = self._run(DFDOWN, "-n", env={"DFXFER_HOSTS": "devbox"})
         args = self._logged_args()
 
         self.assertEqual(proc.returncode, 0, proc.stderr)
@@ -712,11 +712,11 @@ class DfdownInvocationTest(DfxferTestBase):
     def test_remote_dir_is_overridable(self):
         proc = self._run(
             DFDOWN,
-            env={"DFXFER_HOSTS": "toybox", "DFXFER_REMOTE_DOWN_DIR": "custom-dir"},
+            env={"DFXFER_HOSTS": "devbox", "DFXFER_REMOTE_DOWN_DIR": "custom-dir"},
         )
 
         self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertIn("toybox:custom-dir/", self._logged_args())
+        self.assertIn("devbox:custom-dir/", self._logged_args())
 
     def test_shares_destination_resolution_with_dfup(self):
         """代表1本だけ: 宛先が決まらないときに dfdown も止まること
@@ -737,7 +737,7 @@ class DfdownInvocationTest(DfxferTestBase):
         留める）。"""
         proc = self._run(
             DFDOWN,
-            env={"DFXFER_HOSTS": "toybox", "DFXFER_REMOTE_DIR": "handoff"},
+            env={"DFXFER_HOSTS": "devbox", "DFXFER_REMOTE_DIR": "handoff"},
         )
 
         self.assertNotEqual(proc.returncode, 0)

@@ -36,7 +36,7 @@
 | self-compact の閾値を claude-ds のときだけ 150k に下げ、回数の上限を増分制に置き換えた経緯と DeepSeek の実測を知りたい | [adr/DOC-2611032102_self-compact-rules-revision.md](adr/DOC-2611032102_self-compact-rules-revision.md) | 閾値別・回数の扱い別の費用の試算、ADR DOC-2610142337 の §2.2・§2.3 を置き換えた範囲、Claude の会話に効く範囲（増分制だけ）、却下した案 |
 | `ocw -H` で起動する claude の会話タイトルを herdr のラベルと揃えた理由と名前の形を知る | [adr/DOC-2610111939_ocw-session-name.md](adr/DOC-2610111939_ocw-session-name.md) | `--label`・`"<ラベル> / <役割>"` の名前・claude のときだけ足す判定・日本語名での `SendMessage` と宛先解決の実測・却下した案 |
 | `ocw -H` がエージェントを要るペインだけ起動する理由と、後から起動する `ocw agent` の方式を知る | [adr/DOC-2610112129_ocw-lazy-agents.md](adr/DOC-2610112129_ocw-lazy-agents.md) | ペインは全部作りエージェントの起動だけ遅らせる決定・起動行を git dir に残す方式と却下した案・pr-review-loop / `/finalize` の使い方・別セッションでの実測 |
-| 旧形で撒いたリポジトリ（modeldex・pixidex・sheaf）を `copier update` できる形へ移す | [reference/DOC-2610110507_repo-baseline旧形からの移行手順.md](reference/DOC-2610110507_repo-baseline旧形からの移行手順.md) | 橋渡しのコミットの手順・リポジトリごとの撒いた版と `language` の答え方・衝突しやすいファイル・namecheck |
+| 旧形で撒いたリポジトリ（3リポ）を `copier update` できる形へ移す | [reference/DOC-2610110507_repo-baseline旧形からの移行手順.md](reference/DOC-2610110507_repo-baseline旧形からの移行手順.md) | 橋渡しのコミットの手順・リポジトリごとの撒いた版と `language` の答え方・衝突しやすいファイル・namecheck |
 | なぜ他人の PR 群のレビューと自分の PR 群のレビュー依頼を今のスキル構成にしたかを知る | [adr/DOC-2609270420_multi-repo-pr-review-skills.md](adr/DOC-2609270420_multi-repo-pr-review-skills.md) | `pr-group-review`（レビュワー用）と `pr-group-request`（依頼者用）の線引き・レビュー状態の置き場所・自己完結 HTML のまとめ・COMMENT のみの投稿と権限に止められたときの振る舞いの決定と、却下した案 |
 | なぜ複数リポにまたがる作業の入口と傘の進め方を今の形にしたかを知る | [adr/DOC-2610081412_cross-repo-task-intake.md](adr/DOC-2610081412_cross-repo-task-intake.md) | 入口スキル `task-intake` の判断の3軸と振り分け・司令官の置き場・リポ間の役割分担・軽いハンドオフ・複数リポの傘（他リポの孫は既定ブランチへ PR しマージは人間）の決定と、却下した案 |
 | なぜ孫の PR を承認後も孫がマージせず、傘の司令官がマージするようにしたかを知る | [adr/DOC-2610130212_commander-merges-grandchildren.md](adr/DOC-2610130212_commander-merges-grandchildren.md) | `pr-review-loop` がどの PR もマージしない形・司令官のマージ条件・巡回 cron を30分にした理由・ADR DOC-2609121719 との関係 |
@@ -136,7 +136,7 @@
 | DOC-2610081409 | [cross-repo-workflow_計画.md](planning/DOC-2610081409_cross-repo-workflow_計画.md) | 製品リポと分析リポをまたぐ作業の入口と複数リポ対応の傘ブランチ計画書（傘 `cross-repo-workflow`）。入口スキル `task-intake`（軽いハンドオフを含む）・`umbrella-handoff` / `umbrella-orchestrator` の複数リポ対応・分析リポ側の記録規約・配布物 `claude/CLAUDE.md` の誘導更新を、ADR を含む5本の孫（うち1本は分析リポの孫）へ分解したもの |
 | DOC-2610110122 | [herdr-09-cli-migration_計画.md](planning/DOC-2610110122_herdr-09-cli-migration_計画.md) | 配布スキルを herdr 0.9.0 の CLI へ追随させる傘ブランチ計画書（傘 `herdr-09-cli-migration`）。消えた `herdr wait agent-status` の `herdr agent wait` への置き換え、AI間送信のフォールバックの `herdr agent prompt` への移行、孫から司令官への完了通知、レビュワー再起動の `herdr agent start` への移行の4本の孫へ分解したもの |
 | DOC-2610110211 | [ruby-defaults_計画.md](planning/DOC-2610110211_ruby-defaults_計画.md) | Ruby のリポジトリの既定（RSpec・厳しめの RuboCop）を repo-baseline テンプレートとスキルに持たせる傘ブランチ計画書（傘 `ruby-defaults`）。Ruby のときだけ生成する `.rubocop.yml`・RSpec の足場・`files:` 付きのフック、テンプレート自身の `tools/doc-id` を RuboCop に通すこと、道具のテストの形から規約を推測しないことを書くスキルの更新の3本の孫へ分解したもの |
-| DOC-2610110426 | [copier-update_計画.md](planning/DOC-2610110426_copier-update_計画.md) | repo-baseline テンプレートで `copier update` を使えるようにする傘ブランチ計画書（傘 `copier-update`）。dotfiles のルートへ `copier.yml` を移して `_subdirectory` でテンプレートの中身を指す入口の移動、スキルの update の手順の書き直し、既に撒いたリポジトリ（modeldex・pixidex・sheaf）の移行の手順書の3本の孫へ分解したもの |
+| DOC-2610110426 | [copier-update_計画.md](planning/DOC-2610110426_copier-update_計画.md) | repo-baseline テンプレートで `copier update` を使えるようにする傘ブランチ計画書（傘 `copier-update`）。dotfiles のルートへ `copier.yml` を移して `_subdirectory` でテンプレートの中身を指す入口の移動、スキルの update の手順の書き直し、既に撒いたリポジトリ（3リポ）の移行の手順書の3本の孫へ分解したもの |
 | DOC-2611032048 | [ds-cost-down_計画.md](planning/DOC-2611032048_ds-cost-down_計画.md) | claude-ds（DeepSeek）の費用を下げる傘ブランチ計画書（傘 `ds-cost-down`）。自動圧縮の位置の引き下げ・self-compact の規則の見直し・UI 確認役を別ペインにする仕組みと、他リポの孫 |
 
 ### reference/ — 運用リファレンス
@@ -146,7 +146,7 @@
 | DOC-2608021229-b | [LLM費用観測ベースライン計測手順.md](reference/DOC-2608021229-b_LLM費用観測ベースライン計測手順.md) | `ocw-meter` 導入後、実PR 5〜10本でLLM費用・Claude利用枠のベースラインを計測する手順書（旧ID: `DOC-004`） |
 | DOC-2608021229-c | [ocw-meterイベントスキーマ.md](reference/DOC-2608021229-c_ocw-meterイベントスキーマ.md) | `ocw-meter` が書く全イベント型の恒久リファレンス。共通エンベロープの全フィールド、全 `event_type`、`idempotency_key` の生成規則、費用計算式、`completeness` の判定基準を実データで検証した上でまとめたもの（旧ID: `DOC-005`） |
 | DOC-2608040805 | [配布実体運用ガイド.md](reference/DOC-2608040805_配布実体運用ガイド.md) | 世代ディレクトリ + `current` 配布方式の日常運用手順。canonical prefix のディレクトリ構造・manifest の全フィールド・世代確認・ロールバック・dev モードの出入り・リンク切れ対処・旧方式からの移行手順 |
-| DOC-2610110507 | [repo-baseline旧形からの移行手順.md](reference/DOC-2610110507_repo-baseline旧形からの移行手順.md) | 旧形（`_commit` 無し・`_src_path` 伏せ）で撒いたリポジトリを `copier update` できる形へ移す手順書。橋渡しのコミット経由の共通手順、modeldex・pixidex・sheaf ごとの撒いた版（V）と根拠・`language` の答え方・衝突しやすいファイル・namecheck・移行の時期、複製での模擬の結果、持ち主の判断を仰ぐ点 |
+| DOC-2610110507 | [repo-baseline旧形からの移行手順.md](reference/DOC-2610110507_repo-baseline旧形からの移行手順.md) | 旧形（`_commit` 無し・`_src_path` 伏せ）で撒いたリポジトリを `copier update` できる形へ移す手順書。橋渡しのコミット経由の共通手順、3リポごとの撒いた版（V）と根拠・`language` の答え方・衝突しやすいファイル・namecheck・移行の時期、複製での模擬の結果、持ち主の判断を仰ぐ点 |
 
 ## 新規ファイル追加時のルール
 

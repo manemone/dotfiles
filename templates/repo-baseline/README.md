@@ -3,7 +3,7 @@
 AI エージェント（Claude Code / opencode 等）と協働開発するためのリポジトリ基盤を配布する
 [copier](https://copier.readthedocs.io/) テンプレートです。
 
-dotfiles（本リポジトリ）・lora-dataset-forge（LDF、社内の別リポジトリ）・master に統合された
+dotfiles（本リポジトリ）・別のリポジトリ（社内）・master に統合された
 ocw-meter 傘の3例を突き合わせ、汎用的な部分だけを抽出しています。詳細な経緯は、
 dotfiles リポジトリ内の `docs/planning/DOC-2608020558_repo-baseline_計画.md`
 を参照してください（このディレクトリを別リポジトリへ移動した場合、このリンク先は
@@ -153,7 +153,7 @@ uv tool run copier update
 
 ## docs/ フォルダ規約について
 
-3例（LDF / dotfiles / ocw-meter）を突き合わせた結果、共通していたのは `planning/` だけでした。
+3例（別のリポジトリ / dotfiles / ocw-meter）を突き合わせた結果、共通していたのは `planning/` だけでした。
 このテンプレートは以下の方針で切り分けています。
 
 - `design/`・`planning/` は常に前提とする（`design/` は PR の作法という完全汎用な資産の置き場所であり、

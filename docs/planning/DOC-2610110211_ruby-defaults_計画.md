@@ -12,13 +12,13 @@
 
 > **本計画書は、相談の会話から渡された引き継ぎブリーフ（一時ファイル。転記後に削除済みで
 > 参照できない前提で書く）を material として司令官が起草したものである。** ブリーフに
-> 書かれていた問題意識（持ち主の発言の逐語）・根本原因・決定事項・手本と実例・既存の穴・
+> 書かれていた問題意識・根本原因・決定事項・手本と実例・既存の穴・
 > 制約・スコープ外・検証ステップは本計画書へ転記済みであり、以降はこの計画書が正典である。
 > ブリーフの「孫分割の叩き台」は司令官が検討し、ほぼそのままの3本で確定させた（「孫分割の
 > 判断」参照）。
 
 **この傘の変更は、これから撒くリポジトリにだけ効く。** `copier update` が使えない
-（背景5）ため、既存のリポジトリ（modeldex・pixidex ほか）へは自動では届かない。
+（背景5）ため、既存のリポジトリ（Ruby の2リポほか）へは自動では届かない。
 
 ## 孫ブランチ進捗
 
@@ -40,35 +40,29 @@
 
 ---
 
-## 背景1: 問題意識（持ち主の発言の逐語）
+## 背景1: 問題意識
 
-2026-10-11、pixidex（持ち主の Ruby の新しいリポジトリ）の最初の実装の傘で、持ち主が気づいた。
-持ち主の発言（pixidex の傘の司令官経由で受け取った逐語）:
+2026-10-11、持ち主の Ruby の新しいリポジトリの最初の実装の傘で、持ち主が気づいた点（新しい Ruby リポの傘の司令官経由）:
 
-> Rspec にしたいよ。てかmodeldexもそうすべきだな
+- テストは RSpec にしたい。古い Ruby リポも同じにすべき（古い Ruby リポが minitest になったのは、確認されないまま決まっていた）
+- rubocop の設定は、持ち主の別のリポジトリを手本にする
+- リポジトリを分けたことで、環境の差異が出てきているのではないか、と持ち主は推測している
+- dotfiles に傘を切り、特定のリポジトリに依存しない形でスキルやテンプレートの側を直す
 
-> modeldexはなんでミニテストにしたのかな、、、これも特に確認してなかった気がする
-
-> rubocop の設定はLDFを参考にして欲しい。あれ割ときっちりしてたはず
-
-> なんというかこの辺の環境差異とかも、別リポにしたマイナス点が出てきてる気はする
-
-> dotfiles の方には傘を切ってもらえる？LDFっていう固有のリポに依存せずにスキルやなんかの側をなおせるといいんだが。
-
-（「LDF」は持ち主の別のリポジトリ `lora-dataset-forge`。RuboCop の設定の手本がそこにある）
+（手本のリポジトリは持ち主の別のリポジトリ。RuboCop の設定の手本がそこにある）
 
 ## 背景2: 何が起きたか（根本原因）
 
 **テストの道具という、持ち主が決めるべき規約を、AI が確認せずに推測で決めていた。**
 
-- modeldex のテストが minitest なのは、modeldex の最初の実装の傘の計画書（modeldex リポジトリの
+- 古い Ruby リポのテストが minitest なのは、古い Ruby リポの最初の実装の傘の計画書（古い Ruby リポの
   `docs/planning/` にある ingest-place の計画書。ファイル名の DOC-ID は dotfiles の索引に無いため省く）の 384 行目に
   「lint は RuboCop、テストは minitest（リポジトリの既存のテスト `tools/doc-id/test/`・`spike/test/` と同じ）」
   とあるため。**repo-baseline テンプレートが配る `tools/doc-id/test/` が minitest だったので、AI がそれに
   合わせただけ**で、持ち主は確認していない
-- pixidex は modeldex に合わせて minitest で始め、持ち主が気づいて RSpec に替えた（pixidex の PR #19、
+- 新しい Ruby リポは古い Ruby リポに合わせて minitest で始め、持ち主が気づいて RSpec に替えた（新しい Ruby リポの PR #19、
   マージコミット `fd3a1a2`）
-- RuboCop も同様に、テンプレートは何も持っておらず、各リポジトリの AI がその場で決めている。modeldex の
+- RuboCop も同様に、テンプレートは何も持っておらず、各リポジトリの AI がその場で決めている。古い Ruby リポの
   `.rubocop.yml` は既定ほぼそのまま
 
 **注意: テンプレートの道具のテストが minitest であること自体は正しい。** テンプレートは Ruby 以外の
@@ -79,16 +73,16 @@
 
 ## 背景3: 人間が確定させた決定事項（覆さないこと）
 
-- **Ruby のリポジトリのテストの既定は RSpec**（持ち主「Rspec にしたいよ」）
-- **RuboCop は、持ち主の LDF の設定相当の厳しさ**（持ち主「LDFを参考にして欲しい」）
-- **テンプレート・スキルは、特定のリポジトリ（LDF）を参照しない形で直す**（持ち主「LDFっていう固有のリポに
-  依存せずに」）。設定はテンプレート自身に持つ
+- **Ruby のリポジトリのテストの既定は RSpec**（持ち主の希望）
+- **RuboCop は、持ち主の手本のリポジトリの設定相当の厳しさ**（持ち主の希望。手本のリポジトリを参考にする）
+- **テンプレート・スキルは、特定のリポジトリ（手本のリポジトリ）を参照しない形で直す**（持ち主の希望。固有のリポジトリに
+  依存しない）。設定はテンプレート自身に持つ
 
 ## 背景4: 手本と実例
 
-### 4.1 RuboCop の設定の手本（LDF の `.rubocop.yml`）
+### 4.1 RuboCop の設定の手本（手本のリポジトリの `.rubocop.yml`）
 
-手本の実体は持ち主のマシンの `/home/manemone/projects/lora-dataset-forge/main/.rubocop.yml`
+手本の実体は持ち主のマシンの `/home/manemone/projects/<手本のリポ名>/main/.rubocop.yml`
 （**読むだけ。テンプレートからもスキルからも参照しない**）。孫が手本を開かなくても作業できるように、
 写すべき内容を以下に転記する（2026-10-11 に司令官が実物から転記）。
 
@@ -201,24 +195,23 @@ Metrics/ParameterLists:        { Max: 6 }
 **写さないもの:**
 
 - `AllCops.Exclude` の `'tools/**/*'`（手本では「One-off dev/reporting scripts」として丸ごと除外）
-- `Metrics/ClassLength.Exclude` の `lib/lora_forge/cli.rb`・`lib/lora_forge/commands/*.rb`
+- `Metrics/ClassLength.Exclude` の `lib/<gem名>/cli.rb`・`lib/<gem名>/commands/*.rb`
   （そのリポジトリ固有のファイル名を指した除外）
 - `Metrics/ParameterLists` に付いていた、そのリポジトリ固有のクラスを理由にしたコメント
 
-いずれも pixidex も写さなかった。AI が除外を足さない規則（dotfiles の `AGENTS.md`「最重要ルール」と
+いずれも新しい Ruby リポも写さなかった。AI が除外を足さない規則（dotfiles の `AGENTS.md`「最重要ルール」と
 同趣旨の規則がテンプレートの `AGENTS.md` にもある）に反するうえ、そもそも他のリポジトリには関係ない。
 
 **「厳しい」は数字が小さいことではない。** RuboCop の既定は MethodLength 10・ClassLength 100 で、
 手本はむしろ緩めている。手本の厳しさは、プラグイン（performance・rspec）・`Layout/ClassStructure`・
 Style の追加にある。Metrics の数字を「厳しくするために」既定より小さくしないこと。
 
-### 4.2 実例: pixidex の PR #19
+### 4.2 実例: 新しい Ruby リポへの手本の適用
 
-リポジトリ `manemone/pixidex` の PR #19（マージコミット `fd3a1a2`）。RuboCop を手本どおりにし、
+非公開の新しい Ruby リポで行った変更。RuboCop を手本どおりにし、
 `test/` を `spec/` の RSpec にした。`tools/doc-id`・`tools/namecheck`・`spike` の minitest は触っていない。
 lint は `bundle exec rubocop`、テストは `bundle exec rake spec`。孫1 が Gemfile・`.rspec`・
-`spec/spec_helper.rb`・`Rakefile` の形を決めるときの参考にしてよい（`gh pr view 19 -R manemone/pixidex`
-と `gh pr diff 19 -R manemone/pixidex` で読める）。**テンプレートから pixidex を参照しない。**
+`spec/spec_helper.rb`・`Rakefile` の形を決めるときは、ここに書いた方針を参考にする（元の PR は外から読めない）。**テンプレートから新しい Ruby リポを参照しない。**
 
 ## 背景5: 既存の穴
 
@@ -228,12 +221,12 @@ lint は `bundle exec rubocop`、テストは `bundle exec rake spec`。孫1 が
   無ければ空欄」としか言っておらず、空欄のまま進んだあとに AI が何を基準に決めるかが書かれていない
 - **テンプレートが生成する lint・test の pre-commit フックに `files:` の絞り込みが無い**
   （`template/.pre-commit-config.yaml.jinja`。`pass_filenames: false` で常に走る）。`Gemfile` がまだ無い
-  リポジトリで lint・test のコマンドを入れると、文書だけのコミットでも毎回走って落ちる。pixidex の
-  初期化では、このために lint・test を空欄にして撒いた。modeldex は後から `files:` を手で足した
-- **テンプレート自身の Ruby の道具（`tools/doc-id/`）が、厳しい RuboCop に通らない。** modeldex は
+  リポジトリで lint・test のコマンドを入れると、文書だけのコミットでも毎回走って落ちる。新しい Ruby リポの
+  初期化では、このために lint・test を空欄にして撒いた。古い Ruby リポは後から `files:` を手で足した
+- **テンプレート自身の Ruby の道具（`tools/doc-id/`）が、厳しい RuboCop に通らない。** 古い Ruby リポは
   `tools/doc-id/**` を RuboCop の対象から外しており、理由を「配布元のテンプレートから配られたコード。
-  直すなら配布元で直す」としている。除外を外したときの指摘は 37 件・3 ファイル（2026-09-16 の modeldex
-  での実測。modeldex の当時の設定で Metrics/MethodLength 11・Metrics/AbcSize 7・Style/Documentation 7・
+  直すなら配布元で直す」としている。除外を外したときの指摘は 37 件・3 ファイル（2026-09-16 の古い Ruby リポ
+  での実測。古い Ruby リポの当時の設定で Metrics/MethodLength 11・Metrics/AbcSize 7・Style/Documentation 7・
   Style/OneClassPerFile 6 ほか。**手本の設定とは前提が違う**——手本は Style/Documentation を無効にし、
   一方で `omit_parentheses` 等を足しているので、件数と内訳は孫2 が測り直す）。**この傘がその「配布元」**。
   テンプレートが Ruby の既定の RuboCop の設定を配るなら、テンプレート自身の Ruby の道具がそれに通ること
@@ -278,9 +271,9 @@ lint は `bundle exec rubocop`、テストは `bundle exec rake spec`。孫1 が
 
 ### 1.2 Ruby のときだけ生成するもの
 
-- `.rubocop.yml`（背景4.1 の「写すもの」相当。**自己完結。LDF にも pixidex にも言及しない**）
+- `.rubocop.yml`（背景4.1 の「写すもの」相当。**自己完結。手本のリポジトリにも新しい Ruby リポにも言及しない**）
 - RSpec の足場: `Gemfile`（rubocop・rubocop-performance・rubocop-rspec・rspec・rake）、`.rspec`、
-  `spec/spec_helper.rb`、`spec` タスクを持つ `Rakefile`。中身は最小限にする（pixidex の PR #19 を参考に
+  `spec/spec_helper.rb`、`spec` タスクを持つ `Rakefile`。中身は最小限にする（新しい Ruby リポの PR #19 を参考に
   してよい）。`bundle install` 直後に `bundle exec rubocop` と `bundle exec rake spec`（または孫1 が
   決めたコマンド）が通ること。**example 0 件で rspec が落ちない形**にすること（足場だけのリポジトリで
   test フックが失敗し続けないように）
@@ -344,7 +337,7 @@ RuboCop が `.ruby-version`・`Gemfile.lock`・gemspec 等から推定するの�
 - **テンプレートは Ruby 以外のリポジトリにも撒かれる。Ruby の既定は、Ruby のリポジトリのときだけ生成される**
 - **テンプレートの道具のテスト（minitest・標準ライブラリ）は、Ruby 以外のリポジトリでも `Gemfile` 無しで
   動くことを壊さない**
-- **テンプレート・スキル・ADR から LDF（`lora-dataset-forge`）や pixidex を参照しない。** 設定はテンプレート
+- **テンプレート・スキル・ADR から手本のリポジトリや新しい Ruby リポを参照しない。** 設定はテンプレート
   自身に持つ。ADR で「手本にした」と経緯を書くのは構わないが、手本のファイルを読みに行かせる記述にしない
 - テンプレートは dotfiles の他の部分に依存しない自己完結ディレクトリである
   （`templates/repo-baseline/README.md`「自己完結」）
@@ -357,14 +350,14 @@ RuboCop が `.ruby-version`・`Gemfile.lock`・gemspec 等から推定するの�
 
 ## スコープ外
 
-- **既存のリポジトリの移行**: modeldex は別の傘（`rspec-rubocop`。同時に切った。まずコストの見積もりから）。
-  pixidex は済み
+- **既存のリポジトリの移行**: 古い Ruby リポは別の傘（`rspec-rubocop`。同時に切った。まずコストの見積もりから）。
+  新しい Ruby リポは済み
 - **Windows の Ruby の環境の管理**（gem の導入時に RubyInstaller の仕組みが MSYS2 にパッケージを入れる件。
-  持ち主「なんか環境をコントロールできないのは気持ち悪いな」）: pixidex の傘の孫1c が仕組みの調査・止め方・
+  持ち主は、環境を自分で制御できないことに抵抗を感じている）: 新しい Ruby リポの傘の孫1c が仕組みの調査・止め方・
   戻し方の提案をしている。結果を待つ
 - **`copier update` を使えるようにすること（テンプレートを独立したリポジトリにする）**: 既存のリポジトリへ
   直しを届ける経路の問題で、大きい判断。この傘では扱わない
-- 関連するが持ち主が頼んでいないもの（持ち主が望めば別の傘）: modeldex で生まれた `tools/namecheck/` を
+- 関連するが持ち主が頼んでいないもの（持ち主が望めば別の傘）: 古い Ruby リポで生まれた `tools/namecheck/` を
   テンプレートへ取り込むこと、確認系の道具を pre-commit のリモートフックとして配ること
 - Ruby 以外の言語の既定（Rust・TypeScript 等）
 - Ruby のコーディング方針の文書（`docs/design/` のコーディング方針の雛形）に Ruby の思想を書き込むこと
@@ -449,7 +442,7 @@ git checkout -b rbd-01-template
 1. `copier.yml`: Ruby かを問う質問（設計1.1）。`lint_cmd`・`test_cmd` より前に置き、その2つの既定値を
    Ruby のとき Ruby の既定にする（設計1.3）
 2. Ruby のときだけ生成するもの（設計1.2）: `.rubocop.yml`（計画書 背景4.1 の「写すもの」相当。
-   「写さないもの」は写さない。LDF・pixidex に言及しない）、`Gemfile`、`.rspec`、`spec/spec_helper.rb`、
+   「写さないもの」は写さない。手本のリポジトリ・新しい Ruby リポに言及しない）、`Gemfile`、`.rspec`、`spec/spec_helper.rb`、
    `spec` タスクを持つ `Rakefile`
 3. `.pre-commit-config.yaml.jinja`: Ruby のとき lint・test フックに `files:` を付ける（設計1.3）。Ruby 以外の
    ときの挙動は変えない

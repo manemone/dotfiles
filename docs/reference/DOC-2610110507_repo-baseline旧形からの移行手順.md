@@ -1,6 +1,6 @@
 # repo-baseline で旧形に撒いたリポジトリを copier update できる形へ移す手順
 
-既に撒いたリポジトリ（modeldex・pixidex・sheaf）を `copier update` できる形へ移すときに、
+既に撒いたリポジトリ（3リポ）を `copier update` できる形へ移すときに、
 繰り返し引く手順書である。移行の方式の決定とその根拠は
 [ADR DOC-2610110435](../adr/DOC-2610110435_copier-root-entry.md) §4 にあり、
 update 一般の手順と衝突の解き方はスキル
@@ -19,7 +19,7 @@ update 一般の手順と衝突の解き方はスキル
 - 移行は**各リポジトリで、この手順書ができたあとに行う**。この手順書を書いた傘では移行していない
 - **移行を始める前に、傘 `copier-update`（ルートの `copier.yml`）が `master` にマージされていること。**
   手順 4 の `--vcs-ref` に、ルートの `copier.yml` を含む本物のコミットを使うため
-- modeldex は、RSpec 移行の傘（`rspec-rubocop`）が終わってから。両方が
+- 古い Ruby リポは、RSpec 移行の傘（`rspec-rubocop`）が終わってから。両方が
   `.pre-commit-config.yaml`・`AGENTS.md` を触るため
 - 作業ツリーはきれいにしておく（未コミットの変更があると copier が拒否する）。
   `main` から update 用のブランチを切る
@@ -107,7 +107,7 @@ DOC-2610110435 §2.2）。行末の `namecheck:allow-line` では足りない（
 ファイルを書き直し、マーカーが消えるため）。足したあと
 `tools/namecheck/namecheck .copier-answers.yml` が通ることを確かめる。
 
-あわせて、撒いた先の許可の方針の記述を直す。modeldex・pixidex の `tools/namecheck/allowlist.txt` の
+あわせて、撒いた先の許可の方針の記述を直す。Ruby の2リポの `tools/namecheck/allowlist.txt` の
 冒頭コメントと `tools/namecheck/README.md` の「許可」節は、ファイル単位の許可は最後の手段で、
 載るのは自己参照でヒットする `patterns.txt` だけ、と書いている。そのままだと許可リストの中身と
 食い違い、移行の PR が方針違反と指摘されたり、後でそのリポジトリの AI が記述に従って
@@ -118,7 +118,7 @@ DOC-2610110435 §2.2）。行末の `namecheck:allow-line` では足りない（
 
 ## 4. リポジトリごとの表
 
-| | modeldex | pixidex | sheaf |
+| | 古い Ruby リポ | 新しい Ruby リポ | Rust リポ |
 |---|---|---|---|
 | 撒いたコミット（そのリポジトリ側） | `002f3eb`（2026-09-14） | `21c7080`（2026-10-10） | `6182d5f`（2026-08-21） |
 | **撒いた版 V**（dotfiles のコミット） | `c9bb1a4` | `3ba114c` | `25e1430` |
@@ -140,11 +140,11 @@ dotfiles の `master` で `templates/repo-baseline/` を変えたコミットの
 
 | リポジトリ | V と一致した根拠 | 隣の候補と区別できた点 |
 |---|---|---|
-| sheaf | `25e1430`（#39。テンプレート化した最初のコミット）のテンプレートと、`tools/`・`.github/` 等が一致 | 次にテンプレートの生成物を変えたのは `e721b36`（2026-09-03）で、撒いた日（08-21）より後。その間の `336b1e5` は README だけを変えるので、生成物は同じ |
-| modeldex | `c9bb1a4`（#94）のテンプレートと、`tools/doc-id/` を含め一致。`AGENTS.md` の最重要ルールが #94 で書き換わった後の文面 | 次の `6f927c6`（#111）は `tools/doc-id/` を変えるが、撒いた先の `tools/doc-id/` は #111 の前の版 |
-| pixidex | `3ba114c`（#112）のテンプレートと一致。`AGENTS.md` の上流の取り込みが「rebase」の文面 | 次の `ae02266`（#133）は `tools/doc-id/` を変えるが、撒いた先は #133 の前の版 |
+| Rust リポ | `25e1430`（#39。テンプレート化した最初のコミット）のテンプレートと、`tools/`・`.github/` 等が一致 | 次にテンプレートの生成物を変えたのは `e721b36`（2026-09-03）で、撒いた日（08-21）より後。その間の `336b1e5` は README だけを変えるので、生成物は同じ |
+| 古い Ruby リポ | `c9bb1a4`（#94）のテンプレートと、`tools/doc-id/` を含め一致。`AGENTS.md` の最重要ルールが #94 で書き換わった後の文面 | 次の `6f927c6`（#111）は `tools/doc-id/` を変えるが、撒いた先の `tools/doc-id/` は #111 の前の版 |
+| 新しい Ruby リポ | `3ba114c`（#112）のテンプレートと一致。`AGENTS.md` の上流の取り込みが「rebase」の文面 | 次の `ae02266`（#133）は `tools/doc-id/` を変えるが、撒いた先は #133 の前の版 |
 
-撒いた時点の `master` の先頭（sheaf `22c4309`・modeldex `c16be85`・pixidex `6c56278`）はいずれも
+撒いた時点の `master` の先頭（Rust リポ `22c4309`・古い Ruby リポ `c16be85`・新しい Ruby リポ `6c56278`）はいずれも
 V と同じテンプレートの中身を持つので、`master` から撒かれたと見てよい。V は「テンプレートを最後に
 変えたコミット」を使う（`master` の先頭を使っても同じ結果になる）。
 
@@ -152,42 +152,42 @@ V と同じテンプレートの中身を持つので、`master` から撒かれ
 
 `_skip_if_exists` のファイル（`.rubocop.yml`・`.ruby-version`・`.rspec`・`Gemfile`・`Rakefile`・
 `spec/spec_helper.rb`）は **update でも効く**（既にあるファイルは上書きされず、テンプレートの直しも
-届かない）。模擬で、modeldex の `Gemfile`・`.rubocop.yml`・`Rakefile` が `language=ruby` の update 後も
+届かない）。模擬で、古い Ruby リポの `Gemfile`・`.rubocop.yml`・`Rakefile` が `language=ruby` の update 後も
 手つかずで残ることを確かめた。無いファイルは新規に生成される。
 
 `language=ruby` と `other` の結果の違い（模擬による）:
 
-| | modeldex | pixidex |
+| | 古い Ruby リポ | 新しい Ruby リポ |
 |---|---|---|
 | `other` | 衝突なし。`tools/doc-id/` の修正と `AGENTS.md` の最重要ルールの更新が入るだけ | `AGENTS.md` に衝突1箇所（lint・テストの段落）。ほかは `tools/doc-id/` の修正 |
 | `ruby`（`ruby_version=4.0.5`） | 上に加え、`.ruby-version`・`.rspec`・`spec/spec_helper.rb` が新規生成、`ci.yml` に Ruby の準備が足される。`.pre-commit-config.yaml` に衝突2箇所（lint・test フックの `files:`）。`AGENTS.md` に「テストは RSpec」の段落が足される | `Gemfile`・`.rubocop.yml`・`.rspec`・`.ruby-version`・`Rakefile`・`spec/spec_helper.rb` がすべて新規生成、`ci.yml` に Ruby の準備が足される。`AGENTS.md` に衝突1箇所（lint・テストの段落） |
 
-`language` を変えても、答え済みの `lint_cmd`・`test_cmd` は前の答えのまま残る（模擬で、modeldex の
-`ruby` の update 後も `bundle exec rubocop` / `bundle exec rake test` のままだった）。pixidex は
+`language` を変えても、答え済みの `lint_cmd`・`test_cmd` は前の答えのまま残る（模擬で、古い Ruby リポの
+`ruby` の update 後も `bundle exec rubocop` / `bundle exec rake test` のままだった）。新しい Ruby リポは
 `''` のままなので、`ruby` を選ぶだけでは足場（`Gemfile`・RuboCop・RSpec の設定）が生成されても、
-フックと `pr-review.yml` に lint・test が出ない。modeldex は `test_cmd` が minitest のコマンドの
+フックと `pr-review.yml` に lint・test が出ない。古い Ruby リポは `test_cmd` が minitest のコマンドの
 まま、生成される `AGENTS.md` の「テストは RSpec」と食い違う。**`ruby` を選ぶときは
 `lint_cmd`・`test_cmd` も持ち主が決め、`--data` で渡す。**
 
 **AI は `language` を推測で決めない。** 判断材料は次のとおり。
 
-- **modeldex**: 今のテストは minitest（`test_cmd` が `bundle exec rake test`）で、`.rspec`・`spec/` は無い。
+- **古い Ruby リポ**: 今のテストは minitest（`test_cmd` が `bundle exec rake test`）で、`.rspec`・`spec/` は無い。
   `ruby` と答えると `AGENTS.md` に「テストは RSpec」と生成されるので、RSpec への移行（`rspec-rubocop`
   の傘）が終わる前に `ruby` で update すると、現状と食い違う。傘が終わってから移行するのは、
   この点でも筋が合う。移行した時点の実態（RSpec になっているか）を見て `ruby` か `other` かを決める
-- **pixidex**: Ruby のスクリプトはあるが、`Gemfile`・`.rubocop.yml` 等のプロジェクトの足場がまだ無く、
+- **新しい Ruby リポ**: Ruby のスクリプトはあるが、`Gemfile`・`.rubocop.yml` 等のプロジェクトの足場がまだ無く、
   lint・テストのコマンドも未確定（answers が空）。`ruby` と答えると、足場一式（`Gemfile`・RSpec・RuboCop の
   設定）が新規生成される。足場をテンプレートの既定で持つか、`other` のまま足場を自分で決めるかは持ち主が決める。
   足場を作る作業の前に `other` で移行し、足場ができた後に改めて `language` を変える手もある
   （`language` を変える update が通ることは未検証）
-- **sheaf**: Rust なので `other`。聞かれないので `ruby_version` は渡さない
+- **Rust リポ**: Rust なので `other`。聞かれないので `ruby_version` は渡さない
 
 ## 5. リポジトリごとの注意（update で衝突・追加が出るファイル）
 
 模擬は、各リポジトリの `main` を `mktemp -d` に `git clone` した複製で、上の手順どおりに行った
 （本物には触れていない）。`--vcs-ref` には、この傘の作業ツリーのコミットを使った。
 
-### 5.1 sheaf（`language=other`）
+### 5.1 Rust リポ（`language=other`）
 
 - update は通る（`tools/doc-id/` の修正が入る）。**`AGENTS.md` に衝突が5箇所**出る。リポジトリ固有の
   規則・節がテンプレート由来の節と隣り合っており、テンプレート側の更新（最重要ルール・テスト方針・
@@ -201,7 +201,7 @@ V と同じテンプレートの中身を持つので、`master` から撒かれ
 - 読み取り時点で、作業ツリーが `main` ではないブランチにあり未コミットの変更があった。
   移行は `main` から切ったきれいな作業ツリーで行う
 
-### 5.2 modeldex
+### 5.2 古い Ruby リポ
 
 - `language=other`: 衝突なし。`AGENTS.md` の最重要ルール（git 操作の規則）が V 以降の版に
   置き換わり（上流の取り込みは rebase）、`tools/doc-id/` の修正が入る
@@ -213,12 +213,12 @@ V と同じテンプレートの中身を持つので、`master` から撒かれ
 - namecheck: `_src_path` を URL に書き換えると `.copier-answers.yml` が `manemone` の固有名詞として
   検出される。許可リストに足すと通る（模擬で確認）
 
-### 5.3 pixidex
+### 5.3 新しい Ruby リポ
 
 - `AGENTS.md` に衝突1箇所（lint・テストのコマンドについての段落）。`language` が `other` でも `ruby`
   でも同じ段落で出る。どちらを採るかは、足場の決定（§4.2）に連動する
 - `.pre-commit-config.yaml` は、V の後に足した namecheck のフックがあっても衝突しなかった
-- namecheck: modeldex と同じ（許可リストに足すと通る。模擬で確認）
+- namecheck: 古い Ruby リポと同じ（許可リストに足すと通る。模擬で確認）
 
 ## 6. 模擬の結果（2026-10-11）
 
@@ -227,7 +227,7 @@ V と同じテンプレートの中身を持つので、`master` から撒かれ
 V 以降のテンプレートの直し（`tools/doc-id/` の修正・`AGENTS.md` の更新）が取り込まれ、衝突の印が
 付いたのは上の「5.」に書いたファイルだけだった。`.rej` は出なかった。`--trust` は不要だった。
 
-- modeldex の複製（`language=other`）で、衝突なしの update をコミットし、続けて同じ `--vcs-ref` で
+- 古い Ruby リポの複製（`language=other`）で、衝突なしの update をコミットし、続けて同じ `--vcs-ref` で
   update をもう一度回すと `Keeping template version`（変更なし）で終わり、作業ツリーに差分は出ない
 - 模擬では撒く元に、この傘の作業ツリーのコミットを含む使い捨てのクローンを使った。**本番では
   `master` に傘がマージされたあとの `origin/master` を `--vcs-ref` に使い、手順 7 で `_src_path` を
@@ -247,7 +247,7 @@ V 以降のテンプレートの直し（`tools/doc-id/` の修正・`AGENTS.md`
 
 ## 8. 持ち主に判断を仰ぐ点（まとめ）
 
-- modeldex・pixidex が `ruby` を選ぶときの `lint_cmd`・`test_cmd`（前の答えが引き継がれるため、明示して決める）
-- modeldex の `language`（`rspec-rubocop` の傘が終わった時点の実態で決める）
-- pixidex の `language`（足場をテンプレートの既定で持つか）と、その移行の時期
+- Ruby の2リポが `ruby` を選ぶときの `lint_cmd`・`test_cmd`（前の答えが引き継がれるため、明示して決める）
+- 古い Ruby リポの `language`（`rspec-rubocop` の傘が終わった時点の実態で決める）
+- 新しい Ruby リポの `language`（足場をテンプレートの既定で持つか）と、その移行の時期
 - 衝突の解き方（リポジトリ固有の規則を残す／テンプレートに寄せる）は、移行のたびに差分を見て人間が決める

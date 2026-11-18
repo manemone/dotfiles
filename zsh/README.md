@@ -160,8 +160,8 @@ a shared server. Their destination differs per machine, which is exactly what
 ```bash
 cat >> ~/.zshrc.local <<'EOF'
 # File handoff (bin/dfup, bin/dfdown). Names are ~/.ssh/config Host aliases.
-export DFXFER_HOSTS="toybox work-box"  # every destination this machine knows
-export DFXFER_HOST="toybox"            # the default one
+export DFXFER_HOSTS="devbox work-box"  # every destination this machine knows
+export DFXFER_HOST="devbox"            # the default one
 # export DFXFER_DIR="$HOME/dfxfer"     # local base directory (this is the default)
 EOF
 
@@ -169,7 +169,7 @@ source ~/.zshrc
 ```
 
 **`export` is not optional here.** `dfup` / `dfdown` are separate processes, not shell
-functions — a plain `DFXFER_HOST=toybox` would stay inside zsh and the commands would
+functions — a plain `DFXFER_HOST=devbox` would stay inside zsh and the commands would
 report that no destination is configured.
 
 Because it is sourced last, it can override any variable, alias, or PATH entry

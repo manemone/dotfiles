@@ -127,8 +127,8 @@ dfxfer_host() {
       "Add this to ~/.zshrc.local (it is sourced by zsh, so 'export' is required" \
       "for dfup / dfdown to see it — they run as separate processes):" \
       "" \
-      "  export DFXFER_HOSTS=\"toybox\"   # ssh Host aliases, space separated" \
-      "  export DFXFER_HOST=\"toybox\"    # the default one" \
+      "  export DFXFER_HOSTS=\"devbox\"   # ssh Host aliases, space separated" \
+      "  export DFXFER_HOST=\"devbox\"    # the default one" \
       "" \
       "The names are ~/.ssh/config Host aliases, not hostnames."
   fi

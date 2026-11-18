@@ -69,7 +69,7 @@
 - 06:32:44 `User32 1074`: `TrustedInstaller.exe` がもう1回再起動（0x80020003）
 - 06:33:20 Windows 起動完了。06:35:58 `WindowsUpdateClient 19`: 2026-11 の累積更新 KB5132061（26200.9974）のインストール成功
 - **WSL は 11:59:24 まで起動しなかった**（人間がターミナルを開くまで）。約5時間半、すべて止まっていた
-- 止まる直前（04:55〜06:15）に動いていた Claude の会話は pixidex の傘 `story-grouping` の司令官と孫3本。作業そのものは
+- 止まる直前（04:55〜06:15）に動いていた Claude の会話は別のリポジトリの傘の司令官と孫3本。作業そのものは
   失われていない（Herdr はワークスペースと会話を戻した。ただし会話は再開の指示が来るまで待つだけ）
 - Windows Update のアクティブ時間は `ActiveHoursStart=11`・`ActiveHoursEnd=5`（`HKLM:\SOFTWARE\Microsoft\WindowsUpdate\UX\Settings`）。
   05〜11 時は再起動してよい時間になっていた
@@ -108,7 +108,7 @@
   Claude の会話が動いていれば Claude アプリ（Remote Control）から見える。**WSL と Herdr が起動していなければ何も見えない**
 - Herdr 0.9.0（`~/.local/bin/herdr`）。`herdr` で永続セッションを起動・接続、`herdr status`、`herdr server stop`、
   `herdr --remote <ssh-target>`
-- 学習キューの worker は積まれたときに起動する作り（`lorahaus queue worker` は internal）。この傘で起こす必要は無い
+- 学習キューの worker は積まれたときに起動する作り（この worker は dotfiles の外にある非公開の実装で、中身は参照しない）。この傘で起こす必要は無い
 - 関連する既存文書: ADR DOC-2610111939（`docs/adr/DOC-2610111939_ocw-session-name.md`。Remote Control の会話名）、
   計画書 DOC-2610111927（`docs/planning/DOC-2610111927_herdr-worktree-group_計画.md`）の 5.2（Remote Control・sessions・
   cross-session-messaging の調査）、人間のメモリ「無人実行中は質問で止まらない」（autopilot / cron のターンを質問で
@@ -144,7 +144,7 @@
 ## スコープ外
 
 - Windows Update そのものの無効化（セキュリティ更新は入れる。止めるのは勝手な再起動）
-- 各リポの傘の中身（pixidex の `story-grouping` など）。この傘は「止まった会話を起こす」までで、会話の中身には触れない
+- 各リポの傘の中身（別のリポジトリの傘など）。この傘は「止まった会話を起こす」までで、会話の中身には触れない
 - 外部サービスを使った死活監視（マシンごと落ちて戻らないことを外から検知する仕組み）。必要なら人間に確認したうえで
   別の傘にする。この傘では「戻ったら通知が来る・来なければ戻っていない」と「Remote Control の会話一覧がオフラインになる」で分かる形に留める
 

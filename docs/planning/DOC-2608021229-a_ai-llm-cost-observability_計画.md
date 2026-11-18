@@ -278,7 +278,7 @@ Claude Code 2.1.220 の statusLine コマンドは stdin に JSON を渡す。�
  "agent":"claude","agent_status":"idle",
  "agent_session":{"agent":"claude","kind":"id","source":"herdr:claude",
                   "value":"292fbb18-a548-404a-aa3c-bfd1197602f3"},
- "cwd":"/home/manemone/projects/lora-dataset-forge/main", ...}
+ "cwd":"/home/manemone/projects/<リポ名>/main", ...}
 ```
 
 - `label` = `commander` / `implementer` / `reviewer`（`ocw` が rename 済み）
@@ -878,9 +878,9 @@ OCW_REVIEWER_COMMAND='claude --model opus --effort high --permission-mode auto' 
 - **IDが情報を持たない** — 番号から新旧が判別できない
 - **一度参照されると振り直せない**
 
-`~/projects/lora-dataset-forge/main/docs/` が採用している `DOC-YYMMDDHHMM_タイトル.md` 形式は
+`~/projects/<リポ名>/main/docs/` が採用している `DOC-YYMMDDHHMM_タイトル.md` 形式は
 構造的に衝突せず、ソート順が時系列と一致する。並行作業を前提とする以上こちらが正しい
-（LDF内の実例のファイル名は下記。他リポジトリの DOC-ID のため地の文には書かずコードブロックにする）。
+（その参照先リポジトリ内の実例のファイル名は下記。他リポジトリの DOC-ID のため地の文には書かずコードブロックにする）。
 
 ```
 DOC-2607191331_傘ブランチ_pipeline-hardening_計画.md
@@ -906,7 +906,7 @@ DOC-2607191331_傘ブランチ_pipeline-hardening_計画.md
 3. `docs/README.md` の索引更新
 4. **採番規約を `docs/README.md` に明記** — 「新規文書は作成時刻から `DOC-YYMMDDHHMM`。
    連番は使わない」。規約が書かれていなければ次に触る人がまた連番を振る
-5. ID重複・リンク切れの検証コマンド（lora-dataset-forge の `bin/doc-id verify` 相当）を
+5. ID重複・リンク切れの検証コマンド（別のリポジトリの `bin/doc-id verify` 相当）を
    入れるかは別途判断。入れるなら `bin/tests/lint.sh` から呼ぶ
 
 **この残タスクを忘れないこと。** 孫5が作る `docs/README.md` にも、
@@ -1773,7 +1773,7 @@ cost_basis:   estimated — not an invoice
 
 **配置の注意（着手前に必ず読むこと）**
 
-`~/projects/lora-dataset-forge/main/docs/` が同一ユーザーの確立した文書規約である。
+`~/projects/<リポ名>/main/docs/` が同一ユーザーの確立した文書規約である。
 **そちらの `docs/README.md` を実際に開いて構成を確認してから着手すること。** 要点:
 
 | 場所 | 役割 |
@@ -1786,7 +1786,7 @@ cost_basis:   estimated — not an invoice
 本リポジトリの `docs/` は現在 `adr/` と `planning/` のみで、直下は0ファイル。
 **`reference/` を新設し、手順書とスキーマ仕様はそこに置く。**
 
-`design/` ではなく `reference/` を使う理由（lora-dataset-forge に無い語彙だが意図的に足す）:
+`design/` ではなく `reference/` を使う理由（別のリポジトリに無い語彙だが意図的に足す）:
 
 - `design/` は**作るとき**に読む文書（設計判断とその根拠）
 - `reference/` は**運用中に繰り返し引く**文書（man page 的なもの）
@@ -1795,7 +1795,7 @@ cost_basis:   estimated — not an invoice
 実装完了後も参照され続ける。ベースライン計測手順も運用時に開く。どちらも後者にあたる。
 `docs/README.md` にこの区別を明記すること。
 
-**DOC-ID の採番**: lora-dataset-forge は `DOC-YYMMDDHHMM_タイトル.md`（タイムスタンプ）だが、
+**DOC-ID の採番**: 別のリポジトリは `DOC-YYMMDDHHMM_タイトル.md`（タイムスタンプ）だが、
 本リポジトリは既に `DOC-001` / `DOC-002` / `DOC-003` の連番で3件確立している。
 **リポジトリ内の一貫性を優先し、連番を継続する**（既存の最大番号を確認し次の空き番号を使う）。
 採番方式を変えるならそれは独立した判断であり、このPRでやらない。
@@ -1844,7 +1844,7 @@ cost_basis:   estimated — not an invoice
 #### 3.5. `docs/README.md`（文書索引）の新設
 
 本リポジトリの `docs/` には索引が無く、どこに何があるか分からない。
-`~/projects/lora-dataset-forge/main/docs/README.md` を**実物として読み、同じ体裁で**作成する:
+`~/projects/<リポ名>/main/docs/README.md` を**実物として読み、同じ体裁で**作成する:
 
 - **目的別クイックナビ**（「〜したいときはまずこれを読む」の表）
 - **フォルダ構成の表**（`adr/` / `reference/` / `planning/` の役割と使い分けの基準）
@@ -1857,7 +1857,7 @@ cost_basis:   estimated — not an invoice
 さらに、**採番方式について次の but 書きを必ず残すこと**（第16章「傘マージ後の残タスク T1」と対応）:
 
 > 現在の DOC-ID は連番（`DOC-001` …）だが、この方式は並行ブランチで採番が衝突するため、
-> タイムスタンプ式（`DOC-YYMMDDHHMM`、`~/projects/lora-dataset-forge` と同方式）への
+> タイムスタンプ式（`DOC-YYMMDDHHMM`、`~/projects/<リポ名>` と同方式）への
 > 移行を予定している。移行は独立したPRで行う。**それまでは連番を継続すること。**
 
 これが無いと、次に文書を追加する人が同じ議論を再演するか、無自覚に連番を振り続けることになる。

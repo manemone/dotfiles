@@ -12,8 +12,8 @@ Claude Code の会話は、compact の直後でも毎回、ルール文書（各
 
 1. **各リポの `AGENTS.md` を、毎回要る「芯」と、作業のときだけ読む「詳細」に分ける（孫1〜6）。**
    まず dotfiles で分け方の方針を決めて dotfiles 自身と `templates/repo-baseline` の雛形に適用し（孫1）、
-   その方針で他の5リポ（lora-dataset-forge・pixidex・modeldex・sheaf・iosci）の `AGENTS.md` を分ける（孫2〜6）
-2. **Figma プラグインを、ユーザー全体では止め、Figma を使うリポ（iosci・sheaf・pixidex）でだけ有効にする（孫7 ほか）。**
+   その方針で他の5リポの `AGENTS.md` を分ける（孫2〜6）
+2. **Figma プラグインを、ユーザー全体では止め、Figma を使うリポでだけ有効にする（孫7 ほか）。**
    そのリポでは、ラフに指示すれば自動で Figma のスキルを読む体験を残す
 
 > **本計画書は、相談の会話から渡された引き継ぎブリーフ（一時ファイル。転記後に削除済みで
@@ -26,11 +26,7 @@ Claude Code の会話は、compact の直後でも毎回、ルール文書（各
 | 孫 | リポ | ブランチ | 内容 | 状況 |
 |---|---|---|---|---|
 | 1 | dotfiles | `fc-01-agents-md-policy` | `AGENTS.md` の芯と詳細の分け方の方針を決めて文書にし、dotfiles の `AGENTS.md` と `templates/repo-baseline` の雛形に適用する。他リポへの適用手順（copier を撒いたリポの扱いを含む）も決める | ✅ PR #170 マージ済 |
-| 2 | lora-dataset-forge | `fc-02-agents-md-split` | 孫1 の方針で `AGENTS.md` を芯と詳細に分ける | ✅ PR lora-dataset-forge#494 マージ済 |
-| 3 | pixidex | `fc-03-agents-md-split` | 孫1 の方針で `AGENTS.md` を分ける（孫7 の検証済みなら Figma の有効化の1行も同乗） | ✅ PR pixidex#114・pixidex#115 マージ済 |
-| 4 | modeldex | `fc-04-agents-md-split` | 孫1 の方針で `AGENTS.md` を分ける | ✅ PR modeldex#114 マージ済 |
-| 5 | sheaf | `fc-05-agents-md-split` | 孫1 の方針で `AGENTS.md` を分ける（孫7 の検証済みなら Figma の有効化の1行も同乗） | ✅ PR sheaf#278 マージ済 |
-| 6 | iosci | `fc-06-agents-md-split` | 孫1 の方針で `AGENTS.md` を分ける（孫7 の検証済みなら Figma の有効化の1行も同乗） | ✅ PR iosci#130 マージ済 |
+| 2〜6 | dotfiles 以外の5リポ（各1本） | `fc-0N-agents-md-split` | 孫1 の方針で `AGENTS.md` を芯と詳細に分ける | ✅ 5本ともマージ済（Figma の有効化の1行は、Figma を使うリポにだけ入れた。経緯は進行記録） |
 | 7 | dotfiles | `fc-07-figma-scope` | `figma@synced` にリポごとの `enabledPlugins` の上書きが効くかを確かめ、machine 設定でユーザー全体を止める手順とリポ側で有効にする書き方を書く | ✅ PR #171 マージ済 |
 
 依存:
@@ -40,7 +36,7 @@ Claude Code の会話は、compact の直後でも毎回、ルール文書（各
   （リポが別で、触るファイルが重ならない）。他リポの孫なので PR はそのリポの既定ブランチ向きで、マージは人間。
   ⏳（人間のマージ待ち）のあいだも、他の孫は依存しないので先へ進んでよい
 - 孫7 は孫1 と触るファイルが重ならないので**並列**（背景5-2 は人間が決めた。進行記録 2026-10-15）
-- Figma の有効化の1行（iosci・sheaf・pixidex の `.claude/settings.json`）は、孫7 の検証（背景5-1）が済んでから入れる。
+- Figma の有効化の1行（Figma を使うリポの `.claude/settings.json`）は、孫7 の検証（背景5-1）が済んでから入れる。
   その時点で孫3・5・6 がまだ spawn 前ならその PR に同乗させ、すでに走っていたら司令官が追加の孫を足す（設計3.3）
 - **ユーザー全体で止める設定が実機に効くのは、3リポの有効化がそれぞれの既定ブランチにマージされた後にする**
   （先に止めると、Figma を使うリポで体験が途切れる。設計3.3）
@@ -49,19 +45,14 @@ Claude Code の会話は、compact の直後でも毎回、ルール文書（各
 
 このリポ（dotfiles）は公開リポで、他の5リポは非公開なので、owner/name は値ではなく解決方法を書く
 （`umbrella-orchestrator` §2.1）。司令官はそのリポのメインワークツリーへ `cd` してから叩いて値を得る。
-進捗テーブルの状況値も `owner/name` の代わりに「名前」列の短い名前で書く（例: `⏳ 人間のマージ待ち (PR pixidex#12)`）。
+進捗テーブルの状況値も `owner/name` は書かず、PR 番号だけで書く（例: `⏳ 人間のマージ待ち (PR #12)`）。
 
-| 名前 | メインワークツリー | owner/name | 既定ブランチ |
-|---|---|---|---|
-| dotfiles | `/home/manemone/projects/dotfiles/master` | `manemone/dotfiles` | `master` |
-| lora-dataset-forge | `/home/manemone/projects/lora-dataset-forge/main` | メインワークツリーで `gh repo view --json nameWithOwner -q .nameWithOwner` を叩いた値 | `main` |
-| pixidex | `/home/manemone/projects/pixidex/main` | 同上 | `main` |
-| modeldex | `/home/manemone/projects/modeldex/main` | 同上 | `main` |
-| sheaf | `/home/manemone/projects/sheaf/main` | 同上 | `main` |
-| iosci | `/home/manemone/projects/iosci/main` | 同上 | `main` |
+dotfiles のメインワークツリーは `/home/manemone/projects/dotfiles/master`（`manemone/dotfiles`、既定ブランチ `master`）。
+dotfiles 以外の5リポは、それぞれ `/home/manemone/projects/<リポ名>/main` が非公開リポのメインワークツリーで、owner/name は
+メインワークツリーで `gh repo view --json nameWithOwner -q .nameWithOwner` を叩いた値、既定ブランチは `main`。
 
-各リポで守るべき規約の在処は、それぞれの `AGENTS.md`（lora-dataset-forge の `AGENTS.md` には傘ブランチ方式の規定がある）。
-sheaf のメインワークツリーは人間が別のブランチを checkout して作業中のことがある。司令官はメインワークツリーで
+各リポで守るべき規約の在処は、それぞれの `AGENTS.md`（そのうち1リポの `AGENTS.md` には傘ブランチ方式の規定がある）。
+他のリポのうち一部は、メインワークツリーを人間が別のブランチで checkout して作業中のことがある。司令官はメインワークツリーで
 `git fetch origin` と `ocw` だけを叩き、`git checkout` / `git merge` / `git pull` は叩かない。
 
 ## ワークスペースラベル
@@ -77,13 +68,12 @@ sheaf のメインワークツリーは人間が別のブランチを checkout �
 
 人間は、上位のプランにしても利用枠をすぐ使い切ってしまい、開発速度が上がった実感も薄いので、トークンが
 どこに消えているかを数字で見たいと相談した。相談の AI が集計したところ、学習の会話でキャッシュ切れが
-多いことが見つかり、これは lora-dataset-forge の傘 `ai/training-skill-tidy` で対処した。その傘の調査で
+多いことが見つかり、これは他のリポの傘 `ai/<傘ブランチ名>` で対処した。その傘の調査で
 「compact の直後でも毎回乗る固定分が大きい」ことが分かり、人間の決定で別件としてこの傘に回ってきた。
 
 相談の中で、スキルは本文ではなく一覧が毎回乗っていること、固定分の最大は Memory files（各リポの
 `AGENTS.md`）であること、全会話に Figma プラグインのスキル一覧も乗っていることが分かった。人間は、
-スキルを必要に応じて読み込むオプションでもこの量になるのかを問い、Figma を使うのは iosci・sheaf と
-おそらく pixidex だけだが、ラフに指示して自動で Figma のスキルを読んでくれる体験はとても良いので
+スキルを必要に応じて読み込むオプションでもこの量になるのかを問い、Figma を使うのは一部のリポだけだが、ラフに指示して自動で Figma のスキルを読んでくれる体験はとても良いので
 悩ましい、と述べた。相談の AI は「ユーザー全体では止め、使うリポでだけ有効にする」案と、
 `AGENTS.md` の整理が本命であることを示し、人間は task-intake に回すと決めた。
 
@@ -91,8 +81,8 @@ sheaf のメインワークツリーは人間が別のブランチを checkout �
 
 - この傘でやるのは次の2つ（task-intake で人間が確認済み。司令官は dotfiles、他の5リポは他リポの孫）:
   1. **各リポの `AGENTS.md` を、毎回要る芯と、作業のときだけ読む詳細（`docs/design/` など）に分ける。**
-     対象: dotfiles・lora-dataset-forge・pixidex・modeldex・sheaf・iosci
-  2. **Figma プラグインを、ユーザー全体では止め、Figma を使うリポ（iosci・sheaf・pixidex）でだけ有効にする。**
+     対象: dotfiles と他の5リポ
+  2. **Figma プラグインを、ユーザー全体では止め、Figma を使うリポでだけ有効にする。**
      そのリポでは「ラフに指示すれば自動で Figma のスキルを読む」体験を残す（人間がこの体験を高く評価している）
 - 次は**やらない**（相談で検討して外した）:
   - dotfiles が配るスキルを `skillOverrides` の `"name-only"` にする（合計 0.8k しか無く効果が小さい）
@@ -107,7 +97,7 @@ sheaf のメインワークツリーは人間が別のブランチを checkout �
   全部これを超えていて、毎回の会話の頭に丸ごと乗る（Claude Code では `CLAUDE.md` の `@AGENTS.md` から読み込まれる）
 - dotfiles の `templates/repo-baseline/template/AGENTS.md.jinja`（撒いた先の `AGENTS.md` の雛形。271 行）にも、
   芯と詳細を分ける方針は無い（相談 AI の推測。未確認）。撒いた先が同じように太る
-- Figma プラグイン `figma@synced`（claude.ai から同期）は全会話で有効。Figma を使わないリポ（lora-dataset-forge・dotfiles など）の
+- Figma プラグイン `figma@synced`（claude.ai から同期）は全会話で有効。Figma を使わないリポ（dotfiles など）の
   会話にも、スキル14個分の一覧が毎回乗る
 
 ## 背景4: 実測値
@@ -129,18 +119,14 @@ sheaf のメインワークツリーは人間が別のブランチを checkout �
 | リポ | 行 | 文字 |
 |---|---|---|
 | dotfiles | 505 | 22,830 |
-| lora-dataset-forge | 329 | 15,531 |
-| modeldex | 315 | 12,696 |
-| pixidex | 309 | 14,507 |
-| iosci | 275 | 9,887 |
-| sheaf | 263 | 10,475 |
+| 他の5リポ（最小〜最大） | 263〜329 | 9,887〜15,531 |
 
 参考: `templates/repo-baseline/template/AGENTS.md.jinja` は 271 行・8,239 字（司令官が 2026-10-15 に計測）。
 
 ### 4.3 その他
 
-- lora-dataset-forge の傘 `ai/training-skill-tidy` の孫1 の調査（lora-dataset-forge の `docs/design/` にある
-  学習の会話のトークン消費調査。lora-dataset-forge 側の採番で 2610150029）: 学習の会話の compact 直後の文脈は中央値 91k、うち約 3.5 万トークンが
+- 他のリポの傘 `ai/<傘ブランチ名>` の孫1 の調査（そのリポの `docs/design/` にある
+  学習の会話のトークン消費調査。そのリポ側の採番で 2610150029）: 学習の会話の compact 直後の文脈は中央値 91k、うち約 3.5 万トークンが
   固定分。学習の会話 20 本だけで固定分に週約 $160（毎回の読み約 $50＋キャッシュ切れのたびの書き直し約 $110）
 - 相談 AI の集計（2026-10-08〜14、`~/.claude/projects/**/*.jsonl`、API 単価換算）: 全体の API 呼び出し約 5 万回・約 $4,886。
   固定分を 1 回あたり 1〜1.5 万トークン減らせれば、読みだけで週 $100〜150 程度（目安）。キャッシュ切れの書き直しも同じ割合で減る
@@ -150,7 +136,7 @@ sheaf のメインワークツリーは人間が別のブランチを checkout �
     local（`.claude/settings.local.json`）の順で上書き
   - claude.ai から同期されたプラグインは `<name>@synced` と表示され、`/plugin` の Installed タブで切り替えられる
   - `skillOverrides`（`"on"` / `"name-only"` / `"user-invocable-only"` / `"off"`）はプラグインのスキルには効かない
-  - `MEMORY.md` は先頭 200 行か 25KB の先に来たほうまでしか読まれない（lora-dataset-forge の `MEMORY.md` は 235 行で後ろが切れている）
+  - `MEMORY.md` は先頭 200 行か 25KB の先に来たほうまでしか読まれない（1リポの `MEMORY.md` は 235 行で後ろが切れている）
   - 計測は `/context`（Skills の行）・`/doctor`（一覧の内訳）・`claude plugin details <name>`
 
 ## 背景5: 先に潰すべき前提（未確認）
@@ -169,11 +155,11 @@ sheaf のメインワークツリーは人間が別のブランチを checkout �
    規約文書を列挙しているリポがある（dotfiles など）ので、分けた先のファイルを opencode にも読ませるか判断が要る（孫1）
 5. **他の AI（Codex・OpenCode）への影響。** `AGENTS.md` は Codex / OpenCode もそのまま読む。詳細を外へ出したときに参照を
    辿れるか（孫1）
-6. **各リポの `MEMORY.md`**（`~/.claude/projects/<リポ>/memory/`。リポの外）も固定分。lora-dataset-forge の 235 行は上限超えで
+6. **各リポの `MEMORY.md`**（`~/.claude/projects/<リポ>/memory/`。リポの外）も固定分。1リポの 235 行は上限超えで
    切れている。→ **人間がこの傘で扱うと決めた**（2026-10-15。設計4）。リポの外なので PR にならない
-7. **（司令官が追加）copier で雛形を撒いたリポとの整合。** pixidex・modeldex・sheaf・iosci の4リポは `templates/repo-baseline` を
-   copier で撒いている（`.copier-answers.yml` あり。lora-dataset-forge は無し）。pixidex・modeldex は `_src_path` が dotfiles の
-   GitHub で `_commit` が記録されており `copier update` できるが、sheaf・iosci はローカルパスから撒いて `_commit` が無く
+7. **（司令官が追加）copier で雛形を撒いたリポとの整合。** 他の5リポのうち4リポは `templates/repo-baseline` を
+   copier で撒いている（`.copier-answers.yml` あり。残る1リポは無し）。うち2リポは `_src_path` が dotfiles の
+   GitHub で `_commit` が記録されており `copier update` できるが、残る2リポはローカルパスから撒いて `_commit` が無く
    `copier update` できない。孫1 が雛形の `AGENTS.md.jinja` を分けると、
    - `copier update` は既定で `_src_path` の既定ブランチ（`master`）の版を取るので、雛形の変更は**傘が `master` に入るまで**他リポに届かない
    - 孫2〜6 が手で分けた後に `copier update` を当てると、同じ変更が二重に当たってコンフリクトしうる
@@ -198,7 +184,7 @@ sheaf のメインワークツリーは人間が別のブランチを checkout �
 - **opencode.json の `instructions` の扱い（背景5-4）。** `instructions` に列挙したファイルは OpenCode が毎回読むので、
   分けた詳細を列挙すると OpenCode の固定分は減らない。列挙を減らすか残すかを決める
 - **他リポへの適用手順（背景5-7）。** copier を撒いたリポ（update 可能な2リポ・不可能な2リポ）と撒いていないリポ
-  （lora-dataset-forge）のそれぞれについて、孫2〜6 が従う手順を書く
+  （1リポ）のそれぞれについて、孫2〜6 が従う手順を書く
 - **効果の測り方。** 分ける前後で、毎回読み込まれるファイル（`CLAUDE.md` から `@` で辿れるもの）の合計の行数・文字数を
   `wc -lm` で比べる。トークンで測れるならそれも書く（`/context` の Memory files の行は人間が対話で見られる）
 
@@ -222,7 +208,7 @@ sheaf のメインワークツリーは人間が別のブランチを checkout �
 - 中身を失わない・移した節への参照を直す（そのリポのスキル・文書・`opencode.json` など）は孫1 と同じ
 - 分ける前後の `wc -lm` を PR 本文に書く
 - PR 本文に、この計画書（dotfiles の `docs/planning/` のこのファイル）と孫1 の PR へのリンクを書く（継ぎ目）
-- pixidex・sheaf・iosci の孫は、spawn の時点で孫7 の検証（背景5-1）が済んで進行記録に書かれていれば、Figma の有効化の
+- Figma を使うリポの孫は、spawn の時点で孫7 の検証（背景5-1）が済んで進行記録に書かれていれば、Figma の有効化の
   1行（設計3.2）も同じ PR に入れる。書かれていなければ入れない（後で司令官が追加の孫を足す）
 
 ## 設計3: Figma の有効範囲（孫7 ほか）
@@ -238,7 +224,7 @@ sheaf のメインワークツリーは人間が別のブランチを checkout �
 
 ### 3.2 リポ側の有効化
 
-iosci・sheaf・pixidex の `.claude/settings.json`（コミットされる。背景5-3）の `enabledPlugins` に `"figma@synced": true` を足す。
+Figma を使うリポの `.claude/settings.json`（コミットされる。背景5-3）の `enabledPlugins` に `"figma@synced": true` を足す。
 既存のキーを壊さない。
 
 ### 3.3 ユーザー全体で止める設定と順序
@@ -257,14 +243,10 @@ iosci・sheaf・pixidex の `.claude/settings.json`（コミットされる。�
 
 | リポ | 行 | バイト |
 |---|---|---|
-| lora-dataset-forge | 236 | 36,701 |
-| sheaf | 73 | 14,006 |
-| pixidex | 33 | 6,631 |
-| modeldex | 24 | 4,630 |
-| iosci | 14 | 2,530 |
+| 他の5リポ（最小〜最大） | 14〜236 | 2,530〜36,701 |
 | dotfiles | 13 | 2,257 |
 
-lora-dataset-forge は 200 行・25KB の両方を超えていて後ろが読まれていない。sheaf は行数は少ないが1行が長い。
+1リポは 200 行・25KB の両方を超えていて後ろが読まれていない。別の1リポは行数は少ないが1行が長い。
 memory のディレクトリはワークツリーではなくリポ（メインワークツリーのパス）ごとなので、そのリポの孫のセッションが
 システムプロンプトで渡される memory のパスがそのまま対象になる。
 
@@ -307,7 +289,7 @@ memory のディレクトリはワークツリーではなくリポ（メイン�
 ## スコープ外
 
 - 組み込みツールの定義（System tools 18.4k）。Claude Code 本体の話で手が出せない
-- 学習の会話の待ち方・スキル分割（lora-dataset-forge の傘 `ai/training-skill-tidy` で PR #493 として main に入った）
+- 学習の会話の待ち方・スキル分割（他のリポの傘 `ai/<傘ブランチ名>` で PR #493 として main に入った）
 - 実装の孫の文脈膨張（dotfiles の傘 `context-bloat`、PR #169 で master に入った。デプロイはまだ）
 - グローバルの `claude/CLAUDE.md`（配布物）の整理。今回の対象は各リポの `AGENTS.md`
 
@@ -333,7 +315,7 @@ memory のディレクトリはワークツリーではなくリポ（メイン�
 - 孫1（dotfiles）: `AGENTS.md` の芯と詳細の分け方の方針を決め、dotfiles の `AGENTS.md` に適用。あわせて `templates/repo-baseline` の
   雛形にも方針を入れる（撒いた先が太らないように）
 - 孫2〜6（他リポの孫。各リポ 1 本）: 孫1 の方針で各リポの `AGENTS.md` を分ける。リポごとに中身が違うので独立に進められる
-- 孫7（Figma）: 前提1 を 1 リポで確かめてから、ユーザー全体で止める設定（dotfiles）と、iosci・sheaf・pixidex の
+- 孫7（Figma）: 前提1 を 1 リポで確かめてから、ユーザー全体で止める設定（dotfiles）と、Figma を使うリポの
   `.claude/settings.json` での有効化。リポ側の 1 行は孫2〜6 の `AGENTS.md` の PR に同乗させてもよい
 
 司令官の判断: 叩き台どおり7本に分けた。変えたのは次の2点。
@@ -354,9 +336,9 @@ memory のディレクトリはワークツリーではなくリポ（メイン�
   `AGENTS.md`（dotfiles だけで 2 万字超）より一桁小さい。孫7 を spawn する
 - 2026-10-15: 孫7 の PR #171 を司令官がマージした。**孫7 の検証済み（Figma の有効化の1行を同乗させてよい）。** `figma@synced` は user で `false`・project の `.claude/settings.json` で `true` にすると戻る（local でも戻る）。結果は DOC-2610150527、止め方とリポ側の書き方は `claude/README.md` §4.10。孫3・5・6 は設計3.2 の1行を同乗させる。傘で `pre-commit run --all-files` が通った
 - 2026-10-15: 孫1 の PR #170 を司令官がマージした。**方針文書は DOC-2610150522（`docs/design/` 配下の「AGENTS.mdの芯と詳細の分け方」）。** 他リポへの適用手順と `MEMORY.md` の作法（設計4.2）もこの文書にある（§6 が `MEMORY.md`）。dotfiles の `AGENTS.md` の詳細は DOC-2610150520 系（`docs/design/DOC-2610150520*`）へ移った。傘で `pre-commit run --all-files`・`tests/template_smoke.sh`・`tests/deploy_smoke.sh` が通った。孫2〜6 を spawn する
-- 2026-10-15: 孫5 sheaf#278 は人間がマージした。孫2・3・4・6 も承認済みで人間のマージ待ち。**孫3 pixidex#114 には Figma の有効化の1行が入っていない**（`.claude/settings.json` の書き換えを、孫の auto mode の分類器が自己変更として止めた。孫は回避せず止まった）。人間が孫3 のペインで許可し、同じ PR に積ませている（積んだら再レビューが要るので、状況を 🔄 に戻した）。iosci#130 には入っている
-- 2026-10-15: 孫2 lora-dataset-forge#494・孫4 modeldex#114・孫6 iosci#130 は人間がマージした。孫3 pixidex#114 も人間がマージしたが、マージが Figma の1行のコミット（0815e38）を積む前の HEAD だったので、Figma の有効化は main に入っていない。孫3 に、origin/main から `fc-03b-figma-enable` を切って 0815e38 を cherry-pick し、main 向きの PR を出し直すよう頼んだ。巡回はこのブランチの PR を見る（承認なら ⏳、マージなら孫3 を ✅）
-- 2026-10-15: 孫3 の Figma の1行は pixidex#115 で出し直し、人間がマージした。これで Figma の有効化が iosci・sheaf・pixidex の3リポの main にそろったので、人間に「machine 設定で止めてデプロイしてよい」と伝えた。全孫が ✅ になったので finalize に進む
+- 2026-10-15（PR 番号はそれぞれのリポのもの）: 孫5 の PR #278 は人間がマージした。孫2・3・4・6 も承認済みで人間のマージ待ち。**孫3 の PR #114 には Figma の有効化の1行が入っていない**（`.claude/settings.json` の書き換えを、孫の auto mode の分類器が自己変更として止めた。孫は回避せず止まった）。人間が孫3 のペインで許可し、同じ PR に積ませている（積んだら再レビューが要るので、状況を 🔄 に戻した）。孫6 の PR #130 には入っている
+- 2026-10-15: 孫2 の PR #494・孫4 の PR #114・孫6 の PR #130 は人間がマージした（孫3 と孫4 は別のリポで、PR 番号がたまたま同じ）。孫3 の PR #114 も人間がマージしたが、マージが Figma の1行のコミット（0815e38）を積む前の HEAD だったので、Figma の有効化は main に入っていない。孫3 に、origin/main から `fc-03b-figma-enable` を切って 0815e38 を cherry-pick し、main 向きの PR を出し直すよう頼んだ。巡回はこのブランチの PR を見る（承認なら ⏳、マージなら孫3 を ✅）
+- 2026-10-15: 孫3 の Figma の1行は PR #115 で出し直し、人間がマージした。これで Figma の有効化が Figma を使う3リポの main にそろったので、人間に「machine 設定で止めてデプロイしてよい」と伝えた。全孫が ✅ になったので finalize に進む
 
 ## 孫1用プロンプト:
 
@@ -470,7 +452,7 @@ PR を作る前に `docs/design/DOC-2608020715_プルリクエストの作法.md
 2. 移した節への参照（このリポのスキル・文書・`opencode.json`・`.claude/pr-review.yml` など）を `git grep` で洗って直す
 3. 分ける前後の `wc -lm`（毎回読み込まれるファイルの合計）を PR 本文に書く
 4. 計画書の進行記録に「孫7 の検証済み（Figma の有効化の1行を同乗させてよい）」と書かれていて、このリポが
-   pixidex・sheaf・iosci のどれかなら、計画書 設計3.2 の1行を `.claude/settings.json` に足す。書かれていなければ足さない
+   Figma を使うリポなら、計画書 設計3.2 の1行を `.claude/settings.json` に足す。書かれていなければ足さない
 5. PR とは別に、計画書 設計4.3 に従って、このリポの `MEMORY.md`（このセッションのシステムプロンプトに書かれた memory の
    ディレクトリ）を、方針文書の作法（設計4.2）で整える。触る前に複製を取り、記憶を消さない
 6. このリポ自身の AGENTS.md 等の規約（ブランチ名・PR の作法・コミット前の手順・DOC-ID の運用）に従う
@@ -518,7 +500,7 @@ ocw が既に作業ブランチを作って checkout 済みなので、git fetch
 ## 孫2用プロンプト:
 
 ````markdown
-# リポ: lora-dataset-forge
+# リポ: 孫2 の担当リポ（dotfiles 以外の非公開リポ）
 # 孫ブランチ: fc-02-agents-md-split
 
 計画書 `/home/manemone/projects/dotfiles/fixed-context/docs/planning/DOC-2610150519_fixed-context_計画.md` の「## 孫2〜6用プロンプト（共通の本文）」のコードブロックの指示に従うこと。
@@ -528,7 +510,7 @@ ocw が既に作業ブランチを作って checkout 済みなので、git fetch
 ## 孫3用プロンプト:
 
 ````markdown
-# リポ: pixidex
+# リポ: 孫3 の担当リポ（dotfiles 以外の非公開リポ）
 # 孫ブランチ: fc-03-agents-md-split
 
 計画書 `/home/manemone/projects/dotfiles/fixed-context/docs/planning/DOC-2610150519_fixed-context_計画.md` の「## 孫2〜6用プロンプト（共通の本文）」のコードブロックの指示に従うこと。
@@ -538,7 +520,7 @@ ocw が既に作業ブランチを作って checkout 済みなので、git fetch
 ## 孫4用プロンプト:
 
 ````markdown
-# リポ: modeldex
+# リポ: 孫4 の担当リポ（dotfiles 以外の非公開リポ）
 # 孫ブランチ: fc-04-agents-md-split
 
 計画書 `/home/manemone/projects/dotfiles/fixed-context/docs/planning/DOC-2610150519_fixed-context_計画.md` の「## 孫2〜6用プロンプト（共通の本文）」のコードブロックの指示に従うこと。
@@ -548,7 +530,7 @@ ocw が既に作業ブランチを作って checkout 済みなので、git fetch
 ## 孫5用プロンプト:
 
 ````markdown
-# リポ: sheaf
+# リポ: 孫5 の担当リポ（dotfiles 以外の非公開リポ）
 # 孫ブランチ: fc-05-agents-md-split
 
 計画書 `/home/manemone/projects/dotfiles/fixed-context/docs/planning/DOC-2610150519_fixed-context_計画.md` の「## 孫2〜6用プロンプト（共通の本文）」のコードブロックの指示に従うこと。
@@ -558,7 +540,7 @@ ocw が既に作業ブランチを作って checkout 済みなので、git fetch
 ## 孫6用プロンプト:
 
 ````markdown
-# リポ: iosci
+# リポ: 孫6 の担当リポ（dotfiles 以外の非公開リポ）
 # 孫ブランチ: fc-06-agents-md-split
 
 計画書 `/home/manemone/projects/dotfiles/fixed-context/docs/planning/DOC-2610150519_fixed-context_計画.md` の「## 孫2〜6用プロンプト（共通の本文）」のコードブロックの指示に従うこと。

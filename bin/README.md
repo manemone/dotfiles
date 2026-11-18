@@ -766,7 +766,7 @@ persona --regen
 
 ```bash
 # 1. 送りたいものを out/ に置く（ディレクトリは初回実行時に自動で作られる）
-cp ~/Downloads/議事録.md ~/dfxfer/toybox/out/
+cp ~/Downloads/議事録.md ~/dfxfer/devbox/out/
 
 # 2. 送る
 dfup
@@ -796,8 +796,8 @@ dfup
 
 ```bash
 cat >> ~/.zshrc.local <<'EOF'
-export DFXFER_HOSTS="toybox"   # 宛先の一覧（空白区切り）
-export DFXFER_HOST="toybox"    # 既定の宛先
+export DFXFER_HOSTS="devbox"   # 宛先の一覧（空白区切り）
+export DFXFER_HOST="devbox"    # 既定の宛先
 EOF
 
 source ~/.zshrc
@@ -816,8 +816,8 @@ source ~/.zshrc
 確認しておくこと。
 
 ```
-Host toybox
-  HostName toybox-001.example.com
+Host devbox
+  HostName devbox-001.example.com
   User your-name
   IdentityFile ~/.ssh/id_ed25519
 ```
@@ -866,7 +866,7 @@ dfup -n          # rsync の dry-run
 dfdown
 
 # 2. 落ちてきたものを確認する（ディレクトリは初回実行時に自動で作られる）
-ls ~/dfxfer/toybox/in/
+ls ~/dfxfer/devbox/in/
 ```
 
 リモートの `~/dfxfer/outbox/` の**中身**が、`~/dfxfer/<宛先>/in/` へ rsync される。
@@ -1062,8 +1062,8 @@ OCW_NO_VSCODE=1 ocw widget-maker
 
 ```bash
 cat >> ~/.zshrc.local <<'EOF'
-export DFXFER_HOSTS="toybox"
-export DFXFER_HOST="toybox"
+export DFXFER_HOSTS="devbox"
+export DFXFER_HOST="devbox"
 EOF
 
 source ~/.zshrc

@@ -6,14 +6,14 @@
 ## 概要
 
 このリポジトリには AI エージェント向けの支援ファイルがほぼ無い。同一マシンの
-`lora-dataset-forge`（以下 LDF）には十分に整備された一式があるため、これを参考実装として
+参考実装のリポジトリには十分に整備された一式があるため、これを参考実装として
 dotfiles にも同等の基盤を作る。さらに **その汎用部分を copier テンプレートとして抽出し、
 今後増えるリポジトリ（業務リポジトリを含む）へ再利用可能にする** ところまでを範囲とする。
 
 大きく2段階:
 
-1. **孫1〜6**: dotfiles 自身を LDF 相当のレベルまで整備する
-2. **孫6**: dotfiles と LDF の2例を突き合わせ、汎用部分を copier テンプレートに抽出する
+1. **孫1〜6**: dotfiles 自身を参考実装のリポジトリ相当のレベルまで整備する
+2. **孫6**: dotfiles と参考実装のリポジトリの2例を突き合わせ、汎用部分を copier テンプレートに抽出する
 
 抽象化は2例目からしか妥当に行えないため、孫1〜6 の時点で汎用化を先回りしない。
 
@@ -62,8 +62,8 @@ dotfiles にも同等の基盤を作る。さらに **その汎用部分を copi
 | 領域 | 決定 | 理由 |
 |---|---|---|
 | テンプレート配布・更新 | **copier** | `copier update` の3-wayマージで撒き先のカスタムを保ったまま上流更新を取り込める。質問機能でプレースホルダを埋められる。git URL 指定でき独立リポジトリ化と相性が良い。**自前の init/check/diff CLI は書かない** |
-| 参照の不変性 | **DOC-ID 維持**（LDF 方式） | 「検出」ではなく「予防」。プレースホルダ運用で採番が自動化され、AI に採番を考えさせずに済む。リンクチェッカー（lychee 等）は検出のみで修復できないため採用しない |
-| doc-id の実装言語 | **Ruby** | LDF の実装を移植でき、フルスクラッチ不要 |
+| 参照の不変性 | **DOC-ID 維持**（参考実装のリポジトリ方式） | 「検出」ではなく「予防」。プレースホルダ運用で採番が自動化され、AI に採番を考えさせずに済む。リンクチェッカー（lychee 等）は検出のみで修復できないため採用しない |
+| doc-id の実装言語 | **Ruby** | 参考実装のリポジトリの実装を移植でき、フルスクラッチ不要 |
 | フック管理 | **pre-commit framework** | 隔離環境の自動構築・バージョン固定・差分ファイルのみ実行・CI との一致。自前 `.githooks/` は採用しない |
 | pre-commit の参照方式 | **当面 `repo: local`** | フック配布元にするにはリポジトリルートに `.pre-commit-hooks.yaml` が必要。独立リポジトリ化した時点で `repo: <URL>` に切り替える |
 | 規約文書 | **自作** | 代替なし。ここが本質的な資産 |
@@ -76,7 +76,7 @@ dotfiles にも同等の基盤を作る。さらに **その汎用部分を copi
 - lychee 等のリンクチェッカーで DOC-ID を代替 → 検出のみで修復できない
 - doc-id を bash + awk で実装 → pre-commit が隔離環境を作るので依存最小の制約は不要
 - doc-id を dotfiles の `bin/` に置いて PATH 経由で共有 → 業務リポジトリ・CI・他人のマシンで動かない
-- doc-id を Python で実装 → LDF に Ruby 実装があり移植のほうが安い
+- doc-id を Python で実装 → 参考実装のリポジトリに Ruby 実装があり移植のほうが安い
 
 ---
 
@@ -84,7 +84,7 @@ dotfiles にも同等の基盤を作る。さらに **その汎用部分を copi
 
 ### 判断1: DOC-ID 形式は **タイムスタンプ式（`DOC-YYMMDDHHMM`）に統一する**
 
-既存の `DOC-001` / `DOC-002` 形式は廃止し、LDF と同じ `DOC-YYMMDDHHMM_<説明的ファイル名>.md`
+既存の `DOC-001` / `DOC-002` 形式は廃止し、参考実装のリポジトリと同じ `DOC-YYMMDDHHMM_<説明的ファイル名>.md`
 に移行する。
 
 理由:
@@ -94,7 +94,7 @@ dotfiles にも同等の基盤を作る。さらに **その汎用部分を copi
    同じ番号が別ブランチで同時に払い出される。タイムスタンプは git log の作成日時から導出され、
    衝突時もサフィックス（`-a`, `-b`）で自動回避できる。
 2. **移植する doc-id ツールがタイムスタンプ形式を前提としている。** 連番を維持するなら
-   ツールを別実装するか大改造する必要があり、LDF からの移植という前提が崩れる。
+   ツールを別実装するか大改造する必要があり、参考実装のリポジトリからの移植という前提が崩れる。
 3. **プレースホルダ運用（`DOC-DOCID_PLACEHOLDER_<説明>.md`）がタイムスタンプ形式でしか成立しない。**
    これは「AI に採番を考えさせない」という DOC-ID 運用の中核。
 4. **テンプレートは撒き先ごとの状態を持てない。** 連番だと撒き先ごとにカウンタ相当の状態管理が
@@ -285,7 +285,7 @@ master は `docs/adr/ADR-001_....md` という別名前空間を持つ。`tools/
 - `templates/repo-baseline/` は dotfiles の他の部分に**一切依存しない自己完結**とする
 - dotfiles 固有のパス・前提・命名を埋め込まない
 - **受け入れ条件**: このディレクトリを別リポジトリへそのまま移動するだけで copier テンプレートとして成立すること
-- 現時点では事例が2件（dotfiles / LDF）しかなく抽象化が未成熟なため、
+- 現時点では事例が2件（dotfiles / 参考実装のリポジトリ）しかなく抽象化が未成熟なため、
   **リポジトリ分割は行わず「いつでも切り出せる状態」に留める**
 
 ---
@@ -304,9 +304,9 @@ master は `docs/adr/ADR-001_....md` という別名前空間を持つ。`tools/
 
 ### 2. 丸コピはしない
 
-LDF は Ruby CLI + LoRA 学習。dotfiles は「シェルスクリプト + symlink デプロイ +
+参考実装のリポジトリは Ruby CLI でドメイン固有の処理を持つ。dotfiles は「シェルスクリプト + symlink デプロイ +
 クロスプラットフォーム（macOS / Linux / WSL2）」。**構造とお作法を移植し、中身は
-dotfiles 用に書き下ろす。** LDF 固有の記述（`raw/` 保護、canon レシピ、VLM mock 罠、
+dotfiles 用に書き下ろす。** 参考実装のリポジトリ固有の記述（データ保護の規約・ドメイン固有のレシピ・モックの罠、
 rubocop、学習コマンド）は持ち込まない。
 
 ### 3. AI 不問で書く
@@ -317,7 +317,7 @@ Claude 固有の機能名・書式に閉じない。
 ### 4. 他リポジトリの DOC-ID を地の文に書かない（孫3 マージ後は必須）
 
 `tools/doc-id verify` は追跡下の全 `.md` を走査し、`DOC-` + 10桁数字の**裸の参照**が
-このリポジトリに実在するかを検証する。LDF の文書 ID をそのまま地の文に書くと切れ参照になり
+このリポジトリに実在するかを検証する。参考実装のリポジトリの文書 ID をそのまま地の文に書くと切れ参照になり
 コミットがブロックされる。参照が必要な場合はコードブロック内に書くか、ID を使わず文書名で書く。
 
 ### 5. 破壊的操作の禁止
@@ -333,8 +333,8 @@ Claude 固有の機能名・書式に閉じない。
 ## タスク: ルート AGENTS.md と CLAUDE.md を作る
 
 このリポジトリ（manemone/dotfiles）で作業する AI エージェント向けのルールブックを作る。
-参考実装として /home/manemone/projects/lora-dataset-forge/main/AGENTS.md を読むこと。
-ただし**丸コピはしない**。あちらは Ruby CLI + LoRA 学習、こちらは
+参考実装として /home/manemone/projects/<参考実装のリポジトリ>/main/AGENTS.md を読むこと。
+ただし**丸コピはしない**。あちらは Ruby CLI でドメイン固有の処理を持ち、こちらは
 シェルスクリプト + symlink デプロイ + クロスプラットフォーム。構造だけ借りて中身は書き下ろす。
 
 計画書 docs/planning/DOC-2608020558_repo-baseline_計画.md の
@@ -344,7 +344,7 @@ Claude 固有の機能名・書式に閉じない。
 
 #### 1. ルート `AGENTS.md`（新規）
 
-以下の節を持つこと。節の粒度と順序は LDF の AGENTS.md に倣う。
+以下の節を持つこと。節の粒度と順序は参考実装のリポジトリの AGENTS.md に倣う。
 
 - **概要**: クロスプラットフォーム dotfiles。mise でランタイムを固定し、
   各ツールディレクトリの deploy.sh がユーザーの HOME に symlink を張る、という一文で伝わる説明
@@ -414,7 +414,7 @@ Claude 固有の機能名・書式に閉じない。
 
 ### 検証
 
-- `AGENTS.md` に LDF 固有の記述（raw/、canon、VLM、rubocop、bundle exec）が残っていないこと
+- `AGENTS.md` に参考実装のリポジトリ固有の記述（ドメイン固有の語、rubocop、bundle exec）が残っていないこと
 - `CLAUDE.md` が1行であること
 - 記述したパス・関数名（`symlink_backup` 等）が実在すること
 ````
@@ -427,9 +427,9 @@ Claude 固有の機能名・書式に閉じない。
 `docs/` を「索引 + フォルダ規約 + 規約文書」の構造にする。
 参考実装として以下を読むこと（丸コピはしない）:
 
-- /home/manemone/projects/lora-dataset-forge/main/docs/README.md
-- /home/manemone/projects/lora-dataset-forge/main/docs/design/DOC-2606281852_プルリクエストの作法.md
-- /home/manemone/projects/lora-dataset-forge/main/docs/design/DOC-2606282001_コーディング方針.md
+- /home/manemone/projects/<参考実装のリポジトリ>/main/docs/README.md
+- /home/manemone/projects/<参考実装のリポジトリ>/main/docs/design/DOC-2606281852_プルリクエストの作法.md
+- /home/manemone/projects/<参考実装のリポジトリ>/main/docs/design/DOC-2606282001_コーディング方針.md
 
 計画書 docs/planning/DOC-2608020558_repo-baseline_計画.md の
 「全孫共通の注意」と「判断1: DOC-ID 形式」を必ず読んでから着手すること。
@@ -459,7 +459,7 @@ Claude 固有の機能名・書式に閉じない。
   | `planning/` | ロードマップ・傘ブランチ計画書 |
   | `archive/` | 過去の経緯・履歴。現在の開発判断には使わない |
   `docs/` 直下には索引（本ファイル）のみを置き、他は design/planning/archive のいずれかに置く旨を明記
-  ※ LDF の `training/` は LDF 固有なので作らない
+  ※ 参考実装のリポジトリの `training/` は参考実装のリポジトリ固有なので作らない
   ※ `archive/` は現時点で空になる。空ディレクトリは git で追跡できないので、
     ディレクトリは作らず「必要になったら作る」と README に書くだけでよい
 - 全 DOC-ID 索引（フォルダごとの表: DOC-ID / ファイル / 概要）
@@ -476,7 +476,7 @@ design/ フォルダの文書一覧（DOC-ID / ファイル / 概要 の表）�
 
 #### 3. `docs/design/DOC-2608020715_プルリクエストの作法.md`（新規）
 
-LDF 版をベースにするが、以下を dotfiles 用に書き換える:
+参考実装のリポジトリの版をベースにするが、以下を dotfiles 用に書き換える:
 
 - **説明文の構成**（背景・目的・実装内容・レビューで見てほしいところ・テスト結果・今後の予定）
   と基本ルール（ですます調・平易な言葉・セッション内の固有名詞を入れない）は**そのまま流用**。
@@ -486,7 +486,7 @@ LDF 版をベースにするが、以下を dotfiles 用に書き換える:
 - **テスト結果の例**を dotfiles のものに差し替える（`bundle exec rubocop` ではなく
   `pre-commit run --all-files` 相当。孫4 で確定するので「lint とテストが緑であることの確認のみ」
   という書き方に留め、具体コマンド例は最小限にする）
-- **ブランチ構成**の節は LDF の MVP 固有の例を消し、
+- **ブランチ構成**の節は参考実装のリポジトリの MVP 固有の例を消し、
   「`master` = 本番、`ai/<topic>` = 傘ブランチ、`ai/<prefix>-NN-<slug>` = 孫ブランチ。
   孫は傘に PR を出し、全部マージ後に傘から `master` へ PR を出す」という一般形で書く
 - **傘ブランチの運用手順そのものは書かない。** umbrella-orchestrator スキルの領分であり、
@@ -494,7 +494,7 @@ LDF 版をベースにするが、以下を dotfiles 用に書き換える:
 
 #### 4. `docs/design/DOC-2608020715-a_シェルスクリプトコーディング方針.md`（新規）
 
-LDF の「コーディング方針」の**構造**（機械的に検出できることは linter に委ね、
+参考実装のリポジトリの「コーディング方針」の**構造**（機械的に検出できることは linter に委ね、
 ここでは linter が判定できない思想を書く）を借りて、シェルスクリプト版を書き下ろす。
 Ruby の内容は一切持ち込まない。以下を含めること:
 
@@ -570,7 +570,7 @@ Directory Structure の `docs/` の内訳を実態に合わせる（現在 `plan
 
 - 作成した全 md ファイル名が `DOC-DOCID_PLACEHOLDER_` で始まること（README.md を除く）
 - 文書内のリンクがすべて解決すること（相対パスで実ファイルを指しているか目視確認）
-- LDF 固有の記述（Ruby、rubocop、raw/、canon、VLM、学習）が混入していないこと
+- 参考実装のリポジトリ固有の記述（Ruby、rubocop、ドメイン固有の語）が混入していないこと
 - **他リポジトリの DOC-ID（`DOC-` + 10桁数字）を地の文に書いていないこと。**
   参考文献としてどうしても示す必要があればコードブロック内に書く
 ````
@@ -585,9 +585,9 @@ Directory Structure の `docs/` の内訳を実態に合わせる（現在 `plan
 
 ### 移植元
 
-- /home/manemone/projects/lora-dataset-forge/main/bin/doc-id （208行）
-- /home/manemone/projects/lora-dataset-forge/main/lib/doc_id/scanner.rb （141行）
-- /home/manemone/projects/lora-dataset-forge/main/spec/doc_id/tool_spec.rb （346行）
+- /home/manemone/projects/<参考実装のリポジトリ>/main/bin/doc-id （208行）
+- /home/manemone/projects/<参考実装のリポジトリ>/main/lib/doc_id/scanner.rb （141行）
+- /home/manemone/projects/<参考実装のリポジトリ>/main/spec/doc_id/tool_spec.rb （346行）
 
 いずれも Ruby stdlib（`open3` / `fileutils` / `tmpdir`）しか使っていない。
 
@@ -612,11 +612,11 @@ tools/doc-id/
 - リポジトリルートの解決は移植元と同じく `git rev-parse --show-toplevel` で行う
   （スクリプトの設置場所に依存しないため。これは維持する）
 
-### 汎用化（dotfiles 固有・LDF 固有の前提を埋め込まないこと）
+### 汎用化（dotfiles 固有・参考実装のリポジトリ固有の前提を埋め込まないこと）
 
 移植元を読み、以下を確認・対処すること:
 
-1. **`LEGACY_REF`（`docs/\d{2}` の旧参照検出）は LDF 固有。** LDF が過去に使っていた
+1. **`LEGACY_REF`（`docs/\d{2}` の旧参照検出）は参考実装のリポジトリ固有。** 参考実装のリポジトリが過去に使っていた
    `docs/14` 形式の名残であり、このリポジトリには存在しない。**削除する**。
    関連する `check_legacy_refs` と `type: :legacy` の分岐も含めて落とす
 2. **`spec/` の除外がハードコードされている**（`reject { |f| f.include? "/spec/" }`）。
@@ -689,8 +689,8 @@ tools/doc-id/
 「確定事項」「判断3: pre-commit の Ruby は language_version: default」
 「全孫共通の注意」を必ず読んでから着手すること。
 
-参考実装として /home/manemone/projects/lora-dataset-forge/main/.githooks/pre-commit を読むこと。
-**ただし LDF は自前 `.githooks/` 方式で、こちらは pre-commit framework を採用する。
+参考実装として /home/manemone/projects/<参考実装のリポジトリ>/main/.githooks/pre-commit を読むこと。
+**ただし参考実装のリポジトリは自前 `.githooks/` 方式で、こちらは pre-commit framework を採用する。
 骨格（lint → doc-id → test の順、どれか1つでも落ちたらコミットを止める）だけ借りる。**
 
 ### 作るもの
@@ -959,8 +959,8 @@ master 由来の全ファイル（`bin/ocw-meter` 4243行など）が「追加�
 「判断4: .gitignore の /.claude/ を狭める」を必ず読んでから着手すること。
 
 参考実装:
-- /home/manemone/projects/lora-dataset-forge/main/.claude/settings.json
-- /home/manemone/projects/lora-dataset-forge/main/opencode.json
+- /home/manemone/projects/<参考実装のリポジトリ>/main/.claude/settings.json
+- /home/manemone/projects/<参考実装のリポジトリ>/main/opencode.json
 
 ### 最重要: 触ってはいけないもの
 
@@ -1065,7 +1065,7 @@ Directory Structure に `.claude/` と `opencode.json` を追加。
 ````
 ## タスク: ★ 汎用部分を copier テンプレートとして抽出する
 
-**このスコープの本丸。** 孫1〜6 で dotfiles に作ったものと LDF を突き合わせ、
+**このスコープの本丸。** 孫1〜6 で dotfiles に作ったものと参考実装のリポジトリを突き合わせ、
 汎用部分を copier テンプレートに抽出する。
 
 計画書 docs/planning/DOC-2608020558_repo-baseline_計画.md を**全文**読んでから着手すること。
@@ -1078,14 +1078,14 @@ Directory Structure に `.claude/` と `opencode.json` を追加。
 
 ### この孫だけの追加事情: サンプルが3例になった
 
-当初の想定は「dotfiles と LDF の2例から抽出する」だったが、傘の進行中に
+当初の想定は「dotfiles と参考実装のリポジトリの2例から抽出する」だったが、傘の進行中に
 **master に別傘（ocw-meter）の docs/ 体系が入り、孫5 でそれを統合した**。
 結果として、独立に設計された `docs/` 体系のサンプルが3つ揃っている:
 
 | 出自 | フォルダ規約 | 特徴 |
 |---|---|---|
-| LDF | `design/` `training/` `planning/` `archive/` | `training/` はドメイン固有 |
-| 本傘（孫2） | `design/` `planning/` `archive/` | LDF から `training/` を落とした形 |
+| 参考実装のリポジトリ | `design/` `training/` `planning/` `archive/` | `training/` はドメイン固有 |
+| 本傘（孫2） | `design/` `planning/` `archive/` | 参考実装のリポジトリから `training/` を落とした形 |
 | ocw-meter 傘（master） | `adr/` `planning/` `reference/` | `adr/` と `reference/` を独自に導入 |
 
 **3例に共通するのは `planning/` だけである。** この事実を抽象化の根拠に使うこと。
@@ -1094,7 +1094,7 @@ Directory Structure に `.claude/` と `opencode.json` を追加。
 `design/` `adr/` `reference/` `archive/` は質問で選ばせる、など）。
 **どう切ったかと、その根拠に3例のどこを使ったかを PR に明記すること。**
 
-参考実装（突き合わせる外部の1例）: /home/manemone/projects/lora-dataset-forge/main/
+参考実装（突き合わせる外部の1例）: /home/manemone/projects/<参考実装のリポジトリ>/main/
 残り2例はこのリポジトリ内にある（本傘の成果と、孫5 で統合した master の ocw-meter 由来分）。
 
 ### 想定構成（詳細は設計してよい）
@@ -1141,7 +1141,7 @@ claude/skills/repo-baseline/SKILL.md   # 適用手順と判断ガイド（AI が
 | 長時間コマンドのバックグラウンド実行 + 状態ポーリング規約 | 半汎用 | 該当するリポジトリ限定 → 質問で ON/OFF |
 | コーディング方針（Ruby版 / シェル版） | 固有 | 言語ごとに全く別物。テンプレートは「この文書を置く場所と役割」だけ規定し、中身は AI が書く |
 | デプロイ・symlink・クロスプラットフォーム | 固有（dotfiles） | 移植対象外 |
-| raw/ 保護、canon レシピ、VLM mock 罠 | 固有（LDF） | 移植対象外 |
+| データ保護・レシピ・モックの罠 | 固有（参考実装のリポジトリ） | 移植対象外 |
 
 ### copier.yml の質問（設計してよい。以下は出発点）
 
@@ -1208,12 +1208,12 @@ claude/skills/repo-baseline/SKILL.md   # 適用手順と判断ガイド（AI が
    - この手順を `templates/repo-baseline/README.md` に手順として書き、
      実際に実行した結果を PR に貼ること
 
-2. **LDF との差分検証（最重要）**
-   - テンプレートから展開した結果と LDF の現状を突き合わせる
-   - **出てくる差分がすべて「LDF 固有だから当然」と説明できること。**
+2. **参考実装のリポジトリとの差分検証（最重要）**
+   - テンプレートから展開した結果と参考実装のリポジトリの現状を突き合わせる
+   - **出てくる差分がすべて「参考実装のリポジトリ固有だから当然」と説明できること。**
      説明できない差分が出たら、テンプレート側の切り分けが間違っている
-   - 差分の一覧と「なぜ LDF 固有か」の説明を PR の「レビューで見てほしいところ」に書くこと
-   - LDF を実際に書き換える必要はない（このリポジトリのスコープ外）
+   - 差分の一覧と「なぜ参考実装のリポジトリ固有か」の説明を PR の「レビューで見てほしいところ」に書くこと
+   - 参考実装のリポジトリを実際に書き換える必要はない（このリポジトリのスコープ外）
 
 3. **dotfiles 自身との突き合わせ**
    - dotfiles の現状（孫1〜6 の成果）とテンプレート展開結果の差分も同様に説明できること

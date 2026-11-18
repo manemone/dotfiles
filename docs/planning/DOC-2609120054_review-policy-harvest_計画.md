@@ -1,11 +1,11 @@
-# 計画書: lora-dataset-forge のレビュー方針を dotfiles のレビュースキルと repo-baseline テンプレへ取り込む
+# 計画書: 方針の元のリポジトリのレビュー方針を dotfiles のレビュースキルと repo-baseline テンプレへ取り込む
 
 傘ブランチ: `review-policy-harvest`
 ターゲット: `master`
 
 ## 概要
 
-`~/projects/lora-dataset-forge`（以下 **forge**）で洗練されてきたコードレビュー方針のうち、
+`~/projects/<方針の元のリポジトリ>` で洗練されてきたコードレビュー方針のうち、
 dotfiles 側にまだ無いものを、**レビュースキル（`skills/pr-review-loop/`）** と
 **プロジェクト立ち上げ用テンプレ（`templates/repo-baseline/`）** の2系統へ取り込む。
 ゴールは「新規リポジトリを `repo-baseline` で立ち上げた時点で方針が効いている」状態である。
@@ -15,7 +15,7 @@ dotfiles 側にまだ無いものを、**レビュースキル（`skills/pr-revi
 1. **穴①** `repo-baseline` が `.claude/pr-review.yml` を生成していない（copier で既に聞いている
    lint/test の答えが pr-review-loop に渡らない）
 2. **穴②** risk-based テスト方針が、実装者が普段読む `AGENTS.md` 層に無い
-3. **穴③** linter 対応の作法が forge の方が一段細かい
+3. **穴③** linter 対応の作法が方針の元のリポジトリの方が一段細かい
 4. **穴④** finding に failure scenario（どう壊れるかの具体的な連鎖）の記載が必須化されていない
 
 > **本計画書は、相談の会話から渡された引き継ぎブリーフ（一時ファイル。既に削除済みであり
@@ -67,11 +67,11 @@ dotfiles 側にまだ無いものを、**レビュースキル（`skills/pr-revi
 
 ---
 
-## 背景1: 人間の問題意識（逐語）
+## 背景1: 人間の問題意識
 
-> いま ~/projects/lora-dataset-forge にあるコードレビュー方針がなかなか洗練されてきていて、ほかのプロジェクトを立ち上げる時もこの方針を踏襲したいんだが、現在 dotfiles にあるレビュースキルやプロジェクト作成時のAI化のためのテンプレに、この方針から取り込めるところあるかね？
+方針の元のリポジトリで洗練されてきたコードレビュー方針を、ほかのプロジェクトの立ち上げでも踏襲したい。dotfiles のレビュースキルと、プロジェクト作成時のテンプレートに取り込める所があるか、という相談。
 
-この問いに対し、相談AIが forge と dotfiles の双方を読み比べて調査した結果が背景4である。
+この問いに対し、相談AIが方針の元のリポジトリと dotfiles の双方を読み比べて調査した結果が背景4である。
 人間は調査結果を見たうえで `/umbrella-handoff` を起動した（＝傘ブランチで進めることに同意した）。
 
 ## 背景2: 人間が確定させた決定事項（覆さないこと）
@@ -82,13 +82,13 @@ dotfiles 側にまだ無いものを、**レビュースキル（`skills/pr-revi
 - **目的は「ほかのプロジェクトを立ち上げる時も踏襲できる」状態にすること。**
   dotfiles 自身が良くなるだけでは目的を満たさない。新規リポジトリを `repo-baseline` で
   立ち上げた時点で方針が効いていることがゴール
-- **forge の方針を人間は「洗練されてきている」と評価している。** forge 側の方針を薄めたり
+- **方針の元のリポジトリの方針を人間は洗練されてきていると評価している。** 方針の元のリポジトリ側の方針を薄めたり
   再設計したりするのではなく、dotfiles 側へ取り込む方向である
 
 ## 背景3: 既に取り込み済みのもの（重複作業を避けるため明記する）
 
-forge の「洗練されたレビュー方針」の中核は forge `AGENTS.md` の**テスト方針（risk-based）**
-（forge `AGENTS.md` 118〜171行目「## テスト方針」節。forge のコミット
+方針の元のリポジトリの「洗練されたレビュー方針」の中核は方針の元のリポジトリ `AGENTS.md` の**テスト方針（risk-based）**
+（方針の元のリポジトリ `AGENTS.md` 118〜171行目「## テスト方針」節。方針の元のリポジトリのコミット
 `5a7001a AGENTS.mdにrisk-basedなテスト方針を追加する (#176)`）である。
 **これ自体は既に `skills/pr-review-loop/SKILL.md` へ移植済み。**
 
@@ -99,7 +99,7 @@ forge の「洗練されたレビュー方針」の中核は forge `AGENTS.md` �
   強度序列 CI > 実装者の SHA 付き記録 = pre-commit フック）
 
 PR作法（dotfiles `docs/design/DOC-2608020715_プルリクエストの作法.md` ↔
-forge の `docs/design/` にある同名の「プルリクエストの作法」文書。forge 側の DOC-ID は
+方針の元のリポジトリの `docs/design/` にある同名の「プルリクエストの作法」文書。方針の元のリポジトリ側の DOC-ID は
 dotfiles の `doc-id verify` が切れ参照と見なすため、ここでは ID を書かない）も内容はほぼ同一で、
 dotfiles 側の方が新しい（ブランチ構成節が `ai/` 接頭辞廃止・傘/孫の一般形に更新済み）。
 **PR作法文書の取り込みは不要。**
@@ -137,7 +137,7 @@ dotfiles 側の方が新しい（ブランチ構成節が `ai/` 接頭辞廃止�
 
 ### 穴② risk-based テスト方針が「AGENTS.md 層」に無い
 
-- forge の強みは、この方針が**実装者が普段読む `AGENTS.md`** にあること
+- 方針の元のリポジトリの強みは、この方針が**実装者が普段読む `AGENTS.md`** にあること
 - dotfiles では `skills/pr-review-loop/SKILL.md` にしか無い。確認コマンド:
   `grep -rn "risk-based\|production asset\|機械的に増やし\|scenario 統合" --include="*.md" --include="*.jinja" .`
   → ヒットは `skills/pr-review-loop/SKILL.md` のみ（221・269・284・355・358・458・459行目）。
@@ -145,7 +145,7 @@ dotfiles 側の方が新しい（ブランチ構成節が `ai/` 接頭辞廃止�
   （司令官も同じ結果を確認）
 - pr-review-loop の方針はレビュー依頼ファイル（`/tmp/pr-review-loop/<owner>-<repo>-<PR>.md`）へ
   貼られてレビュワーに渡るが、**実装者が実装中に読む導線が無い**
-- forge の該当節（forge `AGENTS.md`「## テスト方針」）が持つ要素（司令官が原文を確認済み）:
+- 方針の元のリポジトリの該当節（方針の元のリポジトリ `AGENTS.md`「## テスト方針」）が持つ要素（司令官が原文を確認済み）:
   - **基本原則**: 「テストも保守対象の production asset であり、無料ではない。書いた分だけ
     読む・直す・実行する時間がかかる。**新しいコードや受け入れ条件の数に比例して機械的に
     テストを増やしてはいけない。**」「**最小限のテストで、意味のある behavior と現実的な
@@ -155,7 +155,7 @@ dotfiles 側の方が新しい（ブランチ構成節が `ai/` 接頭辞廃止�
     | 対象 | 方針 |
     |---|---|
     | 実バグの修正 | そのバグを再現する regression test を必ず追加する |
-    | destructive / resume / integrity 系（forge では `raw/` 保護、削除・上書き・移動、archive/restore、hardlink、state recovery） | 厚くテストする |
+    | destructive / resume / integrity 系（方針の元のリポジトリではデータ保護、削除・上書き・移動、archive/restore、hardlink、state recovery） | 厚くテストする |
     | 複雑な pure logic | 不変条件と重要な境界値をテストする |
     | public CLI / API / 永続化フォーマット | 外部contractをテストする |
     | config / glue | authoritative な層を中心にテストする |
@@ -178,18 +178,18 @@ dotfiles 側の方が新しい（ブランチ構成節が `ai/` 接頭辞廃止�
 - 注意: pr-review-loop 側と AGENTS.md 側で**同じ基準が二重管理になる**構造上の問題がある。
   → **司令官の設計判断は「設計判断 D1」に確定させた**
 
-### 穴③ linter 対応の作法が forge の方が一段細かい
+### 穴③ linter 対応の作法が方針の元のリポジトリの方が一段細かい
 
 dotfiles の `AGENTS.md`「最重要ルール」と `templates/repo-baseline/template/AGENTS.md.jinja` の
 「最重要ルール」（19〜22行目）は、どちらも「抑制ディレクティブを AI の判断で追加しない」
 「構造を変えて指摘そのものを解消できる場合はそちらを優先する」まで持っている。
-forge にあって**両方に無い**のは次の2点（forge `AGENTS.md`「## コミット前の必須ステップ」節。
+方針の元のリポジトリにあって**両方に無い**のは次の2点（方針の元のリポジトリ `AGENTS.md`「## コミット前の必須ステップ」節。
 司令官が原文を確認済み）。
 
-- forge `AGENTS.md` 68行目: 「**rubocop 違反は原則リファクタで対応すること。** 長さ違反への
+- 方針の元のリポジトリ `AGENTS.md` 68行目: 「**rubocop 違反は原則リファクタで対応すること。** 長さ違反への
   対応では、機械的にクラスやメソッドを分割しない。分割後に責務・凝集性・読みやすさが
   改善する場合だけリファクタする。」
-- forge `AGENTS.md` 71行目: 「**新規ファイルの追加時、または既存Rubyファイルを大幅変更した
+- 方針の元のリポジトリ `AGENTS.md` 71行目: 「**新規ファイルの追加時、または既存Rubyファイルを大幅変更した
   時点で、対象ファイル単位のRuboCopを実行する。** RuboCopの実行をコミット直前まで遅らせない。」
 
 後者は「lint を前倒しする」という実装中の作法であり、レビューラウンドを減らす効果がある
@@ -197,7 +197,7 @@ forge にあって**両方に無い**のは次の2点（forge `AGENTS.md`「## �
 
 ### 穴④ finding に failure scenario が必須化されていない
 
-- forge の `.claude/findings.json` は、記録されている5件すべてが
+- 方針の元のリポジトリの `.claude/findings.json` は、記録されている5件すべてが
   `file` / `line` / `summary` / `failure_scenario` の4フィールドを持つ。`failure_scenario` は
   「どの入力・状態で、何が起き、ユーザーから何がどう見えるか」を具体的な連鎖として書いたもの。
   実例（原文は英語。司令官が訳した）:
@@ -216,20 +216,20 @@ forge にあって**両方に無い**のは次の2点（forge `AGENTS.md`「## �
   「maintainability を理由にする場合は『この状態だと、どんな将来変更で、どう壊れるのか』を
   具体的に説明できること」までで、**成果物としての記載様式は要求していない**
 - ブリーフの注意: `.claude/findings.json` の形式自体は Claude Code の `/code-review` が
-  `ReportFindings` ツールで出力する形式に由来する可能性が高く、forge 固有の発明とは言い切れない。
+  `ReportFindings` ツールで出力する形式に由来する可能性が高く、方針の元のリポジトリ固有の発明とは言い切れない。
   取り込むべきは JSON ファイルの形式ではなく「finding には failure scenario を書かせる」という
   要求のほうである → **司令官の見極めは背景5.1 と「設計判断 D3」**
 
 ## 背景5: 司令官が追加で確認した事実（2026-09-12）
 
-### 5.1 forge の `findings.json` は forge の「方針」ではなくツールの出力物である
+### 5.1 方針の元のリポジトリの `findings.json` は方針の元のリポジトリの「方針」ではなくツールの出力物である
 
-- forge の `.gitignore` 38行目 `/.claude/*` により `.claude/findings.json` は **git 管理外**
-  （`git check-ignore -v .claude/findings.json` → `.gitignore:38:/.claude/*`）。forge が
+- 方針の元のリポジトリの `.gitignore` 38行目 `/.claude/*` により `.claude/findings.json` は **git 管理外**
+  （`git check-ignore -v .claude/findings.json` → `.gitignore:38:/.claude/*`）。方針の元のリポジトリが
   リポジトリの規約として配っているものではない
 - Claude Code の `ReportFindings` ツール（`/code-review` が使う）の finding は
   `file` / `line` / `summary` / `failure_scenario` を持つ（司令官が自分のツール定義で確認）。
-  forge の `findings.json` の各要素と一致する
+  方針の元のリポジトリの `findings.json` の各要素と一致する
 - したがってブリーフの推測どおり、**取り込むのは「failure scenario を書かせる」という要求
   だけ**である。`ReportFindings`・`/code-review`・`findings.json` は Claude Code 固有であり、
   AI 不問を掲げる pr-review-loop へ持ち込んではいけない（設計判断 D3）
@@ -248,8 +248,8 @@ forge にあって**両方に無い**のは次の2点（forge `AGENTS.md`「## �
 
 ### 5.3 `.claude/` を丸ごと無視しているリポジトリは実在する
 
-- forge の `.gitignore`: `/.claude/*` + `!/.claude/skills/` + `!/.claude/settings.json`
-  （**`pr-review.yml` は否定されていない**。forge 自体も `.claude/pr-review.yml` を持っていない）
+- 方針の元のリポジトリの `.gitignore`: `/.claude/*` + `!/.claude/skills/` + `!/.claude/settings.json`
+  （**`pr-review.yml` は否定されていない**。方針の元のリポジトリ自体も `.claude/pr-review.yml` を持っていない）
 - dotfiles の `.gitignore`: `/.claude/*` + `!/.claude/pr-review.yml` + `!/.claude/settings.json`
   （過去の傘 DOC-2608020558 の判断4で否定行を足した経緯がある）
 - **repo-baseline テンプレは `.gitignore` を生成しない。** 撒き先に既存の `.gitignore` があり
@@ -306,7 +306,7 @@ forge にあって**両方に無い**のは次の2点（forge `AGENTS.md`「## �
    マシンに pr-review-loop が配られている保証も無い
 2. **pr-review-loop のレビュワーはレビュー依頼ファイルしか読まない設計**であり、スキルは節の
    本文を貼っている（背景5.6）。AGENTS.md への参照に置き換えるとレビュワーに基準が届かない
-3. **forge の強みは実装者の導線にあること**（背景4 穴②）。スキル側だけに置く現状がまさに穴
+3. **方針の元のリポジトリの強みは実装者の導線にあること**（背景4 穴②）。スキル側だけに置く現状がまさに穴
 
 乖離を抑える手当て:
 
@@ -318,9 +318,9 @@ forge にあって**両方に無い**のは次の2点（forge `AGENTS.md`「## �
   - 「発生可能性 × 影響度 × 既存coverage」
   - 「壊れないことを確認するのと、専用テストを足すのは別の判断」
   - 「このテストが存在しなかった場合、どんな現実的な regression を逃すのか？」
-- **テンプレ版・本体版は forge の節構成（基本原則／必須性の判断／重複防止／scenario 統合／
+- **テンプレ版・本体版は方針の元のリポジトリの節構成（基本原則／必須性の判断／重複防止／scenario 統合／
   テスト追加時の問い）を踏襲する。** 薄めない（背景2）。言語固有の語（`spec`・RSpec 等）と
-  forge 固有の対象（`raw/` 保護等）だけを一般化する
+  方針の元のリポジトリ固有の対象（データ保護等）だけを一般化する
 - **本体の `AGENTS.md`「実装時の注意」に、3箇所のどれかを変えたら残り2箇所も確認する旨の
   ルールを置く**（孫3）。dotfiles の開発ルールは本体の `AGENTS.md` が正典なので、ここが
   二重管理を監視する唯一の場所になる
@@ -367,7 +367,7 @@ forge にあって**両方に無い**のは次の2点（forge `AGENTS.md`「## �
 
 ### D4: linter 対応の作法は「締める方向」だけ足す。抑制禁止ルールそのものは変えない（孫2・孫3）
 
-- 足すのは forge の2点（背景4 穴③）: (a) 違反はリファクタで直すが、長さ系の指摘に対して
+- 足すのは方針の元のリポジトリの2点（背景4 穴③）: (a) 違反はリファクタで直すが、長さ系の指摘に対して
   機械的に分割しない（分割後に責務・凝集性・読みやすさが改善する場合だけ）、
   (b) 新規ファイル追加時・大幅変更時点で対象ファイル単位の lint を前倒しで実行する
 - **既存の「抑制ディレクティブや設定の除外・閾値緩和を AI の判断で追加しない」は一字も
@@ -409,13 +409,13 @@ forge にあって**両方に無い**のは次の2点（forge `AGENTS.md`「## �
 
 ## スコープ外
 
-- **forge リポジトリ自体への変更。** 本傘は dotfiles 側だけを触る。forge への書き戻しが必要だと
+- **方針の元のリポジトリ自体への変更。** 本傘は dotfiles 側だけを触る。方針の元のリポジトリへの書き戻しが必要だと
   判断した場合も、この傘では行わず人間に報告する
 - **`claude/CLAUDE.md`（配布物）の編集。** 上記「決定的な制約」参照
-- **PR作法文書（DOC-2608020715）の改訂。** forge 側と内容がほぼ同一で、dotfiles 側の方が
+- **PR作法文書（DOC-2608020715）の改訂。** 方針の元のリポジトリ側と内容がほぼ同一で、dotfiles 側の方が
   新しいことを確認済み。取り込むものが無い
-- **`.opencode/commands/レビュー.md`（forge 側）の移植。** forge の MVP 期のプロジェクト固有
-  コマンドであり（`raw/` を変更していないか、MVP中にVLM・WD14を混ぜていないか等）、汎用性が無い
+- **`.opencode/commands/レビュー.md`（方針の元のリポジトリ側）の移植。** 方針の元のリポジトリの MVP 期のプロジェクト固有
+  コマンドであり（データを変更していないか、MVP中に特定のモデルを混ぜていないか等）、汎用性が無い
 - **`ocw-meter` による工程計測の拡張。** pr-review-loop には計測呼び出しが埋まっているが、
   本傘の問題意識とは別軸
 - **dotfiles 本体の `.claude/pr-review.yml` の変更**（`convention_docs` 等の追加）。本傘の
@@ -607,10 +607,10 @@ tests/template_smoke.sh
 計画書 `docs/planning/DOC-2609120054_review-policy-harvest_計画.md` を**必ず先に読むこと。**
 特に次の節は本孫の要求仕様そのものである。
 
-- 「背景2: 人間が確定させた決定事項」— **forge の方針を薄めたり再設計したりしない**
-- 「背景4」の穴② — forge の「テスト方針」節の原文（基本原則／必須性の判断の表／重複防止／
+- 「背景2: 人間が確定させた決定事項」— **方針の元のリポジトリの方針を薄めたり再設計したりしない**
+- 「背景4」の穴② — 方針の元のリポジトリの「テスト方針」節の原文（基本原則／必須性の判断の表／重複防止／
   scenario 統合／テスト追加時の問い）。**これが取り込む中身**
-- 「背景4」の穴③ — forge の linter 作法2点の原文
+- 「背景4」の穴③ — 方針の元のリポジトリの linter 作法2点の原文
 - 「設計判断 D1」— 3箇所で持つ理由、揃えるキーフレーズ、優先順位。**覆さない**
 - 「設計判断 D4」— 締める方向だけ。抑制禁止ルールは一字も緩めない
 - 「設計判断 D5」— 質問で出し分けない
@@ -619,15 +619,15 @@ tests/template_smoke.sh
 
 ### 1. `## テスト方針` 節を新設する
 
-`templates/repo-baseline/template/AGENTS.md.jinja` に、forge の節構成を踏襲した
+`templates/repo-baseline/template/AGENTS.md.jinja` に、方針の元のリポジトリの節構成を踏襲した
 「テスト方針」節を**無条件で**（どの回答でも出るように）足す。
 
-- 中身は forge の原文（計画書 背景4 穴②）を土台にする。**薄めない。**
+- 中身は方針の元のリポジトリの原文（計画書 背景4 穴②）を土台にする。**薄めない。**
   変えてよいのは次だけ:
   - 言語固有の語（`spec`・RSpec・`example` の Ruby 的な用法など）を言語非依存の語にする。
     ただし `test example` のように pr-review-loop 側と共通の語は残す
-  - forge 固有の対象（`raw/` 保護など）を一般的な書き方にする
-  - forge 固有の文書への参照（`docs/design/DOC-2606281812_テスト方針.md` への言及）を落とす
+  - 方針の元のリポジトリ固有の対象（データ保護など）を一般的な書き方にする
+  - 方針の元のリポジトリ固有の文書への参照（`docs/design/DOC-2606281812_テスト方針.md` への言及）を落とす
 - 計画書 設計判断 D1 のキーフレーズ5つを**同じ字面で**使う
 - 「必須性の判断」の表の destructive / integrity 系の行に、撒き先のリポジトリ固有の高リスク
   領域を書き足す前提の `<!-- TODO: ... -->` を置くかは判断してよい（テンプレの既存の TODO
@@ -653,7 +653,7 @@ tests/template_smoke.sh
 
 - `templates/repo-baseline/README.md` や `skills/repo-baseline/SKILL.md` に、生成される
   `AGENTS.md` の節を列挙・説明している箇所があれば追随する
-- `skills/pr-review-loop/SKILL.md` は**触らない**。語彙はテンプレ側をスキル側・forge 側に
+- `skills/pr-review-loop/SKILL.md` は**触らない**。語彙はテンプレ側をスキル側・方針の元のリポジトリ側に
   合わせる（逆にスキル側を書き換えない）
 
 ## スコープ外
@@ -662,7 +662,7 @@ tests/template_smoke.sh
 - `skills/pr-review-loop/SKILL.md` の変更（孫4 が別の節を触る）
 - `.claude/pr-review.yml` 関連（孫1 でマージ済み）
 - copier への新しい質問の追加
-- forge リポジトリの変更
+- 方針の元のリポジトリの変更
 
 ## 検証方針
 
@@ -710,7 +710,7 @@ tests/template_smoke.sh
 計画書 `docs/planning/DOC-2609120054_review-policy-harvest_計画.md` を**必ず先に読むこと。**
 特に次の節は本孫の要求仕様そのものである。
 
-- 「背景4」の穴②③ — forge の原文
+- 「背景4」の穴②③ — 方針の元のリポジトリの原文
 - 「背景5.5」— dotfiles のテスト方針文書（DOC-2608020715-b）の役割と、一部が古いこと
 - 「設計判断 D1」— 3箇所で持つ理由と、**本体 `AGENTS.md` に乖離防止ルールを置くこと**
 - 「設計判断 D4」— 締める方向だけ
@@ -803,10 +803,10 @@ pre-commit run --all-files
 計画書 `docs/planning/DOC-2609120054_review-policy-harvest_計画.md` を**必ず先に読むこと。**
 特に次の節は本孫の要求仕様そのものである。
 
-- 「背景4」の穴④ — forge の finding の実例（correctness と maintainability の2例）と、
+- 「背景4」の穴④ — 方針の元のリポジトリの finding の実例（correctness と maintainability の2例）と、
   pr-review-loop の現状（テスト不足の finding にしか記載様式が無い）
-- 「背景5.1」— forge の `findings.json` は gitignore された Claude Code `/code-review` の
-  出力物であり、forge の方針そのものではないこと
+- 「背景5.1」— 方針の元のリポジトリの `findings.json` は gitignore された Claude Code `/code-review` の
+  出力物であり、方針の元のリポジトリの方針そのものではないこと
 - 「背景5.6」— `{{FINDING_GATE}}` の貼り付け範囲が**本文の書き出しと末尾の文字列**で
   指定されていること
 - 「設計判断 D3」— 要求は取り込み、形式（JSON・ツール）は持ち込まない。**覆さない**
@@ -823,7 +823,7 @@ pre-commit run --all-files
 - maintainability を理由にする finding では「どんな将来変更で → どう壊れ → 何が見えるか」の
   連鎖になる（既存の 223〜224行目の要求を、記載様式として具体化したもの）
 - **failure scenario を書けない指摘は finding ではない**（gate の入口と記載様式を結びつける）
-- 例を載せるなら計画書 背景4 穴④の2例を土台にしてよいが、forge 固有の固有名詞
+- 例を載せるなら計画書 背景4 穴④の2例を土台にしてよいが、方針の元のリポジトリ固有の固有名詞
   （sd-scripts・`text_encoder_path` 等）を避けた一般形にする
 
 既存の「### finding として書くときの作法」（テスト不足の finding 用。320〜327行目）とは

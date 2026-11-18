@@ -14,7 +14,7 @@ claude-ds（Claude Code を DeepSeek の API で動かすラッパ `bin/claude-d
 2. **self-compact の決まりを直す（孫2）。** 「1 PR につき多くて 3 回」の読み違えを無くし、回数で止める形・区切りの
    足りなさ・閾値を DeepSeek の実測で見直す。この規則は Claude の会話と共通なので、どこまで変えるかは人間に確かめる
 3. **UI 確認のやり方を変える（孫3・孫4）。** deepseek-flash が画像を本当に読めているかを確かめたうえで、確認役を
-   サブエージェントではなく別の会話（ペイン）として立てる仕組みを dotfiles に作り（孫3）、pixidex 側の頼み方を
+   サブエージェントではなく別の会話（ペイン）として立てる仕組みを dotfiles に作り（孫3）、他リポ側の頼み方を
    それに合わせる（孫4、他リポの孫）
 
 > **本計画書は、相談の会話から渡された引き継ぎブリーフ（一時ファイル。転記後に削除済みで
@@ -29,7 +29,7 @@ claude-ds（Claude Code を DeepSeek の API で動かすラッパ `bin/claude-d
 | 1 | dotfiles | `dcd-01-autocompact-window` | `bin/claude-ds` の `CLAUDE_CODE_AUTO_COMPACT_WINDOW` を 20〜25万へ下げ、README の理由を実測に合わせて直す。サブエージェントに効くかを確かめる | ✅ PR #208 マージ済 |
 | 2 | dotfiles | `dcd-02-self-compact-rules` | self-compact の決まり（pr-review-loop・umbrella-orchestrator の自動付与指示・`compact-reminder.sh`・ADR）を DeepSeek の実測で見直す。Claude にも効かせるかは人間に確かめる | ✅ PR #207 マージ済 |
 | 3 | dotfiles | `dcd-03-ui-checker-pane` | deepseek-flash の画像読み取りを確かめ、UI 確認役を別の会話（ペイン）として立てる仕組みを作る | ✅ PR #209 マージ済 |
-| 4 | pixidex | `dcd-04-checker-request` | pixidex の「確かめ役」の頼み方（規約・現役の計画書の型・ADR）を孫3 の仕組みに合わせる | ⏳ 人間のマージ待ち (PR pixidex#234) |
+| 4 | 他リポ | `dcd-04-checker-request` | 他リポ側の確かめ役の頼み方を孫3 の仕組みに合わせる（中身は他リポの文書に任せる） | ⏳ 人間のマージ待ち (PR #234) |
 
 依存:
 
@@ -39,7 +39,7 @@ claude-ds（Claude Code を DeepSeek の API で動かすラッパ `bin/claude-d
   compact の閾値に触れる1文と `skills/pr-review-loop/SKILL.md` 程度。後からマージされる側が傘へ rebase で追随する
 - 孫2 の閾値の見直しは孫1 の自動圧縮の位置と関係する（自動圧縮は self-compact より後に来る安全網であるべき。設計2）。
   孫2 は孫1 の完了を待たないが、孫1 が先にマージされていればその値を前提にし、まだなら「20〜25万のどこか」を前提にする
-- 孫4 は**孫3 が傘にマージされてから** spawn する（孫3 の仕組みの使い方に合わせるため）。孫4 は pixidex の既定ブランチ
+- 孫4 は**孫3 が傘にマージされてから** spawn する（孫3 の仕組みの使い方に合わせるため）。孫4 は他リポの既定ブランチ
   `main` へ PR を出し、マージは人間が行う
 
 ## 関係するリポ
@@ -47,20 +47,20 @@ claude-ds（Claude Code を DeepSeek の API で動かすラッパ `bin/claude-d
 | 名前 | メインワークツリー | owner/name | 既定ブランチ |
 |---|---|---|---|
 | dotfiles | `/home/manemone/projects/dotfiles/master` | `manemone/dotfiles` | `master` |
-| pixidex | `/home/manemone/projects/pixidex/main` | メインワークツリーで `gh repo view --json nameWithOwner -q .nameWithOwner` を叩いた値 | `main` |
+| 他リポ | `/home/manemone/projects/<リポ名>/main` | メインワークツリーで `gh repo view --json nameWithOwner -q .nameWithOwner` を叩いた値 | `main` |
 
-pixidex は private のため、owner/name は値ではなく解決方法を書いた。状況の値も `pixidex#XX` と短い名前で書く。
-規約の在処: dotfiles は `AGENTS.md`（作業別の索引の DOC を含む）、pixidex はそのリポの `AGENTS.md` / `CLAUDE.md`。
+他リポは private のため、owner/name は値ではなく解決方法を書いた。状況の値も `PR #XX` の形で書く。
+規約の在処: dotfiles は `AGENTS.md`（作業別の索引の DOC を含む）、他リポはそのリポの `AGENTS.md` / `CLAUDE.md`。
 
 ## ワークスペースラベル
 
-接頭辞は `ocw label-prefix`（dotfiles では `dotfiles`、pixidex では `pixidex`）。
+接頭辞は `ocw label-prefix`（dotfiles では `dotfiles`、他リポではリポ名と同じ）。
 
 - 傘: `dotfiles :: claude-ds 費用削減`
 - 孫1: `dotfiles :: claude-ds 費用削減 孫1 自動圧縮の位置を下げる`
 - 孫2: `dotfiles :: claude-ds 費用削減 孫2 self-compact 規則の改訂`
 - 孫3: `dotfiles :: claude-ds 費用削減 孫3 UI 確認役のペイン`
-- 孫4: `pixidex :: claude-ds 費用削減 孫4 確かめ役の頼み方`
+- 孫4: `<リポ名> :: claude-ds 費用削減 孫4 確かめ役の頼み方`
 
 ## 背景1: 問題意識（要約）
 
@@ -93,7 +93,7 @@ pixidex は private のため、owner/name は値ではなく解決方法を書�
    - 確認役をサブエージェントではなく別の会話（ペイン）として立てる案。Claude（Sonnet で十分）で起動できる・self-compact
      できる・人間が横から見られる、が利点
    - 確認は試行錯誤させず、撮影スクリプトと確認項目を渡して流させる形にする
-   - 確認役の仕組みは dotfiles（`ocw` / `pr-review-loop` 等）、頼み方は pixidex 側の規約・計画書
+   - 確認役の仕組みは dotfiles（`ocw` / `pr-review-loop` 等）、頼み方は他リポ側の規約・計画書
 
 あわせて確定していること:
 
@@ -110,14 +110,7 @@ pixidex は private のため、owner/name は値ではなく解決方法を書�
 - `pr-review-loop` は「指摘対応の修正の途中は行わない」「Phase 7（承認後）では行わない」ため、承認後に持ち主の感想で追加の
   直しが入った局面で区切りが無い
 - `ocw self-compact` は実装役のペインにしか打てず、サブエージェントには届かない
-- UI 確認役の使い方は pixidex の計画書・ADR にあり（「確かめ役」の記述。下の一覧）、dotfiles 側に確認役の仕組みは無い。
-  一覧は pixidex（別リポ）の DOC-ID なので、dotfiles の doc-id の検査に掛からないようコードブロックに置く:
-
-  ```text
-  pixidex docs/planning/   DOC-2610290939 DOC-2611012121 DOC-2610200307 DOC-2610290943 DOC-2611012120
-  pixidex docs/adr/        DOC-2610291230
-  pixidex docs/reference/  DOC-2610200344
-  ```
+- UI 確認役の使い方は他リポの計画書・ADR にあり、dotfiles 側に確認役の仕組みは無い。他リポの文書の DOC-ID や中身は、この計画書に書かない。
 
 ## 背景4: 実測値
 
@@ -141,12 +134,12 @@ pixidex は private のため、owner/name は値ではなく解決方法を書�
 - 実装役セッション1本あたりの呼び出し回数の中央値（10/14以降）: Sonnet 80回（209本）、deepseek-flash 257回（41本）。
   1回の平均文脈はどちらも 13.5〜14万（仕事の大きさの違いを揃えていない荒い比較）
 
-**最も高かった pixidex `dp-08-qa`（セッション c7d0dc27、$2.90）**
+**最も高かった他リポの `<ブランチ名>`（セッション c7d0dc27、$2.90）**
 
 - 本体は self-compact を 3回（370k→52k、254k→49k、372k→63k）。3回目はレビュー待ちの compact
 - その後 JST 19:30〜20:14 にフックの差し込みが6回あったが、本人が見送った: 修正の途中だから（3回）、「1 PR につき多くて
   3 回」に達したから（3回。うち2回はレビュー依頼直後で上限の対象外＝読み違え。本人は「計画書の上限」と書いており、
-  pixidex の計画書側の書き方は未確認）。JST 20:16 に人間の指示で compact（364k→56k）
+  他リポの計画書側の書き方は未確認）。JST 20:16 に人間の指示で compact（364k→56k）
 - 06:19Z に一度承認 → 持ち主の感想で 2回目の直し → その間ずっと伸びた
 - UI 確認のサブエージェント（`general-purpose`、総当たりの独立した確かめ役）1本が 464回・$1.12、文脈 0→48万で圧縮ゼロ。
   node で撮影 78回、curl 74回、grep 106回、スクショ Read 37回。JST 11:04〜12:36（料金 2倍の時間帯）
@@ -168,14 +161,14 @@ pixidex は private のため、owner/name は値ではなく解決方法を書�
   箇条（`CLAUDE_CODE_AUTO_COMPACT_WINDOW=786432` の行）に、問題の理由の文がある
 - 「1 PR につき多くて 3 回」の書き写しは dotfiles では `skills/pr-review-loop/SKILL.md`「区切りでの自己 compact（実装側のみ）」、
   `skills/umbrella-orchestrator/SKILL.md` §3.2 の自動付与指示（同じリポ用・他リポ用の2か所）、ADR DOC-2610142337 にある。
-  pixidex では過去の計画書の孫用プロンプト（例: 背景3 の一覧の先頭の計画書や、LoRA の始動の計画書）が自動付与指示をそのまま写している。
-  dp-08-qa の実装AIが「計画書の上限」と書いたのはこの写しを読んだためと思われる
+  他リポでは過去の計画書の孫用プロンプトが自動付与指示をそのまま写している。
+  該当ブランチの実装AIが「計画書の上限」と書いたのはこの写しを読んだためと思われる
 - `claude/hooks/compact-reminder.sh` は `OCW_ROLE=implementer` のときだけ動き、閾値 `THRESHOLD = 200000`、区切り
   （`git commit` / `git push` / `gh pr create` / `herdr agent prompt` / `SendMessage`）の直後に1回、それ以外は閾値超えの
   最初と 50k 増えるごとに差し込む。差し込みの文面に「承認後の報告は区切りでない」「指摘対応の修正の途中は区切りでない」が
   入っている。テストは `tests/compact_reminder_test.sh`
 - このマシンの実装役・レビュー役の既定は `OCW_IMPLEMENTER_COMMAND`=Sonnet、`OCW_REVIEWER_COMMAND`=Opus（dotfiles の孫は
-  Claude で動く）。DeepSeek の費用が出ているのは主に pixidex の実装役
+  Claude で動く）。DeepSeek の費用が出ているのは主に他リポの実装役
 
 ## 決定的な制約（孫は全部守ること）
 
@@ -187,7 +180,7 @@ pixidex は private のため、owner/name は値ではなく解決方法を書�
   DOC-ID を明示
 - self-compact 規則の変更は Claude の会話にも効く（範囲は未決。孫2 が人間に確認する）
 - 確認役を Claude で動かす場合、Sonnet の消費は週の上限に効く（ドルでは比べない）
-- pixidex（private）の内容を dotfiles（public）の文書・PR に必要以上に書き写さない（pixidex の文書は DOC-ID とパスで指す）
+- 他リポ（private）の内容を dotfiles（public）の文書・PR に書き写さない
 
 ## スコープ外
 
@@ -204,7 +197,7 @@ pixidex は private のため、owner/name は値ではなく解決方法を書�
 - デプロイ関連のシェルを変えたら `tests/deploy_smoke.sh`
 - `claude/hooks/compact-reminder.sh` を変えたら `bash tests/compact_reminder_test.sh`（bash 用。`sh` で呼ぶと `pipefail` で落ちる）
 - `docs/` 新規は doc-id 採番、`./tools/doc-id/doc-id verify`
-- pixidex 側はそのリポの `AGENTS.md` の手順に従う
+- 他リポ側はそのリポの `AGENTS.md` の手順に従う
 - **全孫のマージと人間の配布のあと**、ocw-meter で 1日分を見比べ、試算どおり下がったか確かめる（試算は甘め。付録A の
   `sim.py` / `breakdown.py` / `ui_share.py` を同じ条件で回す）。これは傘の最終 PR の後の宿題として進行記録に残す
 
@@ -276,15 +269,10 @@ pixidex は private のため、owner/name は値ではなく解決方法を書�
 3. 画像読み取りの結果が「deepseek-flash は画像を見ていない」なら、確認役を Claude で動かすことは必須であり、ADR にその根拠を
    書く。「見えている」なら、確認役を DeepSeek で動かす選択肢も残し、既定をどちらにするかを理由とともに書く
 
-## 設計4: pixidex の確かめ役の頼み方を合わせる（孫4、他リポ）
+## 設計4: 他リポ側の頼み方（孫4、他リポ）
 
-- 孫3 の仕組みの使い方（ADR と使い方の文書）を読み、pixidex の現役の規約・計画書の型・ADR のうち、UI 確認を
-  サブエージェントの確かめ役に頼む書き方をしている箇所を、孫3 の仕組みで頼む形に直す。対象の候補は背景3 の一覧（pixidex の DOC-ID）。**完了済みの計画書は記録なので書き換えない**（現役のもの・
-  これから使う型・規約だけ）
-- 確かめ役に渡す「撮影スクリプト」と「確認項目」の置き場所と書き方を pixidex 側で決める
-- pixidex に「1 PR につき多くて 3 回」の書き写しが現役の規約・テンプレートにあれば、孫2 の新しい書き方に合わせる
-  （孫2 が未マージなら触らず、PR 本文にそう書く）
-- PR 本文に、この計画書（dotfiles の `docs/planning/` の本計画書の DOC-ID）と孫3 の PR へのリンクを書く
+- 孫3 の仕組みに依存する（孫4 は孫3 のマージ後に spawn する）。他リポ側で何を直すかは、他リポの規約・文書に任せ、この計画書には書かない（非公開のため）。
+- この計画書に残すのは、孫4 の PR 番号と、マージされたかどうかだけ。
 
 ## 孫ブランチ分割の叩き台（ブリーフより転記。採った分割は上の進捗テーブル）
 
@@ -294,7 +282,7 @@ pixidex は private のため、owner/name は値ではなく解決方法を書�
 - 孫B（dotfiles）: `pr-review-loop` の self-compact 規則・`compact-reminder.sh`・ADR の改訂（上限の文言、増分制、区切りの追加、
   閾値の再測定）。Claude にも効くかの判断を人間に仰ぐ
 - 孫C（dotfiles）: deepseek-flash の画像読み取りの確認 → 結果に応じて確認役ペインの仕組み（`ocw` / `pr-review-loop` 等）
-- 孫D（pixidex）: 確かめ役の頼み方を孫C の仕組みに合わせる（計画書・ADR・規約）。孫C に依存
+- 孫D（他リポ）: 確かめ役の頼み方を孫C の仕組みに合わせる（計画書・ADR・規約）。孫C に依存
 
 司令官の判断: A→孫1、B→孫2、C→孫3、D→孫4 とそのまま採った。孫3 の画像読み取りの確認は独立の PR にするほど大きくなく、
 仕組みの既定（Claude で動かすか）を決める材料なので、同じ孫の最初の手順にした。順序は孫1〜3 を並列、孫4 は孫3 の後。
@@ -309,8 +297,8 @@ pixidex は private のため、owner/name は値ではなく解決方法を書�
 - 2026-11-03: 孫2 の PR #207 を司令官がマージした。閾値 200k→150k、実装途中の回数上限を増分制に置き換え、Claude の会話にも効く（ADR DOC-2611032102。閾値の変更も孫2 が人間に確認済み）。傘で unittest（465件）・`pre-commit run --all-files`・`bash tests/compact_reminder_test.sh`・`doc-id verify` が通った。孫1 の自動圧縮の位置は 150k より上に置くこと
 - 2026-11-03: 訂正: 人間が Claude にも効かせてよいとしたのは回数の上限（増分制）だけだった。閾値 150k は claude-ds のときだけにし、それ以外の Claude は 200k に戻した（フックは `ANTHROPIC_BASE_URL` で見分ける。司令官が傘へ直接コミット。ADR DOC-2611032102 §3 の 4 を訂正）
 - 2026-11-03: 孫1 の PR #208 を司令官がマージした。claude-ds の `CLAUDE_CODE_AUTO_COMPACT_WINDOW` を 786432→233000（ADR DOC-2611032100）。傘で unittest・`pre-commit run --all-files`・`bash tests/compact_reminder_test.sh`・`doc-id verify` が通った
-- 2026-11-03: 孫3 の PR #209 を司令官がマージした（`ocw checker`）。傘で unittest・`pre-commit run --all-files`・`bash tests/compact_reminder_test.sh`・`doc-id verify` が通った。孫4 を pixidex の `origin/main` から spawn した
-- 2026-11-03: 孫4 の PR pixidex#234 が HEAD d975354f で承認された。ADR に「`ocw checker` が配られてから main にマージ」という前提があるため、傘の master へのマージとデプロイの後に人間がマージする
+- 2026-11-03: 孫3 の PR #209 を司令官がマージした（`ocw checker`）。傘で unittest・`pre-commit run --all-files`・`bash tests/compact_reminder_test.sh`・`doc-id verify` が通った。孫4 を他リポの `origin/main` から spawn した
+- 2026-11-03: 孫4 の PR #234 が HEAD d975354f で承認された。ADR に「`ocw checker` が配られてから main にマージ」という前提があるため、傘の master へのマージとデプロイの後に人間がマージする
 
 ## 孫1用プロンプト:
 
@@ -546,13 +534,12 @@ PR を作る前に `docs/design/DOC-2608020715_プルリクエストの作法.md
 1. **画像読み取りの確認（設計3 の1。最初にやる）。** 中身を推測できない画像を作り、claude-ds（deepseek-flash）と Claude の
    両方に読ませて比べる。DeepSeek の Anthropic 互換 API の公式の文書で画像の扱いも確かめる。費用は小さく（短い会話で1〜2枚）。
    実験の会話は使い捨て（`claude -p` など）にし、結果（読めたか・根拠・試した手順）をメモに残す
-2. **仕組みの設計（設計3 の2・3）。** 置き場所の候補を比べて選ぶ。pixidex の確かめ役の使われ方（計画書 背景3 の一覧の文書を
-   `/home/manemone/projects/pixidex/main` で読むだけ。書き換えない）を読み、何を渡し何を返せば足りるかを確かめる
+2. **仕組みの設計（設計3 の2・3）。** 置き場所の候補を比べて選ぶ。他リポの確かめ役の使われ方（他リポの文書を読むだけ。書き換えない）を読み、何を渡し何を返せば足りるかを確かめる
 3. 仕組みを実装する。使い方の文書（README またはスキル本文）を書く
 4. ADR を `docs/adr/` に足す（`DOC-DOCID_PLACEHOLDER_<名前>.md` で作って `./tools/doc-id/doc-id assign <path>`）。画像読み取りの
    結果、置き場所の比較と選択、既定のモデル（Claude で動かす根拠）、Sonnet の消費が週の上限に効くこと、Claude の会話に効くか
-5. 孫4（pixidex 側の頼み方）が読む前提で、使い方の文書に「実装役から頼む手順」「渡すファイルの形」「返ってくるもの」を
-   具体的に書く。pixidex のことは dotfiles の文書に必要以上に書き写さない（private のため）
+5. 孫4（他リポ側の頼み方）が読む前提で、使い方の文書に「実装役から頼む手順」「渡すファイルの形」「返ってくるもの」を
+   具体的に書く。他リポのことは dotfiles の文書に必要以上に書き写さない（private のため）
 
 ## 検証方針
 
@@ -624,21 +611,21 @@ reviewerはdone状態で完了し完了通知は来ないので、待機して�
 ## PR作成時の注意
 
 PR を作る前に `docs/design/DOC-2608020715_プルリクエストの作法.md` を読むこと。
-人間の発言を逐語で書かない（PUBLIC リポ。要約する）。pixidex（private）の中身は DOC-ID とパスで指すに留める。
+人間の発言を逐語で書かない（PUBLIC リポ。要約する）。他リポ（private）の中身は書き写さない。
 ````
 
 ## 孫4用プロンプト:
 
 ````markdown
 # 傘ブランチ: ds-cost-down（dotfiles）
-# 孫ブランチ: dcd-04-checker-request（pixidex）
-# ターゲット: pixidex の main（他リポの孫。マージは人間）
+# 孫ブランチ: dcd-04-checker-request（他リポ）
+# ターゲット: このリポの main（他リポの孫。マージは人間）
 
 計画書（dotfiles 側）: `/home/manemone/projects/dotfiles/ds-cost-down/docs/planning/DOC-2611032048_ds-cost-down_計画.md`
 
 **まず計画書の「概要」「背景2」「背景3」「背景4」「決定的な制約」「スコープ外」「設計3」「設計4」「進行記録」を読むこと。**
 続けて、孫3 がマージした仕組みの使い方の文書と ADR（計画書の進行記録に PR 番号がある。dotfiles の `origin/ds-cost-down` に
-入っている）を読む。最後に、このリポ（pixidex）の `AGENTS.md` / `CLAUDE.md` を読み、その規約に従う。
+入っている）を読む。最後に、このリポの `AGENTS.md` / `CLAUDE.md` を読み、その規約に従う。
 
 ## 実装開始前の必須手順
 
@@ -648,13 +635,13 @@ PR を作る前に `docs/design/DOC-2608020715_プルリクエストの作法.md
 
 ## やること
 
-1. 計画書 設計4 の対象の候補（背景3 の一覧）を読み、UI 確認をサブエージェントの確かめ役に頼む書き方をしている
+1. 計画書 設計4 の対象の候補（このリポ側の現役の文書）を読み、UI 確認をサブエージェントの確かめ役に頼む書き方をしている
    **現役の**規約・計画書の型・ADR・リファレンスを洗い出す（完了済みの計画書は記録なので書き換えない）
 2. それらを孫3 の仕組みで頼む形に直す。確かめ役に渡す「撮影スクリプト」と「確認項目」の置き場所と書き方を決め、
-   pixidex の規約に書く
+   このリポの規約に書く
 3. 「1 PR につき多くて 3 回」の書き写しが現役の規約・テンプレートにあれば、dotfiles 孫2 の新しい書き方に合わせる
    （孫2 が未マージなら触らず、PR 本文にそう書く）
-4. 新しい判断（置き場所・書き方）は pixidex の ADR の作法に従って残す
+4. 新しい判断（置き場所・書き方）はこのリポの ADR の作法に従って残す
 
 ## 検証方針
 

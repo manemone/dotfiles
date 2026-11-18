@@ -132,10 +132,10 @@ $ herdr worktree list --cwd /home/manemone/projects
 無関係なリポジトリを返すため、**必ず `--cwd`（または `--workspace <id>`）を指定すること。**
 
 ```json
-{"result":{"source":{"repo_root":"/home/manemone/projects/lora-dataset-forge/main", ...},
- "worktrees":[{"branch":"oc-01-canon-recipe","is_linked_worktree":true,
+{"result":{"source":{"repo_root":"/home/manemone/projects/<リポ名>/main", ...},
+ "worktrees":[{"branch":"oc-01-example-task","is_linked_worktree":true,
    "is_prunable":false,"open_workspace_id":"w9M",
-   "path":"/home/manemone/projects/lora-dataset-forge/oc-01-canon-recipe"}]}}
+   "path":"/home/manemone/projects/<リポ名>/oc-01-example-task"}]}}
 ```
 
 **`is_linked_worktree: false` の要素（各リポジトリの main チェックアウト自体）は

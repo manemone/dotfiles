@@ -1270,11 +1270,11 @@ class LabelPrefixTests(OcwTestCase):
         self.assertEqual(result.stdout, "origin\n")
 
     def test_label_prefix_config_is_display_only(self):
-        set_config(self.repo_root, "ocw.labelPrefix", "LDF")
+        set_config(self.repo_root, "ocw.labelPrefix", "example-repo")
         set_config(self.repo_root, "ocw.worktreeDir", "{repo_parent}/{repo}-{name}")
 
         result = run_ocw(["label-prefix"], self.repo_root)
-        self.assertEqual(result.stdout, "LDF\n")
+        self.assertEqual(result.stdout, "example-repo\n")
 
         create = run_ocw(["widget-maker"], self.repo_root)
         self.assertEqual(create.returncode, 0, create.stderr)
@@ -2147,14 +2147,14 @@ class HerdrPaneModeTests(HerdrOcwTestCase):
         self.assertEqual(create_call[create_call.index("--label") + 1], "origin :: gadget-maker")
 
         self.herdr_log.unlink()
-        set_config(self.repo_root, "ocw.labelPrefix", "LDF")
+        set_config(self.repo_root, "ocw.labelPrefix", "example-repo")
         result = self.run_herdr_ocw(["-H", "--no-commander", "widget-maker"])
         self.assertEqual(result.returncode, 0, result.stderr)
         create_call = next(c for c in self.herdr_calls() if c[:2] == ["worktree", "open"])
-        self.assertEqual(create_call[create_call.index("--label") + 1], "LDF :: widget-maker")
+        self.assertEqual(create_call[create_call.index("--label") + 1], "example-repo :: widget-maker")
         lines = self.agent_lines("widget-maker")
         self.assertEqual(
-            shlex.split(lines["implementer"])[-1], "LDF :: widget-maker / 実装"
+            shlex.split(lines["implementer"])[-1], "example-repo :: widget-maker / 実装"
         )
 
     def test_name_is_added_only_to_claude_and_claude_ds_commands(self):
