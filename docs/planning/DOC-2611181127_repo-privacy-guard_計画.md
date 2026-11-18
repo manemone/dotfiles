@@ -27,7 +27,7 @@
 
 | 孫 | ブランチ | 内容 | 状況 |
 |---|---|---|---|
-| 1 | `rp-01-skill-rules` | スキルの文の修正: 逐語を書いてよいのはブリーフだけ・非公開の名前を書かない・レビュワーの観点・PR 本文の点検の呼び出し（設計1） | 🔄 実装中 |
+| 1 | `rp-01-skill-rules` | スキルの文の修正: 逐語を書いてよいのはブリーフだけ・非公開の名前を書かない・レビュワーの観点・PR 本文の点検の呼び出し（設計1） | ⏳ CI待ち (PR #235) |
 | 2 | `rp-02-commit-check` | コミット時の点検 `tools/privacy-check/` を作り、`templates/repo-baseline` で配る。dotfiles 自身の `.pre-commit-config.yaml` への登録は孫3（設計2） | 🔄 実装中 |
 | 3 | `rp-03-scrub-existing` | 既存ファイルの修正の仕上げと、dotfiles の `.pre-commit-config.yaml` への点検の登録（設計3）。**持ち主が反映のしかたを決めるまで spawn しない** | ⬜ 待機中（持ち主の判断待ち） |
 
