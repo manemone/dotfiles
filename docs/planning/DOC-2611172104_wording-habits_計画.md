@@ -30,7 +30,7 @@ AI（主に Claude Code）が書く日本語に、持ち主が繰り返し指摘
 | 3 | dotfiles | `wh-03-skills-core` | 書き直し: `skills/umbrella-orchestrator/` と `skills/pr-review-loop/` | ✅ PR #234 マージ済 |
 | 4 | dotfiles | `wh-04-skills-rest` | 書き直し: 孫3 以外の `skills/` | ⬜ 待機中 |
 | 5 | dotfiles | `wh-05-docs` | 書き直し: `AGENTS.md`・`docs/design/`・`docs/reference/`・`docs/README.md`・各 README・`templates/repo-baseline/`・`bin/` のヘルプの文面（孫2 の対象リストの範囲） | ⬜ 待機中 |
-| 6 | repo-a | `wh-06-repo-a` | 書き直し: repo-a（孫2 の対象リストの範囲） | ⏳ 人間のマージ待ち (PR repo-a#605) |
+| 6 | repo-a | `wh-06-repo-a` | 書き直し: repo-a（孫2 の対象リストの範囲） | ✅ PR repo-a#605 マージ済 |
 | 7 | repo-b | `wh-07-repo-b` | 書き直し: repo-b（同上） | ✅ PR repo-b#287 マージ済 |
 | 8 | repo-c | `wh-08-repo-c` | 書き直し: repo-c（同上） | ✅ PR repo-c#151 マージ済 |
 | 9 | repo-d | `wh-09-repo-d` | 書き直し: repo-d（同上） | ✅ PR repo-d#131 マージ済 |
@@ -335,6 +335,7 @@ dotfiles 以外は非公開リポ。**dotfiles（公開）の文書・コミッ�
 - 2026-11-18: 孫4・孫5 は持ち主の判断待ち。読まれた回数の計測（targets/dotfiles.md）で、dotfiles の読まれる回数の8割超は
   孫3 の2つのスキルと `AGENTS.md` が占め、孫4（残りのスキル）・孫5（docs・README）の対象は8割の外だった。8割の外も書き直すか、
   見送るかを持ち主に聞いている（司令官の推奨は見送り）
+- 2026-11-18: 持ち主が repo-a#605 をマージした。他リポの孫（6〜10）は全部マージ済み
 
 ## 孫1用プロンプト:
 
