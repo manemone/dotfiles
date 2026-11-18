@@ -1,5 +1,8 @@
 {#- Ruby のとき lint・test フックを走らせるファイル。文書だけのコミットでは走らせない -#}
 {%- set ruby_files_regex = '(\\.(rb|rake|gemspec)$|^(Gemfile|Gemfile\\.lock|Rakefile|\\.rspec|\\.ruby-version|\\.rubocop[^/]*\\.yml)$)' -%}
+# commit-msg 段を入れても、段を指定していないフックはコミットごとに1回だけ走るように、
+# 既定の段を pre-commit に固定する（commit-msg 段で動かすフックは個別に stages を持つ）。
+default_stages: [pre-commit]
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v6.0.0
@@ -24,7 +27,7 @@ repos:
 
       - id: privacy-check-commit-msg
         name: privacy-check (コミットメッセージ)
-        entry: ./tools/privacy-check/privacy-check
+        entry: ./tools/privacy-check/privacy-check --commit-msg
         language: system
         stages: [commit-msg]
 {% if use_doc_id %}

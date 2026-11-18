@@ -211,6 +211,7 @@ assert_privacy_check() {
     grep -q 'entry: ./tools/privacy-check/privacy-check' "$sbx/.pre-commit-config.yaml" &&
     grep -q 'stages: \[pre-commit\]' "$sbx/.pre-commit-config.yaml" &&
     grep -q 'stages: \[commit-msg\]' "$sbx/.pre-commit-config.yaml" &&
+    grep -q "^default_stages: \[pre-commit\]" "$sbx/.pre-commit-config.yaml" &&
     grep -q 'pre-commit install --hook-type commit-msg' "$sbx/AGENTS.md"; then
     pass "$label: privacy-check が生成され、2つの段に登録され、AGENTS.md が commit-msg の案内を持つ"
   else

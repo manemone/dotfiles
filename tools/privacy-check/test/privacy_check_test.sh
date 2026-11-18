@@ -66,11 +66,19 @@ _rc=$?
 expect 1 "標準入力の名前のヒットが止まる"
 check "標準入力の出力は <stdin>:行:name" grep -q '^<stdin>:1: name$' "$_work/out"
 
+# 1b. --commit-msg: git が捨てるコメント行とはさみ線より下は読まず、本文は読む
+printf 'remove the name\n# example-private-repo in a comment\n# ------------------------ >8 ------------------------\n-example-private-repo removed line\n' >msg2
+run --commit-msg msg2
+expect 0 "--commit-msg はコメント行とはさみ線より下の名前で止めない"
+printf 'fix example-private-repo\n# comment\n' >msg3
+run --commit-msg msg3
+expect 1 "--commit-msg でも本文の名前は止まる"
+
 # 2. 見出しの点検: 逐語の節は止まり、地の文の引用・手順の例・「書かない」見出しは止まらない
-printf '# 計画\n## 問題意識（逐語）\n## 持ち主の言葉\n### 人間の発言\n' >bad.md
+printf '# 計画\n## 問題意識（逐語）\n## 持ち主の言葉\n### 人間の発言\n## 問題意識（逐語・要約禁止）\n## 問題意識（逐語。手を入れない）\n## 人間の発言（原文のまま。省略を含めない）\n' >bad.md
 run bad.md
 expect 1 "発言の逐語の節の見出しが止まる"
-check "3つの見出しが当たる" test "$(grep -c ': heading$' "$_work/out")" -eq 3
+check "逐語を守る側の否定語を添えた見出しも含め、6つの見出しが当たる" test "$(grep -c ': heading$' "$_work/out")" -eq 6
 cat >good.md <<'MD'
 # 計画
 
@@ -116,11 +124,13 @@ _rc=$?
 expect 1 "既定の置き場（XDG_CONFIG_HOME 配下）の一覧を読む"
 
 # 5. 引数なしは git 管理下の全ファイルを点検する。バイナリは読まない
-git init -q . && git add notes.txt good.md bad.md
+printf '## 逐語\n' >日本語の計画.md
+git init -q . && git add notes.txt good.md bad.md 日本語の計画.md
 printf 'example-private-repo\000\001' >bin.dat
 git add bin.dat
 run
 expect 1 "引数なしで git 管理下のファイルを点検する"
+check "日本語を含むパスのファイルも点検される" grep -q '日本語の計画.md:1: heading' "$_work/out"
 check "バイナリは点検しない" test "$(grep -c 'bin.dat' "$_work/out")" -eq 0
 
 # 6. 使い方の誤り
