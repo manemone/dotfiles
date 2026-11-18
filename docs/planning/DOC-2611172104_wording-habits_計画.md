@@ -351,6 +351,8 @@ dotfiles 以外は非公開リポ。**dotfiles（公開）の文書・コミッ�
 - 2026-11-18: 孫5 の PR #238（承認 HEAD 5af1106、レビュー2回目）と孫4 の PR #239（承認 HEAD d59c1e2、レビュー2回目）を、CI green を
   確かめて司令官がマージした。傘で `pre-commit run --all-files`・`doc-id verify` が通った。残りは、別の傘と重なるため外した3ファイル
   （`skills/umbrella-handoff`・`skills/task-intake` の SKILL.md、`docs/design/DOC-2608020715`）だけ
+- 2026-11-18: 最終 PR #240 のレビューで、`claude/CLAUDE.md` の既存の節（孫2 は末尾に節を足しただけ）を書き直すかが記録から
+  落ちていると指摘された。この傘では書き直していない。書き直すかは持ち主が決める（未決。この傘に足さず、別の作業として扱う）
 
 ## 孫1用プロンプト:
 
