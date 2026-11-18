@@ -144,14 +144,14 @@ uv tool run copier update
 手順の詳細・増えた質問への答え方・既に撒いた（`_commit` の無い）リポジトリの移行は
 `skills/repo-baseline/SKILL.md` と移行の手順書（`docs/reference/DOC-2610110507_repo-baseline旧形からの移行手順.md`）に従ってください。
 
-## privacy-check（発言と非公開の名前を止める点検）
+## privacy-check（発言の逐語の節を止める点検）
 
-展開先には `tools/privacy-check/` が入り、コミットの時点で次の2つを止める（設計の理由は
+展開先には `tools/privacy-check/` が入り、コミットの時点で次を止める（設計の理由は
 [ADR DOC-2611181132](../../docs/adr/DOC-2611181132_privacy-check.md)）。
 
 - Markdown の見出しに、人間の発言をそのまま載せる節であることを示す語がある（`heading`）
-- 非公開の名前の一覧に載った語がある（`name`。一覧はリポジトリの外の
-  `~/.config/privacy-check/private-names.txt` か `PRIVACY_CHECK_NAMES_FILE`。無ければ飛ばす）
+
+非公開の名前は機械では照合しない（決まりとレビューで止める。ADR に理由）。
 
 展開後にやること:
 
@@ -194,7 +194,7 @@ uv tool run copier update
 - `language=ruby` で、文書だけのコミットでは lint・test フックが Skipped になり、`.rb` を含むコミットでは走ること
 - `language=other`（既定）で Ruby の物が何も生成されず、`tools/doc-id/` のテストが `Gemfile` 無しで動くこと
 
-- `tools/privacy-check/`（人間の発言の逐語を載せる節の見出しと、非公開の名前を止める点検）は、回答によらず
+- `tools/privacy-check/`（人間の発言の逐語を載せる節の見出しを止める点検）は、回答によらず
   常に生成され、pre-commit の `pre-commit` 段と `commit-msg` 段に登録される（`tests/template_smoke.sh` が検査する）
 - 空の git リポジトリに `uv tool run copier copy <このリポジトリのルート> <展開先>` で展開できること
 - 展開直後に `./tools/doc-id/doc-id assign` を実行すると、プレースホルダが実際のタイムスタンプへ

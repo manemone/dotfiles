@@ -62,9 +62,9 @@
 - 指示された範囲外の機能を先回りして実装しない。
 - **人間の発言そのものと、非公開のリポジトリ・ホストの名前を、コミット・PR・文書・コードのコメントに
   書かない。** 履歴と PR の差分に残り続け、あとから消すことは事実上できない。発言は要点を自分の言葉で
-  書く。`tools/privacy-check/privacy-check` が、発言の逐語を載せる節の見出しと、非公開の名前の一覧
-  （リポジトリの外の `~/.config/privacy-check/private-names.txt`。使い方は
-  [tools/privacy-check/README.md](tools/privacy-check/README.md)）に載った語をコミットの時点で止める。
+  書く。`tools/privacy-check/privacy-check` が、発言の逐語を載せる節の見出しをコミットの時点で止める
+  （使い方は [tools/privacy-check/README.md](tools/privacy-check/README.md)）。名前は機械で照合しないので、
+  書かないことを自分で守り、レビューでも見る。
   PR の本文は `tools/privacy-check/privacy-check --stdin` に通してから出す。許可の印
   （`privacy-check:allow-line`・`tools/privacy-check/allowlist.txt`）を AI の判断で足さない
 - **linter / formatter の抑制ディレクティブや、設定ファイルの除外・閾値緩和を、AI の判断で
@@ -85,7 +85,7 @@
 
 | ディレクトリ | 役割 |
 |---|---|
-| `tools/privacy-check/` | 人間の発言の逐語を載せる節の見出しと、非公開の名前を止める点検。pre-commit から呼ぶ |
+| `tools/privacy-check/` | 人間の発言の逐語を載せる節の見出しを止める点検。pre-commit から呼ぶ |
 {%- if use_doc_id %}
 | `docs/` | 設計文書・計画書。詳細は [docs/README.md](docs/README.md) を参照 |
 | `tools/doc-id/` | DOC-ID（`docs/` 配下の文書に付与する不変識別子）の割当・検証ツール |

@@ -1,5 +1,5 @@
 #!/bin/sh
-# privacy-check: 人間の発言の逐語を載せる節の見出しと、非公開の名前を、コミットの時点で止める。
+# privacy-check: 人間の発言の逐語を載せる節の見出しを、コミットの時点で止める。
 #
 # 使い方:
 #   privacy-check [<file> ...]   ファイルを点検する。引数が無ければ git 管理下の全ファイル
@@ -8,14 +8,12 @@
 #                                コミットメッセージのファイルを点検する。git が捨てる行は読まない
 #                                （はさみ線より下の差分。案内のコメントがあるメッセージでは行頭コメントも）
 #
-# 点検は2つ。
-#   heading: Markdown（*.md / *.markdown と標準入力）の見出し行に、発言をそのまま載せる節を
-#            示す語がある。地の文は見ない。「書かない」ことを述べる見出しは止めない
-#   name:    非公開の名前の一覧（リポジトリの外のマシンローカルな設定）に載った語がある。
-#            一覧が無ければ黙って飛ばす。当たった語そのものは出力しない
+# 点検は heading の1つ: Markdown（*.md / *.markdown と標準入力）の見出し行に、発言をそのまま
+# 載せる節を示す語がある。地の文は見ない。「書かない」ことを述べる見出しは止めない。
+# 非公開の名前は機械で照合しない（決まりとレビューで止める。ADR DOC-2611181132）。
 #
-# 出力は `<path>:<行番号>: <heading|name>`。ヒットありで終了コード 1、無しで 0、使い方の誤りは 2。
-# 行に `privacy-check:allow-line` があれば、その行は両方の点検で飛ばす。ファイル単位の許可は
+# 出力は `<path>:<行番号>: heading`。ヒットありで終了コード 1、無しで 0、使い方の誤りは 2。
+# 行に `privacy-check:allow-line` があれば、その行は飛ばす。ファイル単位の許可は
 # このスクリプトと同じ場所の allowlist.txt（1行1パス。リポジトリのルートからの相対パス）。
 # 置き場・設計の理由は README.md を参照。
 
@@ -23,9 +21,7 @@ set -u
 
 _self_dir=$(cd "$(dirname "$0")" && pwd) || exit 2
 _allowlist="$_self_dir/allowlist.txt"
-_names="${PRIVACY_CHECK_NAMES_FILE-${XDG_CONFIG_HOME:-${HOME:-}/.config}/privacy-check/private-names.txt}"
 
-[ -f "$_names" ] || _names=""
 [ -f "$_allowlist" ] || _allowlist=""
 
 _stdin=0
@@ -78,7 +74,7 @@ if [ "$_stdin" -eq 0 ]; then
 fi
 
 # バイト単位で比べる（日本語の語を locale に左右されず部分一致させる）。
-LC_ALL=C awk -v stdin_mode="$_stdin" -v cmsg="$_cmsg" -v cguide="$_cguide" -v cc="$_cc" -v names_file="$_names" -v allow_file="$_allowlist" '
+LC_ALL=C awk -v stdin_mode="$_stdin" -v cmsg="$_cmsg" -v cguide="$_cguide" -v cc="$_cc" -v allow_file="$_allowlist" '
 function trim(s) {
   sub(/^[ \t\r]+/, "", s)
   sub(/[ \t\r]+$/, "", s)
@@ -98,11 +94,6 @@ BEGIN {
   # その語が同居していれば逐語の節の見出しとして扱う
   nw2 = split("入れない 含めない 禁止", wneg, " ")
   np = split("要約 改変 省略 手を 加え 変え", prot, " ")
-  while (names_file != "" && (getline line < names_file) > 0) {
-    sub(/#.*/, "", line)
-    line = trim(line)
-    if (line != "") names[++nname] = tolower(line)
-  }
   while (allow_file != "" && (getline line < allow_file) > 0) {
     sub(/#.*/, "", line)
     line = trim(line)
@@ -133,13 +124,6 @@ index($0, "privacy-check:allow-line") { next }
     for (i = 1; i <= np; i++) if (index($0, prot[i])) { prot_hit = 1; break }
     if (neg || (wneg_hit && !prot_hit)) h = 0
     if (h) { printf "%s:%d: heading\n", label, FNR; hits++ }
-  }
-  if (nname > 0) {
-    low = tolower($0)
-    for (i = 1; i <= nname; i++) if (index(low, names[i])) {
-      printf "%s:%d: name\n", label, FNR; hits++
-      break
-    }
   }
 }
 END { exit hits > 0 ? 1 : 0 }

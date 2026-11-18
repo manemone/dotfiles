@@ -14,12 +14,12 @@ repos:
       - id: check-yaml
       - id: check-json
 
-  # 人間の発言の逐語の節と非公開の名前を止める点検。commit-msg 段は
+  # 人間の発言の逐語の節を止める点検。commit-msg 段は
   # `pre-commit install --hook-type commit-msg` を一度実行しないと効かない。
   - repo: local
     hooks:
       - id: privacy-check
-        name: privacy-check (発言の逐語の節・非公開の名前の検出)
+        name: privacy-check (発言の逐語の節の検出)
         entry: ./tools/privacy-check/privacy-check
         language: system
         types: [text]

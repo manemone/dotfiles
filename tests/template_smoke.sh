@@ -204,9 +204,9 @@ assert_ruby_defaults() {
 
 # assert_privacy_check <sandbox> <label>
 # tools/privacy-check が回答に関わらず生成され、pre-commit の2つの段（pre-commit・commit-msg）に
-# 登録され、展開先でテストが（言語ランタイム無しで）通り、架空の名前の一覧で実際に止めることを検証する。
+# 登録され、展開先でテストが（言語ランタイム無しで）通り、逐語の節の見出しを実際に止めることを検証する。
 assert_privacy_check() {
-  local sbx="$1" label="$2" names_file
+  local sbx="$1" label="$2"
   if [ -x "$sbx/tools/privacy-check/privacy-check" ] &&
     grep -q 'entry: ./tools/privacy-check/privacy-check' "$sbx/.pre-commit-config.yaml" &&
     grep -q 'stages: \[pre-commit\]' "$sbx/.pre-commit-config.yaml" &&
@@ -223,18 +223,15 @@ assert_privacy_check() {
   else
     fail "$label: tools/privacy-check のテストが展開先で通る"
   fi
-  # 展開直後のファイルは見出しの点検を通り、架空の名前を足せば止まる
-  names_file="$(mktemp)" || return
-  CREATED_FILES+=("$names_file")
-  printf 'example-private-repo\n' >"$names_file"
-  printf '本文に example-private-repo がある\n' >"$sbx/_privacy_probe.txt"
-  if (cd "$sbx" && PRIVACY_CHECK_NAMES_FILE=/nonexistent tools/privacy-check/privacy-check AGENTS.md README.md >/dev/null 2>&1) &&
-    ! (cd "$sbx" && PRIVACY_CHECK_NAMES_FILE="$names_file" tools/privacy-check/privacy-check _privacy_probe.txt >/dev/null 2>&1); then
-    pass "$label: 展開直後のファイルは通り、一覧に載った名前は止まる"
+  # 展開直後のファイルは見出しの点検を通り、逐語の節の見出しを足せば止まる
+  printf '## 問題意識（逐語）\n' >"$sbx/_privacy_probe.md"
+  if (cd "$sbx" && tools/privacy-check/privacy-check AGENTS.md README.md >/dev/null 2>&1) &&
+    ! (cd "$sbx" && tools/privacy-check/privacy-check _privacy_probe.md >/dev/null 2>&1); then
+    pass "$label: 展開直後のファイルは通り、逐語の節の見出しは止まる"
   else
-    fail "$label: 展開直後のファイルは通り、一覧に載った名前は止まる"
+    fail "$label: 展開直後のファイルは通り、逐語の節の見出しは止まる"
   fi
-  rm -f "$sbx/_privacy_probe.txt"
+  rm -f "$sbx/_privacy_probe.md"
 }
 
 # check_combo <name> <comma区切りの生成されないはずのパス、無ければ空文字> --data ...

@@ -1,6 +1,6 @@
 #!/bin/sh
 # privacy-check のテスト。実際のリポジトリにも $HOME にも触れず、mktemp -d の中の
-# 架空の名前の一覧だけを使う。POSIX sh のみ（配る先で言語ランタイムを要求しないため）。
+# 架空の名前だけを使う。POSIX sh のみ（配る先で言語ランタイムを要求しないため）。
 set -u
 
 # pre-commit から呼ばれると GIT_DIR / GIT_INDEX_FILE が呼び出し元のリポジトリを指す。
@@ -26,9 +26,6 @@ cp -R "$_tool_src" "$_work/repo/tools/privacy-check"
 _pc="$_work/repo/tools/privacy-check/privacy-check"
 cd "$_work/repo" || exit 1
 
-printf '# 架空の一覧\nexample-private-repo  # コメント\n\nexample-host.internal\n' >"$_work/names.txt"
-export PRIVACY_CHECK_NAMES_FILE="$_work/names.txt"
-
 # check <ラベル> <コマンド...>: コマンドが成功すれば PASS
 check() {
   _label="$1"
@@ -48,34 +45,27 @@ expect() { # expect <期待する終了コード> <ラベル>
   fi
 }
 
-# 1. 名前の一覧に載った語が、ファイル・標準入力・コミットメッセージ（.md でないファイル）で止まり、
-#    出力に語そのものが出ない。大文字小文字は区別しない
-printf 'ok\nsee Example-Private-Repo here\n' >notes.txt
-printf 'fix: example-host.internal を直す\n' >msg
+# 1. 名前の照合は無い: 一覧のファイルを環境変数・既定の置き場に置いても、結果は変わらない
+#    （照合が残っていると、止まるはずのない行が止まる）
+printf 'ok\nsee example-private-repo here\n' >notes.txt
+printf 'fix: example-private-repo を直す\n' >msg
+printf 'example-private-repo\n' >"$_work/names.txt"
+mkdir -p "$_work/xdg/privacy-check"
+cp "$_work/names.txt" "$_work/xdg/privacy-check/private-names.txt"
+export PRIVACY_CHECK_NAMES_FILE="$_work/names.txt"
+export XDG_CONFIG_HOME="$_work/xdg"
 run notes.txt
-expect 1 "ファイルの名前のヒットが止まる"
-if grep -q 'notes.txt:2: name' "$_work/out" && ! grep -qi example "$_work/out"; then
-  ok "出力に行番号が出て、当たった語は出ない"
-else
-  ng "出力に行番号が出て、当たった語は出ない"
-fi
-run msg
-expect 1 "コミットメッセージのファイルの名前のヒットが止まる"
+expect 0 "名前の一覧があっても、ファイルの名前は止まらない"
 printf 'body example-private-repo\n' | "$_pc" --stdin >"$_work/out" 2>&1
 _rc=$?
-expect 1 "標準入力の名前のヒットが止まる"
-check "標準入力の出力は <stdin>:行:name" grep -q '^<stdin>:1: name$' "$_work/out"
+expect 0 "標準入力の名前も止まらない"
+run --commit-msg msg
+expect 0 "コミットメッセージの名前も止まらない"
 
-# 1b. --commit-msg: git が捨てるコメント行とはさみ線より下は読まず、本文は読む
-printf 'remove the name\n# Please enter the commit message for your changes.\n# example-private-repo in a comment\n# ------------------------ >8 ------------------------\n-example-private-repo removed line\n' >msg2
+# 1b. --commit-msg: git が捨てるコメント行とはさみ線より下は読まない
+printf 'remove\n# Please enter the commit message for your changes.\n# ------------------------ >8 ------------------------\n## 逐語\n' >msg2
 run --commit-msg msg2
-expect 0 "--commit-msg はコメント行とはさみ線より下の名前で止めない"
-printf 'fix example-private-repo\n# comment\n' >msg3
-run --commit-msg msg3
-expect 1 "--commit-msg でも本文の名前は止まる"
-printf 'fix\n\n#2 example-private-repo の設定を直す\n' >msg4
-run --commit-msg msg4
-expect 1 "案内のコメントが無い（-m / -F）メッセージの # 行の名前は止まる"
+expect 0 "--commit-msg ははさみ線より下を読まない"
 
 # 2. 見出しの点検: 逐語の節は止まり、地の文の引用・手順の例・「書かない」見出しは止まらない
 printf '# 計画\n## 問題意識（逐語）\n## 持ち主の言葉\n### 人間の発言\n## 問題意識（逐語・要約禁止）\n## 問題意識（逐語。手を入れない）\n## 人間の発言（原文のまま。省略を含めない）\n' >bad.md
@@ -103,9 +93,9 @@ run notes2.txt
 expect 0 "Markdown でないファイルは見出しの点検をしない"
 
 # 3. 行の許可の印と、ファイル単位の許可リスト
-printf '## 逐語 <!-- privacy-check:allow-line -->\nexample-private-repo # privacy-check:allow-line\n' >allowed.md
+printf '## 逐語 <!-- privacy-check:allow-line -->\n' >allowed.md
 run allowed.md
-expect 0 "allow-line の行は両方の点検で飛ばされる"
+expect 0 "allow-line の行は飛ばされる"
 run bad.md notes.txt
 expect 1 "許可リストが空なら止まる"
 printf 'bad.md\n./notes.txt\n' >tools/privacy-check/allowlist.txt
@@ -113,30 +103,15 @@ run bad.md notes.txt
 expect 0 "許可リストのファイルは飛ばされる"
 : >tools/privacy-check/allowlist.txt
 
-# 4. 名前の一覧が無ければ名前の点検だけが黙って飛ばされ、見出しの点検は走る
-PRIVACY_CHECK_NAMES_FILE="$_work/none.txt" run notes.txt
-expect 0 "一覧が無いとき、名前は飛ばされて通る"
-PRIVACY_CHECK_NAMES_FILE="$_work/none.txt" run bad.md
-expect 1 "一覧が無くても見出しの点検は走る"
-# 既定の置き場: PRIVACY_CHECK_NAMES_FILE を使わず XDG_CONFIG_HOME から読む
-mkdir -p "$_work/xdg/privacy-check"
-cp "$_work/names.txt" "$_work/xdg/privacy-check/private-names.txt"
-(
-  unset PRIVACY_CHECK_NAMES_FILE
-  XDG_CONFIG_HOME="$_work/xdg" "$_pc" notes.txt >"$_work/out" 2>&1
-)
-_rc=$?
-expect 1 "既定の置き場（XDG_CONFIG_HOME 配下）の一覧を読む"
-
 # 5. 引数なしは git 管理下の全ファイルを点検する。バイナリは読まない
 printf '## 逐語\n' >日本語の計画.md
 git init -q . && git add notes.txt good.md bad.md 日本語の計画.md
-printf 'example-private-repo\000\001' >bin.dat
-git add bin.dat
+printf '## 逐語\000\001' >bin.md
+git add bin.md
 run
 expect 1 "引数なしで git 管理下のファイルを点検する"
 check "日本語を含むパスのファイルも点検される" grep -q '日本語の計画.md:1: heading' "$_work/out"
-check "バイナリは点検しない" test "$(grep -c 'bin.dat' "$_work/out")" -eq 0
+check "バイナリは点検しない" test "$(grep -c 'bin.md' "$_work/out")" -eq 0
 
 # 6. 使い方の誤り
 run --stdin notes.txt
