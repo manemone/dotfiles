@@ -5,8 +5,8 @@
 #   privacy-check [<file> ...]   ファイルを点検する。引数が無ければ git 管理下の全ファイル
 #   privacy-check --stdin        標準入力のテキストを点検する（PR の本文など）
 #   privacy-check --commit-msg <file>
-#                                コミットメッセージのファイルを点検する。git が捨てるコメント行と、
-#                                `git commit -v` のはさみ線より下の差分は読まない
+#                                コミットメッセージのファイルを点検する。git が捨てる行は読まない
+#                                （はさみ線より下の差分。案内のコメントがあるメッセージでは行頭コメントも）
 #
 # 点検は2つ。
 #   heading: Markdown（*.md / *.markdown と標準入力）の見出し行に、発言をそのまま載せる節を
@@ -45,6 +45,12 @@ case "${1:-}" in
     esac
     ;;
 esac
+# git は、エディタを開いたときだけ案内のコメント行を足し、その行頭コメントを捨てる。
+# -m / -F のコミットでは行頭が # の行もメッセージに残るので、案内があるときだけコメント行を飛ばす。
+_cguide=0
+if [ "$_cmsg" -eq 1 ] && [ "$#" -gt 0 ] && grep -F -q "$_cc Please enter" -- "$1" 2>/dev/null; then
+  _cguide=1
+fi
 if [ "$_stdin" -eq 1 ] && [ "$#" -gt 0 ]; then
   echo "usage: privacy-check [<file> ...] | --stdin | --commit-msg <file>" >&2
   exit 2
@@ -72,7 +78,7 @@ if [ "$_stdin" -eq 0 ]; then
 fi
 
 # バイト単位で比べる（日本語の語を locale に左右されず部分一致させる）。
-LC_ALL=C awk -v stdin_mode="$_stdin" -v cmsg="$_cmsg" -v cc="$_cc" -v names_file="$_names" -v allow_file="$_allowlist" '
+LC_ALL=C awk -v stdin_mode="$_stdin" -v cmsg="$_cmsg" -v cguide="$_cguide" -v cc="$_cc" -v names_file="$_names" -v allow_file="$_allowlist" '
 function trim(s) {
   sub(/^[ \t\r]+/, "", s)
   sub(/[ \t\r]+$/, "", s)
@@ -86,8 +92,11 @@ BEGIN {
   # 発言をそのまま載せる節であることを示す語（公開してよい一覧）
   nw = split("逐語 持ち主の言葉 持ち主の発言 人間の発言 人間の言葉 発言の原文 依頼の原文 原文", words, " ")
   # 「書かない」ことを述べる見出しは止めない
-  nn = split("書かない 写さない 残さない 入れない 載せない 含めない 引用しない 禁止", negs, " ")
-  # 否定語があっても、逐語を守る側の言い回し（要約・改変・省略をしない等）なら、逐語の節の見出しである
+  # 書くこと自体を否定する語。守る側の語（要約など）が同居しても、書かないと述べる見出しである
+  nn = split("書かない 写さない 残さない 載せない 引用しない", negs, " ")
+  # 「入れない」「含めない」「禁止」は、要約・改変・省略をしない等（逐語を守る側）にかかる形もある。
+  # その語が同居していれば逐語の節の見出しとして扱う
+  nw2 = split("入れない 含めない 禁止", wneg, " ")
   np = split("要約 改変 省略 手を 加え 変え", prot, " ")
   while (names_file != "" && (getline line < names_file) > 0) {
     sub(/#.*/, "", line)
@@ -109,7 +118,7 @@ FNR == 1 {
 }
 cmsg && cut { next }
 cmsg && index($0, cc " ------------------------ >8 ------------------------") == 1 { cut = 1; next }
-cmsg && substr($0, 1, length(cc)) == cc { next }
+cmsg && cguide && substr($0, 1, length(cc)) == cc { next }
 skip { next }
 index($0, "privacy-check:allow-line") { next }
 {
@@ -118,9 +127,11 @@ index($0, "privacy-check:allow-line") { next }
     for (i = 1; i <= nw; i++) if (index($0, words[i])) { h = 1; break }
     neg = 0
     for (i = 1; i <= nn; i++) if (index($0, negs[i])) { neg = 1; break }
+    wneg_hit = 0
+    for (i = 1; i <= nw2; i++) if (index($0, wneg[i])) { wneg_hit = 1; break }
     prot_hit = 0
     for (i = 1; i <= np; i++) if (index($0, prot[i])) { prot_hit = 1; break }
-    if (neg && !prot_hit) h = 0
+    if (neg || (wneg_hit && !prot_hit)) h = 0
     if (h) { printf "%s:%d: heading\n", label, FNR; hits++ }
   }
   if (nname > 0) {

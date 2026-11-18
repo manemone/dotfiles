@@ -8,7 +8,13 @@
 ```sh
 tools/privacy-check/privacy-check [<file> ...]   # 引数が無ければ git 管理下の全ファイル
 tools/privacy-check/privacy-check --stdin        # 標準入力（PR の本文など、ファイルにならないもの）
+tools/privacy-check/privacy-check --commit-msg <file>   # コミットメッセージのファイル（commit-msg 段）
 ```
+
+`--commit-msg` は git が捨てる行を読まない。はさみ線（`git commit -v` の差分の手前）より下は常に読まない。
+行頭がコメント文字（`core.commentChar`、既定 `#`）の行は、エディタを開いたときの案内
+（`Please enter the commit message` の行）がファイルにあるときだけ読まない。`-m` / `-F` のコミットでは
+`#` で始まる行もメッセージに残るので、そのまま点検する。
 
 ヒットは `<path>:<行番号>: <heading|name>` の形で出し、ヒットがあれば終了コード 1、無ければ 0。
 **名前の一覧に当たった語そのものは出力しない**（CI のログや PR のコメントへ写らないように。行番号で見に行く）。
