@@ -28,14 +28,14 @@ AI（主に Claude Code）が書く日本語に、持ち主が繰り返し指摘
 | 1 | dotfiles | `wh-01-research` | 調査（正規表現による計測と仕組みの候補）。推奨案は背景5 の理由で取り下げ | ✅ PR #232 マージ済 |
 | 2 | dotfiles | `wh-02-standard` | 基準と計測: 基準の文書・`claude/CLAUDE.md` の指示文・向きを持った規則の修正・読まれる頻度の計測と各リポの書き直し対象・モデル判定の基準値・調査結果の修正・ADR | ✅ PR #233 マージ済 |
 | 3 | dotfiles | `wh-03-skills-core` | 書き直し: `skills/umbrella-orchestrator/` と `skills/pr-review-loop/` | ✅ PR #234 マージ済 |
-| 4 | dotfiles | `wh-04-skills-rest` | 書き直し: 孫3 以外の `skills/` | ⬜ 待機中 |
-| 5 | dotfiles | `wh-05-docs` | 書き直し: `AGENTS.md`・`docs/design/`・`docs/reference/`・`docs/README.md`・各 README・`templates/repo-baseline/`・`bin/` のヘルプの文面（孫2 の対象リストの範囲） | ⬜ 待機中 |
+| 4 | dotfiles | `wh-04-skills-rest` | 書き直し: 孫3 以外の `skills/` | 🔄 実装中 |
+| 5 | dotfiles | `wh-05-docs` | 書き直し: `AGENTS.md`・`docs/design/`・`docs/reference/`・`docs/README.md`・各 README・`templates/repo-baseline/`・`bin/` のヘルプの文面（孫2 の対象リストの範囲） | 🔄 実装中 |
 | 6 | repo-a | `wh-06-repo-a` | 書き直し: repo-a（孫2 の対象リストの範囲） | ✅ PR repo-a#605 マージ済 |
 | 7 | repo-b | `wh-07-repo-b` | 書き直し: repo-b（同上） | ✅ PR repo-b#287 マージ済 |
 | 8 | repo-c | `wh-08-repo-c` | 書き直し: repo-c（同上） | ✅ PR repo-c#151 マージ済 |
 | 9 | repo-d | `wh-09-repo-d` | 書き直し: repo-d（同上） | ✅ PR repo-d#131 マージ済 |
 | 10 | repo-e | `wh-10-repo-e` | 書き直し: repo-e（同上） | ✅ PR repo-e#448 マージ済 |
-| 11 | （リポの外） | — | メモリ: 全リポの目次（`MEMORY.md`）と、向きを持った規則・全面禁止に広げた記録の書き直し案（設計0 の 5） | 🔄 実装中 |
+| 11 | （リポの外） | — | メモリ: 全リポの目次（`MEMORY.md`）と、向きを持った規則・全面禁止に広げた記録の書き直し案（設計0 の 5） | ✅ 9ファイル反映済 |
 
 依存:
 
@@ -336,6 +336,10 @@ dotfiles 以外は非公開リポ。**dotfiles（公開）の文書・コミッ�
   孫3 の2つのスキルと `AGENTS.md` が占め、孫4（残りのスキル）・孫5（docs・README）の対象は8割の外だった。8割の外も書き直すか、
   見送るかを持ち主に聞いている（司令官の推奨は見送り）
 - 2026-11-18: 持ち主が repo-a#605 をマージした。他リポの孫（6〜10）は全部マージ済み
+- 2026-11-18: 持ち主の決定: (1) メモリの書き直し案を反映する → 9ファイル（目次4本と規則のファイル5本）を反映した。元のファイルは
+  リポの外の `memory-backup/` に退避。dotfiles と repo-d は変更なし (2) 8割の外の孫4・孫5 も書き直す → spawn した。孫5 は事前に
+  傘 repo-privacy-guard の司令官へ知らせた。既存の名前と発言を消す修正は向こうの孫3 の範囲なので、孫5 は言葉の書き直しだけにする
+  (3) 判定のサンプルは、書き直しの前後を比べるときまでに持ち主が見る
 
 ## 孫1用プロンプト:
 
