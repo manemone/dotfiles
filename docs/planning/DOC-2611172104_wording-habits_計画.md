@@ -28,8 +28,8 @@ AI（主に Claude Code）が書く日本語に、持ち主が繰り返し指摘
 | 1 | dotfiles | `wh-01-research` | 調査（正規表現による計測と仕組みの候補）。推奨案は背景5 の理由で取り下げ | ✅ PR #232 マージ済 |
 | 2 | dotfiles | `wh-02-standard` | 基準と計測: 基準の文書・`claude/CLAUDE.md` の指示文・向きを持った規則の修正・読まれる頻度の計測と各リポの書き直し対象・モデル判定の基準値・調査結果の修正・ADR | ✅ PR #233 マージ済 |
 | 3 | dotfiles | `wh-03-skills-core` | 書き直し: `skills/umbrella-orchestrator/` と `skills/pr-review-loop/` | ✅ PR #234 マージ済 |
-| 4 | dotfiles | `wh-04-skills-rest` | 書き直し: 孫3 以外の `skills/` | 🔄 実装中 |
-| 5 | dotfiles | `wh-05-docs` | 書き直し: `AGENTS.md`・`docs/design/`・`docs/reference/`・`docs/README.md`・各 README・`templates/repo-baseline/`・`bin/` のヘルプの文面（孫2 の対象リストの範囲） | 🔄 実装中 |
+| 4 | dotfiles | `wh-04-skills-rest` | 書き直し: 孫3 以外の `skills/` | ✅ PR #239 マージ済 |
+| 5 | dotfiles | `wh-05-docs` | 書き直し: `AGENTS.md`・`docs/design/`・`docs/reference/`・`docs/README.md`・各 README・`templates/repo-baseline/`・`bin/` のヘルプの文面（孫2 の対象リストの範囲） | ✅ PR #238 マージ済 |
 | 6 | repo-a | `wh-06-repo-a` | 書き直し: repo-a（孫2 の対象リストの範囲） | ✅ PR repo-a#605 マージ済 |
 | 7 | repo-b | `wh-07-repo-b` | 書き直し: repo-b（同上） | ✅ PR repo-b#287 マージ済 |
 | 8 | repo-c | `wh-08-repo-c` | 書き直し: repo-c（同上） | ✅ PR repo-c#151 マージ済 |
@@ -348,6 +348,9 @@ dotfiles 以外は非公開リポ。**dotfiles（公開）の文書・コミッ�
   `doc-id verify` が通った。孫4・孫5 のブランチ（コミット0件）を新しい傘の先頭へ移して再開した。別の傘のブランチがまだ
   `skills/umbrella-handoff`・`skills/task-intake` の SKILL.md と `docs/design/DOC-2608020715` を変えているため、孫4・孫5 はこの3ファイルを
   触らない（その傘が master に入ってから別に扱う）
+- 2026-11-18: 孫5 の PR #238（承認 HEAD 5af1106、レビュー2回目）と孫4 の PR #239（承認 HEAD d59c1e2、レビュー2回目）を、CI green を
+  確かめて司令官がマージした。傘で `pre-commit run --all-files`・`doc-id verify` が通った。残りは、別の傘と重なるため外した3ファイル
+  （`skills/umbrella-handoff`・`skills/task-intake` の SKILL.md、`docs/design/DOC-2608020715`）だけ
 
 ## 孫1用プロンプト:
 
