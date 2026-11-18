@@ -28,8 +28,8 @@ AI（主に Claude Code）が書く日本語に、持ち主が繰り返し指摘
 | 1 | dotfiles | `wh-01-research` | 調査（正規表現による計測と仕組みの候補）。推奨案は背景5 の理由で取り下げ | ✅ PR #232 マージ済 |
 | 2 | dotfiles | `wh-02-standard` | 基準と計測: 基準の文書・`claude/CLAUDE.md` の指示文・向きを持った規則の修正・読まれる頻度の計測と各リポの書き直し対象・モデル判定の基準値・調査結果の修正・ADR | ✅ PR #233 マージ済 |
 | 3 | dotfiles | `wh-03-skills-core` | 書き直し: `skills/umbrella-orchestrator/` と `skills/pr-review-loop/` | ✅ PR #234 マージ済 |
-| 4 | dotfiles | `wh-04-skills-rest` | 書き直し: 孫3 以外の `skills/` | 🔄 実装中 |
-| 5 | dotfiles | `wh-05-docs` | 書き直し: `AGENTS.md`・`docs/design/`・`docs/reference/`・`docs/README.md`・各 README・`templates/repo-baseline/`・`bin/` のヘルプの文面（孫2 の対象リストの範囲） | 🔄 実装中 |
+| 4 | dotfiles | `wh-04-skills-rest` | 書き直し: 孫3 以外の `skills/` | ⏸ 一時停止（別の傘の master 反映待ち） |
+| 5 | dotfiles | `wh-05-docs` | 書き直し: `AGENTS.md`・`docs/design/`・`docs/reference/`・`docs/README.md`・各 README・`templates/repo-baseline/`・`bin/` のヘルプの文面（孫2 の対象リストの範囲） | ⏸ 一時停止（別の傘の master 反映待ち） |
 | 6 | repo-a | `wh-06-repo-a` | 書き直し: repo-a（孫2 の対象リストの範囲） | ✅ PR repo-a#605 マージ済 |
 | 7 | repo-b | `wh-07-repo-b` | 書き直し: repo-b（同上） | ✅ PR repo-b#287 マージ済 |
 | 8 | repo-c | `wh-08-repo-c` | 書き直し: repo-c（同上） | ✅ PR repo-c#151 マージ済 |
@@ -341,6 +341,9 @@ dotfiles 以外は非公開リポ。**dotfiles（公開）の文書・コミッ�
   リポの外の `memory-backup/` に退避。dotfiles と repo-d は変更なし (2) 8割の外の孫4・孫5 も書き直す → spawn した。孫5 は事前に
   傘 repo-privacy-guard の司令官へ知らせた。既存の名前と発言を消す修正は向こうの孫3 の範囲なので、孫5 は言葉の書き直しだけにする
   (3) 判定のサンプルは、書き直しの前後を比べるときまでに持ち主が見る
+- 2026-11-18: 傘 repo-privacy-guard の既存の名前・発言の修正（53ファイル。docs/README.md・docs/design・docs/reference・skills・
+  templates/repo-baseline/README.md・bin/README.md などを含む）が master への反映待ちと分かり、孫4・孫5 を編集前に止めた。
+  向こうから master 反映の連絡が来たら、傘を `git rebase origin/master` してから孫4・孫5 を再開する
 
 ## 孫1用プロンプト:
 
