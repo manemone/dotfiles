@@ -31,10 +31,10 @@ AI（主に Claude Code）が書く日本語に、持ち主が何十回も指摘
 | 4 | dotfiles | `wh-04-skills-rest` | 書き直し: 孫3 以外の `skills/` | ⬜ 待機中 |
 | 5 | dotfiles | `wh-05-docs` | 書き直し: `AGENTS.md`・`docs/design/`・`docs/reference/`・`docs/README.md`・各 README・`templates/repo-baseline/`・`bin/` のヘルプの文面（孫2 の対象リストの範囲） | ⬜ 待機中 |
 | 6 | lorahaus | `wh-06-lorahaus` | 書き直し: lorahaus（孫2 の対象リストの範囲） | 🔄 実装中 |
-| 7 | sheaf | `wh-07-sheaf` | 書き直し: sheaf（同上） | ⏳ 人間のマージ待ち (PR sheaf#287) |
-| 8 | modeldex | `wh-08-modeldex` | 書き直し: modeldex（同上） | ⏳ 人間のマージ待ち (PR modeldex#151) |
-| 9 | iosci | `wh-09-iosci` | 書き直し: iosci（同上） | ⏳ 人間のマージ待ち (PR iosci#131) |
-| 10 | pixidex | `wh-10-pixidex` | 書き直し: pixidex（同上） | ⏳ 人間のマージ待ち (PR pixidex#448) |
+| 7 | sheaf | `wh-07-sheaf` | 書き直し: sheaf（同上） | ✅ PR sheaf#287 マージ済 |
+| 8 | modeldex | `wh-08-modeldex` | 書き直し: modeldex（同上） | ✅ PR modeldex#151 マージ済 |
+| 9 | iosci | `wh-09-iosci` | 書き直し: iosci（同上） | ✅ PR iosci#131 マージ済 |
+| 10 | pixidex | `wh-10-pixidex` | 書き直し: pixidex（同上） | ✅ PR pixidex#448 マージ済 |
 | 11 | （リポの外） | — | メモリ: 全リポの目次（`MEMORY.md`）と、向きを持った規則・全面禁止に広げた記録の書き直し案（設計0 の 5） | ⬜ 待機中 |
 
 依存:
@@ -314,6 +314,7 @@ dotfiles 以外は非公開リポ。**dotfiles（公開）の文書・コミッ�
 - 2026-11-18: 孫9 の PR iosci#131 が HEAD 405a3cd で承認された（レビュー2回目、+19/-19）。CI は支払いエラーで赤。マージは持ち主
 - 2026-11-18: 孫6（lorahaus）は書き直し済みだが、origin/main でも落ちる rspec 6件（Linux に opencv-python-headless の wheel が無い）で
   pre-commit が止まり、未コミット。`--no-verify` は auto mode に拒否された。rspec を飛ばすかを持ち主に確認中
+- 2026-11-18: 持ち主が sheaf#287・modeldex#151・pixidex#448・iosci#131 をマージした
 
 ## 孫1用プロンプト:
 
