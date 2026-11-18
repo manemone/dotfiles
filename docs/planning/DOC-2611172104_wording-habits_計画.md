@@ -315,6 +315,9 @@ dotfiles 以外は非公開リポ。**dotfiles（公開）の文書・コミッ�
 - 2026-11-18: 孫6（lorahaus）は書き直し済みだが、origin/main でも落ちる rspec 6件（Linux に opencv-python-headless の wheel が無い）で
   pre-commit が止まり、未コミット。`--no-verify` は auto mode に拒否された。rspec を飛ばすかを持ち主に確認中
 - 2026-11-18: 持ち主が sheaf#287・modeldex#151・pixidex#448・iosci#131 をマージした
+- 2026-11-18: 孫6 の rspec 6件の原因は環境でなく、opencv-python-headless 5.1.0.95 の PyPI 公開の途中（Windows 用が先、Linux 用は約3時間半後）に
+  孫6 のワークツリーで生成された `tools/uv.lock`（.gitignore 対象）が Windows 用だけを固定したこと。司令官が
+  `uv lock --upgrade-package opencv-python-headless` で作り直し、孫6 は通常どおり pre-commit を通して再開した
 
 ## 孫1用プロンプト:
 
