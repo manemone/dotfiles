@@ -5,7 +5,7 @@ description: "Gitワークツリー（worktree）の作成・削除・Herdr連�
 
 # ocw — Git worktree 管理 CLI
 
-`ocw` は Git worktree の作成・削除を自動化し、オプションで Herdr の
+`ocw` は Git のワークツリー（worktree）の作成・削除を自動化し、オプションで Herdr の
 commander/implementer/reviewer マルチペイン環境をセットアップする CLI。
 `$HOME/bin/ocw`（このリポジトリの `bin/ocw`）としてインストールされる。
 
@@ -26,7 +26,7 @@ ocw help all      # 全 topic をまとめて読む
 
 ## topic 一覧
 
-**正確な一覧の一次情報源は `ocw help` が出力する `topics:` 節。** 下表は執筆時点の写しであり、
+**正確な一覧の一次情報源は `ocw help` が出力する `topics:` 節。** 下表は執筆時点のコピーであり、
 古くなっていても構わない（`ocw help` を叩けば常に正しい一覧と説明が手に入る）。
 
 | topic | 答える問い |
@@ -42,4 +42,4 @@ ocw help all      # 全 topic をまとめて読む
 
 設定キー名・プレースホルダ・解決規則・マージ判定の意味論・環境変数・ペイン構成といった
 **挙動の事実は一切書かない。** すべて `ocw help <topic>` が一次情報源であり、ここに答えを
-書き写すと `ocw` を直す人がここも直さねばならなくなり、いずれ食い違う。
+コピーすると、`ocw` を修正する人がここも修正しなければならなくなり、いずれ食い違う。

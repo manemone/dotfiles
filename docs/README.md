@@ -10,6 +10,7 @@
 |---|---|---|
 | このリポジトリのルールを知る | [../AGENTS.md](../AGENTS.md) | 最重要ルール・ディレクトリ構成・デプロイの仕組みなど |
 | PR を出す前に読む | [design/DOC-2608020715_プルリクエストの作法.md](design/DOC-2608020715_プルリクエストの作法.md) | 説明文の構成・コメントのプレフィクス・ブランチ構成 |
+| 文章（返事・指示・PR 本文・文書）を書く前に読む | [design/DOC-2611172307_AIが書く文章の言葉.md](design/DOC-2611172307_AIが書く文章の言葉.md) | 読み手の名前で書く・決まり文句の代わりに中身を書く・指摘を場面の話として受け取る |
 | シェルを書く前に読む | [design/DOC-2608020715-a_シェルスクリプトコーディング方針.md](design/DOC-2608020715-a_シェルスクリプトコーディング方針.md) | POSIX sh / bash の使い分け、bashism の回避 |
 | `AGENTS.md` の芯と詳細の分け方を知る（分けた詳細の置き場を知る） | [design/DOC-2610150522_AGENTS.mdの芯と詳細の分け方.md](design/DOC-2610150522_AGENTS.mdの芯と詳細の分け方.md) | 芯に残す基準・参照の書き方・他リポへの適用手順 |
 | デプロイの仕組み（世代・状態ファイル・退避）を知る | [design/DOC-2610150520-b_デプロイの仕組み.md](design/DOC-2610150520-b_デプロイの仕組み.md) | `AGENTS.md` から移した詳細 |
@@ -21,6 +22,7 @@
 | なぜ承認と CI を切り離し、CI をマージの前に司令官が見張るようにしたかを知る | [adr/DOC-2611151330_ci-wait-after-approval.md](adr/DOC-2611151330_ci-wait-after-approval.md) | `ci_gate` / `child_pr_ci` の宣言・マージ条件への CI の追加・依存の無い孫を先に進める歯止め・却下した案 |
 | なぜ画面を触る PR の確認を汎用スキル `ui-review` にしたかを知る | [adr/DOC-2611040233_ui-review-skill.md](adr/DOC-2611040233_ui-review-skill.md) | 既存の画面レビューの下敷きと不採用の理由・リポ側の入口の形・レビュー役専用の確認役ペイン |
 | なぜ `ocw-meter` の ingest を statusLine から自動で走らせるようにしたかを知る | [adr/DOC-2611010254_auto-ingest.md](adr/DOC-2611010254_auto-ingest.md) | statusLine 起点・間隔・ロック・`quota.sample` への影響の実測と、hook / OS のスケジューラを採らなかった理由 |
+| なぜ AI の言葉の癖を、基準の文書・指示文・読まれる文書の書き直しで抑え、モデルの文脈判定で測るようにしたかを知る | [adr/DOC-2611172307-a_言葉の基準と計測の方法.md](adr/DOC-2611172307-a_言葉の基準と計測の方法.md) | 正規表現の hook・語のリスト・毎ターンの再注入を採らなかった理由、Codex・OpenCode に届く範囲、基準値の測り方 |
 | なぜスキルを複数の AI エージェントへ配るようにしたかを知る | [adr/DOC-2608272128_skills-multi-agent-distribution.md](adr/DOC-2608272128_skills-multi-agent-distribution.md) | `skills/` の切り出し・配布先エージェントの決め方・却下した案 |
 | なぜ Codex / OpenCode のグローバル指示を `claude/CLAUDE.md` から配るようにしたかを知る | [adr/DOC-2609072334_codex-opencode-global-instructions-distribution.md](adr/DOC-2609072334_codex-opencode-global-instructions-distribution.md) | `codex/` `opencode/` の新設・単一ソース symlink 方式・却下した案 |
 | なぜ git 操作の許可ポリシーを今の形にしたかを知る | [adr/DOC-2609121719_git-operation-permission-policy.md](adr/DOC-2609121719_git-operation-permission-policy.md) | `main`/`master` へのマージだけを人間に残す線引きと、PreToolUse フックの担保範囲を `gh pr merge` の base 判定1点に絞った決定、却下した案 |
@@ -45,6 +47,7 @@
 | Claude の使用量を実ログから測る手順と、どこを削れるかの調査結果を知る | [reference/DOC-2610130216_使用量の測り方と削りどころの調査結果.md](reference/DOC-2610130216_使用量の測り方と削りどころの調査結果.md) | 集計スクリプト（`docs/adr/probes/usage-diet/`）の使い方・役割別の費用・キャッシュ切れ・文脈の太り方・compact の試算と、効かないとわかった案、施策の前後比較（2026-10-21 の再測定） |
 | 実装の孫の文脈が何で膨らむか（ツール結果の内訳・出力トークンの寄与）と、大きい出力の作法の根拠・置き場を知る | [reference/DOC-2610142335_実装の孫の文脈の内訳調査.md](reference/DOC-2610142335_実装の孫の文脈の内訳調査.md) | 集計スクリプト（`docs/adr/probes/context-bloat/` の `tools.py` / `share.py`）・Bash の先頭語別とサイズ別の分布・作法の中身と置き場・入れなかった場所 |
 | Figma プラグイン（`figma@synced`）をユーザー全体で止めてリポごとに有効にできるかの検証結果を知る | [reference/DOC-2610150527_Figmaプラグインの有効範囲の検証.md](reference/DOC-2610150527_Figmaプラグインの有効範囲の検証.md) | 設定の階層ごとの実測表・実 `$HOME` を触らない確かめ方・machine 設定のマージ結果・実機で止める順序 |
+| AI の言葉の悪癖（正規表現で数えた、和語に開いた言い換えと全面禁止の宣言）の計測方法と現状の値、モデル判定の基準値と読まれる頻度、抑える仕組みの候補の比較（正規表現の hook の推奨は取り下げ）を知る | [reference/DOC-2611172119_言葉の悪癖を抑える仕組みの調査結果.md](reference/DOC-2611172119_言葉の悪癖を抑える仕組みの調査結果.md) | 集計スクリプト（`docs/adr/probes/wording-habits/wh.py`）の使い方・4週間の現状の値・hooks など候補ごとの効果と副作用・Stop hook 試作の試験結果・取り下げた推奨案・指示文で抑える外部の事例・再注入の試算・モデル判定の基準値（§9） |
 | 傘ブランチの計画を確認する | [planning/](planning/) 配下の各計画書 | 進行中・完了した傘ブランチの計画書 |
 | このリポジトリの AI 支援基盤を他のリポジトリへ配布する | [../templates/repo-baseline/README.md](../templates/repo-baseline/README.md) | copier テンプレート。dotfiles 本体とは独立・自己完結 |
 
