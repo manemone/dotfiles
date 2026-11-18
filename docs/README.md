@@ -40,6 +40,7 @@
 | なぜ他人の PR 群のレビューと自分の PR 群のレビュー依頼を今のスキル構成にしたかを知る | [adr/DOC-2609270420_multi-repo-pr-review-skills.md](adr/DOC-2609270420_multi-repo-pr-review-skills.md) | `pr-group-review`（レビュワー用）と `pr-group-request`（依頼者用）の線引き・レビュー状態の置き場所・自己完結 HTML のまとめ・COMMENT のみの投稿と権限に止められたときの振る舞いの決定と、却下した案 |
 | なぜ複数リポにまたがる作業の入口と傘の進め方を今の形にしたかを知る | [adr/DOC-2610081412_cross-repo-task-intake.md](adr/DOC-2610081412_cross-repo-task-intake.md) | 入口スキル `task-intake` の判断の3軸と振り分け・司令官の置き場・リポ間の役割分担・軽いハンドオフ・複数リポの傘（他リポの孫は既定ブランチへ PR しマージは人間）の決定と、却下した案 |
 | なぜ孫の PR を承認後も孫がマージせず、傘の司令官がマージするようにしたかを知る | [adr/DOC-2610130212_commander-merges-grandchildren.md](adr/DOC-2610130212_commander-merges-grandchildren.md) | `pr-review-loop` がどの PR もマージしない形・司令官のマージ条件・巡回 cron を30分にした理由・ADR DOC-2609121719 との関係 |
+| なぜ人間の発言と非公開の名前をコミットの時点で止める点検を、名前の一覧をリポジトリの外に置く形にしたかを知る | [adr/DOC-2611181132_privacy-check.md](adr/DOC-2611181132_privacy-check.md) | `tools/privacy-check/` の2つの点検・一覧の置き場・出力に語を出さない決定と、却下した案 |
 | `ocw-meter` のイベントスキーマを調べる | [reference/DOC-2608021229-c_ocw-meterイベントスキーマ.md](reference/DOC-2608021229-c_ocw-meterイベントスキーマ.md) | 全 event_type・全フィールド・費用計算式の一次情報源 |
 | LLM費用のベースラインを測る手順を知る | [reference/DOC-2608021229-b_LLM費用観測ベースライン計測手順.md](reference/DOC-2608021229-b_LLM費用観測ベースライン計測手順.md) | 実PR 5〜10本での計測手順 |
 | Claude の使用量を実ログから測る手順と、どこを削れるかの調査結果を知る | [reference/DOC-2610130216_使用量の測り方と削りどころの調査結果.md](reference/DOC-2610130216_使用量の測り方と削りどころの調査結果.md) | 集計スクリプト（`docs/adr/probes/usage-diet/`）の使い方・役割別の費用・キャッシュ切れ・文脈の太り方・compact の試算と、効かないとわかった案、施策の前後比較（2026-10-21 の再測定） |
@@ -116,6 +117,7 @@
 | DOC-2610200218 | [reviewer-fresh-each-round.md](adr/DOC-2610200218_reviewer-fresh-each-round.md) | 再レビューのたびにレビュワーの会話を新しくし、読み方の作法をレビュー指示に足す（`pr-review-loop`） |
 | DOC-2610310237 | [quota-per-pct-estimate.md](adr/DOC-2610310237_quota-per-pct-estimate.md) | 週の上限の 1% あたりのトークンを推定する方法・「測れない」の基準・誤差の要因（`ocw-meter report --quota-per-pct`） |
 | DOC-2611010251 | [transcript-retention-days.md](adr/DOC-2611010251_transcript-retention-days.md) | Claude Code の transcript の保持期間 `cleanupPeriodDays` を 90 日にした決定。ingest 前に transcript が消えた欠落の仕組み・自動の取り込みの「保険」である理由・ディスク使用量の実測と 30/90/180/365 の比較・`0` が検証エラーである出典・`settings.machine.json` での上書き |
+| DOC-2611181132 | [privacy-check.md](adr/DOC-2611181132_privacy-check.md) | 人間の発言の逐語を載せる節の見出しと非公開の名前をコミットの時点で止める点検 `tools/privacy-check/` の設計。名前の一覧をリポジトリの外に置く理由・当たった語を出力しない理由・見出しだけを見る理由・CI で名前の点検が効かないことの受け入れ・コードブロック内の扱い |
 
 ### planning/ — ロードマップ・計画
 

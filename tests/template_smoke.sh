@@ -14,7 +14,7 @@
 # ci.yml を YAML パースに通す。あわせて生成された全 .md（AGENTS.md と
 # docs/ 配下の全ファイル）の Jinja 空白制御ミス（行ゼロの表・見出し直前の
 # 空行欠落・空行の二重化・Jinja 構文の残骸）と、use_doc_id=false 時に
-# docs/ tools/ .github/ が生成されないことも検証する。.claude/pr-review.yml
+# docs/ tools/doc-id/ .github/ が生成されないことも検証する。.claude/pr-review.yml
 # （回答に関わらず常に生成される）は lint_cmd/test_cmd の読み戻し・markers の
 # 既定値・convention_docs の出し分けと参照先の実在を検証する。
 #
@@ -202,6 +202,41 @@ assert_ruby_defaults() {
   fi
 }
 
+# assert_privacy_check <sandbox> <label>
+# tools/privacy-check が回答に関わらず生成され、pre-commit の2つの段（pre-commit・commit-msg）に
+# 登録され、展開先でテストが（言語ランタイム無しで）通り、架空の名前の一覧で実際に止めることを検証する。
+assert_privacy_check() {
+  local sbx="$1" label="$2" names_file
+  if [ -x "$sbx/tools/privacy-check/privacy-check" ] &&
+    grep -q 'entry: ./tools/privacy-check/privacy-check' "$sbx/.pre-commit-config.yaml" &&
+    grep -q 'stages: \[pre-commit\]' "$sbx/.pre-commit-config.yaml" &&
+    grep -q 'stages: \[commit-msg\]' "$sbx/.pre-commit-config.yaml" &&
+    grep -q "^default_stages: \[pre-commit\]" "$sbx/.pre-commit-config.yaml" &&
+    grep -q 'pre-commit install --hook-type commit-msg' "$sbx/AGENTS.md"; then
+    pass "$label: privacy-check が生成され、2つの段に登録され、AGENTS.md が commit-msg の案内を持つ"
+  else
+    fail "$label: privacy-check が生成され、2つの段に登録され、AGENTS.md が commit-msg の案内を持つ"
+    return
+  fi
+  if (cd "$sbx" && tools/privacy-check/test/privacy_check_test.sh >/dev/null 2>&1); then
+    pass "$label: tools/privacy-check のテストが展開先で通る"
+  else
+    fail "$label: tools/privacy-check のテストが展開先で通る"
+  fi
+  # 展開直後のファイルは見出しの点検を通り、架空の名前を足せば止まる
+  names_file="$(mktemp)" || return
+  CREATED_FILES+=("$names_file")
+  printf 'example-private-repo\n' >"$names_file"
+  printf '本文に example-private-repo がある\n' >"$sbx/_privacy_probe.txt"
+  if (cd "$sbx" && PRIVACY_CHECK_NAMES_FILE=/nonexistent tools/privacy-check/privacy-check AGENTS.md README.md >/dev/null 2>&1) &&
+    ! (cd "$sbx" && PRIVACY_CHECK_NAMES_FILE="$names_file" tools/privacy-check/privacy-check _privacy_probe.txt >/dev/null 2>&1); then
+    pass "$label: 展開直後のファイルは通り、一覧に載った名前は止まる"
+  else
+    fail "$label: 展開直後のファイルは通り、一覧に載った名前は止まる"
+  fi
+  rm -f "$sbx/_privacy_probe.txt"
+}
+
 # check_combo <name> <comma区切りの生成されないはずのパス、無ければ空文字> --data ...
 # 「生成されないはずのパス」の検査は copier copy が成功した場合のみ行う。
 # 呼び出し順や外側のグローバル変数に依存させず、この関数の中で完結させる
@@ -238,6 +273,8 @@ check_combo() {
       fi
     done
   fi
+
+  assert_privacy_check "$sbx" "$name"
 
   # .claude/pr-review.yml は回答に関わらず常に生成される（skills/pr-review-loop/ が
   # Phase 0.5 で最優先に読む設定ファイル）。lint_cmd/test_cmd は特殊文字を含む回答が
@@ -384,10 +421,10 @@ check_combo "全部盛り(use_doc_id/use_ci/has_long_running_commands/use_adr/us
   --data use_adr=true \
   --data use_reference=true
 
-# _exclude による制御が効いていること（docs/ tools/ .github/ が生成され
-# ないこと）を最小構成のケースで確認する。テンプレート README の受け入れ
+# _exclude による制御が効いていること（docs/ tools/doc-id/ .github/ が生成され
+# ないこと。tools/privacy-check/ は use_doc_id によらず常に生成される）を最小構成のケースで確認する。テンプレート README の受け入れ
 # 条件の1つ。
-check_combo "最小構成(use_doc_id/use_ci/has_long_running_commands すべて false, lint/test 空欄)" "docs,tools,.github" \
+check_combo "最小構成(use_doc_id/use_ci/has_long_running_commands すべて false, lint/test 空欄)" "docs,tools/doc-id,.github" \
   --data default_branch=main \
   --data lint_cmd= \
   --data test_cmd= \
@@ -408,7 +445,7 @@ check_combo "Ruby(language=ruby, lint/test は Ruby の既定値, use_doc_id/use
   --data language=ruby
 
 # language=ruby でも use_doc_id/use_ci を切れば docs/ tools/ .github/ は出ず、Ruby の足場だけが残る。
-check_combo "Ruby(language=ruby, use_doc_id/use_ci false, lint_cmd のみ上書き)" "docs,tools,.github" \
+check_combo "Ruby(language=ruby, use_doc_id/use_ci false, lint_cmd のみ上書き)" "docs,tools/doc-id,.github" \
   --data language=ruby \
   --data use_doc_id=false \
   --data use_ci=false \

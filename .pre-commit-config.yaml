@@ -94,3 +94,17 @@ repos:
         language: system
         pass_filenames: false
         files: ^(tools/doc-id/|templates/repo-baseline/template/tools/doc-id/)
+
+      - id: privacy-check-test
+        name: tools/privacy-check のテスト
+        entry: tools/privacy-check/test/privacy_check_test.sh
+        language: system
+        pass_filenames: false
+        files: ^tools/privacy-check/
+
+      - id: privacy-check-template-sync
+        name: tools/privacy-check と templates/repo-baseline 内の複製が同期しているか
+        entry: diff -r tools/privacy-check templates/repo-baseline/template/tools/privacy-check
+        language: system
+        pass_filenames: false
+        files: ^(tools/privacy-check/|templates/repo-baseline/template/tools/privacy-check/)

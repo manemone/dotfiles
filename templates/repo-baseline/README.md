@@ -55,7 +55,7 @@ copier は変更を一時コミットして撒き、`_commit` にどこにも存
 | `ruby_version` | 文字列 | `3.3` | `language=ruby` のときだけ質問。`.ruby-version` に書く（RuboCop の `TargetRubyVersion` の推定元、CI の `ruby/setup-ruby` の入力） |
 | `lint_cmd` | 文字列 | `""`（`language=ruby` では `bundle exec rubocop`） | pre-commit の local フック・AGENTS.md・`.claude/pr-review.yml` に埋め込む lint コマンド。空欄なら生成しない |
 | `test_cmd` | 文字列 | `""`（`language=ruby` では `bundle exec rake spec`） | 同上（test コマンド） |
-| `use_doc_id` | bool | `true` | DOC-ID 運用一式（`docs/`・`tools/doc-id/`・関連 pre-commit フック）を生成するか |
+| `use_doc_id` | bool | `true` | DOC-ID 運用一式（`docs/`・`tools/doc-id/`・関連 pre-commit フック）を生成するか。`tools/privacy-check/` はこの回答によらず常に生成する |
 | `use_ci` | bool | `true` | `.github/workflows/ci.yml` を生成するか |
 | `has_long_running_commands` | bool | `false` | AGENTS.md にバックグラウンド実行 + ポーリングの規約節を追加するか |
 | `use_adr` | bool | `false` | `docs/README.md` に adr/ フォルダの説明を含めるか（`use_doc_id` が true の場合のみ質問） |
@@ -144,9 +144,29 @@ uv tool run copier update
 手順の詳細・増えた質問への答え方・既に撒いた（`_commit` の無い）リポジトリの移行は
 `skills/repo-baseline/SKILL.md` と移行の手順書（`docs/reference/DOC-2610110507_repo-baseline旧形からの移行手順.md`）に従ってください。
 
+## privacy-check（発言と非公開の名前を止める点検）
+
+展開先には `tools/privacy-check/` が入り、コミットの時点で次の2つを止める（設計の理由は
+[ADR DOC-2611181132](../../docs/adr/DOC-2611181132_privacy-check.md)）。
+
+- Markdown の見出しに、人間の発言をそのまま載せる節であることを示す語がある（`heading`）
+- 非公開の名前の一覧に載った語がある（`name`。一覧はリポジトリの外の
+  `~/.config/privacy-check/private-names.txt` か `PRIVACY_CHECK_NAMES_FILE`。無ければ飛ばす）
+
+展開後にやること:
+
+- `pre-commit install --hook-type commit-msg` を一度実行する（コミットメッセージの点検に要る。
+  `pre-commit install` だけでは `commit-msg` 段は入らない）
+- 展開先に既存の見出しのヒットがあると `pre-commit run --all-files`（と、それを走らせる CI）が落ちる。
+  その場合は、そのリポジトリで該当の節を要点に書き換える。ブリーフの雛形のように正当に残す行には
+  `privacy-check:allow-line` を付ける。`allowlist.txt` への追加は最小限にする
+- 使い方・一覧の書式・許可は `tools/privacy-check/README.md`
+- `tools/privacy-check/` は dotfiles の `tools/privacy-check/` の複製で、dotfiles 側の pre-commit
+  フック（`privacy-check-template-sync`）が同期を確かめる
+
 ## 分業の原則
 
-- **決定論的に配れるもの**（規約文書の骨組み・pre-commit 設定・doc-id ツール・CI）は
+- **決定論的に配れるもの**（規約文書の骨組み・pre-commit 設定・doc-id ツール・privacy-check・CI）は
   この copier テンプレートが撒きます
 - **判断が要るもの**（このリポジトリ固有のルール、コーディング方針の中身、AGENTS.md の
   「概要」等）は、撒いた後に `skills/repo-baseline/SKILL.md` を読んだ AI が埋めます
@@ -174,13 +194,15 @@ uv tool run copier update
 - `language=ruby` で、文書だけのコミットでは lint・test フックが Skipped になり、`.rb` を含むコミットでは走ること
 - `language=other`（既定）で Ruby の物が何も生成されず、`tools/doc-id/` のテストが `Gemfile` 無しで動くこと
 
+- `tools/privacy-check/`（人間の発言の逐語を載せる節の見出しと、非公開の名前を止める点検）は、回答によらず
+  常に生成され、pre-commit の `pre-commit` 段と `commit-msg` 段に登録される（`tests/template_smoke.sh` が検査する）
 - 空の git リポジトリに `uv tool run copier copy <このリポジトリのルート> <展開先>` で展開できること
 - 展開直後に `./tools/doc-id/doc-id assign` を実行すると、プレースホルダが実際のタイムスタンプへ
   採番され、`AGENTS.md` / `docs/README.md` / `docs/design/README.md` / `opencode.json` 内の
   参照が自動更新されること
 - 展開先で `ruby tools/doc-id/test/doc_id_test.rb` が全緑（24 runs / 0 failures）
 - 展開先で `git init` 後、`pre-commit install && pre-commit run --all-files` が全緑
-- `use_doc_id=false` / `use_ci=false` の組み合わせで `docs/` `tools/` `.github/` が
+- `use_doc_id=false` / `use_ci=false` の組み合わせで `docs/` `tools/doc-id/` `.github/` が
   生成されないこと（`_exclude` による制御）
 - `use_doc_id=false` かつ `lint_cmd` / `test_cmd` が空欄の場合、`.pre-commit-config.yaml` には
   `pre-commit-hooks` 由来の基本フックのみが残り、有効な YAML であること

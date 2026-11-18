@@ -103,7 +103,7 @@ _exclude:
   - .svn
   - "{% if not use_ci %}.github{% endif %}"
   - "{% if not use_doc_id %}docs{% endif %}"
-  - "{% if not use_doc_id %}tools{% endif %}"
+  - "{% if not use_doc_id %}tools/doc-id{% endif %}"
   # Ruby の既定は language=ruby のときだけ生成する
   - "{% if language != 'ruby' %}.rubocop.yml{% endif %}"
   - "{% if language != 'ruby' %}.ruby-version{% endif %}"
