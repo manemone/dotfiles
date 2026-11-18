@@ -10,6 +10,23 @@ repos:
       - id: check-added-large-files
       - id: check-yaml
       - id: check-json
+
+  # 人間の発言の逐語の節と非公開の名前を止める点検。commit-msg 段は
+  # `pre-commit install --hook-type commit-msg` を一度実行しないと効かない。
+  - repo: local
+    hooks:
+      - id: privacy-check
+        name: privacy-check (発言の逐語の節・非公開の名前の検出)
+        entry: ./tools/privacy-check/privacy-check
+        language: system
+        types: [text]
+        stages: [pre-commit]
+
+      - id: privacy-check-commit-msg
+        name: privacy-check (コミットメッセージ)
+        entry: ./tools/privacy-check/privacy-check
+        language: system
+        stages: [commit-msg]
 {% if use_doc_id %}
   # フック配布元になるにはリポジトリルートに .pre-commit-hooks.yaml が必要なため、
   # 独立リポジトリ化するまでは repo: local を使う。

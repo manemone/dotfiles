@@ -60,6 +60,13 @@
   人間の指示が明確なら、この文書に書かれていないことを理由に拒否せず、安全な手順で
   実行する。
 - 指示された範囲外の機能を先回りして実装しない。
+- **人間の発言そのものと、非公開のリポジトリ・ホストの名前を、コミット・PR・文書・コードのコメントに
+  書かない。** 履歴と PR の差分に残り続け、あとから消すことは事実上できない。発言は要点を自分の言葉で
+  書く。`tools/privacy-check/privacy-check` が、発言の逐語を載せる節の見出しと、非公開の名前の一覧
+  （リポジトリの外の `~/.config/privacy-check/private-names.txt`。使い方は
+  [tools/privacy-check/README.md](tools/privacy-check/README.md)）に載った語をコミットの時点で止める。
+  PR の本文は `tools/privacy-check/privacy-check --stdin` に通してから出す。許可の印
+  （`privacy-check:allow-line`・`tools/privacy-check/allowlist.txt`）を AI の判断で足さない
 - **linter / formatter の抑制ディレクティブや、設定ファイルの除外・閾値緩和を、AI の判断で
   追加しない。** 指摘が設計上不合理だと判断した場合は、抑制せず違反内容・対象ファイル・
   判断理由を人間に報告する。コードの構造を変えて指摘そのものを解消できる場合は、抑制より
@@ -75,17 +82,16 @@
 ## ディレクトリ構成
 
 <!-- TODO: 主要ディレクトリの役割を表にする。以下はこのテンプレートが生成したものの参考 -->
-{%- if use_doc_id or use_ci %}
 
 | ディレクトリ | 役割 |
 |---|---|
+| `tools/privacy-check/` | 人間の発言の逐語を載せる節の見出しと、非公開の名前を止める点検。pre-commit から呼ぶ |
 {%- if use_doc_id %}
 | `docs/` | 設計文書・計画書。詳細は [docs/README.md](docs/README.md) を参照 |
 | `tools/doc-id/` | DOC-ID（`docs/` 配下の文書に付与する不変識別子）の割当・検証ツール |
 {%- endif %}
 {%- if use_ci %}
 | `.github/workflows/` | CI（`pre-commit run --all-files` 相当） |
-{%- endif %}
 {%- endif %}
 
 ## AI 支援ツールの設定
@@ -197,7 +203,10 @@ edge case は「思いついたから全部」ではなく、**発生可能性 �
 ```
 uv tool install pre-commit
 pre-commit install
+pre-commit install --hook-type commit-msg
 ```
+
+2つ目の `--hook-type commit-msg` は、コミットメッセージの点検（`privacy-check`）を効かせるために要る。
 {%- if language == 'ruby' %}
 
 Ruby の依存は `bundle install` で入れる。

@@ -1,0 +1,110 @@
+#!/bin/sh
+# privacy-check: 人間の発言の逐語を載せる節の見出しと、非公開の名前を、コミットの時点で止める。
+#
+# 使い方:
+#   privacy-check [<file> ...]   ファイルを点検する。引数が無ければ git 管理下の全ファイル
+#   privacy-check --stdin        標準入力のテキストを点検する（PR の本文など）
+#
+# 点検は2つ。
+#   heading: Markdown（*.md / *.markdown と標準入力）の見出し行に、発言をそのまま載せる節を
+#            示す語がある。地の文は見ない。「書かない」ことを述べる見出しは止めない
+#   name:    非公開の名前の一覧（リポジトリの外のマシンローカルな設定）に載った語がある。
+#            一覧が無ければ黙って飛ばす。当たった語そのものは出力しない
+#
+# 出力は `<path>:<行番号>: <heading|name>`。ヒットありで終了コード 1、無しで 0、使い方の誤りは 2。
+# 行に `privacy-check:allow-line` があれば、その行は両方の点検で飛ばす。ファイル単位の許可は
+# このスクリプトと同じ場所の allowlist.txt（1行1パス。リポジトリのルートからの相対パス）。
+# 置き場・設計の理由は README.md を参照。
+
+set -u
+
+_self_dir=$(cd "$(dirname "$0")" && pwd) || exit 2
+_allowlist="$_self_dir/allowlist.txt"
+_names="${PRIVACY_CHECK_NAMES_FILE-${XDG_CONFIG_HOME:-${HOME:-}/.config}/privacy-check/private-names.txt}"
+
+[ -f "$_names" ] || _names=""
+[ -f "$_allowlist" ] || _allowlist=""
+
+_stdin=0
+if [ "${1:-}" = "--stdin" ]; then
+  _stdin=1
+  shift
+fi
+if [ "$_stdin" -eq 1 ] && [ "$#" -gt 0 ]; then
+  echo "usage: privacy-check [<file> ...] | --stdin" >&2
+  exit 2
+fi
+
+_tmp=$(mktemp -d) || exit 2
+trap 'rm -rf "$_tmp"' EXIT
+
+# 点検対象のファイル名を1行1つで $_tmp/list に作る。バイナリ・空・存在しないファイルは除く。
+if [ "$_stdin" -eq 0 ]; then
+  if [ "$#" -gt 0 ]; then
+    printf '%s\n' "$@" >"$_tmp/cand"
+  else
+    git ls-files >"$_tmp/cand" || exit 2
+  fi
+  : >"$_tmp/list"
+  while IFS= read -r _f; do
+    [ -f "$_f" ] && grep -Iq . -- "$_f" 2>/dev/null && printf '%s\n' "$_f" >>"$_tmp/list"
+  done <"$_tmp/cand"
+  set --
+  while IFS= read -r _f; do
+    set -- "$@" "$_f"
+  done <"$_tmp/list"
+  [ "$#" -gt 0 ] || exit 0
+fi
+
+# バイト単位で比べる（日本語の語を locale に左右されず部分一致させる）。
+LC_ALL=C awk -v stdin_mode="$_stdin" -v names_file="$_names" -v allow_file="$_allowlist" '
+function trim(s) {
+  sub(/^[ \t\r]+/, "", s)
+  sub(/[ \t\r]+$/, "", s)
+  return s
+}
+function norm(p) {
+  while (sub(/^\.\//, "", p)) {}
+  return p
+}
+BEGIN {
+  # 発言をそのまま載せる節であることを示す語（公開してよい一覧）
+  nw = split("逐語 持ち主の言葉 持ち主の発言 人間の発言 人間の言葉 発言の原文 依頼の原文 原文", words, " ")
+  # 「書かない」ことを述べる見出しは止めない
+  nn = split("書かない 写さない 残さない 入れない 載せない 含めない 引用しない 禁止", negs, " ")
+  while (names_file != "" && (getline line < names_file) > 0) {
+    sub(/#.*/, "", line)
+    line = trim(line)
+    if (line != "") names[++nname] = tolower(line)
+  }
+  while (allow_file != "" && (getline line < allow_file) > 0) {
+    sub(/#.*/, "", line)
+    line = trim(line)
+    if (line != "") allow[norm(line)] = 1
+  }
+  hits = 0
+}
+FNR == 1 {
+  label = stdin_mode ? "<stdin>" : FILENAME
+  skip = (!stdin_mode && (norm(FILENAME) in allow))
+  markdown = stdin_mode || FILENAME ~ /\.(md|markdown)$/
+}
+skip { next }
+index($0, "privacy-check:allow-line") { next }
+{
+  if (markdown && $0 ~ /^ ? ? ?#+([ \t]|$)/) {
+    h = 0
+    for (i = 1; i <= nw; i++) if (index($0, words[i])) { h = 1; break }
+    for (i = 1; h && i <= nn; i++) if (index($0, negs[i])) h = 0
+    if (h) { printf "%s:%d: heading\n", label, FNR; hits++ }
+  }
+  if (nname > 0) {
+    low = tolower($0)
+    for (i = 1; i <= nname; i++) if (index(low, names[i])) {
+      printf "%s:%d: name\n", label, FNR; hits++
+      break
+    }
+  }
+}
+END { exit hits > 0 ? 1 : 0 }
+' "$@"
