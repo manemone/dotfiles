@@ -377,7 +377,7 @@ PostToolUse フック）は、**`OCW_ROLE=implementer` のペインでだけ**�
   （compact した）状態を消す。状態は `${XDG_STATE_HOME:-~/.local/state}/dotfiles/compact-reminder/<session_id>`
 - 判定できない入力（python3 無し・transcript が読めない・壊れた JSON）は何も言わず、エージェントを止めない
 - テストは `tests/compact_reminder_test.sh`。**実機で `additionalContext` が孫の文脈に届くかは未検証**
-  （デプロイ後に確かめる。閾値 150,000 の根拠は ADR [DOC-2611032102](../docs/adr/DOC-2611032102_self-compact-rules-revision.md)。ADR [DOC-2610142359](../docs/adr/DOC-2610142359_implementer-compact-reminder-hook.md) §4）
+  （デプロイ後に確認する。閾値 150,000 の根拠は ADR [DOC-2611032102](../docs/adr/DOC-2611032102_self-compact-rules-revision.md)。ADR [DOC-2610142359](../docs/adr/DOC-2610142359_implementer-compact-reminder-hook.md) §4）
 
 無効化するには、リポジトリ側の `claude/settings.json` から `hooks.PostToolUse` を削除する
 （machine 設定で `hooks.PostToolUse` を空配列にしても同じ。§3.5 の無効化と同様の浅いマージ）。
@@ -419,7 +419,7 @@ vim "${XDG_DATA_HOME:-$HOME/.local/share}/dotfiles/settings.machine.json"
 固定パスはワークツリーをまたいで共有され `uninstall.sh` でも消えないため、一度ここに
 全許可が入ると以前より気づきにくく消えにくくなります。実際に必要な項目（自分の
 `additionalDirectories` や Herdr の `hooks.SessionStart` など）だけを、パスを自分の
-環境に合わせて書き換えたうえで手で書き写してください。
+環境に合わせて書き換えたうえで手作業でコピーしてください。
 
 内容を書いたら、デプロイを実行します（ベース + machine をマージして
 `~/.claude/settings.json` を生成）:

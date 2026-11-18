@@ -140,7 +140,7 @@ ocw help all     # 全 topic を連結
 
 ### UI 確認役に頼む（`ocw checker`）
 
-実装役が UI の見た目を確かめたいとき、サブエージェントに頼む代わりに、同じ Herdr ワークスペースに
+実装役が UI の見た目を確認したいとき、サブエージェントに頼む代わりに、同じ Herdr ワークスペースに
 確認役のペインを足して頼む。確認役は普通の会話なので、人間が横から見られ、`ocw self-compact` もできる。
 既定は Claude の Sonnet（`OCW_CHECKER_COMMAND` で上書き。既定値 `claude --model sonnet`）。Sonnet の消費は
 サブスクの週の上限に効く。なぜ Claude か・なぜこの形かは ADR
@@ -163,7 +163,7 @@ ocw help all     # 全 topic を連結
 `result.md` を消す。`--wait` の終了コードは、現れたら 0、時間切れなら 3（依頼は生きている。`result.md` が
 できるのを自分で見に行く。`ocw checker` を打ち直すと依頼を二重に送る。ツールに打ち切られたときも同じで、打ち直さない）。
 
-宛先は `ocw` が作って `.git` 内の `ocw-checker-pane` に控えた確認役のペインだけで、実装役自身のペインへは
+宛先は `ocw` が作って `.git` 内の `ocw-checker-pane` に記録した確認役のペインだけで、実装役自身のペインへは
 送らない。確認役のセッションの権限は確認役自身の設定に従う（自動承認はしない）。
 
 
@@ -840,7 +840,7 @@ Host devbox
 
 #### rsync に追加の引数を渡す
 
-`dfup` に渡した引数はそのまま rsync へ透過する。何が飛ぶのかを先に確かめたいときは:
+`dfup` に渡した引数はそのまま rsync へ透過する。何が飛ぶのかを先に確認したいときは:
 
 ```bash
 dfup -n          # rsync の dry-run
@@ -903,7 +903,7 @@ rsync の差分転送なので、同じディレクトリを何度落として�
 
 #### rsync に追加の引数を渡す
 
-`dfdown` に渡した引数はそのまま rsync へ透過する。何が落ちてくるのかを先に確かめたいときは:
+`dfdown` に渡した引数はそのまま rsync へ透過する。何が落ちてくるのかを先に確認したいときは:
 
 ```bash
 dfdown -n          # rsync の dry-run
@@ -945,7 +945,7 @@ rebootctl setup    # 表示だけ。何も実行しない
 (2) 起動時のタスク `dotfiles-reboot-recovery`（サインイン無しで `rebootctl boot --hold` を走らせる）が入る。
 タスクは配布された `~/bin/rebootctl` を呼ぶので、先に `deploy-all.sh` で配っておくこと。
 
-#### 確かめ方
+#### 確認方法
 
 ```bash
 rebootctl status         # 人が読める形
@@ -968,7 +968,7 @@ Windows 側（ポリシー・アクティブ時間・再起動待ち・最終起
 手順1〜3 は止めない。起動後の会話が `last-recovery.json` をスマホへ通知し、再起動の予告の巡回を登録する。スキルが
 `~/.claude/skills/` に配られていること（`deploy-all.sh`）が前提。
 
-#### 起動の方式 A を確かめる実験（人間が叩く）
+#### 起動の方式 A を確認する実験（人間が叩く）
 
 `wsl --shutdown` はこのマシンで動いている会話を全部止める。叩く時刻は自分で決めること。
 
@@ -976,7 +976,7 @@ Windows 側（ポリシー・アクティブ時間・再起動待ち・最終起
 2. 通常の PowerShell で `wsl --shutdown` を打つ
 3. `Start-ScheduledTask -TaskName dotfiles-reboot-recovery` を打つ
 4. 1分ほど待って WSL を開き、`rebootctl status` で Herdr サーバが running か、`boot.log` に「boot: 終了」があるかを見る
-5. **10分以上**待ち、WSL と Herdr サーバがまだ生きているか確かめる
+5. **10分以上**待ち、WSL と Herdr サーバがまだ生きているか確認する
 6. 本物の再起動で、サインインせずに待ち、同じ確認をする（傘の最終 PR の後の宿題）
 
 試験をやめてタスクを外すとき（上の手順とは別。順に進めても行き着かない）:
