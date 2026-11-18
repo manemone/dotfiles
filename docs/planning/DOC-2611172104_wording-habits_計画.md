@@ -5,7 +5,7 @@
 
 ## 概要
 
-AI（主に Claude Code）が書く日本語に、持ち主が何十回も指摘しても改善しない癖がある（背景2）。
+AI（主に Claude Code）が書く日本語に、持ち主が繰り返し指摘しても改善しない癖がある（背景2）。
 メモリへの記録・指示文の追記では改善しなかった（背景4）。
 
 孫1 の調査（DOC-2611172119）は、例として挙がった語を正規表現で数え、正規表現の hook を推奨したが、
@@ -16,7 +16,7 @@ AI（主に Claude Code）が書く日本語に、持ち主が何十回も指摘
 2. その基準を `claude/CLAUDE.md` の指示文にし、向きを持った既存の規則（「横文字を避ける」など）を修正する
 3. **AI が毎回・頻繁に読む文書そのものを、基準に沿った文体へ書き直す**。指示文の文体が出力の文体に影響する
    （Anthropic の公式ガイド）ので、今の文体で書かれたスキル・指示文がお手本になっている可能性が高い。
-   対象は dotfiles と、このマシンのほかの5リポ（lorahaus・sheaf・modeldex・iosci・pixidex）、各リポのメモリ
+   対象は dotfiles と、このマシンのほかの5リポ（repo-a・repo-b・repo-c・repo-d・repo-e）、各リポのメモリ
 4. 効果は、過去の返事のサンプルをモデルに文脈で判定させて計測する（正規表現は使わない）
 
 毎ターンの再注入（UserPromptSubmit の hook）は、書き直しの後に、長い会話で癖が残るかを見てから判断する（背景7）。
@@ -30,11 +30,11 @@ AI（主に Claude Code）が書く日本語に、持ち主が何十回も指摘
 | 3 | dotfiles | `wh-03-skills-core` | 書き直し: `skills/umbrella-orchestrator/` と `skills/pr-review-loop/` | ✅ PR #234 マージ済 |
 | 4 | dotfiles | `wh-04-skills-rest` | 書き直し: 孫3 以外の `skills/` | ⬜ 待機中 |
 | 5 | dotfiles | `wh-05-docs` | 書き直し: `AGENTS.md`・`docs/design/`・`docs/reference/`・`docs/README.md`・各 README・`templates/repo-baseline/`・`bin/` のヘルプの文面（孫2 の対象リストの範囲） | ⬜ 待機中 |
-| 6 | lorahaus | `wh-06-lorahaus` | 書き直し: lorahaus（孫2 の対象リストの範囲） | ⏳ 人間のマージ待ち (PR lorahaus#605) |
-| 7 | sheaf | `wh-07-sheaf` | 書き直し: sheaf（同上） | ✅ PR sheaf#287 マージ済 |
-| 8 | modeldex | `wh-08-modeldex` | 書き直し: modeldex（同上） | ✅ PR modeldex#151 マージ済 |
-| 9 | iosci | `wh-09-iosci` | 書き直し: iosci（同上） | ✅ PR iosci#131 マージ済 |
-| 10 | pixidex | `wh-10-pixidex` | 書き直し: pixidex（同上） | ✅ PR pixidex#448 マージ済 |
+| 6 | repo-a | `wh-06-repo-a` | 書き直し: repo-a（孫2 の対象リストの範囲） | ⏳ 人間のマージ待ち (PR repo-a#605) |
+| 7 | repo-b | `wh-07-repo-b` | 書き直し: repo-b（同上） | ✅ PR repo-b#287 マージ済 |
+| 8 | repo-c | `wh-08-repo-c` | 書き直し: repo-c（同上） | ✅ PR repo-c#151 マージ済 |
+| 9 | repo-d | `wh-09-repo-d` | 書き直し: repo-d（同上） | ✅ PR repo-d#131 マージ済 |
+| 10 | repo-e | `wh-10-repo-e` | 書き直し: repo-e（同上） | ✅ PR repo-e#448 マージ済 |
 | 11 | （リポの外） | — | メモリ: 全リポの目次（`MEMORY.md`）と、向きを持った規則・全面禁止に広げた記録の書き直し案（設計0 の 5） | 🔄 実装中 |
 
 依存:
@@ -43,7 +43,9 @@ AI（主に Claude Code）が書く日本語に、持ち主が何十回も指摘
 - **孫2 のマージ後、司令官は各リポの書き直し対象（ファイル数・字数）を持ち主に提示し、了承を得てから孫3 以降を spawn する**
 - 孫3・孫4・孫5 は触るファイルが重ならないので、同時に spawn してよい。他リポの孫（6〜10）は dotfiles の孫と重ならない。
   同時に動かす孫は3本を目安とする（umbrella-orchestrator §3.5）。順序は孫3・孫4・孫5 → 孫6〜9 → 孫10
-- 孫10（pixidex）は、spawn の前に pixidex で進行中の別の傘と触るファイルが重ならないかを確認する。重なるなら持ち主に相談する
+- 孫5（文書の書き直し）は、spawn の前に傘 repo-privacy-guard の司令官へ一言知らせる（既存の文書の名前と発言の修正を、
+  向こうの孫3 が担当していて範囲が重なるため）
+- 孫10（repo-e）は、spawn の前に repo-e で進行中の別の傘と触るファイルが重ならないかを確認する。重なるなら持ち主に相談する
 - 孫11 は PR にならない（リポの外のファイル）。司令官が Sonnet のサブエージェントに書き直し案を作らせ、持ち主の確認を経て反映する
 - 基準の文書（孫2）の文言を変える必要が書き直しの孫で出たら、孫は変えずに司令官へ知らせる
 
@@ -60,19 +62,19 @@ AI（主に Claude Code）が書く日本語に、持ち主が何十回も指摘
 
 ## 背景1: 問題意識（要約。PUBLIC リポのため逐語では書かない）
 
-2026-11-17、別リポの傘の司令官（Claude Code）との会話で、持ち主が強い不快感とともに次を指摘した。
+2026-11-17、別リポの傘の司令官（Claude Code）との会話で、持ち主が次を指摘した（要点）。
 
 - 「確認」で済むところを「確かめ」、「修正」を「直し」と言うような、無理に和語に開いた言い換えをやめてほしい。
-  何十回も言っているのに改善しない。言い換えのせいで AI の言うことの理解が遠回りになり、認知負荷が高い。
+  繰り返し指摘しても改善しない。言い換えのせいで AI の言うことの理解が遠回りになり、認知負荷が高い。
   結果として持ち主側の指示まで曖昧になることがある
 - ただし「引く」「探す」「立てる・止める」「回す」のような和語は普通に通じる。司令官がそれらまで避ける語に
   入れたことに対し、この境界の感覚が無いと指摘した
-- 「この状況ではそのやり方が不適切」と言っただけなのに、AI は「今後一切しません」と全面禁止に広げて宣言する。
+- ある場面でのやり方が不適切だと指摘しただけなのに、AI はそれを今後の全面禁止に広げて宣言する。
   ある判断が拙いという指摘は、以後それをやるなという意味ではない。全面禁止として言質を取るのは
-  責任回避の逃げに見え、信用をなくす。これも何十回も指摘している
-  - 例え話: 豆腐を賽の目に切る作業で、ハサミを使って時間がかかり角も崩れたのを叱ったら、AI が
-    「今後ハサミは二度と使いません。袋を開けているほかの担当にも伝えます」と返した。これがどれだけ
-    おかしいかが、持ち主の言う癖である
+  責任回避の逃げに見え、信用をなくす。これも繰り返し指摘されている
+  - 持ち主の例え話の要点: 料理の下ごしらえで不向きな道具を使って時間がかかり出来も悪かったのを叱ると、
+    AI はその道具を今後一切使わないと宣言し、ほかの担当にまで広めると返す。叱られたのは道具の選び方のその場の判断であって、
+    道具そのものではない
 - 中の部品の名前（「焼いた指示書」のような、プロンプトを指す造語）を説明なしに持ち主向けの説明に使うのも同じ問題
 - 司令官が `~/.claude/CLAUDE.md` を直接編集したことに対し、dotfiles の手順に従うよう指摘した
 - こうした癖を抑える仕組みの調査も含めて、作業の入口（task-intake）に回すよう指示した
@@ -111,7 +113,7 @@ AI（主に Claude Code）が書く日本語に、持ち主が何十回も指摘
 - 2026-11-17（孫1 のマージ後）の持ち主の決定:
   - 正規表現で判定・計測する方法は採らない（背景5）
   - スキル本文の書き直しを行う
-  - 書き直しは dotfiles だけでなく、ほかのリポ（pixidex を含む全部）でも行う
+  - 書き直しは dotfiles だけでなく、ほかのリポ（repo-e を含む全部）でも行う
   - 毎ターンの再注入は、書き直しの後に回す（背景7）
   - 書き直す範囲は、AI が実際に読む頻度の高い文書から優先する。ADR と終わった傘の計画書は対象外
   - メモリは、目次と、向きを持った規則・全面禁止に広げた記録を先に修正する
@@ -173,16 +175,22 @@ AI（主に Claude Code）が書く日本語に、持ち主が何十回も指摘
 | 名前 | メインワークツリー | owner/name | 既定ブランチ |
 |---|---|---|---|
 | dotfiles | `/home/manemone/projects/dotfiles/master` | `manemone/dotfiles` | `master` |
-| lorahaus | `/home/manemone/projects/lorahaus/main` | メインワークツリーで `gh repo view --json nameWithOwner -q .nameWithOwner` を叩いた値 | `main` |
-| sheaf | `/home/manemone/projects/sheaf/main` | 同上 | `main` |
-| modeldex | `/home/manemone/projects/modeldex/main` | 同上 | `main` |
-| iosci | `/home/manemone/projects/iosci/main` | 同上 | `main` |
-| pixidex | `/home/manemone/projects/pixidex/main` | 同上 | `main` |
+| repo-a | `~/.local/state/umbrella/wording-habits/repos.md` の対応表で引く | メインワークツリーで `gh repo view --json nameWithOwner -q .nameWithOwner` を叩いた値 | `main` |
+| repo-b | `~/.local/state/umbrella/wording-habits/repos.md` の対応表で引く | メインワークツリーで `gh repo view --json nameWithOwner -q .nameWithOwner` を叩いた値 | `main` |
+| repo-c | `~/.local/state/umbrella/wording-habits/repos.md` の対応表で引く | メインワークツリーで `gh repo view --json nameWithOwner -q .nameWithOwner` を叩いた値 | `main` |
+| repo-d | `~/.local/state/umbrella/wording-habits/repos.md` の対応表で引く | メインワークツリーで `gh repo view --json nameWithOwner -q .nameWithOwner` を叩いた値 | `main` |
+| repo-e | `~/.local/state/umbrella/wording-habits/repos.md` の対応表で引く | メインワークツリーで `gh repo view --json nameWithOwner -q .nameWithOwner` を叩いた値 | `main` |
 
 dotfiles 以外は非公開リポ。**dotfiles（公開）の文書・コミット・PR に、ほかのリポの中身（ファイル名・文面）を書かない。**
-リポの名前（短い名前）だけは書いてよい（既に `docs/README.md` などに出ている）。
+**非公開リポの名前も書かない。** 計画書では仮の名前（repo-a〜repo-e）で書き、実際の名前・メインワークツリーは
+リポの外の `~/.local/state/umbrella/wording-habits/repos.md` で引く（umbrella-orchestrator §2.1「値そのものを書けないセル」）。
+人間の発言そのもの（逐語・文中の引用）も書かず、要点を自分の言葉で書く。
 
 ## 決定的な制約（孫は全部守ること）
+
+- **人間の発言そのもの（逐語・文中の引用）と、非公開リポの名前・ホスト名を、文書・コードのコメント・コミットメッセージ・PR の本文に
+  書かない。** 要点を自分の言葉で書く。書き直しの対象の文書に既にあるものを、新たに書き足したり書き直しで残したりしない
+  （dotfiles は公開リポ。傘 repo-privacy-guard の決まり〈dotfiles PR #235〉と同じ）
 
 - dotfiles の `AGENTS.md` の最重要ルール: `claude/CLAUDE.md` は配布物で、指示が無い限り編集しない
   （この傘では、孫2 が設計0 の 2 の範囲で編集する）。`CLAUDE.machine.md`（人格）はリポの外にあり、スコープ外。
@@ -300,27 +308,30 @@ dotfiles 以外は非公開リポ。**dotfiles（公開）の文書・コミッ�
   書き直し対象（targets/）と判定のサンプルを持ち主に提示し、了承待ち。孫3 以降は了承まで spawn しない
 - 2026-11-18: 孫3 の対象（2つのスキル）は読まれる回数の上位で、残りの判断に左右されないため、持ち主の指示で孫3 を spawn した。
   孫4・孫5 の扱いと判定のサンプルの確認は持ち主の返事待ち
-- 2026-11-18: 孫6（lorahaus）・孫7（sheaf）も、対象リストが孫4・孫5 の判断に左右されないため spawn した（同時3本）
+- 2026-11-18: 孫6（repo-a）・孫7（repo-b）も、対象リストが孫4・孫5 の判断に左右されないため spawn した（同時3本）
 - 2026-11-18: 孫3 の PR #234（承認 HEAD 80aa67d、CI green、レビュー1回目で承認）を司令官がマージした。2ファイル +91/-91。
   傘で `pre-commit run --all-files`・`doc-id verify` が通った
-- 2026-11-18: 孫3 の枠が空いたので孫8（modeldex）を spawn した
-- 2026-11-18: 孫7 の PR sheaf#287 が HEAD ce38e1f で承認された（内容の指摘0件）。CI は GitHub Actions の支払いエラーでジョブが起動せず赤、手元の pre-commit は通過。
-  private リポ（lorahaus・sheaf・modeldex）の CI は同じ理由で動かない。マージは持ち主
-- 2026-11-18: 孫7 が人間のマージ待ちになり枠が空いたので孫9（iosci）を spawn した
-- 2026-11-18: 孫8 の PR modeldex#151 が HEAD dfe3f4e で承認された（レビュー2回目）。CI は支払いエラーで赤。マージは持ち主
-- 2026-11-18: 孫10（pixidex）の前に衝突を確認した。pixidex の `AGENTS.md`・`CLAUDE.md` を触るリモートのブランチは全部マージ済みで、
-  進行中の傘（gen-speed など）のブランチは触っていない。孫10 を spawn した
-- 2026-11-18: 孫10 の PR pixidex#448 が HEAD 94fe479 で承認された（+4/-4）。CI は支払いエラーで赤。マージは持ち主
-- 2026-11-18: 孫9 の PR iosci#131 が HEAD 405a3cd で承認された（レビュー2回目、+19/-19）。CI は支払いエラーで赤。マージは持ち主
-- 2026-11-18: 孫6（lorahaus）は書き直し済みだが、origin/main でも落ちる rspec 6件（Linux に opencv-python-headless の wheel が無い）で
+- 2026-11-18: 孫3 の枠が空いたので孫8（repo-c）を spawn した
+- 2026-11-18: 孫7 の PR repo-b#287 が HEAD ce38e1f で承認された（内容の指摘0件）。CI は GitHub Actions の支払いエラーでジョブが起動せず赤、手元の pre-commit は通過。
+  private リポ（repo-a・repo-b・repo-c）の CI は同じ理由で動かない。マージは持ち主
+- 2026-11-18: 孫7 が人間のマージ待ちになり枠が空いたので孫9（repo-d）を spawn した
+- 2026-11-18: 孫8 の PR repo-c#151 が HEAD dfe3f4e で承認された（レビュー2回目）。CI は支払いエラーで赤。マージは持ち主
+- 2026-11-18: 孫10（repo-e）の前に衝突を確認した。repo-e の `AGENTS.md`・`CLAUDE.md` を触るリモートのブランチは全部マージ済みで、
+  進行中の別の傘のブランチは触っていない。孫10 を spawn した
+- 2026-11-18: 孫10 の PR repo-e#448 が HEAD 94fe479 で承認された（+4/-4）。CI は支払いエラーで赤。マージは持ち主
+- 2026-11-18: 孫9 の PR repo-d#131 が HEAD 405a3cd で承認された（レビュー2回目、+19/-19）。CI は支払いエラーで赤。マージは持ち主
+- 2026-11-18: 孫6（repo-a）は書き直し済みだが、origin/main でも落ちる rspec 6件（Linux に opencv-python-headless の wheel が無い）で
   pre-commit が止まり、未コミット。`--no-verify` は auto mode に拒否された。rspec を飛ばすかを持ち主に確認中
-- 2026-11-18: 持ち主が sheaf#287・modeldex#151・pixidex#448・iosci#131 をマージした
+- 2026-11-18: 持ち主が repo-b#287・repo-c#151・repo-e#448・repo-d#131 をマージした
 - 2026-11-18: 孫6 の rspec 6件の原因は環境でなく、opencv-python-headless 5.1.0.95 の PyPI 公開の途中（Windows 用が先、Linux 用は約3時間半後）に
   孫6 のワークツリーで生成された `tools/uv.lock`（.gitignore 対象）が Windows 用だけを固定したこと。司令官が
   `uv lock --upgrade-package opencv-python-headless` で作り直し、孫6 は通常どおり pre-commit を通して再開した
-- 2026-11-18: 孫6 の PR lorahaus#605 が HEAD 5529efe で承認された（レビュー1回目）。マージは持ち主
+- 2026-11-18: 孫6 の PR repo-a#605 が HEAD 5529efe で承認された（レビュー1回目）。マージは持ち主
 - 2026-11-18: 孫11（メモリ）の書き直し案を Sonnet のサブエージェントに作らせ始めた。案は `~/.local/state/umbrella/wording-habits/memory-proposal/`、
   元のファイルは触らない。反映は持ち主の了承後
+- 2026-11-18: 傘 repo-privacy-guard の司令官からの依頼（持ち主の指示による）で、計画書の非公開リポの名前を仮の名前に、
+  持ち主の発言の引用を要点に直した。対応表はリポの外の `repos.md`。決定的な制約に同じ決まりを足した。
+  傘の孫 PR（#232〜#234）の本文・コミットメッセージと、傘で足した文書に非公開リポの名前は無かった
 
 ## 孫1用プロンプト:
 
@@ -855,8 +866,8 @@ PR 本文自体も基準の文書（孫2 が作ったもの）に沿って書く
 
 ````markdown
 # 傘ブランチ: wording-habits
-# 孫ブランチ: wh-06-lorahaus
-# リポ: lorahaus
+# 孫ブランチ: wh-06-repo-a
+# リポ: repo-a
 # ターゲット: main（このリポの既定ブランチ。マージは人間）
 
 計画書: `/home/manemone/projects/dotfiles/wording-habits/docs/planning/DOC-2611172104_wording-habits_計画.md`
@@ -868,12 +879,12 @@ DOC-ID は計画書の「進行記録」にある）を全部読む。これが�
 
 ## 実装開始前の必須手順
 
-`ocw` がすでに `wh-06-lorahaus` ブランチのワークツリーを用意しているので、`git fetch origin` と `git log --oneline -3` で、
+`ocw` がすでに `wh-06-repo-a` ブランチのワークツリーを用意しているので、`git fetch origin` と `git log --oneline -3` で、
 そのブランチが `origin/main` の先端から切られていることを確認する（`git pull` は使わない）。
 
 ## やること
 
-1. 書き直しの対象: 孫2 の対象リスト（`~/.local/state/umbrella/wording-habits/targets/lorahaus.md`）の範囲のファイル
+1. 書き直しの対象: 孫2 の対象リスト（`~/.local/state/umbrella/wording-habits/targets/<repo-a の実際の名前>.md`）の範囲のファイル
 2. 設計0 の 4（書き直しの方法）に従い、対象のファイルを文脈を読んで基準に沿って書き直す。
    語の置換スクリプトや sed で一括に変換しない。意味（規則・手順・条件・数値・例外・参照先）を変えない。
    コード・コマンド・パス・識別子・引用・他から参照される見出しと書式は変えない（決定的な制約）
@@ -934,7 +945,7 @@ reviewerはdone状態で完了し完了通知は来ないので、待機して�
 ## ブランチ作成時の注意（最重要）
 
 作業ブランチは傘ブランチではなく、**このリポの既定ブランチ（origin/main）から切られている。**
-ocw が既に `wh-06-lorahaus` を作って checkout 済みなので、git fetch origin と git log --oneline -1 origin/main で、
+ocw が既に `wh-06-repo-a` を作って checkout 済みなので、git fetch origin と git log --oneline -1 origin/main で、
 作業ブランチが既定ブランチの先端を含んでいることだけを確認すればよい（git pull は使わない。
 既定ブランチはメインワークツリーで checkout 済みのため、ここで git checkout しない）
 ````
@@ -943,8 +954,8 @@ ocw が既に `wh-06-lorahaus` を作って checkout 済みなので、git fetch
 
 ````markdown
 # 傘ブランチ: wording-habits
-# 孫ブランチ: wh-07-sheaf
-# リポ: sheaf
+# 孫ブランチ: wh-07-repo-b
+# リポ: repo-b
 # ターゲット: main（このリポの既定ブランチ。マージは人間）
 
 計画書: `/home/manemone/projects/dotfiles/wording-habits/docs/planning/DOC-2611172104_wording-habits_計画.md`
@@ -956,12 +967,12 @@ DOC-ID は計画書の「進行記録」にある）を全部読む。これが�
 
 ## 実装開始前の必須手順
 
-`ocw` がすでに `wh-07-sheaf` ブランチのワークツリーを用意しているので、`git fetch origin` と `git log --oneline -3` で、
+`ocw` がすでに `wh-07-repo-b` ブランチのワークツリーを用意しているので、`git fetch origin` と `git log --oneline -3` で、
 そのブランチが `origin/main` の先端から切られていることを確認する（`git pull` は使わない）。
 
 ## やること
 
-1. 書き直しの対象: 孫2 の対象リスト（`~/.local/state/umbrella/wording-habits/targets/sheaf.md`）の範囲のファイル
+1. 書き直しの対象: 孫2 の対象リスト（`~/.local/state/umbrella/wording-habits/targets/<repo-b の実際の名前>.md`）の範囲のファイル
 2. 設計0 の 4（書き直しの方法）に従い、対象のファイルを文脈を読んで基準に沿って書き直す。
    語の置換スクリプトや sed で一括に変換しない。意味（規則・手順・条件・数値・例外・参照先）を変えない。
    コード・コマンド・パス・識別子・引用・他から参照される見出しと書式は変えない（決定的な制約）
@@ -1022,7 +1033,7 @@ reviewerはdone状態で完了し完了通知は来ないので、待機して�
 ## ブランチ作成時の注意（最重要）
 
 作業ブランチは傘ブランチではなく、**このリポの既定ブランチ（origin/main）から切られている。**
-ocw が既に `wh-07-sheaf` を作って checkout 済みなので、git fetch origin と git log --oneline -1 origin/main で、
+ocw が既に `wh-07-repo-b` を作って checkout 済みなので、git fetch origin と git log --oneline -1 origin/main で、
 作業ブランチが既定ブランチの先端を含んでいることだけを確認すればよい（git pull は使わない。
 既定ブランチはメインワークツリーで checkout 済みのため、ここで git checkout しない）
 ````
@@ -1031,8 +1042,8 @@ ocw が既に `wh-07-sheaf` を作って checkout 済みなので、git fetch or
 
 ````markdown
 # 傘ブランチ: wording-habits
-# 孫ブランチ: wh-08-modeldex
-# リポ: modeldex
+# 孫ブランチ: wh-08-repo-c
+# リポ: repo-c
 # ターゲット: main（このリポの既定ブランチ。マージは人間）
 
 計画書: `/home/manemone/projects/dotfiles/wording-habits/docs/planning/DOC-2611172104_wording-habits_計画.md`
@@ -1044,12 +1055,12 @@ DOC-ID は計画書の「進行記録」にある）を全部読む。これが�
 
 ## 実装開始前の必須手順
 
-`ocw` がすでに `wh-08-modeldex` ブランチのワークツリーを用意しているので、`git fetch origin` と `git log --oneline -3` で、
+`ocw` がすでに `wh-08-repo-c` ブランチのワークツリーを用意しているので、`git fetch origin` と `git log --oneline -3` で、
 そのブランチが `origin/main` の先端から切られていることを確認する（`git pull` は使わない）。
 
 ## やること
 
-1. 書き直しの対象: 孫2 の対象リスト（`~/.local/state/umbrella/wording-habits/targets/modeldex.md`）の範囲のファイル
+1. 書き直しの対象: 孫2 の対象リスト（`~/.local/state/umbrella/wording-habits/targets/<repo-c の実際の名前>.md`）の範囲のファイル
 2. 設計0 の 4（書き直しの方法）に従い、対象のファイルを文脈を読んで基準に沿って書き直す。
    語の置換スクリプトや sed で一括に変換しない。意味（規則・手順・条件・数値・例外・参照先）を変えない。
    コード・コマンド・パス・識別子・引用・他から参照される見出しと書式は変えない（決定的な制約）
@@ -1110,7 +1121,7 @@ reviewerはdone状態で完了し完了通知は来ないので、待機して�
 ## ブランチ作成時の注意（最重要）
 
 作業ブランチは傘ブランチではなく、**このリポの既定ブランチ（origin/main）から切られている。**
-ocw が既に `wh-08-modeldex` を作って checkout 済みなので、git fetch origin と git log --oneline -1 origin/main で、
+ocw が既に `wh-08-repo-c` を作って checkout 済みなので、git fetch origin と git log --oneline -1 origin/main で、
 作業ブランチが既定ブランチの先端を含んでいることだけを確認すればよい（git pull は使わない。
 既定ブランチはメインワークツリーで checkout 済みのため、ここで git checkout しない）
 ````
@@ -1119,8 +1130,8 @@ ocw が既に `wh-08-modeldex` を作って checkout 済みなので、git fetch
 
 ````markdown
 # 傘ブランチ: wording-habits
-# 孫ブランチ: wh-09-iosci
-# リポ: iosci
+# 孫ブランチ: wh-09-repo-d
+# リポ: repo-d
 # ターゲット: main（このリポの既定ブランチ。マージは人間）
 
 計画書: `/home/manemone/projects/dotfiles/wording-habits/docs/planning/DOC-2611172104_wording-habits_計画.md`
@@ -1132,12 +1143,12 @@ DOC-ID は計画書の「進行記録」にある）を全部読む。これが�
 
 ## 実装開始前の必須手順
 
-`ocw` がすでに `wh-09-iosci` ブランチのワークツリーを用意しているので、`git fetch origin` と `git log --oneline -3` で、
+`ocw` がすでに `wh-09-repo-d` ブランチのワークツリーを用意しているので、`git fetch origin` と `git log --oneline -3` で、
 そのブランチが `origin/main` の先端から切られていることを確認する（`git pull` は使わない）。
 
 ## やること
 
-1. 書き直しの対象: 孫2 の対象リスト（`~/.local/state/umbrella/wording-habits/targets/iosci.md`）の範囲のファイル
+1. 書き直しの対象: 孫2 の対象リスト（`~/.local/state/umbrella/wording-habits/targets/<repo-d の実際の名前>.md`）の範囲のファイル
 2. 設計0 の 4（書き直しの方法）に従い、対象のファイルを文脈を読んで基準に沿って書き直す。
    語の置換スクリプトや sed で一括に変換しない。意味（規則・手順・条件・数値・例外・参照先）を変えない。
    コード・コマンド・パス・識別子・引用・他から参照される見出しと書式は変えない（決定的な制約）
@@ -1198,7 +1209,7 @@ reviewerはdone状態で完了し完了通知は来ないので、待機して�
 ## ブランチ作成時の注意（最重要）
 
 作業ブランチは傘ブランチではなく、**このリポの既定ブランチ（origin/main）から切られている。**
-ocw が既に `wh-09-iosci` を作って checkout 済みなので、git fetch origin と git log --oneline -1 origin/main で、
+ocw が既に `wh-09-repo-d` を作って checkout 済みなので、git fetch origin と git log --oneline -1 origin/main で、
 作業ブランチが既定ブランチの先端を含んでいることだけを確認すればよい（git pull は使わない。
 既定ブランチはメインワークツリーで checkout 済みのため、ここで git checkout しない）
 ````
@@ -1207,8 +1218,8 @@ ocw が既に `wh-09-iosci` を作って checkout 済みなので、git fetch or
 
 ````markdown
 # 傘ブランチ: wording-habits
-# 孫ブランチ: wh-10-pixidex
-# リポ: pixidex
+# 孫ブランチ: wh-10-repo-e
+# リポ: repo-e
 # ターゲット: main（このリポの既定ブランチ。マージは人間）
 
 計画書: `/home/manemone/projects/dotfiles/wording-habits/docs/planning/DOC-2611172104_wording-habits_計画.md`
@@ -1220,19 +1231,19 @@ DOC-ID は計画書の「進行記録」にある）を全部読む。これが�
 
 ## 実装開始前の必須手順
 
-`ocw` がすでに `wh-10-pixidex` ブランチのワークツリーを用意しているので、`git fetch origin` と `git log --oneline -3` で、
+`ocw` がすでに `wh-10-repo-e` ブランチのワークツリーを用意しているので、`git fetch origin` と `git log --oneline -3` で、
 そのブランチが `origin/main` の先端から切られていることを確認する（`git pull` は使わない）。
 
 ## やること
 
-1. 書き直しの対象: 孫2 の対象リスト（`~/.local/state/umbrella/wording-habits/targets/pixidex.md`）の範囲のファイル
+1. 書き直しの対象: 孫2 の対象リスト（`~/.local/state/umbrella/wording-habits/targets/<repo-e の実際の名前>.md`）の範囲のファイル
 2. 設計0 の 4（書き直しの方法）に従い、対象のファイルを文脈を読んで基準に沿って書き直す。
    語の置換スクリプトや sed で一括に変換しない。意味（規則・手順・条件・数値・例外・参照先）を変えない。
    コード・コマンド・パス・識別子・引用・他から参照される見出しと書式は変えない（決定的な制約）
 3. 書き直しで見つけた、基準の文書だけでは判断できない場合（例: その分野で実際に使われる名前が2つある）は、
    どちらにしたかと理由を PR 本文に書く。基準の文書の修正が必要だと思ったら、変えずに司令官へ知らせる
 4. ファイルのまとまりごとにコミットを分ける（レビューで意味の変化を確認しやすくするため）
-5. pixidex では別の傘が進行中である。その傘が触っているファイルとの衝突を避けるよう、司令官が spawn の前に確認した結果が「進行記録」にある。そこで除いたファイルは触らない
+5. repo-e では別の傘が進行中である。その傘が触っているファイルとの衝突を避けるよう、司令官が spawn の前に確認した結果が「進行記録」にある。そこで除いたファイルは触らない
 6. このリポの中のプルリクエストの作法などに「横文字を避ける」のような向きを持った言葉の規則の写しがあれば、基準に沿って修正する（dotfiles の `templates/repo-baseline/` から配られた写しを含む）
 
 ## 検証方針
@@ -1287,7 +1298,7 @@ reviewerはdone状態で完了し完了通知は来ないので、待機して�
 ## ブランチ作成時の注意（最重要）
 
 作業ブランチは傘ブランチではなく、**このリポの既定ブランチ（origin/main）から切られている。**
-ocw が既に `wh-10-pixidex` を作って checkout 済みなので、git fetch origin と git log --oneline -1 origin/main で、
+ocw が既に `wh-10-repo-e` を作って checkout 済みなので、git fetch origin と git log --oneline -1 origin/main で、
 作業ブランチが既定ブランチの先端を含んでいることだけを確認すればよい（git pull は使わない。
 既定ブランチはメインワークツリーで checkout 済みのため、ここで git checkout しない）
 ````
