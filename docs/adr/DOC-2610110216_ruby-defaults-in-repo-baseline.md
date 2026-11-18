@@ -17,7 +17,7 @@ minitest を選び、持ち主に確認されないまま既定になった。Ru
 [DOC-2610110211](../planning/DOC-2610110211_ruby-defaults_計画.md) 背景3）:
 
 - Ruby のリポジトリのテストの既定は RSpec
-- RuboCop は、持ち主の別のリポジトリで使っている設定相当の厳しさにする
+- RuboCop は厳しめの設定にする（プラグインの performance・rspec、`Layout/ClassStructure` 等）
 - テンプレート・スキルは特定のリポジトリを参照しない。設定はテンプレート自身に持つ
 
 本 ADR は孫1（テンプレート）が確定させた設計を記録する。孫2（`tools/doc-id/` を RuboCop に
@@ -42,24 +42,24 @@ minitest を選び、持ち主に確認されないまま既定になった。Ru
 
 ### 2.2 `.rubocop.yml` はテンプレート自身に持つ。特定のリポジトリを参照しない
 
-持ち主の別のリポジトリの設定を手本にした（プラグインの performance・rspec、
-`Layout/ClassStructure`、Style の追加〈宣言的・関数型の方針〉、Metrics と RSpec の上限）。
+プラグインの performance・rspec、`Layout/ClassStructure`、Style の追加（宣言的・関数型の方針）、
+Metrics と RSpec の上限を採った。
 `AllCops.Exclude` は RuboCop の既定の除外（`vendor`・`tmp`・`node_modules` 等）を置き換えて
 しまうため、`inherit_mode: { merge: [Exclude] }` で既定にマージして足す形にした（傘の最終レビューで
-指摘され修正）。手本の値と方針のコメント（`NewCops: disable` の理由など）はそのまま写したが、設定ファイルは
-自己完結にし、手本のファイルを読みに行かせる記述は置かない。
+指摘され修正）。方針のコメント（`NewCops: disable` の理由など）は設定ファイルに書き、
+設定ファイルは自己完結にして外部のファイルを読みに行かせる記述は置かない。
 
-**写さなかったもの**: `tools/**/*` の丸ごと除外（AI が除外を足さない規則に反し、
-`tools/doc-id/` を RuboCop に通すという孫2の方針とも衝突する）、手本固有のファイル名を指した
-`Metrics/ClassLength` の除外、手本固有のクラスを理由にしたコメント。
+**採らなかったもの**: `tools/**/*` の丸ごと除外（AI が除外を足さない規則に反し、
+`tools/doc-id/` を RuboCop に通すという孫2の方針とも衝突する）、特定のファイル名を指した
+`Metrics/ClassLength` の除外、特定のクラスを理由にしたコメント。
 
 **「厳しい」は Metrics の数字を小さくすることではない。** RuboCop の既定は MethodLength 10・
-ClassLength 100 で、手本の値はむしろ緩い。厳しさの源泉はプラグインと `Layout/ClassStructure`
+ClassLength 100 で、採った値はむしろ緩い。厳しさの源泉はプラグインと `Layout/ClassStructure`
 と Style の追加にあるので、Metrics を既定より小さくしない。
 
 ### 2.3 `TargetRubyVersion` は書かず、`.ruby-version` から推定させる
 
-手本の固定値を書くと、撒いた先の Ruby とずれる。`.rubocop.yml` には書かず、RuboCop が
+固定値を書くと、撒いた先の Ruby とずれる。`.rubocop.yml` には書かず、RuboCop が
 `.ruby-version` から推定するのに任せる（Ruby のバージョンの定義元が1つで済む）。推定元が
 無いと RuboCop は古い版を仮定するため、`.ruby-version` を生成する。その値のために質問
 `ruby_version`（`language=ruby` のときだけ、既定 `3.3`）を足した。CI の `ruby/setup-ruby` も

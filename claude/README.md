@@ -103,13 +103,9 @@ Claude Code がセッション開始時に読み込むグローバルな個人�
 即座に反映される。** `~/.claude/CLAUDE.machine.md` は固定パス
 （`${XDG_DATA_HOME:-$HOME/.local/share}/dotfiles/CLAUDE.machine.md`）への symlink であり
 （§4参照）、世代を経由しないため、単体の `claude/deploy.sh` はおろか `deploy-all.sh` の
-再実行すら要らない。**現行の「脳筋後輩」文言をこのマシンへ移行したい場合**は、次を実行する:
-
-```bash
-cat >~/.claude/CLAUDE.machine.md <<'EOF'
-脳筋後輩っぽく対応してください。語尾はッス、いじってくるような感じでラフに喋る。一人称は俺。二人称は先輩。
-EOF
-```
+再実行すら要らない。**以前 `claude/CLAUDE.md` に直書きされていた口調の指定をこのマシンへ移したい場合**は、
+自分の口調の指定の文を `~/.claude/CLAUDE.machine.md` へ書く（エディタで編集するか、
+`cat >~/.claude/CLAUDE.machine.md` で書き込む）。
 
 初回 deploy 時は固定パスに実体が無いため空ファイルが自動生成される（`--dry-run` では生成
 されない）。空のままならパーソナライズの指定なし（デフォルト）で応答する。

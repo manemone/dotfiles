@@ -186,4 +186,4 @@ spawn・マージ・巡回の手順は `umbrella-orchestrator`、PR の往復は
 | [references/audit.md](references/audit.md) | 点検スクリプトを回す・決まりの表を差し替える・例外を足す・確かめるとき |
 | [references/audit-template.js](references/audit-template.js) | 点検スクリプトの雛形（決まりの表がファイルの先頭にある。読むだけ） |
 | [references/handoff-to-impl.md](references/handoff-to-impl.md) | Figma の決めを実装の傘へ渡すとき・実装の側から決めを聞かれたとき |
-| [references/pitfalls.md](references/pitfalls.md) | Figma の落とし穴を避けたいとき・ユーザーによく指摘されることを事前に確かめたいとき |
+| [references/pitfalls.md](references/pitfalls.md) | Figma の落とし穴を避けたいとき・よくある失敗を事前に確かめたいとき |

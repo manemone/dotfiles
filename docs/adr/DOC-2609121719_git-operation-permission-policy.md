@@ -13,7 +13,7 @@ base 判定だけに縮小した。**
 ## 1. 背景
 
 計画書 [DOC-2609121700](../planning/DOC-2609121700_autopilot-permissions_計画.md)
-（傘 `autopilot-permissions`）が確定させた線引きは1本だけである。
+（傘 `autopilot-permissions`）の線引きは1本だけである。
 
 > **`main` / `master` へのマージは人間がやる。それ以外は AI に任せる。**
 
@@ -22,7 +22,7 @@ base 判定だけに縮小した。**
 日常的に何度も走る。ここに承認ダイアログが出ると、押す人間がいない孫のペインは
 そこで固まり、autopilot が autopilot として機能しない。
 
-**そして「autopilot でやることになる作業は、全部、承認なしで通す」。** 人間の
+**autopilot でやることになる作業は、全部、承認なしで通す。** 人間の
 承認が要るのは `main` / `master` に変更が入る最終行為だけである。`git rebase` で
 傘を上流に追いつかせて `git push --force-with-lease` する操作にまで承認を出す
 実装は、この要件を満たしていない（初版がまさにそれだった。§6）。

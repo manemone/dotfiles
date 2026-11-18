@@ -1329,7 +1329,7 @@ scenario_claude_machine_md_fixed_path() {
   # --- (2) CLAUDE.machine.md を持たないソースツリーから再deployしても、
   #     固定パスの既存内容(人間が編集したと見立てた内容)は失われない。
   #     案A(世代経由の状態ファイル方式)を却下した理由そのものの回帰。 ---
-  printf '脳筋後輩っぽく対応してください。\n' >"$fixed_path"
+  printf 'テスト用の口調の指定。\n' >"$fixed_path"
 
   copy_dir="$(mktemp -d)"
   CREATED_DIRS+=("$copy_dir")
@@ -1345,7 +1345,7 @@ scenario_claude_machine_md_fixed_path() {
     fail "CLAUDE.machine.mdを持たないソースツリーからのdeployが失敗 (exit=$rc)"
     log "$out"
   else
-    if grep -q "脳筋後輩" "$fixed_path" 2>/dev/null; then
+    if grep -q "テスト用の口調の指定" "$fixed_path" 2>/dev/null; then
       pass "CLAUDE.machine.mdを持たないソースツリーからdeployしても固定パスの既存内容が失われない"
     else
       fail "CLAUDE.machine.mdを持たないソースツリーからdeployしても固定パスの既存内容が失われない"
@@ -1702,7 +1702,7 @@ scenario_codex_generated_agents_md() {
   esac
 
   # --- (1) CLAUDE.machine.md を書き換えて再deployすると反映される ---
-  printf '脳筋後輩っぽく対応してください。\n' >"$fixed_machine_md"
+  printf 'テスト用の口調の指定。\n' >"$fixed_machine_md"
   wait_for_next_second
   out="$(run_deploy "$sbx" --force --only codex 2>&1)"
   rc=$?
@@ -1710,7 +1710,7 @@ scenario_codex_generated_agents_md() {
     fail "CLAUDE.machine.md書き換え後のdeploy-all.sh --force --only codexが失敗 (exit=$rc)"
     log "$out"
   else
-    if grep -q '脳筋後輩っぽく対応してください' "$generated" 2>/dev/null; then
+    if grep -q 'テスト用の口調の指定' "$generated" 2>/dev/null; then
       pass "CLAUDE.machine.mdの書き換えが再deployで生成物へ反映される"
     else
       fail "CLAUDE.machine.mdの書き換えが再deployで生成物へ反映される"
@@ -1732,7 +1732,7 @@ scenario_codex_generated_agents_md() {
   fi
   assert_not_exists "$sbx/.codex/AGENTS.md"
   assert_not_exists "$generated"
-  if [ "$(cat "$fixed_machine_md" 2>/dev/null)" = "脳筋後輩っぽく対応してください。" ]; then
+  if [ "$(cat "$fixed_machine_md" 2>/dev/null)" = "テスト用の口調の指定。" ]; then
     pass "uninstall --only codex の後もCLAUDE.machine.mdの実体は消えない"
   else
     fail "uninstall --only codex の後もCLAUDE.machine.mdの実体は消えない"

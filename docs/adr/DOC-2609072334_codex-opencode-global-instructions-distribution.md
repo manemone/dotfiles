@@ -6,10 +6,9 @@
 
 ## 1. 背景
 
-人間の確定事項（計画書 `docs/planning/DOC-2609072212_agent-handoff_計画.md` 背景2）:
-
-> 発動条件は Claude Code だけでなく他のAI（Codex / OpenCode）にも効く形にする。
-> `claude/CLAUDE.md` に1行入れるだけでは Claude Code にしか効かない。
+要件（計画書 `docs/planning/DOC-2609072212_agent-handoff_計画.md` 背景2）: 発動条件は
+3エージェント（Claude Code / Codex / OpenCode）のすべてに効くこと。`claude/CLAUDE.md` への
+1行追加は Claude Code にしか効かないので不足である。
 
 「相談された課題が複数PRに分かれる規模だと判断したら、実装や計画書執筆を始めず
 `umbrella-handoff` スキルへの引き継ぎを人間に提案する」という恒久的な振る舞いを配るには、
@@ -27,9 +26,8 @@
 | OpenCode | `${XDG_CONFIG_HOME:-$HOME/.config}/opencode/AGENTS.md` | 司令官の実測時点では権限の都合で存在確認できず、[OpenCode公式ドキュメント](https://opencode.ai/docs/rules/) で調査し判明した。同ドキュメントによれば OpenCode は `~/.claude/CLAUDE.md` もフォールバックとして読むが、自身の `AGENTS.md` が存在すればそちらが優先される |
 
 **Codex の `~/.codex/AGENTS.md` が既に `claude/CLAUDE.md` と同一内容を手で複製済みだった**
-という事実が、本決定の出発点になっている。個人の口調設定（「脳筋後輩っぽく対応してください」
-等）はエージェント名を問わない内容であり、人間は既にそれを承知の上で3エージェントへ同じ
-指示を配ろうとしていた。
+という事実が、本決定の出発点になっている。個人の口調設定（口調の指定の文）
+などはエージェント名を問わない内容であり、3エージェントで同じ実体を共有できる。
 
 ## 2. 決定
 

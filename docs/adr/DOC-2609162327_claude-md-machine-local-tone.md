@@ -11,7 +11,7 @@
 
 ```markdown
 # Personal instructions
-脳筋後輩っぽく対応してください。語尾はッス、いじってくるような感じでラフに喋る。一人称は俺。二人称は先輩。
+（口調の指定の文）
 ```
 
 このファイルは symlink で Claude Code / Codex / OpenCode の3エージェントへ配られる
@@ -111,7 +111,7 @@ import 行は **`@~/.claude/CLAUDE.machine.md`（ホーム相対）** を採り�
 
 ### 2.4 人間の現在のパーソナライズの移行は自動化しない
 
-deploy は空の `CLAUDE.machine.md` を作るだけで、現行の「脳筋後輩」文言を自動で
+deploy は空の `CLAUDE.machine.md` を作るだけで、現行の口調の指定の文を自動で
 書き込まない（「デフォルトはパーソナライズ指定なし」という決定事項どおり）。移行手順
 （現行文言を `~/.claude/CLAUDE.machine.md` へ書く）は `claude/README.md` §3.1・§4.9 と、
 傘→`master` PR 本文に記載する。
