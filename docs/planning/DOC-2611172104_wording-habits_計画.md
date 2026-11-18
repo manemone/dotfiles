@@ -30,7 +30,7 @@ AI（主に Claude Code）が書く日本語に、持ち主が何十回も指摘
 | 3 | dotfiles | `wh-03-skills-core` | 書き直し: `skills/umbrella-orchestrator/` と `skills/pr-review-loop/` | ✅ PR #234 マージ済 |
 | 4 | dotfiles | `wh-04-skills-rest` | 書き直し: 孫3 以外の `skills/` | ⬜ 待機中 |
 | 5 | dotfiles | `wh-05-docs` | 書き直し: `AGENTS.md`・`docs/design/`・`docs/reference/`・`docs/README.md`・各 README・`templates/repo-baseline/`・`bin/` のヘルプの文面（孫2 の対象リストの範囲） | ⬜ 待機中 |
-| 6 | lorahaus | `wh-06-lorahaus` | 書き直し: lorahaus（孫2 の対象リストの範囲） | 🔄 実装中 |
+| 6 | lorahaus | `wh-06-lorahaus` | 書き直し: lorahaus（孫2 の対象リストの範囲） | ⏳ 人間のマージ待ち (PR lorahaus#605) |
 | 7 | sheaf | `wh-07-sheaf` | 書き直し: sheaf（同上） | ✅ PR sheaf#287 マージ済 |
 | 8 | modeldex | `wh-08-modeldex` | 書き直し: modeldex（同上） | ✅ PR modeldex#151 マージ済 |
 | 9 | iosci | `wh-09-iosci` | 書き直し: iosci（同上） | ✅ PR iosci#131 マージ済 |
@@ -318,6 +318,7 @@ dotfiles 以外は非公開リポ。**dotfiles（公開）の文書・コミッ�
 - 2026-11-18: 孫6 の rspec 6件の原因は環境でなく、opencv-python-headless 5.1.0.95 の PyPI 公開の途中（Windows 用が先、Linux 用は約3時間半後）に
   孫6 のワークツリーで生成された `tools/uv.lock`（.gitignore 対象）が Windows 用だけを固定したこと。司令官が
   `uv lock --upgrade-package opencv-python-headless` で作り直し、孫6 は通常どおり pre-commit を通して再開した
+- 2026-11-18: 孫6 の PR lorahaus#605 が HEAD 5529efe で承認された（レビュー1回目）。マージは持ち主
 
 ## 孫1用プロンプト:
 
