@@ -28,7 +28,7 @@
 
 | 孫 | ブランチ | 内容 | 状況 |
 |---|---|---|---|
-| 1 | `rn-01-nas-creds` | 原因の確認と影響の洗い出し、直し方の案の比較（人間が選ぶ）、選ばれた案と起動後の NAS の確認を `bin/rebootctl` に入れ、ADR に記録する | ⏳ CI待ち (PR #243) |
+| 1 | `rn-01-nas-creds` | 原因の確認と影響の洗い出し、直し方の案の比較（人間が選ぶ）、選ばれた案と起動後の NAS の確認を `bin/rebootctl` に入れ、ADR に記録する | ✅ PR #243 マージ済 |
 
 依存: 孫は1本。調べること・人間の選択・直すこと・記録が同じ `bin/rebootctl` と ADR に集まり、縛り合うため分けない
 （叩き台の「洗い出し」と「案の比較」は孫1 の中の手順にした）。人間の選んだ案が `bin/rebootctl` の外（別リポなど）に
@@ -139,6 +139,7 @@
 
 - 2026-11-23: 計画書を起草した。傘は `origin/master`（5a2c83d）から切られている。孫1 を spawn する
 - 2026-11-23: 孫1 を spawn した（`ocw -H --no-commander`、base-ref は `reboot-network-creds`）。ブリーフは転記後に削除した。引き継ぎ元から届いた Interactive の一時タスクの実測を背景3 に足した
+- 2026-11-23: 孫1 の PR #243 を司令官がマージした。原因は、起動時タスクで起きた WSL から呼ぶ Windows のプログラムが S4U のログオンのまま動き、人間が後からサインインしても切り替わらないこと（Kerberos チケットも `net use` の接続も無い）。人間の選択は、S4U のまま、Windows のプログラムには UNC でなくWSL の中の cifs マウントを `wslpath -w` のパスで渡す案（ADR DOC-2611151248 §7）。`rebootctl status` に NAS の確認3項目（環境変数 `REBOOTCTL_NAS_MOUNT` / `REBOOTCTL_NAS_UNC`）を足した。傘で `bin/tests/lint.sh`・unittest・`doc-id verify` が通った。残り: UNC 前提のコードを持つ別リポの処理（学習ツールの転送と登録ツールの呼び出し、画像生成ツールの Windows 版 CLI）をこの案に合わせる直しは別リポの作業で、どこでやるかを人間に相談中。最終 PR のあとの人間の宿題: `deploy-all.sh`、環境変数の設定、サインインしない再起動で `rebootctl status` の NAS の3項目を確かめる
 
 ## 孫1用プロンプト:
 
