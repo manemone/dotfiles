@@ -32,7 +32,7 @@
 | 2 | 学習ツール | `rn-02-nas-via-wsl-mount` | 学習ツールの NAS 転送（`robocopy.exe` / `powershell.exe`）と、Windows の `ruby.exe` 経由の登録ツールの呼び出しを、UNC でなく WSL の cifs マウントの `wslpath -w` のパスで渡す形に直す | ⏳ 人間のマージ待ち (PR 学習ツール#608) |
 | 3 | 画像生成ツール | `rn-03-nas-via-wsl-mount` | 画像生成ツールの Windows 版 CLI を WSL から呼んで NAS を使う経路を確かめ、UNC 前提なら WSL の cifs マウントの `wslpath -w` のパスで渡す形に直す（設定だけで済むなら設定の例と文書を直す） | ⏳ 人間のマージ待ち (PR 画像生成ツール#468) |
 | 4 | 画像生成ツール | `rn-04-nas-mount-check` | 保管庫の読み書きの前に、設定したマウント先が実際にマウントされているかを mountinfo で確かめ、外れていれば NAS に書かず分かるメッセージで止める（WSL の中と Windows の Ruby の両方） | ⬜ 待機中 |
-| 5 | 登録ツール | `rn-05-nas-via-wsl-mount` | 登録ツール（学習ツールが Windows の `ruby.exe` 経由で呼ぶ）が、保管庫・目録・作例の置き場を WSL の cifs マウントの `wslpath -w` のパスで受けても動くかを確かめ、動かない箇所を直し、設定の書き方を文書にする | 🔄 実装中 |
+| 5 | 登録ツール | `rn-05-nas-via-wsl-mount` | 登録ツール（学習ツールが Windows の `ruby.exe` 経由で呼ぶ）が、保管庫・目録・作例の置き場を WSL の cifs マウントの `wslpath -w` のパスで受けても動くかを確かめ、動かない箇所を直し、設定の書き方を文書にする | ⏳ 人間のマージ待ち (PR 登録ツール#152) |
 
 依存: 孫は1本。調べること・人間の選択・直すこと・記録が同じ `bin/rebootctl` と ADR に集まり、縛り合うため分けない
 （叩き台の「洗い出し」と「案の比較」は孫1 の中の手順にした）。人間の選んだ案が `bin/rebootctl` の外（別リポなど）に
