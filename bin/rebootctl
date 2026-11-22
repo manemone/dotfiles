@@ -20,6 +20,8 @@ RESTORE_WAIT="${REBOOTCTL_RESTORE_WAIT:-90}"
 #   REBOOTCTL_NAS_MOUNT  WSL の中のマウント先（例: /mnt/nas。cifs でマウントしたもの）
 #   REBOOTCTL_NAS_UNC    Windows から見た NAS の共有フォルダ（\\<ホスト>\<共有> 形式）
 NAS_MOUNT="${REBOOTCTL_NAS_MOUNT:-}"
+# 末尾の / は落とす（/proc/self/mounts の表記と突き合わせるため。/ だけは残す）
+while [ "${#NAS_MOUNT}" -gt 1 ] && [ "${NAS_MOUNT%/}" != "$NAS_MOUNT" ]; do NAS_MOUNT=${NAS_MOUNT%/}; done
 NAS_UNC="${REBOOTCTL_NAS_UNC:-}"
 
 POLICY_KEY_AU='HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU'
@@ -125,6 +127,11 @@ nas_windows_unc() {
 nas_windows_via_wsl() {
   [ -n "$NAS_MOUNT" ] || {
     printf 'skipped'
+    return 0
+  }
+  # マウントが生きていないと、マウント先は空のディレクトリとして残り Test-Path が True になるので、先に見る
+  [ "$(nas_wsl_mounted)" = yes ] || {
+    printf 'no'
     return 0
   }
   command -v wslpath >/dev/null 2>&1 || {

@@ -112,7 +112,7 @@ WSL から Windows のプログラム（`*.exe`）を呼び、NAS を UNC で使
 
 - 別リポの学習ツールの NAS 転送（`robocopy.exe` で送り、`powershell.exe` で読み戻す）
 - 同じ学習ツールが、モデルを公開する手順で Windows の `ruby.exe` 経由で呼ぶ登録ツール（保存先は NAS 上のフォルダ）
-- 画像生成ツールの Windows 版 CLI を WSL から呼ぶ経路（`tools/winrun` 系。NAS を使う設定のとき）
+- 画像生成ツールの Windows 版 CLI を WSL から呼ぶ経路（NAS を使う設定のとき）
 
 ほかの `*.exe` 呼び出し（`taskkill.exe`・`cmd.exe /c start`・GPU アプリの起動）は NAS を使わないので影響しない。
 このリポの `bin/`・`shared/`・`skills/` には、NAS を Windows 経由で使う処理は無い。

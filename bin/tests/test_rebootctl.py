@@ -172,17 +172,24 @@ exit 0
         self.assertEqual(data["nas_windows_via_wsl_reachable"], "skipped")
 
         # UNC は届かず、WSL 経由のパスは届く（S4U の WSL の実測と同じ形）。
-        # WSL のマウント先が無い（マウントされていない）ことも別に出る
+        # マウント済みの場所として /proc を使う（末尾の / があっても同じに扱う）
         write_stub(self.stubs / "wslpath", 'echo "\\\\wsl.localhost\\X\\nas"\n')
         write_stub(
             self.stubs / "powershell.exe",
             'case "$*" in *wsl.localhost*) echo True;; *) echo False;; esac\n',
         )
-        env = {"REBOOTCTL_NAS_MOUNT": str(self.tmp / "no-such-mount"), "REBOOTCTL_NAS_UNC": "\\\\nas\\share"}
+        env = {"REBOOTCTL_NAS_MOUNT": "/proc/", "REBOOTCTL_NAS_UNC": "\\\\nas\\share"}
         data = json.loads(self.run_ctl("status", "--json", extra_env=env).stdout)
-        self.assertIs(data["nas_wsl_mounted"], False)
+        self.assertIs(data["nas_wsl_mounted"], True)
         self.assertIs(data["nas_windows_unc_reachable"], False)
         self.assertIs(data["nas_windows_via_wsl_reachable"], True)
+
+        # マウントされていない空のディレクトリは、Windows から見えても「届かない」（空の場所へ書かせない）
+        (self.tmp / "empty-dir").mkdir()
+        unmounted = {**env, "REBOOTCTL_NAS_MOUNT": str(self.tmp / "empty-dir")}
+        data = json.loads(self.run_ctl("status", "--json", extra_env=unmounted).stdout)
+        self.assertIs(data["nas_wsl_mounted"], False)
+        self.assertIs(data["nas_windows_via_wsl_reachable"], False)
 
         # Windows 側が読めない（powershell.exe が無い）: 「届かない」でなく null
         r = self.run_ctl("status", "--json", path_only_stubs=True, extra_env=env)
