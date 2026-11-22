@@ -16,6 +16,11 @@ BOOT_LOG="$STATE_DIR/boot.log"
 TASK_NAME="dotfiles-reboot-recovery"
 # 会話の復元（herdr が workspace を戻す）を待つ上限秒数
 RESTORE_WAIT="${REBOOTCTL_RESTORE_WAIT:-90}"
+# NAS の確認先（環境依存なので既定値を持たない。未設定の確認は飛ばして「未設定」と出す）。
+#   REBOOTCTL_NAS_MOUNT  WSL の中のマウント先（例: /mnt/nas。cifs でマウントしたもの）
+#   REBOOTCTL_NAS_UNC    Windows から見た NAS の共有フォルダ（\\<ホスト>\<共有> 形式）
+NAS_MOUNT="${REBOOTCTL_NAS_MOUNT:-}"
+NAS_UNC="${REBOOTCTL_NAS_UNC:-}"
 
 POLICY_KEY_AU='HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU'
 UX_KEY='HKLM:\SOFTWARE\Microsoft\WindowsUpdate\UX\Settings'
@@ -26,7 +31,8 @@ usage() {
 Usage: rebootctl <command>
 
   status [--json]   Windows の再起動ポリシー・アクティブ時間・最終起動時刻・起動タスクの登録・
-                    Herdr サーバの生死を読む（何も書き換えない）
+                    Herdr サーバの生死・NAS に届くか（REBOOTCTL_NAS_MOUNT / REBOOTCTL_NAS_UNC が
+                    設定されているとき）を読む（何も書き換えない）
   setup             管理者 PowerShell に貼るコマンドを表示する（このコマンドは何も実行しない）
   boot [--hold]     Herdr のサーバを起こし、会話の復元を待ち、herdr-resume があれば recover を呼び、
                     管制の会話（ラベル「管制」のワークスペース）が無ければ起こす。
@@ -75,6 +81,65 @@ EOF
   timeout 60 powershell.exe -NoProfile -NonInteractive -Command "$ps" 2>/dev/null | tr -d '\r'
 }
 
+# ── NAS の確認（読み取りだけ） ─────────────────────────────────────
+# 結果は yes / no / unknown / skipped のどれか1語（標準出力）。落ちない。
+#   skipped: 確認先が未設定   unknown: 確認する道具（powershell.exe / wslpath）が使えない
+nas_wsl_mounted() {
+  [ -n "$NAS_MOUNT" ] || {
+    printf 'skipped'
+    return 0
+  }
+  if grep -qF " $NAS_MOUNT " /proc/self/mounts 2>/dev/null && timeout 10 test -d "$NAS_MOUNT/." 2>/dev/null; then
+    printf 'yes'
+  else
+    printf 'no'
+  fi
+}
+
+# Windows のプログラムから Test-Path で $1（Windows 形式のパス）に届くか。
+windows_test_path() {
+  command -v powershell.exe >/dev/null 2>&1 || {
+    printf 'unknown'
+    return 0
+  }
+  local p=${1//\'/\'\'} out
+  out=$(timeout 30 powershell.exe -NoProfile -NonInteractive -Command \
+    "(Test-Path -LiteralPath '$p')" 2>/dev/null | tr -d '\r') || out=""
+  case "$out" in
+    True) printf 'yes' ;;
+    False) printf 'no' ;;
+    *) printf 'unknown' ;;
+  esac
+}
+
+# 起動時タスク（S4U）のログオンには NAS の資格情報が無いので、UNC 直指定は届かない。
+# WSL の中の cifs を Windows 側から見たパス（wslpath -w）なら資格情報が要らない（ADR DOC-2611151248 §7）。
+nas_windows_unc() {
+  [ -n "$NAS_UNC" ] || {
+    printf 'skipped'
+    return 0
+  }
+  windows_test_path "$NAS_UNC"
+}
+
+nas_windows_via_wsl() {
+  [ -n "$NAS_MOUNT" ] || {
+    printf 'skipped'
+    return 0
+  }
+  command -v wslpath >/dev/null 2>&1 || {
+    printf 'unknown'
+    return 0
+  }
+  local wp
+  wp=$(wslpath -w "$NAS_MOUNT" 2>/dev/null) || wp=""
+  [ -n "$wp" ] || {
+    printf 'unknown'
+    return 0
+  }
+  windows_test_path "$wp"
+}
+
 herdr_state() {
   if ! command -v herdr >/dev/null 2>&1; then
     printf 'missing'
@@ -113,6 +178,10 @@ cmd_status() {
   local boot_id herdr
   boot_id=$(cat /proc/sys/kernel/random/boot_id 2>/dev/null || true)
   herdr=$(herdr_state)
+  local nas_mount nas_unc nas_via
+  nas_mount=$(nas_wsl_mounted)
+  nas_unc=$(nas_windows_unc)
+  nas_via=$(nas_windows_via_wsl)
 
   if [ "$json" = 1 ]; then
     # 値が空（読めなかった・未設定）は null にする
@@ -128,8 +197,19 @@ cmd_status() {
       "$readable" "$(jv "$au")" "$(jv "$nar")"
     printf '"active_hours_start":%s,"active_hours_end":%s,"reboot_required":%s,' \
       "$(jv "$ahs")" "$(jv "$ahe")" "$(jb "$rr")"
-    printf '"windows_last_boot":%s,"boot_task_registered":%s,"wsl_boot_id":%s,"herdr_server":"%s"}\n' \
+    # NAS: yes→true / no→false / unknown→null（読めなかった）/ skipped→"skipped"（確認先が未設定）
+    jn() {
+      case "$1" in
+        yes) printf 'true' ;;
+        no) printf 'false' ;;
+        skipped) printf '"skipped"' ;;
+        *) printf 'null' ;;
+      esac
+    }
+    printf '"windows_last_boot":%s,"boot_task_registered":%s,"wsl_boot_id":%s,"herdr_server":"%s",' \
       "$(jv "$lb")" "$(jb "$tr")" "$(jv "$boot_id")" "$herdr"
+    printf '"nas_wsl_mounted":%s,"nas_windows_unc_reachable":%s,"nas_windows_via_wsl_reachable":%s}\n' \
+      "$(jn "$nas_mount")" "$(jn "$nas_unc")" "$(jn "$nas_via")"
     return 0
   fi
 
@@ -150,6 +230,24 @@ cmd_status() {
   printf 'WSL 側:\n'
   printf '  boot_id       : %s\n' "${boot_id:-?}"
   printf '  Herdr サーバ  : %s\n' "$herdr"
+  printf 'NAS（確認先は REBOOTCTL_NAS_MOUNT / REBOOTCTL_NAS_UNC）:\n'
+  nas_line 'WSL の中のマウント' "$nas_mount"
+  nas_line 'Windows から UNC で' "$nas_unc"
+  nas_line 'Windows から WSL のマウント経由で' "$nas_via"
+  if [ "$nas_unc" = no ] && [ "$nas_via" = yes ]; then
+    printf '  → UNC は届かず WSL 経由は届きます。Windows のプログラムには WSL 経由のパス（wslpath -w）を渡してください\n'
+  fi
+}
+
+nas_line() {
+  local label=$1 v=$2 word
+  case "$v" in
+    yes) word='届く' ;;
+    no) word='届かない' ;;
+    skipped) word='未設定（確認を飛ばした）' ;;
+    *) word='確認できなかった' ;;
+  esac
+  printf '  %s: %s\n' "$label" "$word"
 }
 
 # ── setup（表示だけ。ここでは powershell.exe を呼ばない） ──────────
@@ -174,7 +272,8 @@ Get-ItemProperty \$au | Select-Object AUOptions, NoAutoRebootWithLoggedOnUsers
 
 # --- 2. 再起動のあと、サインイン無しで WSL と Herdr を起こすタスク（方式 A: 起動時・S4U） ---
 # サインインしていなくても実行される。パスワードは保存しない（S4U）。
-# ネットワーク資格情報が要る処理は S4U では動かないので、起動後の確認を必ず行うこと。
+# S4U のログオンにはネットワーク資格情報が無い。この WSL から呼ぶ Windows のプログラムも同じログオンで動くので、
+# NAS の UNC パスには届かない（WSL の中の cifs を wslpath -w で渡せば届く）。起動後に「rebootctl status」の NAS の欄で確認すること。
 \$user = "\$env:USERDOMAIN\\\$env:USERNAME"
 \$action = New-ScheduledTaskAction -Execute 'wsl.exe' \`
   -Argument '-d $distro -- bash -lc "\$HOME/bin/rebootctl boot --hold"'
