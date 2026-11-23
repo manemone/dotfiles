@@ -6,6 +6,9 @@ powershell.exe / herdr / herdr-resume はスタブへ差し替え、実 Windows 
 - `setup` は管理者コマンドを表示するだけで、powershell.exe を一度も呼ばない
   （呼ぶと管理者操作を人間の承認なしに実行しうる）
 - `boot` は何度呼んでも Herdr のサーバを二重に起動しない。herdr-resume が無くても止まらない
+- `watch` は再起動待ちでないとき・読めないときは管制の会話へ何も送らない。再起動待ちのときだけ送り、
+  同じ `windows_last_boot` への予告は1回だけ。解けたら印を消し、送れなかったとき（承認待ち・作業中・管制なし）は
+  印を書かない。`control-tower.json` のほかの鍵は壊さない
 - `status` は powershell.exe が無くても落ちず、「読めなかった」ことを出す
 - `status` の NAS の確認は、確認先が未設定なら飛ばし、Windows 側が読めないときは「確認できなかった」を
   「届かない」と取り違えず、UNC と WSL 経由を別々に出す
@@ -72,6 +75,7 @@ exit 0
         env = dict(os.environ)
         env.pop("REBOOTCTL_NAS_MOUNT", None)
         env.pop("REBOOTCTL_NAS_UNC", None)
+        env["REBOOTCTL_WIN_PS_DIR"] = str(self.tmp / "no-win-ps")  # 実機の Windows を読まない
         env.update(extra_env or {})
         env["XDG_STATE_HOME"] = str(self.state)
         env["REBOOTCTL_RESTORE_WAIT"] = "6"
@@ -155,6 +159,82 @@ exit 0
         r = self.run_ctl("boot")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("boot: 終了", (self.state / "reboot-recovery" / "boot.log").read_text())
+
+    def watch_setup(self, reboot: str) -> None:
+        """Windows の再起動待ちを reboot（True / False）にした powershell.exe のスタブへ差し替える"""
+        write_stub(
+            self.stubs / "powershell.exe",
+            f"echo reboot_required={reboot}; echo last_boot=2026-11-21T23:07:45+09:00\n",
+        )
+        (self.tmp / "control").touch()
+
+    def prompts(self) -> list[str]:
+        return [c for c in self.calls_text().splitlines() if c.startswith("herdr agent prompt")]
+
+    def test_watch_announces_only_when_reboot_pending_and_once(self) -> None:
+        state = self.state / "reboot-recovery"
+        state.mkdir(parents=True)
+        marker = state / "control-tower.json"
+        marker.write_text(json.dumps({"notified_boot_id": "b1"}))
+
+        # 再起動待ちでない / Windows が読めない: 何も送らず、モデルも呼ばない
+        self.watch_setup("False")
+        self.assertEqual(self.run_ctl("watch").returncode, 0)
+        r = self.run_ctl("watch", path_only_stubs=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.prompts(), [])
+        # 読めなかったことは boot.log に残る（cron の下で黙って止まらない）
+        self.assertIn("watch: Windows 側を読めなかった", (state / "boot.log").read_text())
+
+        # 再起動待ち: 1回だけ送り、印を書く（ほかの鍵は残す）。2回目以降は送らない
+        self.watch_setup("True")
+        for _ in range(3):
+            self.assertEqual(self.run_ctl("watch").returncode, 0)
+        self.assertEqual(len(self.prompts()), 1, "同じ予告が繰り返し送られた")
+        self.assertIn("再起動の予告の手順", self.prompts()[0])
+        data = json.loads(marker.read_text())
+        self.assertEqual(data["announced_reboot_for"], "2026-11-21T23:07:45+09:00")
+        self.assertEqual(data["notified_boot_id"], "b1")
+
+        # 解けたら印だけ消す。次に再起動待ちになればまた1回送る
+        self.watch_setup("False")
+        self.run_ctl("watch")
+        self.assertEqual(json.loads(marker.read_text()), {"notified_boot_id": "b1"})
+        self.watch_setup("True")
+        self.run_ctl("watch")
+        self.assertEqual(len(self.prompts()), 2)
+
+    def test_watch_finds_powershell_outside_the_cron_path(self) -> None:
+        # cron の PATH には Windows 側の置き場所が無い。watch が自分で足して読めること
+        self.watch_setup("True")
+        win_ps = self.tmp / "win-ps"
+        win_ps.mkdir()
+        (self.stubs / "powershell.exe").rename(win_ps / "powershell.exe")
+        r = self.run_ctl("watch", extra_env={"REBOOTCTL_WIN_PS_DIR": str(win_ps)})
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(len(self.prompts()), 1)
+
+    def test_watch_does_not_mark_when_it_could_not_send(self) -> None:
+        marker = self.state / "reboot-recovery" / "control-tower.json"
+        self.watch_setup("True")
+        # 作業中・承認待ち・エージェント無し・管制のワークスペース無し: 送らず、印も書かない（次の巡回で試す）
+        (self.tmp / "pane-blocked").touch()
+        self.run_ctl("watch")
+        (self.tmp / "pane-blocked").unlink()
+        (self.tmp / "pane-noagent").touch()
+        self.run_ctl("watch")
+        (self.tmp / "pane-noagent").unlink()
+        (self.tmp / "control").unlink()
+        self.run_ctl("watch")
+        self.assertEqual(self.prompts(), [])
+        self.assertFalse(marker.exists(), "送れていないのに印が書かれた")
+        # 届いたか未確認（timeout）は再送しないので印を書く
+        (self.tmp / "control").touch()
+        (self.tmp / "prompt-timeout").touch()
+        self.run_ctl("watch")
+        self.run_ctl("watch")
+        self.assertEqual(len(self.prompts()), 1)
+        self.assertIn("announced_reboot_for", marker.read_text())
 
     def test_status_survives_unreadable_windows(self) -> None:
         # スタブの PATH から powershell.exe を外す（Windows 側が読めない状況）

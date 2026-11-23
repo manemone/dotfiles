@@ -30,7 +30,7 @@ Remote Control の会話一覧がオフラインになる、の2つで分かる�
   居なければ起動し直す
 - **会話名:** `再起動管制`（`claude --name`。ADR DOC-2610111939 の流儀。Claude アプリの一覧で一目で分かる日本語）
 - **モデル:** Sonnet（`claude --model sonnet`）。常駐して巡回するので費用を抑える（計画書 設計0 の 5）
-- **巡回の間隔:** 1時間おき（`CronCreate`。分は 0 を避ける）。`rebootctl status --json` を読むだけで軽い
+- **巡回の間隔:** 1時間おき。当初は会話内の `CronCreate` だったが、OS の cron（`rebootctl watch`）へ移した（ADR DOC-2611232111）。`rebootctl status --json` を読むだけで軽い
 - **ふるまいの本体:** スキル `skills/control-tower/SKILL.md`。起動時に `last-recovery.json` を読んで1回通知し、巡回を登録する。
   通知済みかは `reboot-recovery/control-tower.json` に印を置く（compact・復帰で2度通知しない）。同じ再起動の予告も印で1回にする
 

@@ -1,6 +1,6 @@
 ---
 name: control-tower
-description: "再起動の管制の会話（Herdr に常駐する Claude）の振る舞い。この会話が `rebootctl boot` から起こされたとき、または「管制」「再起動からの復帰」「状況は」「〜を再開して」「〜を止めて」と外（スマホの Claude アプリ）から頼まれたときに発動する。起動時に last-recovery.json をスマホへ1回通知し、再起動の予告の巡回（CronCreate）を登録し、外からの状況確認・再開・停止の依頼を受ける。破壊的操作・承認の代行・外部サービスへの送信はしない。"
+description: "再起動の管制の会話（Herdr に常駐する Claude）の振る舞い。この会話が `rebootctl boot` から起こされたとき、または「管制」「再起動からの復帰」「状況は」「〜を再開して」「〜を止めて」と外（スマホの Claude アプリ）から頼まれたときに発動する。起動時に last-recovery.json をスマホへ1回通知し、cron の巡回（rebootctl watch）から頼まれたとき再起動待ちの予告をスマホへ通知し、外からの状況確認・再開・停止の依頼を受ける。「control-tower スキルの「再起動の予告の手順」を実行する」と送られたときにも発動する。破壊的操作・承認の代行・外部サービスへの送信はしない。"
 ---
 
 # control-tower — 再起動の管制の会話
@@ -15,12 +15,12 @@ description: "再起動の管制の会話（Herdr に常駐する Claude）の�
 |---|---|---|
 | `$ST/last-recovery.json` | `herdr-resume recover` | `boot_id`・`windows_last_boot`・`status`・`sent[]`・`not_sent[]`（`needs_human`・`reason`・`workspace`・`cwd`） |
 | `$ST/boot.log` | `rebootctl boot` | 起動の記録 |
-| `$ST/control-tower.json` | この会話 | 通知済みの印（下記） |
+| `$ST/control-tower.json` | `notified_boot_id` はこの会話、`announced_reboot_for` は `rebootctl watch` | 通知済みの印（下記） |
 
 ## 1. 起動時の手順（この会話が立ち上がったら、まず1回）
 
 質問で止まらない。人間への確認が要る場面でも、この手順の中では聞かずに通知へ書く（無人で動いている。質問で
-ターンを塞ぐと以降の巡回が全部止まる）。
+ターンを塞ぐと以降の予告の依頼や外からの依頼を受けられなくなる）。
 
 1. 今の起動の識別子を読む: `cat /proc/sys/kernel/random/boot_id`
 2. `$ST/control-tower.json` があれば読む。`notified_boot_id` が今の `boot_id` と同じなら**この起動の通知は済んでいる**
@@ -34,27 +34,31 @@ description: "再起動の管制の会話（Herdr に常駐する Claude）の�
    - N = `sent` の件数（`result` が `unconfirmed` のものは「届いたか未確認」として別に数える）、M = `not_sent` のうち `needs_human: true` の件数
    - 要確認が0件なら名前は省く。報告が無いときは `起動した。再開の報告は無い` とだけ
    - 通知したら `$ST/control-tower.json` に `{"notified_boot_id": "<boot_id>"}` を書く（既にキーがあれば他のキーは残す）
-5. 再起動の予告の巡回を登録する（§2）。登録済みかは `CronList` で確かめ、同じ巡回があれば足さない
+5. 再起動の予告の巡回は、この会話では登録しない（OS の cron が `rebootctl watch` で回している。§2）
 
 `PushNotification` が使えない・失敗したら、通知は諦めて会話の中に結果を書く（再送しない）。
 
-## 2. 再起動の予告の巡回
+## 2. 再起動の予告の手順
 
-会話が立ち上がるたびに登録する（`CronCreate` はこの会話の中にしか無く、再起動・終了で消え、7日で期限切れになる。
-`herdr-resume` が復帰した会話に巡回の再登録を促すのも、この理由）。
+**巡回はこの会話の外にある。** OS の cron が1時間おきに `rebootctl watch` を呼ぶ（ADR DOC-2611232111）。`watch` は
+`rebootctl status --json` を読むだけで、Windows が再起動待ちでなければ何も送らず、この会話も呼ばれない。
+再起動待ちを見つけたときだけ、この会話へ次の1文が送られてくる:
+「control-tower スキルの「再起動の予告の手順」を実行する」。この会話は巡回を登録しない・持たない。
 
-- 1時間おき。分は 0 を避ける（例: `23 * * * *`）。`recurring: true`
-- 巡回のプロンプト: 「control-tower スキルの §2 の巡回の手順を実行する」
+**予告の手順（無人。質問しない）:**
 
-**巡回の手順（無人。質問しない）:**
+1. `PushNotification` で**1回だけ**知らせる:
+   `Windows が再起動待ち。放置すると勝手に再起動しうる（予定時刻は status からは分からない）`
+2. それだけで終える。**印（`announced_reboot_for`）は書かない**。書くのは `rebootctl watch` だけ
+   （同じ `windows_last_boot` への予告を1回にする・解けたら消す、はそちらが受け持つ）。`control-tower.json` を触らない
 
-1. `rebootctl status --json` を読む（読み取りだけ。`rebootctl` が無い・失敗したら何もせず終える）
-2. `windows_readable` が `false`（読めなかった）なら何もしない
-3. `reboot_required` が `true` で、`$ST/control-tower.json` の `announced_reboot_for` が今の `windows_last_boot` と違うとき**だけ**
-   `PushNotification` で知らせる: `Windows が再起動待ち。放置すると勝手に再起動しうる（予定時刻は status からは分からない）`
-   → 知らせたら `announced_reboot_for` に今の `windows_last_boot` を書く。同じ予告を毎回は知らせない
-4. `reboot_required` が `false` なら `announced_reboot_for` を消す（次に再起動待ちが現れたらまた知らせる）
-5. 7日で巡回が切れるので、会話が7日近く続いているときは巡回の登録し直しを自分で行う
+`PushNotification` が使えない・失敗したら、通知は諦めて会話の中に書く（再送しない）。
+
+**「状況は」と聞かれたとき、巡回が回っているか確かめるには:** `crontab -l` に `rebootctl watch` の行があるか、
+`$ST/boot.log` の `watch:` の行（再起動待ちを見つけたとき・送れなかったとき・Windows を読めなかったときに残る。
+何も無いのは、再起動待ちでなく読めてもいる正常なとき）を見る。「Windows 側を読めなかった」の行が最近のものとして出ていれば、
+巡回は回っているが Windows を読めていない（予告は届かない）と答える。行が無くて `crontab -l` にも `rebootctl watch` の行が無ければ、
+人間が登録していない（`bin/README.md` §3.7 に登録の1行がある）と答える。この会話からは登録しない。
 
 ## 3. 外からの依頼（スマホの Claude アプリから）
 
