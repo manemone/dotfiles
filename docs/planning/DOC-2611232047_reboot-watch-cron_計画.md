@@ -21,7 +21,7 @@
 
 | 孫 | ブランチ | 内容 | 状況 |
 |---|---|---|---|
-| 1 | `rw-01-cron-watch` | `claude -p` から通知が届くかの実機確認（cron の下を含む）→ 予告の巡回を cron で回す仕組み（テスト・crontab への登録の手順）→ `control-tower` スキル・`herdr-resume`・ADR の書き換え | ⬜ 待機中 |
+| 1 | `rw-01-cron-watch` | `claude -p` から通知が届くかの実機確認（cron の下を含む）→ 予告の巡回を cron で回す仕組み（テスト・crontab への登録の手順）→ `control-tower` スキル・`herdr-resume`・ADR の書き換え | 🔄 実装中 |
 
 依存: なし（孫は1本）。
 
@@ -146,6 +146,7 @@
 （司令官が運用中に分かったこと・人間の決定をここに追記する）
 
 - 2026-11-23: 計画書を起草した。傘は `origin/master`（6047f8c）から切られている。孫1 を spawn する
+- 2026-11-23: 孫1 を spawn した（`ocw -H --no-commander`、base-ref は `reboot-watch-cron`）。ブリーフは転記後に削除した
 
 ## 孫1用プロンプト:
 
