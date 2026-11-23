@@ -31,7 +31,7 @@
 | 1 | dotfiles | `rn-01-nas-creds` | 原因の確認と影響の洗い出し、直し方の案の比較（人間が選ぶ）、選ばれた案と起動後の NAS の確認を `bin/rebootctl` に入れ、ADR に記録する | ✅ PR #243 マージ済 |
 | 2 | 学習ツール | `rn-02-nas-via-wsl-mount` | 学習ツールの NAS 転送（`robocopy.exe` / `powershell.exe`）と、Windows の `ruby.exe` 経由の登録ツールの呼び出しを、UNC でなく WSL の cifs マウントの `wslpath -w` のパスで渡す形に直す | ✅ PR 学習ツール#608 マージ済 |
 | 3 | 画像生成ツール | `rn-03-nas-via-wsl-mount` | 画像生成ツールの Windows 版 CLI を WSL から呼んで NAS を使う経路を確かめ、UNC 前提なら WSL の cifs マウントの `wslpath -w` のパスで渡す形に直す（設定だけで済むなら設定の例と文書を直す） | ✅ PR 画像生成ツール#468 マージ済 |
-| 4 | 画像生成ツール | `rn-04-nas-mount-check` | 保管庫の読み書きの前に、設定したマウント先が実際にマウントされているかを mountinfo で確かめ、外れていれば NAS に書かず分かるメッセージで止める（WSL の中と Windows の Ruby の両方） | 🔄 実装中 |
+| 4 | 画像生成ツール | `rn-04-nas-mount-check` | 保管庫の読み書きの前に、設定したマウント先が実際にマウントされているかを mountinfo で確かめ、外れていれば NAS に書かず分かるメッセージで止める（WSL の中と Windows の Ruby の両方） | ⏳ 人間のマージ待ち (PR 画像生成ツール#472) |
 | 5 | 登録ツール | `rn-05-nas-via-wsl-mount` | 登録ツール（学習ツールが Windows の `ruby.exe` 経由で呼ぶ）が、保管庫・目録・作例の置き場を WSL の cifs マウントの `wslpath -w` のパスで受けても動くかを確かめ、動かない箇所を直し、設定の書き方を文書にする | ✅ PR 登録ツール#152 マージ済 |
 
 依存: 孫は1本。調べること・人間の選択・直すこと・記録が同じ `bin/rebootctl` と ADR に集まり、縛り合うため分けない
