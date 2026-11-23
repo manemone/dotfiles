@@ -12,7 +12,7 @@
 | `persona` | このマシンでの人格のパーソナライズ（口調など。`CLAUDE.machine.md`）を編集し、Codex 向け生成物（`AGENTS.md`）を再生成する単一の入口 |
 | `dfup` | ローカルマシン → 共有サーバのファイルアップロード。`~/dfxfer/<宛先>/out/` に置いたものを、引数なし1コマンドでリモートの `~/dfxfer/inbox/` へ送る |
 | `dfdown` | 共有サーバ → ローカルマシンのファイルダウンロード。リモートの `~/dfxfer/outbox/` の中身を、引数なし1コマンドで `~/dfxfer/<宛先>/in/` へ落とす |
-| `rebootctl` | Windows の勝手な再起動からの復帰の入口。`status` で再起動ポリシー・最終起動時刻・Herdr の生死を読み、`setup` で管理者 PowerShell に貼るコマンドを表示し、`boot` で WSL 起動後に Herdr を起こして会話の再開を呼ぶ |
+| `rebootctl` | Windows の勝手な再起動からの復帰の入口。`status` で再起動ポリシー・最終起動時刻・Herdr の生死を読み、`setup` で管理者 PowerShell に貼るコマンドを表示し、`boot` で WSL 起動後に Herdr を起こして会話の再開を呼び、`watch`（cron から1時間おき）で再起動待ちのときだけ管制の会話へ予告を頼む |
 
 ## 1. Requirements
 
@@ -978,8 +978,27 @@ Windows のプログラムに NAS を使わせるときは UNC でなく WSL 経
 ワークスペースを作り、`claude --model sonnet --name 再起動管制` を起動する。ラベル `管制` のワークスペースが既にあれば
 作り直さない（何度呼んでも1つだけ）。Herdr が復元した会話は待つだけなので、待機中ならそのペインへ起動時の手順を送り、
 承認待ちなどには送らず、エージェントが居なければ起動し直す。`claude` が無い・起こせないときは `boot.log` に書いて続行し、
-手順1〜3 は止めない。起動後の会話が `last-recovery.json` をスマホへ通知し、再起動の予告の巡回を登録する。スキルが
+手順1〜3 は止めない。起動後の会話が `last-recovery.json` をスマホへ通知する。スキルが
 `~/.claude/skills/` に配られていること（`deploy-all.sh`）が前提。
+
+#### watch（再起動待ちの予告。cron に登録する）
+
+`rebootctl watch` は、Windows が再起動待ちのときだけ管制の会話（ラベル `管制`）へ予告の手順を頼む（ADR DOC-2611232111）。
+`rebootctl status --json` を読むだけで、再起動待ちでなければ何も送らず、モデルも呼ばない。同じ `windows_last_boot` への
+予告は1回だけで、印は `${XDG_STATE_HOME:-~/.local/state}/reboot-recovery/control-tower.json` の `announced_reboot_for`
+（書くのは `watch` だけ。再起動待ちが解けると消える）。管制の会話が待機中（idle / done）でないとき・無いときは送らず、
+印も書かず、次の巡回で試す。結果は `boot.log` の `watch:` の行に残る。スマホへ通知するのは管制の会話で、cron の下の
+`claude -p` ではスマホへ届かない（Remote Control が対話のセッションにしか無いため。理由は ADR）。
+
+登録は**人間がマージと `deploy-all.sh` のあとに行う**（配布された `~/bin/rebootctl` を呼ぶため）。`crontab -e` に次の1行を足す
+（分は 0 を避ける。標準出力・エラーは捨てる。記録は `boot.log` に残る）:
+
+```
+17 * * * * $HOME/bin/rebootctl watch >/dev/null 2>&1
+```
+
+登録の確かめ方: `crontab -l | grep 'rebootctl watch'` で行があること、`rebootctl watch` を手で1回叩いて終了コードが 0 であること。
+再起動待ちでないときは何も起きないのが正常。cron は WSL が動いているあいだだけ回る。
 
 #### 起動の方式 A を確認する実験（人間が叩く）
 

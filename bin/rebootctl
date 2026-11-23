@@ -6,6 +6,7 @@ set -euo pipefail
 #   rebootctl status [--json]   Windows と Herdr の状態を読む（読み取りだけ）
 #   rebootctl setup             人間が管理者 PowerShell に貼るコマンドを表示する（実行しない）
 #   rebootctl boot [--hold]     WSL 起動後に Herdr を起こし、会話の再開を呼ぶ（冪等）
+#   rebootctl watch             再起動待ちのときだけ管制の会話へ予告を頼む（cron から1時間おきに呼ぶ）
 #
 # 設計と判断の根拠は ADR DOC-2611151248（bin/README.md §3.7 に使い方）。
 # 状態の置き場所は ${XDG_STATE_HOME:-~/.local/state}/reboot-recovery/ に固定
@@ -36,6 +37,9 @@ Usage: rebootctl <command>
                     Herdr サーバの生死・NAS に届くか（REBOOTCTL_NAS_MOUNT / REBOOTCTL_NAS_UNC が
                     設定されているとき）を読む（何も書き換えない）
   setup             管理者 PowerShell に貼るコマンドを表示する（このコマンドは何も実行しない）
+  watch             Windows が再起動待ちのときだけ、管制の会話（ラベル「管制」）へ予告の手順を送る。
+                    再起動待ちでなければ何も送らず、モデルも呼ばない。同じ予告は1回だけ
+                    （cron から1時間おきに呼ぶ。登録の1行は bin/README.md §3.7）
   boot [--hold]     Herdr のサーバを起こし、会話の復元を待ち、herdr-resume があれば recover を呼び、
                     管制の会話（ラベル「管制」のワークスペース）が無ければ起こす。
                     何度呼んでも害は無い。--hold は最後に居座って WSL を落とさない
@@ -392,6 +396,105 @@ start_control_tower() {
   log "boot: 管制の会話を起こした ($pane)"
 }
 
+# ── watch（cron から呼ぶ。再起動待ちの予告） ──────────────────────
+# 再起動待ちでないときは status を読むだけで終わる（モデルを呼ばない）。再起動待ちを見つけたときだけ、
+# 管制の会話へ予告の手順を送る。スマホへ通知するのは管制の会話（Remote Control がつながっている対話の
+# セッション）で、cron の下の `claude -p` からはスマホへ届かない（ADR DOC-2611232111）。
+# 印（announced_reboot_for）を書くのはこの関数だけ。管制の会話は書かない。
+WATCH_PROMPT="control-tower スキルの「再起動の予告の手順」を実行する"
+CONTROL_STATE="$STATE_DIR/control-tower.json"
+
+# control-tower.json の announced_reboot_for を読む（無い・空は空文字）。壊れていれば失敗する
+announced_get() {
+  [ -f "$CONTROL_STATE" ] || return 0
+  python3 -c '
+import json, sys
+print(json.load(open(sys.argv[1])).get("announced_reboot_for") or "")
+' "$CONTROL_STATE"
+}
+
+# announced_reboot_for を書く（$1 が空なら消す）。ほかの鍵は残す。壊れていれば失敗する（上書きしない）
+announced_put() {
+  python3 -c '
+import json, os, sys
+path, value = sys.argv[1], sys.argv[2]
+d = json.load(open(path)) if os.path.exists(path) else {}
+if value:
+    d["announced_reboot_for"] = value
+else:
+    d.pop("announced_reboot_for", None)
+tmp = path + ".tmp"
+with open(tmp, "w") as f:
+    json.dump(d, f, ensure_ascii=False)
+os.replace(tmp, path)
+' "$CONTROL_STATE" "$1"
+}
+
+cmd_watch() {
+  # cron から呼ばれると PATH が最小になる
+  export PATH="$HOME/.local/bin:$HOME/bin:$PATH"
+  mkdir -p "$STATE_DIR"
+  command -v python3 >/dev/null 2>&1 || return 0
+
+  # 「読めた・再起動待ち・最終起動時刻」。読めない・解釈できないときは何も出さず、何もしない
+  local fields readable reboot boot
+  fields=$(cmd_status --json 2>/dev/null | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+print(d.get("windows_readable") is True, d.get("reboot_required"), d.get("windows_last_boot") or "")
+' 2>/dev/null) || return 0
+  read -r readable reboot boot <<<"$fields"
+  [ "$readable" = True ] || return 0
+
+  if [ "$reboot" = False ]; then
+    # 再起動待ちが解けた。次に現れたらまた知らせるよう、印を消す
+    if [ -n "$(announced_get 2>/dev/null)" ]; then announced_put "" || log "watch: 印を消せなかった"; fi
+    return 0
+  fi
+  [ "$reboot" = True ] && [ -n "$boot" ] || return 0
+
+  local announced
+  announced=$(announced_get) || {
+    log "watch: $CONTROL_STATE が読めないので予告しない"
+    return 0
+  }
+  [ "$announced" = "$boot" ] && return 0
+
+  local info pane agent status out
+  info=$(control_pane_info)
+  if [ -z "$info" ]; then
+    log "watch: 再起動待ちだが管制のワークスペースが無いので予告を送らない（次の巡回で試す）"
+    return 0
+  fi
+  read -r pane agent status <<<"$info"
+  if [ "$agent" = "-" ]; then
+    log "watch: 再起動待ちだが管制のペイン ($pane) にエージェントが居ないので送らない（次の巡回で試す）"
+    return 0
+  fi
+  case "$status" in
+    idle | done) ;;
+    *)
+      log "watch: 再起動待ちだが管制の会話 ($pane) は $status なので送らない（次の巡回で試す）"
+      return 0
+      ;;
+  esac
+
+  # 手順は1ターンで終わらないので、--wait の timeout は通常。届いたかもしれない失敗（timeout / stalled）は
+  # 再送しないよう、成功と同じく印を書く。承認待ち・その他の失敗は届いていないので書かず、次の巡回で試す
+  if out=$(herdr agent prompt "$pane" "$WATCH_PROMPT" --wait --timeout 10000 2>&1); then
+    log "watch: 管制の会話 ($pane) へ再起動待ちの予告を頼んだ"
+  elif printf '%s' "$out" | grep -q 'agent_blocked'; then
+    log "watch: 管制の会話 ($pane) は承認待ちで送られなかった（次の巡回で試す）"
+    return 0
+  elif printf '%s' "$out" | grep -Eq 'timeout|stalled'; then
+    log "watch: 管制の会話 ($pane) へ再起動待ちの予告を頼んだ（届いたか未確認。再送しない）"
+  else
+    log "watch: 管制の会話 ($pane) へ送れなかった（次の巡回で試す）"
+    return 0
+  fi
+  announced_put "$boot" || log "watch: 印を書けなかった（次の巡回で同じ予告を繰り返しうる）"
+}
+
 cmd_boot() {
   local hold=0
   [ "${1:-}" = "--hold" ] && hold=1
@@ -475,6 +578,7 @@ main() {
   case "$cmd" in
     status) cmd_status "$@" ;;
     setup) cmd_setup ;;
+    watch) cmd_watch ;;
     boot) cmd_boot "$@" ;;
     -h | --help | help | "") usage ;;
     *)
