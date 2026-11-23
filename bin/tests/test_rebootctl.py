@@ -7,6 +7,8 @@ powershell.exe / herdr / herdr-resume はスタブへ差し替え、実 Windows 
   （呼ぶと管理者操作を人間の承認なしに実行しうる）
 - `boot` は何度呼んでも Herdr のサーバを二重に起動しない。herdr-resume が無くても止まらない
 - `status` は powershell.exe が無くても落ちず、「読めなかった」ことを出す
+- `status` の NAS の確認は、確認先が未設定なら飛ばし、Windows 側が読めないときは「確認できなかった」を
+  「届かない」と取り違えず、UNC と WSL 経由を別々に出す
 """
 
 import json
@@ -66,8 +68,11 @@ exit 0
         write_stub(self.stubs / "claude", "exit 0\n")
         write_stub(self.stubs / "powershell.exe", f'echo "powershell $*" >> {self.calls}\n')
 
-    def run_ctl(self, *args: str, path_only_stubs: bool = False):
+    def run_ctl(self, *args: str, path_only_stubs: bool = False, extra_env: dict | None = None):
         env = dict(os.environ)
+        env.pop("REBOOTCTL_NAS_MOUNT", None)
+        env.pop("REBOOTCTL_NAS_UNC", None)
+        env.update(extra_env or {})
         env["XDG_STATE_HOME"] = str(self.state)
         env["REBOOTCTL_RESTORE_WAIT"] = "6"
         env["HOME"] = str(self.tmp / "home")
@@ -158,6 +163,39 @@ exit 0
         data = json.loads(r.stdout)
         self.assertFalse(data["windows_readable"])
         self.assertIsNone(data["au_options"])
+
+    def test_status_reports_nas_checks_separately(self) -> None:
+        # 確認先が未設定: 飛ばしたと出す（落ちない）
+        data = json.loads(self.run_ctl("status", "--json").stdout)
+        self.assertEqual(data["nas_wsl_mounted"], "skipped")
+        self.assertEqual(data["nas_windows_unc_reachable"], "skipped")
+        self.assertEqual(data["nas_windows_via_wsl_reachable"], "skipped")
+
+        # UNC は届かず、WSL 経由のパスは届く（S4U の WSL の実測と同じ形）。
+        # マウント済みの場所として /proc を使う（末尾の / があっても同じに扱う）
+        write_stub(self.stubs / "wslpath", 'echo "\\\\wsl.localhost\\X\\nas"\n')
+        write_stub(
+            self.stubs / "powershell.exe",
+            'case "$*" in *wsl.localhost*) echo True;; *) echo False;; esac\n',
+        )
+        env = {"REBOOTCTL_NAS_MOUNT": "/proc/", "REBOOTCTL_NAS_UNC": "\\\\nas\\share"}
+        data = json.loads(self.run_ctl("status", "--json", extra_env=env).stdout)
+        self.assertIs(data["nas_wsl_mounted"], True)
+        self.assertIs(data["nas_windows_unc_reachable"], False)
+        self.assertIs(data["nas_windows_via_wsl_reachable"], True)
+
+        # マウントされていない空のディレクトリは、Windows から見えても「届かない」（空の場所へ書かせない）
+        (self.tmp / "empty-dir").mkdir()
+        unmounted = {**env, "REBOOTCTL_NAS_MOUNT": str(self.tmp / "empty-dir")}
+        data = json.loads(self.run_ctl("status", "--json", extra_env=unmounted).stdout)
+        self.assertIs(data["nas_wsl_mounted"], False)
+        self.assertIs(data["nas_windows_via_wsl_reachable"], False)
+
+        # Windows 側が読めない（powershell.exe が無い）: 「届かない」でなく null
+        r = self.run_ctl("status", "--json", path_only_stubs=True, extra_env=env)
+        data = json.loads(r.stdout)
+        self.assertIsNone(data["nas_windows_unc_reachable"])
+        self.assertIsNone(data["nas_windows_via_wsl_reachable"])
 
 
 if __name__ == "__main__":

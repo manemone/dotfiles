@@ -955,6 +955,19 @@ rebootctl status --json  # 巡回など機械向け
 Windows 側（ポリシー・アクティブ時間・再起動待ち・最終起動時刻・タスクの登録）と WSL 側（`boot_id`・Herdr サーバの生死）を
 読むだけで、何も書き換えない。`powershell.exe` が使えないときも落ちず、読めなかったと出す。
 
+NAS に届くかも見る。確認先は環境ごとに違うので、環境変数で渡す（未設定の確認は飛ばして「未設定」と出す）:
+
+```bash
+export REBOOTCTL_NAS_MOUNT=/mnt/nas          # WSL の中のマウント先（cifs）
+export REBOOTCTL_NAS_UNC='\\<ホスト>\<共有>'   # Windows から見た共有フォルダ
+rebootctl status
+```
+
+出るのは、WSL の中のマウント・Windows のプログラムから UNC・Windows のプログラムから WSL のマウント経由（`wslpath -w`）の
+3つ。起動時タスク（S4U）で起きた WSL では、後からサインインしても Windows のプログラムのログオンは変わらず、
+UNC には届かない。サインインしない再起動のあとは「WSL の中のマウントは届く・UNC は届かない・WSL 経由は届く」が想定どおり。
+Windows のプログラムに NAS を使わせるときは UNC でなく WSL 経由のパスを渡す（理由と案の比較は ADR DOC-2611151248 §7）。
+
 #### boot
 
 `rebootctl boot` はタスクが呼ぶ入口で、手で叩いても安全（冪等）。Herdr のサーバが動いていなければ起動し、会話の復元を
@@ -977,7 +990,8 @@ Windows 側（ポリシー・アクティブ時間・再起動待ち・最終起
 3. `Start-ScheduledTask -TaskName dotfiles-reboot-recovery` を打つ
 4. 1分ほど待って WSL を開き、`rebootctl status` で Herdr サーバが running か、`boot.log` に「boot: 終了」があるかを見る
 5. **10分以上**待ち、WSL と Herdr サーバがまだ生きているか確認する
-6. 本物の再起動で、サインインせずに待ち、同じ確認をする（傘の最終 PR の後の宿題）
+6. 本物の再起動で、サインインせずに待ち、同じ確認をする（傘の最終 PR の後の宿題）。あわせて `rebootctl status` の NAS の
+   3つが上の想定どおりかを見る
 
 試験をやめてタスクを外すとき（上の手順とは別。順に進めても行き着かない）:
 `Unregister-ScheduledTask -TaskName dotfiles-reboot-recovery -Confirm:$false`
