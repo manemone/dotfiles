@@ -71,4 +71,4 @@ WSL が止まっているあいだは、止まる会話も管制の会話も無�
 - 確かめた: `watch` の挙動（再起動待ちでなければ送らない・1回だけ・解けたら印を消す・送れなかったら印を書かない）は
   `bin/tests/test_rebootctl.py`。`claude -p` が cron の下でもスマホへ届かないことは実機。
 - 確かめていない: 管制の会話が `PushNotification` でスマホへ届くこと（管制の会話にも「端末がアクティブ」の判定が
-  かかりうる）。cron の下の `rebootctl watch` の実機の動き。いずれも人間の配布と crontab の登録のあとに確かめる宿題とする。
+  かかりうる）。実際の cron デーモンの下の `rebootctl watch` の動き（cron 相当の環境 `env -i PATH=/usr/bin:/bin` で Windows を読めることは確かめた）。いずれも人間の配布と crontab の登録のあとに確かめる宿題とする。

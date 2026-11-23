@@ -75,6 +75,7 @@ exit 0
         env = dict(os.environ)
         env.pop("REBOOTCTL_NAS_MOUNT", None)
         env.pop("REBOOTCTL_NAS_UNC", None)
+        env["REBOOTCTL_WIN_PS_DIR"] = str(self.tmp / "no-win-ps")  # 実機の Windows を読まない
         env.update(extra_env or {})
         env["XDG_STATE_HOME"] = str(self.state)
         env["REBOOTCTL_RESTORE_WAIT"] = "6"
@@ -182,6 +183,8 @@ exit 0
         r = self.run_ctl("watch", path_only_stubs=True)
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(self.prompts(), [])
+        # 読めなかったことは boot.log に残る（cron の下で黙って止まらない）
+        self.assertIn("watch: Windows 側を読めなかった", (state / "boot.log").read_text())
 
         # 再起動待ち: 1回だけ送り、印を書く（ほかの鍵は残す）。2回目以降は送らない
         self.watch_setup("True")
@@ -200,6 +203,16 @@ exit 0
         self.watch_setup("True")
         self.run_ctl("watch")
         self.assertEqual(len(self.prompts()), 2)
+
+    def test_watch_finds_powershell_outside_the_cron_path(self) -> None:
+        # cron の PATH には Windows 側の置き場所が無い。watch が自分で足して読めること
+        self.watch_setup("True")
+        win_ps = self.tmp / "win-ps"
+        win_ps.mkdir()
+        (self.stubs / "powershell.exe").rename(win_ps / "powershell.exe")
+        r = self.run_ctl("watch", extra_env={"REBOOTCTL_WIN_PS_DIR": str(win_ps)})
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(len(self.prompts()), 1)
 
     def test_watch_does_not_mark_when_it_could_not_send(self) -> None:
         marker = self.state / "reboot-recovery" / "control-tower.json"

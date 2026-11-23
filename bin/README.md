@@ -997,7 +997,10 @@ Windows のプログラムに NAS を使わせるときは UNC でなく WSL 経
 17 * * * * $HOME/bin/rebootctl watch >/dev/null 2>&1
 ```
 
-登録の確かめ方: `crontab -l | grep 'rebootctl watch'` で行があること、`rebootctl watch` を手で1回叩いて終了コードが 0 であること。
+登録の確かめ方: `crontab -l | grep 'rebootctl watch'` で行があること。cron の下で Windows が読めているかは、終了コードでは
+分からない（読めなくても 0）ので、cron 相当の環境で `env -i HOME=$HOME PATH=/usr/bin:/bin ~/bin/rebootctl status --json` を叩き、
+`windows_readable` が `true` であることを見る。cron の下で読めなかったときは `boot.log` に「watch: Windows 側を読めなかった」が残る
+（`watch` は cron の PATH に無い `powershell.exe` の置き場所を自分で足す。場所を変えるときは `REBOOTCTL_WIN_PS_DIR`）。
 再起動待ちでないときは何も起きないのが正常。cron は WSL が動いているあいだだけ回る。
 
 #### 起動の方式 A を確認する実験（人間が叩く）
