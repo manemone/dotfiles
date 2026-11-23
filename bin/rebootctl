@@ -15,8 +15,10 @@ set -euo pipefail
 STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/reboot-recovery"
 BOOT_LOG="$STATE_DIR/boot.log"
 TASK_NAME="dotfiles-reboot-recovery"
-# WSL の cron は PATH に Windows 側を足さないので、powershell.exe の置き場所を自分で足す（watch が使う）
+# WSL の cron は PATH に Windows 側を足さないので、powershell.exe の置き場所を自分で足す
+# （status も watch も同じ条件で読めるよう、全コマンドに効かせる）
 WIN_PS_DIR="${REBOOTCTL_WIN_PS_DIR:-/mnt/c/Windows/System32/WindowsPowerShell/v1.0}"
+export PATH="$PATH:$WIN_PS_DIR"
 # 会話の復元（herdr が workspace を戻す）を待つ上限秒数
 RESTORE_WAIT="${REBOOTCTL_RESTORE_WAIT:-90}"
 # NAS の確認先（環境依存なので既定値を持たない。未設定の確認は飛ばして「未設定」と出す）。
@@ -434,7 +436,7 @@ os.replace(tmp, path)
 
 cmd_watch() {
   # cron から呼ばれると PATH が最小（/usr/bin:/bin）になり、Windows 側の powershell.exe も見えない
-  export PATH="$HOME/.local/bin:$HOME/bin:$PATH:$WIN_PS_DIR"
+  export PATH="$HOME/.local/bin:$HOME/bin:$PATH"
   mkdir -p "$STATE_DIR"
   command -v python3 >/dev/null 2>&1 || return 0
 
