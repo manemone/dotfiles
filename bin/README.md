@@ -12,7 +12,7 @@
 | `persona` | このマシンでの人格のパーソナライズ（口調など。`CLAUDE.machine.md`）を編集し、Codex 向け生成物（`AGENTS.md`）を再生成する単一の入口 |
 | `dfup` | ローカルマシン → 共有サーバのファイルアップロード。`~/dfxfer/<宛先>/out/` に置いたものを、引数なし1コマンドでリモートの `~/dfxfer/inbox/` へ送る |
 | `dfdown` | 共有サーバ → ローカルマシンのファイルダウンロード。リモートの `~/dfxfer/outbox/` の中身を、引数なし1コマンドで `~/dfxfer/<宛先>/in/` へ落とす |
-| `rebootctl` | Windows の勝手な再起動からの復帰の入口。`status` で再起動ポリシー・最終起動時刻・Herdr の生死を読み、`setup` で管理者 PowerShell に貼るコマンドを表示し、`boot` で WSL 起動後に Herdr を起こして会話の再開を呼び、`watch`（cron から1時間おき）で再起動待ちのときだけ管制の会話へ予告を頼む |
+| `rebootctl` | Windows の勝手な再起動からの復帰の入口。`pause` / `resume` で起動タスクを一時的に止める・戻す。`status` で再起動ポリシー・最終起動時刻・Herdr の生死を読み、`setup` で管理者 PowerShell に貼るコマンドを表示し、`boot` で WSL 起動後に Herdr を起こして会話の再開を呼び、`watch`（cron から1時間おき）で再起動待ちのときだけ管制の会話へ予告を頼む |
 
 ## 1. Requirements
 
@@ -981,11 +981,23 @@ Windows 自体が止まっているとき。起動の種類は `boot_id` が前�
 WSL だけの起き直し、違えば Windows の再起動、読めない・前回が無ければ不明とする。記録は
 `${XDG_STATE_HOME:-~/.local/state}/reboot-recovery/boot-state.json`（`cause`）で、管制の会話が通知文に使う。
 **意図して止めた WSL も、最大5分で起き直る。** 繰り返しは「落ちた」と「`wsl --shutdown` で止めた」を区別しない。
-vhdx の圧縮や `wsl --export` のために WSL を止めておきたいときは、先に管理者 PowerShell で
-`Disable-ScheduledTask -TaskName dotfiles-reboot-recovery` を打ち、終わったら `Enable-ScheduledTask -TaskName dotfiles-reboot-recovery`
-で戻す（必要な権限は環境による。通らなければ管理者で打つ）。**戻し忘れると、無効のタスクは起動時トリガーでも走らないので、Windows の再起動のあとも WSL・Herdr・管制の会話が起きず、
-再起動からの復帰がまるごと止まる。** `rebootctl status` の「起動タスク」の欄は登録の有無しか見ないので、無効になっていても
-登録済みと出る（無効かどうかは `Get-ScheduledTask -TaskName dotfiles-reboot-recovery` の `State` で見る）。
+vhdx の圧縮や `wsl --export` のために WSL を止めておくときは、`rebootctl pause` を使う:
+
+```bash
+rebootctl pause              # 起動タスクを無効にする（WSL は止めない）
+rebootctl pause --shutdown   # 無効にできたあとで wsl.exe --shutdown も打つ（走っている会話・学習がすべて止まる）
+rebootctl resume             # WSL の中から、起動タスクを有効に戻す
+```
+
+圧縮のあと WSL が止まっているときは、PowerShell で戻して WSL を起こす:
+`Enable-ScheduledTask -TaskName dotfiles-reboot-recovery; Start-ScheduledTask -TaskName dotfiles-reboot-recovery`
+（`Start` が WSL を起こして `boot` まで走らせる）。`pause` / `resume` は決めた引数（`pause --shutdown` だけ）以外を、`--help` を含めて何もせず拒否する。呼ぶ実行ファイルは
+`REBOOTCTL_POWERSHELL` / `REBOOTCTL_WSL_EXE` で差し替えられる（テストと手元の確かめは偽物で行い、本物のタスクを変えない）。
+`pause` は `Disable-ScheduledTask` を呼ぶだけで、権限が足りなければ
+失敗して理由と管理者 PowerShell で打つ形を表示し、そのときは WSL を止めない（実機での権限は未確認）。
+**戻し忘れると、無効のタスクは起動時トリガーでも走らないので、Windows の再起動のあとも WSL・Herdr・管制の会話が起きず、
+再起動からの復帰がまるごと止まる。** `rebootctl status` の「起動タスク」の欄は登録の有無に加えて状態（`Disabled` / `Ready`）も出し、
+無効のときは戻す案内を出す。
 **タスクは登録し直しが要る**（`rebootctl setup` の出力を管理者 PowerShell に貼る。登録済みのタスクは古い形のまま動き続け、
 起動時には今までどおり走るが、WSL だけの起き直しは拾わない）。
 
