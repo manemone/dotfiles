@@ -979,6 +979,10 @@ export REBOOTCTL_NAS_UNC='\\<ホスト>\<共有>'   # Windows から見た共有
 rebootctl status
 ```
 
+`REBOOTCTL_NAS_UNC` のホスト名は、他のツールの設定の UNC・資格情報マネージャーと同じ短い名前（`.local` 無し）にする。
+WSL の cifs のマウント元の名前をそのまま写さない。名前が違うと、起動時の `net use` が張る接続と他のツールが開く接続が
+別になり、サインインしない再起動のあと NAS に届かない（`status` の UNC の欄も同じ値を確かめるので「届く」と出て、失敗が見えない。ADR §8）。
+
 出るのは、WSL の中のマウント・Windows のプログラムから UNC・Windows のプログラムから WSL のマウント経由（`wslpath -w`）の
 3つ。起動時タスク（S4U）のログオンには NAS の資格情報が無いので、タスクの root の操作が `/etc/nas-credentials` の
 資格情報で `net use` を張る（`rebootctl netuse-boot`。ADR DOC-2611151248 §8）。サインインしない再起動のあとも、3つとも「届く」が
