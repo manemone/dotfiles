@@ -264,6 +264,9 @@ NAS に届かない件に、「Windows のプログラムには UNC でなく、
   Windows のプログラムを呼ぶのと同じ `wsl.exe` の起動の中で張ることが条件と見た。孫1 の代案のうち、操作を1つにし、root で
   `net use` してからユーザーへ切り替えて `boot` を続ける形を選んだ（切り替えで WSL_INTEROP を落とさない・root がユーザーの
   状態ファイルを root の持ち物で作らない、を注意として伝えた）。人間に一時タスクで再び試してもらう。孫1 の PR は #248（base は傘）
+- 2026-11-24: 学習ツールの側の傘の孫が dotfiles PR #249（`wc-04-task-pause-resume`、base は master、e65a128 の後から）を出した。
+  `rebootctl pause [--shutdown]` / `resume` と、`status` の起動タスクの欄の状態（Disabled / Ready）を足す。`cmd_boot`・`cmd_setup`・
+  `start_control_tower` とタスクの形は触らない。孫1（#248）とは `bin/rebootctl`・`bin/README.md`・`bin/tests/test_rebootctl.py` が重なる
 
 ## 孫1用プロンプト:
 
