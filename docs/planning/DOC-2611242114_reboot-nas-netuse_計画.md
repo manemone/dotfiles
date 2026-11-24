@@ -247,6 +247,11 @@ NAS に届かない件に、「Windows のプログラムには UNC でなく、
   残る）が HEAD 8ae8478 で承認された。人間のマージ待ち（CI の設定は無い）。実測（256MB、Interactive）: `robocopy.exe` で UNC へ
   7.7 秒（初回・接続込み）・4.7 秒・4.3 秒、#608 の cifs 経路 6.5 秒・6.9 秒で、遅くなっていない。マージ後に戻す PC 固有の設定:
   学習ツールの設定の `archive_root_wsl` を消す（`archive_root` の UNC は残す）
+- 2026-11-24: #247 は b0816df のまま master に入り、`rebootctl pause` / `resume` は入らなかった。学習ツールの側の傘が別の PR
+  （ブランチ `wc-04-task-pause-resume`、origin/master から）にする。触るのは `bin/rebootctl`（新しいサブコマンドと usage）・
+  `bin/tests/test_rebootctl.py`・`bin/README.md` で、`setup` が出すタスクの形は変えない。孫1 と同じファイルなので、マージの順で
+  後になったほうが rebase する。push・PR・承認・マージのたびに向こうの孫から司令官へ知らせが来る。人間のタスクの登録し直しは、
+  この傘の `setup` の変更とまとめて1回にする前提
 
 ## 孫1用プロンプト:
 
