@@ -30,9 +30,9 @@ Remote Control の会話一覧がオフラインになる、の2つで分かる�
   居なければ起動し直す
 - **会話名:** `再起動管制`（`claude --name`。ADR DOC-2610111939 の流儀。Claude アプリの一覧で一目で分かる日本語）
 - **モデル:** Sonnet（`claude --model sonnet`）。常駐して巡回するので費用を抑える（計画書 設計0 の 5）
-- **巡回の間隔:** 1時間おき（`CronCreate`。分は 0 を避ける）。`rebootctl status --json` を読むだけで軽い
-- **ふるまいの本体:** スキル `skills/control-tower/SKILL.md`。起動時に `last-recovery.json` を読んで1回通知し、巡回を登録する。
-  通知済みかは `reboot-recovery/control-tower.json` に印を置く（compact・復帰で2度通知しない）。同じ再起動の予告も印で1回にする
+- **巡回の間隔:** 1時間おき。当初は会話内の `CronCreate` だったが、OS の cron（`rebootctl watch`）へ移した（ADR DOC-2611232111）。`rebootctl status --json` を読むだけで軽い
+- **ふるまいの本体:** スキル `skills/control-tower/SKILL.md`。起動時に `last-recovery.json` を読んで1回通知する（巡回の登録は、cron への移行で会話の役目から外れた。ADR DOC-2611232111）。
+  通知済みかは `reboot-recovery/control-tower.json` に印を置く（compact・復帰で2度通知しない）。同じ再起動の予告を1回にする印は `rebootctl watch` が書く
 
 ## 4. 外からの制御のかたち
 
@@ -47,12 +47,12 @@ Remote Control の会話一覧がオフラインになる、の2つで分かる�
 
 - 管制の会話が戻った会話と同じ Herdr のサーバに居るため、WSL ごと落ちれば管制の会話も止まる。復帰後は `rebootctl boot` が
   ワークスペースの復元を待ったうえで起こし、復元されていなければ新しく立てる。復元されていれば起動時の手順を送る。`herdr-resume` が管制の会話へ送らないので文が重ならない。それでも通知は
-  `control-tower.json` の印で1回に、巡回は `CronList` の確認で1つにする（スキル §1・§2）
+  `control-tower.json` の印で1回にする（スキル §1）。再起動待ちの巡回は会話に持たせず cron の `rebootctl watch` だけが回すので、重複しない（ADR DOC-2611232111）
 - 管制の会話（ラベル `管制` のワークスペース）は `herdr-resume` の送信の対象から外す（`not_sent` に `code: "control_tower"`・
   `needs_human: false` で載る）。対象にすると、巡回の再登録を促す文のターンが `rebootctl boot` の手順4より先に走って管制の会話が
   `working` になり、起動時の手順が送られず、スマホへの通知が行われないことがあるため。起こすのは手順4だけに任せる（`herdr-resume` は管制のペインの読み込みが済むまで待つので、手順4が読み込み途中のペインに当たらない）。ラベルは
   `bin/herdr-resume` と `bin/rebootctl` の両方に同じ値で書く
-- 費用: 常駐の Sonnet が1時間おきに軽い読み取りをする
+- 費用: 平常時は cron が `rebootctl status --json` を読むだけでモデルを呼ばない。常駐の Sonnet が動くのは起動時の通知と外からの依頼のときだけ（ADR DOC-2611232111）
 
 ## 6. 確かめた範囲と未確認の範囲
 

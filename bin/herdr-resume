@@ -24,7 +24,8 @@ import time
 from pathlib import Path
 
 REPORT_VERSION = 1
-# CronCreate の巡回は7日で期限切れ（ツールの仕様）。それより古い巡回は無効とみなす。
+# 7日より古い巡回は無効とみなす。CronCreate の期限は2026-11-23 時点で30日だが、記録が古いほど当てにならないので、
+# 保守的な7日のまま残す（ADR DOC-2611232111 §7。値を変えるなら IDLE_MAX_AGE とテストも合わせる）。
 CRON_MAX_AGE = 7 * 24 * 3600
 # 作業中の記録が古すぎるときは、記録が当てにならない（途中で別の理由で止まった等）。
 WORKING_MAX_AGE = 24 * 3600
