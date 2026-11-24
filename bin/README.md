@@ -983,7 +983,9 @@ WSL だけの起き直し、違えば Windows の再起動、読めない・前�
 **意図して止めた WSL も、最大5分で起き直る。** 繰り返しは「落ちた」と「`wsl --shutdown` で止めた」を区別しない。
 vhdx の圧縮や `wsl --export` のために WSL を止めておきたいときは、先に管理者 PowerShell で
 `Disable-ScheduledTask -TaskName dotfiles-reboot-recovery` を打ち、終わったら `Enable-ScheduledTask -TaskName dotfiles-reboot-recovery`
-で戻す（必要な権限は環境による。通らなければ管理者で打つ）。戻し忘れると、WSL が落ちても自動では起き直らない。
+で戻す（必要な権限は環境による。通らなければ管理者で打つ）。**戻し忘れると、無効のタスクは起動時トリガーでも走らないので、Windows の再起動のあとも WSL・Herdr・管制の会話が起きず、
+再起動からの復帰がまるごと止まる。** `rebootctl status` の「起動タスク」の欄は登録の有無しか見ないので、無効になっていても
+登録済みと出る（無効かどうかは `Get-ScheduledTask -TaskName dotfiles-reboot-recovery` の `State` で見る）。
 **タスクは登録し直しが要る**（`rebootctl setup` の出力を管理者 PowerShell に貼る。登録済みのタスクは古い形のまま動き続け、
 起動時には今までどおり走るが、WSL だけの起き直しは拾わない）。
 
