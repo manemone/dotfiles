@@ -161,6 +161,45 @@ exit 3
         for text in (log, r.stdout, r.stderr):
             self.assertNotIn(secret, text)
 
+    def test_netuse_boot_hands_user_runtime_dir_to_boot(self) -> None:
+        # runuser は「-u ユーザー --」を外して後ろをそのまま実行するスタブ（実機の root 切り替えはテストで再現できない）。
+        # boot の代わりに、渡った環境を書き出す
+        write_stub(self.stubs / "runuser", 'shift 3\nexec "$@"\n')
+        dump = self.tmp / "env.out"
+        boot = self.tmp / "fake-boot"
+        write_stub(boot, f'echo "xdg=${{XDG_RUNTIME_DIR-unset}} bus=${{DBUS_SESSION_BUS_ADDRESS-unset}}" > {dump}\n')
+        user = subprocess.run(["id", "-un"], capture_output=True, text=True).stdout.strip()
+        uid = subprocess.run(["id", "-u"], capture_output=True, text=True).stdout.strip()
+        run_dir = self.tmp / "run-user"
+        env = {
+            "REBOOTCTL_RUN_USER_DIR": str(run_dir),
+            "REBOOTCTL_BOOT_CMD": str(boot),
+            "REBOOTCTL_NAS_CREDENTIALS": str(self.tmp / "none"),
+            # root のログオンの値が残っていても、そのままは渡らない
+            "XDG_RUNTIME_DIR": "/run/user/0",
+            "DBUS_SESSION_BUS_ADDRESS": "unix:path=/run/user/0/bus",
+        }
+        rt = run_dir / uid
+
+        def boot_env() -> str:
+            dump.unlink(missing_ok=True)
+            r = self.run_ctl("netuse-boot", "//nas/share", user, extra_env=env)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            return dump.read_text().strip()
+
+        # /run/user/<uid> が無い → 2つとも外す
+        self.assertEqual(boot_env(), "xdg=unset bus=unset")
+        # あるがバスのソケットが無い → XDG_RUNTIME_DIR だけ置き換える（env の -u は代入より先）
+        rt.mkdir(parents=True)
+        self.assertEqual(boot_env(), f"xdg={rt} bus=unset")
+        # ソケットもある → 両方置き換える
+        import socket
+
+        sock = socket.socket(socket.AF_UNIX)
+        self.addCleanup(sock.close)
+        sock.bind(str(rt / "bus"))
+        self.assertEqual(boot_env(), f"xdg={rt} bus=unix:path={rt}/bus")
+
     def test_control_tower_is_not_started_in_home(self) -> None:
         r = self.run_ctl("boot")
         self.assertEqual(r.returncode, 0, r.stderr)

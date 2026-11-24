@@ -185,7 +185,7 @@ S4U の起動時タスクのまま、**タスクの操作を1つの `wsl.exe -u 
   ただし引き継ぐ環境のうち、root のログオンの `XDG_RUNTIME_DIR` / `DBUS_SESSION_BUS_ADDRESS`（`/run/user/0`）はユーザーに使えず、
   Herdr 配下のペインが root のセッションバスを指したままになる。そのため `env` で、ユーザーの `/run/user/<uid>` が書き込めるときは
   そこへ置き換え（バスのソケットがあるときだけ `DBUS_SESSION_BUS_ADDRESS` も置き換え）、無いときは2つとも外す。
-  確かめた範囲: 自動テスト（スタブ）で置き換え・外すの両方。S4U で root だけが起きたときに `/run/user/<uid>` が作られているかは未確認で、
+  確かめた範囲: 自動テストで、`runuser` をスタブにし `/run/user` の場所を `REBOOTCTL_RUN_USER_DIR` で差し替えて、3つの分岐（無い→両方外す／ソケット無し→`XDG_RUNTIME_DIR` だけ置き換え／ソケット有り→両方置き換え）で `boot` まで届き、root の値が残らないこと。`env` の `-u` は代入より前に並べる（後ろに置くと `-u` がコマンド名と読まれて 127 になる）。S4U で root だけが起きたときに `/run/user/<uid>` が作られているかは未確認で、
   マージ後の本番の登録のあとに `boot.log` と Herdr 配下のペインの `XDG_RUNTIME_DIR` で見る
 - root の側が `boot.log` やその置き場を root の持ち物として作らないよう、無いときは `$HOME` の持ち主に合わせて作る
 - #247 の「起動時の差し込み口」に乗せる案は、ユーザー権限で動き `/etc/nas-credentials`（root 600）を読めないので採らない。

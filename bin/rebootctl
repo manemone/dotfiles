@@ -365,16 +365,16 @@ cmd_netuse_boot() {
   fi
   # root のログオンの XDG_RUNTIME_DIR / DBUS_SESSION_BUS_ADDRESS（/run/user/0）はユーザーに使えないので引き継がない。
   # ユーザーの /run/user/<uid> があればそこへ向け、無ければ外す（ADR DOC-2611151248 §8）
+  # env は最初の NAME=値 でオプションの解釈をやめるので、-u は代入より先に並べる
   local uid rt
   uid=$(id -u "$user" 2>/dev/null) || uid=""
-  rt="/run/user/$uid"
+  rt="${REBOOTCTL_RUN_USER_DIR:-/run/user}/$uid"
   local -a rt_env=(-u XDG_RUNTIME_DIR -u DBUS_SESSION_BUS_ADDRESS)
   if [ -n "$uid" ] && [ -d "$rt" ] && [ -w "$rt" ]; then
-    rt_env=("XDG_RUNTIME_DIR=$rt")
     if [ -S "$rt/bus" ]; then
-      rt_env+=("DBUS_SESSION_BUS_ADDRESS=unix:path=$rt/bus")
+      rt_env=("XDG_RUNTIME_DIR=$rt" "DBUS_SESSION_BUS_ADDRESS=unix:path=$rt/bus")
     else
-      rt_env+=(-u DBUS_SESSION_BUS_ADDRESS)
+      rt_env=(-u DBUS_SESSION_BUS_ADDRESS "XDG_RUNTIME_DIR=$rt")
     fi
   fi
   exec runuser -u "$user" -- env "${rt_env[@]}" "HOME=$h" "USER=$user" "LOGNAME=$user" \
