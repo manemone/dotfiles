@@ -12,6 +12,10 @@ powershell.exe / herdr / herdr-resume はスタブへ差し替え、実 Windows 
 - `boot` は boot_id が変わり Windows の最終起動時刻が同じなら WSL だけの起き直しと判定し、起動時の差し込み口を
   名前順に呼ぶ（1本の失敗・時間切れで残りを止めない）。`--once-per-boot` は同じ起動で2回目以降、差し込み口も
   管制への送信も繰り返さない
+- 起動時の `netuse`（root で NAS の資格情報から net use を張る）は、パスワードを標準出力・標準エラー・
+  boot.log のどこにも出さず、失敗しても資格情報が無くても 0 で終わる（後ろの boot を止めない）。
+  `setup` は NAS の UNC が分かるときだけ net use の操作を足す
+- 管制の会話は `$HOME` でなく専用のフォルダで起こす（信頼を保存できないと毎回確認で止まる）
 - `status` は powershell.exe が無くても落ちず、「読めなかった」ことを出す
 - `status` の NAS の確認は、確認先が未設定なら飛ばし、Windows 側が読めないときは「確認できなかった」を
   「届かない」と取り違えず、UNC と WSL 経由を別々に出す
@@ -102,6 +106,68 @@ exit 0
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("NoAutoRebootWithLoggedOnUsers", r.stdout)
         self.assertNotIn("powershell", self.calls_text())
+
+    def test_setup_adds_netuse_action_only_when_unc_is_known(self) -> None:
+        r = self.run_ctl("setup", extra_env={"REBOOTCTL_NAS_UNC": "\\\\nas\\share"})
+        self.assertIn("rebootctl netuse //nas/share'", r.stdout)
+        self.assertIn("@($netuse, $action)", r.stdout)
+        self.assertNotIn("password", r.stdout.lower())
+        r = self.run_ctl("setup")
+        self.assertNotIn("rebootctl netuse", r.stdout.replace("`rebootctl netuse`", ""))
+        self.assertIn("@($action)", r.stdout)
+        self.assertNotIn("powershell", self.calls_text())
+
+    def test_netuse_never_leaks_password_and_never_fails_boot(self) -> None:
+        secret = "S3cr3t-pw"
+        cred = self.tmp / "nas-credentials"
+        cred.write_text(f"username=alice\npassword={secret}\n")
+        env = {"REBOOTCTL_NAS_CREDENTIALS": str(cred)}
+        # net.exe は、標準入力の渡し方なら成功し、引数の渡し方なら失敗する。受けた引数は calls に
+        # 残すが、パスワードの引数だけ伏せる（スタブ自身が漏らさない）。失敗時の出力にパスワードを混ぜる
+        write_stub(
+            self.stubs / "net.exe",
+            f"""printf '%s\\n' "net.exe $1 $2 $3 $4" | sed 's/{secret}/<pw>/' >> {self.calls}
+if [ "$3" = '*' ]; then
+  read -r got
+  [ -e {self.tmp}/stdin-fails ] && {{ echo "error for $got"; exit 2; }}
+  [ "$got" = '{secret}' ] && exit 0
+  exit 3
+fi
+[ -e {self.tmp}/arg-fails ] && {{ echo "error for $3"; exit 2; }}
+exit 0
+""",
+        )
+        r = self.run_ctl("netuse", "//nas/share", extra_env=env)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("net.exe use \\\\nas\\share * /user:alice", self.calls_text())
+        # 引数に載せる渡し方には落ちない（標準入力で通った）
+        self.assertNotIn("<pw>", self.calls_text())
+        # 標準入力が通らなければ引数で渡し直す。両方失敗でも 0。出力のパスワードは伏せる
+        (self.tmp / "stdin-fails").touch()
+        (self.tmp / "arg-fails").touch()
+        r = self.run_ctl("netuse", "//nas/share", extra_env=env)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("<pw>", self.calls_text())
+        # 資格情報が無い・UNC が無い・net.exe が無いときも 0
+        for args, e in (
+            (("//nas/share",), {"REBOOTCTL_NAS_CREDENTIALS": str(self.tmp / "none")}),
+            ((), env),
+        ):
+            self.assertEqual(self.run_ctl("netuse", *args, extra_env=e).returncode, 0)
+        r = self.run_ctl("netuse", "//nas/share", path_only_stubs=True, extra_env=env)
+        self.assertEqual(r.returncode, 0)
+        log = (self.state / "reboot-recovery" / "boot.log").read_text()
+        self.assertIn("netuse:", log)
+        for text in (log, r.stdout, r.stderr):
+            self.assertNotIn(secret, text)
+
+    def test_control_tower_is_not_started_in_home(self) -> None:
+        r = self.run_ctl("boot")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        create = [c for c in self.calls_text().splitlines() if c.startswith("herdr workspace create")]
+        self.assertEqual(len(create), 1)
+        self.assertNotIn(f"--cwd {self.tmp / 'home'} ", create[0] + " ")
+        self.assertIn(f"--cwd {self.state / 'reboot-recovery' / 'control'} ", create[0] + " ")
 
     def test_boot_is_idempotent_and_tolerates_missing_herdr_resume(self) -> None:
         for _ in range(2):
