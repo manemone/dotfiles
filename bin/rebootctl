@@ -300,7 +300,7 @@ nas_line() {
 # ── netuse（起動時タスクの中で root が呼ぶ） ───────────────
 # S4U のログオンには NAS の資格情報が無いので、/etc/nas-credentials の資格情報で Windows 側に UNC を張る
 # （このタスクのログオンの中の net use。同じタスクで起きる WSL から呼ぶ Windows のプログラムにも効く。ADR DOC-2611151248 §8）。
-# - パスワードはまず標準入力で渡す（net.exe の引数にならない）。通らなければ引数で渡し直す
+# - パスワードは net.exe の引数で渡す（標準入力で渡す形は実機で通らなかった。動いているあいだだけ引数に載る）
 # - ログには終了コードと、パスワードを伏せた net.exe の出力だけを書く
 # - 失敗しても、既に張ってあっても、常に 0 で終わる（後ろの boot を止めない。冪等）
 netuse_log() {
@@ -330,25 +330,21 @@ cmd_netuse() {
   domain=$(sed -n 's/^domain=//p' "$NAS_CREDENTIALS" 2>/dev/null | head -n1)
   [ -z "$domain" ] || user="$domain\\$user"
   local net=net.exe
-  command -v "$net" >/dev/null 2>&1 || net=/mnt/c/Windows/System32/net.exe
+  command -v "$net" >/dev/null 2>&1 || net=${REBOOTCTL_NET_EXE:-/mnt/c/Windows/System32/net.exe}
   [ -x "$(command -v "$net" 2>/dev/null)" ] || {
     netuse_log "netuse: net.exe が見つからないので何もしない"
     return 0
   }
-  local out rc how=stdin
-  rc=0
-  out=$(printf '%s\n' "$pass" | timeout 30 "$net" use "$unc" '*' "/user:$user" /persistent:no 2>&1) || rc=$?
-  if [ "$rc" != 0 ]; then
-    how=arg
-    rc=0
-    out=$(timeout 30 "$net" use "$unc" "$pass" "/user:$user" /persistent:no 2>&1 </dev/null) || rc=$?
-  fi
+  # パスワードは引数で渡す（標準入力で渡す形は、実機の S4U のタスクでは通らなかった。ADR DOC-2611151248 §8）。
+  # 引数に載るのは net.exe が動いているあいだだけ（上限30秒）
+  local out rc=0
+  out=$(timeout 30 "$net" use "$unc" "$pass" "/user:$user" /persistent:no 2>&1 </dev/null) || rc=$?
   [ -z "$pass" ] || out=${out//"$pass"/'***'}
   out=$(printf '%s' "$out" | tr -d '\r' | head -c 200 | tr '\n' ' ')
   if [ "$rc" = 0 ]; then
-    netuse_log "netuse: $unc を張った（パスワードの渡し方: $how）"
+    netuse_log "netuse: $unc を張った"
   else
-    netuse_log "netuse: $unc を張れなかった（終了コード $rc。渡し方: $how）（続行）: $out"
+    netuse_log "netuse: $unc を張れなかった（終了コード $rc）（続行）: $out"
   fi
   return 0
 }

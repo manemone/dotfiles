@@ -957,8 +957,9 @@ mkdir -p "${XDG_STATE_HOME:-$HOME/.local/state}/reboot-recovery/control"
 cd "${XDG_STATE_HOME:-$HOME/.local/state}/reboot-recovery/control" && claude   # 信頼を承認して抜ける
 ```
 
-前の起動から Herdr が復元した管制のワークスペースが `$HOME` のままで止まるときは、そのワークスペースを一度閉じる
-（次の `boot` が専用のフォルダで作り直す）。
+**今ある管制のワークスペースは `$HOME` で作られたものなので、配ったあとに一度閉じる**（`boot` はラベル「管制」の
+ワークスペースがあれば作業フォルダを見ずに使うため、閉じないと、復元された `$HOME` のワークスペースが残って
+信頼の確認で止まり続ける。閉じると次の `boot` が専用のフォルダで作り直す）。
 
 #### 確認方法
 

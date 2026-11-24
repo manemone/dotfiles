@@ -86,6 +86,7 @@ exit 0
         env.update(extra_env or {})
         env["XDG_STATE_HOME"] = str(self.state)
         env["REBOOTCTL_RESTORE_WAIT"] = "6"
+        env["REBOOTCTL_NET_EXE"] = str(self.tmp / "no-net.exe")  # 実機の net.exe を呼ばない
         env["HOME"] = str(self.tmp / "home")
         (self.tmp / "home").mkdir(exist_ok=True)
         base = "/usr/bin:/bin"
@@ -124,32 +125,25 @@ exit 0
         cred = self.tmp / "nas-credentials"
         cred.write_text(f"username=alice\npassword={secret}\n")
         env = {"REBOOTCTL_NAS_CREDENTIALS": str(cred)}
-        # net.exe は、標準入力の渡し方なら成功し、引数の渡し方なら失敗する。受けた引数は calls に
-        # 残すが、パスワードの引数だけ伏せる（スタブ自身が漏らさない）。失敗時の出力にパスワードを混ぜる
+        # net.exe のスタブ。受けた引数は calls に残すが、パスワードの引数だけ伏せる（スタブ自身が漏らさない）。
+        # 失敗するときは、出力にパスワードを混ぜる
         write_stub(
             self.stubs / "net.exe",
-            f"""printf '%s\\n' "net.exe $1 $2 $3 $4" | sed 's/{secret}/<pw>/' >> {self.calls}
-if [ "$3" = '*' ]; then
-  read -r got
-  [ -e {self.tmp}/stdin-fails ] && {{ echo "error for $got"; exit 2; }}
-  [ "$got" = '{secret}' ] && exit 0
-  exit 3
-fi
-[ -e {self.tmp}/arg-fails ] && {{ echo "error for $3"; exit 2; }}
-exit 0
+            f"""printf '%s\\n' "net.exe $1 $2 <pw> $4" >> {self.calls}
+[ -e {self.tmp}/net-fails ] && {{ echo "error for $3"; exit 2; }}
+[ "$3" = '{secret}' ] && exit 0
+exit 3
 """,
         )
         r = self.run_ctl("netuse", "//nas/share", extra_env=env)
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertIn("net.exe use \\\\nas\\share * /user:alice", self.calls_text())
-        # 引数に載せる渡し方には落ちない（標準入力で通った）
-        self.assertNotIn("<pw>", self.calls_text())
-        # 標準入力が通らなければ引数で渡し直す。両方失敗でも 0。出力のパスワードは伏せる
-        (self.tmp / "stdin-fails").touch()
-        (self.tmp / "arg-fails").touch()
+        self.assertIn("net.exe use \\\\nas\\share <pw> /user:alice", self.calls_text())
+        self.assertIn("を張った", (self.state / "reboot-recovery" / "boot.log").read_text())
+        # 失敗しても 0。出力のパスワードは伏せる
+        (self.tmp / "net-fails").touch()
         r = self.run_ctl("netuse", "//nas/share", extra_env=env)
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertIn("<pw>", self.calls_text())
+        self.assertIn("張れなかった", (self.state / "reboot-recovery" / "boot.log").read_text())
         # 資格情報が無い・UNC が無い・net.exe が無いときも 0
         for args, e in (
             (("//nas/share",), {"REBOOTCTL_NAS_CREDENTIALS": str(self.tmp / "none")}),
