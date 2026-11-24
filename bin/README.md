@@ -980,6 +980,10 @@ WSL ごと起こして `boot` を呼ぶ（最大5分で拾う。WSL が落ちた
 Windows 自体が止まっているとき。起動の種類は `boot_id` が前回と違うときに決め、Windows の最終起動時刻が前回と同じなら
 WSL だけの起き直し、違えば Windows の再起動、読めない・前回が無ければ不明とする。記録は
 `${XDG_STATE_HOME:-~/.local/state}/reboot-recovery/boot-state.json`（`cause`）で、管制の会話が通知文に使う。
+**意図して止めた WSL も、最大5分で起き直る。** 繰り返しは「落ちた」と「`wsl --shutdown` で止めた」を区別しない。
+vhdx の圧縮や `wsl --export` のために WSL を止めておきたいときは、先に管理者 PowerShell で
+`Disable-ScheduledTask -TaskName dotfiles-reboot-recovery` を打ち、終わったら `Enable-ScheduledTask -TaskName dotfiles-reboot-recovery`
+で戻す（必要な権限は環境による。通らなければ管理者で打つ）。戻し忘れると、WSL が落ちても自動では起き直らない。
 **タスクは登録し直しが要る**（`rebootctl setup` の出力を管理者 PowerShell に貼る。登録済みのタスクは古い形のまま動き続け、
 起動時には今までどおり走るが、WSL だけの起き直しは拾わない）。
 
@@ -992,7 +996,7 @@ WSL だけの起き直し、違えば Windows の再起動、読めない・前�
 | 呼ぶ順 | 名前順（`LC_COLLATE=C`）。`10-` `20-` のように数字を前に付けて順を決める |
 | 時間の上限 | 1本ごとに60秒（`REBOOTCTL_HOOK_TIMEOUT` で変更）。時間切れ・失敗でも次の1本と `boot` の続きは止まらない。常駐させたい処理は呼ばれた側で切り離して起動する |
 | 出力 | 標準出力・標準エラーとも `boot.log` へ。標準入力は空 |
-| 渡す環境変数 | `REBOOTCTL_BOOT_CAUSE`（`windows_reboot` / `wsl_restart` / `unknown`）・`REBOOTCTL_BOOT_ID`・`REBOOTCTL_WINDOWS_LAST_BOOT`（読めなければ空） |
+| 渡す環境変数 | `REBOOTCTL_BOOT_CAUSE`（`windows_reboot` / `wsl_restart` / `unknown`）・`REBOOTCTL_BOOT_ID`・`REBOOTCTL_WINDOWS_LAST_BOOT`（読めなければ空。前回の値は渡さない） |
 | 呼ばれる回数 | `boot` が走るたび。手で `boot` を叩いても、同じ起動で複数回呼ばれうる。**呼ばれる側は何度呼ばれても害が無いように作る** |
 
 設計の経緯は ADR DOC-2611242024。

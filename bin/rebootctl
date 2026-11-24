@@ -611,8 +611,7 @@ cmd_boot() {
 
   win=$(read_windows 2>/dev/null | sed -n 's/^last_boot=//p' | head -n1 || true)
   cause=$(classify_boot "$boot_id" "$win")
-  # Windows が読めなかったときは、次回の比べ先が欠けないよう前回の値を残す
-  [ -n "$win" ] || win=$(boot_state_get windows_last_boot)
+  # 読めなかったときは空のまま記録・受け渡しする（前回の値を残すと、次の判定が誤った種類になる）
   boot_state_put "$boot_id" "$win" "$cause" false
   log "boot: 開始 (boot_id=$boot_id, 起動の種類=$cause)"
 

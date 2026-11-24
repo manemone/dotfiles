@@ -208,6 +208,14 @@ exit 0
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(json.loads(state_file.read_text())["cause"], "windows_reboot")
 
+        # Windows が読めなかった起動は、前回の値を残さず空で記録する（次の判定を誤らせない）
+        write_stub(self.stubs / "powershell.exe", "exit 1\n")
+        state_file.write_text(json.dumps({"boot_id": "old", "windows_last_boot": win, "cause": "x", "finished": True}))
+        r = self.run_ctl("boot", extra_env=env)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        record = json.loads(state_file.read_text())
+        self.assertEqual((record["cause"], record["windows_last_boot"]), ("unknown", ""))
+
     def watch_setup(self, reboot: str) -> None:
         """Windows の再起動待ちを reboot（True / False）にした powershell.exe のスタブへ差し替える"""
         write_stub(
