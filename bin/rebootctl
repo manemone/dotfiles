@@ -363,7 +363,21 @@ cmd_netuse_boot() {
     netuse_log "netuse: ユーザー ($user) へ切り替えられないので boot は呼ばない"
     return 0
   fi
-  exec runuser -u "$user" -- env "HOME=$h" "USER=$user" "LOGNAME=$user" \
+  # root のログオンの XDG_RUNTIME_DIR / DBUS_SESSION_BUS_ADDRESS（/run/user/0）はユーザーに使えないので引き継がない。
+  # ユーザーの /run/user/<uid> があればそこへ向け、無ければ外す（ADR DOC-2611151248 §8）
+  local uid rt
+  uid=$(id -u "$user" 2>/dev/null) || uid=""
+  rt="/run/user/$uid"
+  local -a rt_env=(-u XDG_RUNTIME_DIR -u DBUS_SESSION_BUS_ADDRESS)
+  if [ -n "$uid" ] && [ -d "$rt" ] && [ -w "$rt" ]; then
+    rt_env=("XDG_RUNTIME_DIR=$rt")
+    if [ -S "$rt/bus" ]; then
+      rt_env+=("DBUS_SESSION_BUS_ADDRESS=unix:path=$rt/bus")
+    else
+      rt_env+=(-u DBUS_SESSION_BUS_ADDRESS)
+    fi
+  fi
+  exec runuser -u "$user" -- env "${rt_env[@]}" "HOME=$h" "USER=$user" "LOGNAME=$user" \
     bash -lc "$login_script" rebootctl-boot "$@"
 }
 
