@@ -33,7 +33,7 @@ NAS に届かない件に、「Windows のプログラムには UNC でなく、
 | 1 | dotfiles | `nn-01-boot-net-use` | 起動時タスクの最初に root で NAS へ `net use` する形にし（`setup` の表示）、管制の会話を専用のフォルダで起こし、`status` の NAS の表示と ADR を直した後の形に合わせる | 🔄 実装中 |
 | 2 | 学習ツール | `nn-02-nas-unc-direct` | 前の傘（学習ツール#608）で WSL の cifs 経由にした NAS 転送と、登録ツールへ渡すパスを、Windows から UNC で直接の形に戻す | ⏳ 人間のマージ待ち (PR 学習ツール#636) |
 | 3 | 画像生成ツール | `nn-03-nas-unc-direct` | 前の傘（画像生成ツール#468・#472）で入れた `\\wsl.localhost` の形の設定の書き方を、UNC 直接の形に戻す | ⏳ 人間のマージ待ち (PR 画像生成ツール#494) |
-| 4 | 登録ツール | `nn-04-nas-unc-direct` | 前の傘（登録ツール#152）で入れた `\\wsl.localhost` の形の設定の書き方を、UNC 直接の形に戻す | ⏳ 人間のマージ待ち (PR 登録ツール#155。性能の結果が前提と逆で、人間の判断待ち) |
+| 4 | 登録ツール | `nn-04-nas-unc-direct` | 前の傘（登録ツール#152）で入れた `\\wsl.localhost` の形の設定の書き方を、UNC 直接の形に戻す | ⏳ 人間のマージ待ち (PR 登録ツール#155) |
 
 依存: 孫1 は1本（`net use`・管制の会話のフォルダ・`status` の表示・ADR がどれも `bin/rebootctl` と
 `bin/tests/test_rebootctl.py`・`bin/README.md`・ADR DOC-2611151248 に集まり、縛り合うため分けない）。
@@ -252,6 +252,12 @@ NAS に届かない件に、「Windows のプログラムには UNC でなく、
   `bin/tests/test_rebootctl.py`・`bin/README.md` で、`setup` が出すタスクの形は変えない。孫1 と同じファイルなので、マージの順で
   後になったほうが rebase する。push・PR・承認・マージのたびに向こうの孫から司令官へ知らせが来る。人間のタスクの登録し直しは、
   この傘の `setup` の変更とまとめて1回にする前提
+- 2026-11-24: 孫4 が #155 の性能の原因を切り分けた（同じ 256MB・UNC 直接・Interactive）。`robocopy.exe` 4.5 秒、PowerShell の
+  `Copy-Item` 4.3 秒、Ruby で 1MiB / 4MiB の塊のループ 5.5 / 4.9 秒に対し、Ruby の `FileUtils.cp` 54 秒・`IO.copy_stream` 69 秒。
+  遅いのは Ruby 標準のコピーだけで、UNC 直接の経路そのものは遅くない。登録ツールの本番の書き込み経路は既に 1MiB の塊で読み書き
+  しているので、直す箇所は無い見立て。`\\wsl.localhost` 側は `robocopy.exe` が45分戻らず打ち切った。#155 は孫2・孫3 と同じ扱い
+  （孫1 のマージ・配布・タスクの登録し直しの後に人間がマージ）に戻した。測定の残り: NAS のごみ箱のフォルダだけが入った空の
+  フォルダ2つ（テスト用の名前）が `/mnt/nas` の直下に読み取り専用で残っている
 
 ## 孫1用プロンプト:
 
