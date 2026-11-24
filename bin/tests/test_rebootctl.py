@@ -12,6 +12,10 @@ powershell.exe / herdr / herdr-resume はスタブへ差し替え、実 Windows 
 - `boot` は boot_id が変わり Windows の最終起動時刻が同じなら WSL だけの起き直しと判定し、起動時の差し込み口を
   名前順に呼ぶ（1本の失敗・時間切れで残りを止めない）。`--once-per-boot` は同じ起動で2回目以降、差し込み口も
   管制への送信も繰り返さない
+- 起動時の `netuse` / `netuse-boot`（root で NAS の資格情報から net use を張り、ユーザーへ切り替えて boot）は、パスワードを標準出力・標準エラー・
+  boot.log のどこにも出さず、失敗しても資格情報が無くても 0 で終わる（後ろの boot を止めない）。
+  `setup` は NAS の UNC が分かるときだけ net use の操作を足す
+- 管制の会話は `$HOME` でなく専用のフォルダで起こす（信頼を保存できないと毎回確認で止まる）
 - `status` は powershell.exe が無くても落ちず、「読めなかった」ことを出す
 - `status` の NAS の確認は、確認先が未設定なら飛ばし、Windows 側が読めないときは「確認できなかった」を
   「届かない」と取り違えず、UNC と WSL 経由を別々に出す
@@ -82,6 +86,7 @@ exit 0
         env.update(extra_env or {})
         env["XDG_STATE_HOME"] = str(self.state)
         env["REBOOTCTL_RESTORE_WAIT"] = "6"
+        env["REBOOTCTL_NET_EXE"] = str(self.tmp / "no-net.exe")  # 実機の net.exe を呼ばない
         env["HOME"] = str(self.tmp / "home")
         (self.tmp / "home").mkdir(exist_ok=True)
         base = "/usr/bin:/bin"
@@ -102,6 +107,106 @@ exit 0
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("NoAutoRebootWithLoggedOnUsers", r.stdout)
         self.assertNotIn("powershell", self.calls_text())
+
+    def test_setup_adds_netuse_action_only_when_unc_is_known(self) -> None:
+        r = self.run_ctl("setup", extra_env={"REBOOTCTL_NAS_UNC": "\\\\nas\\share"})
+        # 操作は1つで、root の netuse-boot（net use と boot を同じ wsl.exe の起動の中で走らせる）
+        self.assertIn("-u root -- env HOME=", r.stdout)
+        self.assertIn("rebootctl netuse-boot //nas/share ", r.stdout)
+        self.assertIn("-Action $action ", r.stdout)
+        self.assertNotIn("password", r.stdout.lower())
+        r = self.run_ctl("setup")
+        self.assertNotIn("netuse-boot //", r.stdout)
+        self.assertIn("bash -lc", r.stdout)
+        self.assertNotIn("powershell", self.calls_text())
+
+    def test_netuse_never_leaks_password_and_never_fails_boot(self) -> None:
+        secret = "S3cr3t-pw"
+        cred = self.tmp / "nas-credentials"
+        cred.write_text(f"username=alice\npassword={secret}\n")
+        env = {"REBOOTCTL_NAS_CREDENTIALS": str(cred)}
+        # net.exe のスタブ。受けた引数は calls に残すが、パスワードの引数だけ伏せる（スタブ自身が漏らさない）。
+        # 失敗するときは、出力にパスワードを混ぜる
+        write_stub(
+            self.stubs / "net.exe",
+            f"""printf '%s\\n' "net.exe $1 $2 <pw> $4" >> {self.calls}
+[ -e {self.tmp}/net-fails ] && {{ echo "error for $3"; exit 2; }}
+[ "$3" = '{secret}' ] && exit 0
+exit 3
+""",
+        )
+        r = self.run_ctl("netuse", "//nas/share", extra_env=env)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("net.exe use \\\\nas\\share <pw> /user:alice", self.calls_text())
+        self.assertIn("を張った", (self.state / "reboot-recovery" / "boot.log").read_text())
+        # 失敗しても 0。出力のパスワードは伏せる
+        (self.tmp / "net-fails").touch()
+        r = self.run_ctl("netuse", "//nas/share", extra_env=env)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("張れなかった", (self.state / "reboot-recovery" / "boot.log").read_text())
+        # 資格情報が無い・UNC が無い・net.exe が無いときも 0
+        for args, e in (
+            (("//nas/share",), {"REBOOTCTL_NAS_CREDENTIALS": str(self.tmp / "none")}),
+            ((), env),
+        ):
+            self.assertEqual(self.run_ctl("netuse", *args, extra_env=e).returncode, 0)
+        # 切り替え先のユーザーが引けなくても 0 で終わり、boot を呼べなかったことを残す
+        r = self.run_ctl("netuse-boot", "//nas/share", "no-such-user-xyz", "--hold", extra_env=env)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("切り替えられない", (self.state / "reboot-recovery" / "boot.log").read_text())
+        r = self.run_ctl("netuse", "//nas/share", path_only_stubs=True, extra_env=env)
+        self.assertEqual(r.returncode, 0)
+        log = (self.state / "reboot-recovery" / "boot.log").read_text()
+        self.assertIn("netuse:", log)
+        for text in (log, r.stdout, r.stderr):
+            self.assertNotIn(secret, text)
+
+    def test_netuse_boot_hands_user_runtime_dir_to_boot(self) -> None:
+        # runuser は「-u ユーザー --」を外して後ろをそのまま実行するスタブ（実機の root 切り替えはテストで再現できない）。
+        # boot の代わりに、渡った環境を書き出す
+        write_stub(self.stubs / "runuser", 'shift 3\nexec "$@"\n')
+        dump = self.tmp / "env.out"
+        boot = self.tmp / "fake-boot"
+        write_stub(boot, f'echo "xdg=${{XDG_RUNTIME_DIR-unset}} bus=${{DBUS_SESSION_BUS_ADDRESS-unset}}" > {dump}\n')
+        user = subprocess.run(["id", "-un"], capture_output=True, text=True).stdout.strip()
+        uid = subprocess.run(["id", "-u"], capture_output=True, text=True).stdout.strip()
+        run_dir = self.tmp / "run-user"
+        env = {
+            "REBOOTCTL_RUN_USER_DIR": str(run_dir),
+            "REBOOTCTL_BOOT_CMD": str(boot),
+            "REBOOTCTL_NAS_CREDENTIALS": str(self.tmp / "none"),
+            # root のログオンの値が残っていても、そのままは渡らない
+            "XDG_RUNTIME_DIR": "/run/user/0",
+            "DBUS_SESSION_BUS_ADDRESS": "unix:path=/run/user/0/bus",
+        }
+        rt = run_dir / uid
+
+        def boot_env() -> str:
+            dump.unlink(missing_ok=True)
+            r = self.run_ctl("netuse-boot", "//nas/share", user, extra_env=env)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            return dump.read_text().strip()
+
+        # /run/user/<uid> が無い → 2つとも外す
+        self.assertEqual(boot_env(), "xdg=unset bus=unset")
+        # あるがバスのソケットが無い → XDG_RUNTIME_DIR だけ置き換える（env の -u は代入より先）
+        rt.mkdir(parents=True)
+        self.assertEqual(boot_env(), f"xdg={rt} bus=unset")
+        # ソケットもある → 両方置き換える
+        import socket
+
+        sock = socket.socket(socket.AF_UNIX)
+        self.addCleanup(sock.close)
+        sock.bind(str(rt / "bus"))
+        self.assertEqual(boot_env(), f"xdg={rt} bus=unix:path={rt}/bus")
+
+    def test_control_tower_is_not_started_in_home(self) -> None:
+        r = self.run_ctl("boot")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        create = [c for c in self.calls_text().splitlines() if c.startswith("herdr workspace create")]
+        self.assertEqual(len(create), 1)
+        self.assertNotIn(f"--cwd {self.tmp / 'home'} ", create[0] + " ")
+        self.assertIn(f"--cwd {self.state / 'reboot-recovery' / 'control'} ", create[0] + " ")
 
     def test_boot_is_idempotent_and_tolerates_missing_herdr_resume(self) -> None:
         for _ in range(2):
