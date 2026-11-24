@@ -5,10 +5,11 @@ set -euo pipefail
 #
 #   rebootctl status [--json]   Windows と Herdr の状態を読む（読み取りだけ）
 #   rebootctl setup             人間が管理者 PowerShell に貼るコマンドを表示する（実行しない）
-#   rebootctl boot [--hold]     WSL 起動後に Herdr を起こし、会話の再開を呼ぶ（冪等）
+#   rebootctl boot [--hold] [--once-per-boot]
+#                               WSL 起動後に Herdr を起こし、会話の再開を呼ぶ（冪等）
 #   rebootctl watch             再起動待ちのときだけ管制の会話へ予告を頼む（cron から1時間おきに呼ぶ）
 #
-# 設計と判断の根拠は ADR DOC-2611151248（bin/README.md §3.7 に使い方）。
+# 設計と判断の根拠は ADR DOC-2611151248・DOC-2611242024（bin/README.md §3.7 に使い方）。
 # 状態の置き場所は ${XDG_STATE_HOME:-~/.local/state}/reboot-recovery/ に固定
 # （sessions/ と last-recovery.json は herdr-resume、boot.log はこのツールが書く）。
 
@@ -19,6 +20,11 @@ TASK_NAME="dotfiles-reboot-recovery"
 # （status も watch も同じ条件で読めるよう、全コマンドに効かせる）
 WIN_PS_DIR="${REBOOTCTL_WIN_PS_DIR:-/mnt/c/Windows/System32/WindowsPowerShell/v1.0}"
 export PATH="$PATH:$WIN_PS_DIR"
+# 起動時の差し込み口（持ち主が置いた実行ファイルを boot の最初に名前順で呼ぶ。bin/README.md §3.7）
+BOOT_D="${REBOOTCTL_BOOT_D:-${XDG_CONFIG_HOME:-$HOME/.config}/reboot-recovery/boot.d}"
+HOOK_TIMEOUT="${REBOOTCTL_HOOK_TIMEOUT:-60}"
+# 起動の記録（boot_id・Windows の最終起動時刻・起動の種類）。管制の会話もこれを読む
+BOOT_STATE="$STATE_DIR/boot-state.json"
 # 会話の復元（herdr が workspace を戻す）を待つ上限秒数
 RESTORE_WAIT="${REBOOTCTL_RESTORE_WAIT:-90}"
 # NAS の確認先（環境依存なので既定値を持たない。未設定の確認は飛ばして「未設定」と出す）。
@@ -44,10 +50,13 @@ Usage: rebootctl <command>
   watch             Windows が再起動待ちのときだけ、管制の会話（ラベル「管制」）へ予告の手順を送る。
                     再起動待ちでなければ何も送らず、モデルも呼ばない。同じ予告は1回だけ
                     （cron から1時間おきに呼ぶ。登録の1行は bin/README.md §3.7）
-  boot [--hold]     Herdr のサーバを起こし、会話の復元を待ち、herdr-resume があれば recover を呼び、
+  boot [--hold] [--once-per-boot]
+                    起動時の差し込み口（boot.d）の実行ファイルを呼び、Herdr のサーバを起こし、
+                    会話の復元を待ち、herdr-resume があれば recover を呼び、
                     管制の会話（ラベル「管制」のワークスペース）が無ければ起こす。
                     何度呼んでも害は無い。--hold は最後に居座って WSL を落とさない
-                    （Windows のタスクから起こすときに使う）
+                    （Windows のタスクから起こすときに使う）。--once-per-boot は、この起動で
+                    boot が最後まで終わっていれば何もしない（タスクの繰り返し用）
 EOF
 }
 
@@ -287,15 +296,19 @@ Get-ItemProperty \$au | Select-Object AUOptions, NoAutoRebootWithLoggedOnUsers
 
 # --- 2. 再起動のあと、サインイン無しで WSL と Herdr を起こすタスク（方式 A: 起動時・S4U） ---
 # サインインしていなくても実行される。パスワードは保存しない（S4U）。
+# 起動時に加えて5分おきにも走る。boot --hold は WSL が生きているあいだ居座って終わらず、
+# 同時に2つは走らない（IgnoreNew）ので、繰り返しが効くのは WSL だけが落ちて wsl.exe が終わったあと
+# （次の繰り返しで WSL ごと起こし直す）。--once-per-boot で、同じ起動では2回目以降は何もしない。
 # S4U のログオンにはネットワーク資格情報が無い。この WSL から呼ぶ Windows のプログラムも同じログオンで動くので、
 # NAS の UNC パスには届かない（WSL の中の cifs を wslpath -w で渡せば届く）。起動後に「rebootctl status」の NAS の欄で確認すること。
 \$user = "\$env:USERDOMAIN\\\$env:USERNAME"
 \$action = New-ScheduledTaskAction -Execute 'wsl.exe' \`
-  -Argument '-d $distro -- bash -lc "\$HOME/bin/rebootctl boot --hold"'
+  -Argument '-d $distro -- bash -lc "\$HOME/bin/rebootctl boot --hold --once-per-boot"'
 \$trigger = New-ScheduledTaskTrigger -AtStartup
 \$trigger.Delay = 'PT30S'
+\$trigger.Repetition = (New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 5)).Repetition
 \$principal = New-ScheduledTaskPrincipal -UserId \$user -LogonType S4U -RunLevel Limited
-\$settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) \`
+\$settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances IgnoreNew \`
   -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
 Register-ScheduledTask -TaskName '$TASK_NAME' -Action \$action -Trigger \$trigger \`
   -Principal \$principal -Settings \$settings -Force
@@ -503,9 +516,76 @@ print(d.get("windows_readable") is True, d.get("reboot_required"), d.get("window
   announced_put "$boot" || log "watch: 印を書けなかった（次の巡回で同じ予告を繰り返しうる）"
 }
 
+# ── 起動の種類と差し込み口 ─────────────────────────────────────────
+# boot-state.json の鍵を読む（無い・壊れている・python3 が無いときは空）
+boot_state_get() {
+  [ -f "$BOOT_STATE" ] || return 0
+  python3 -c '
+import json, sys
+print(json.load(open(sys.argv[1])).get(sys.argv[2], ""))
+' "$BOOT_STATE" "$1" 2>/dev/null || true
+}
+
+# boot-state.json を書く: boot_id・windows_last_boot・cause・finished(true/false)
+boot_state_put() {
+  command -v python3 >/dev/null 2>&1 || return 0
+  python3 -c '
+import json, os, sys
+path, boot_id, win, cause, finished = sys.argv[1:6]
+tmp = path + ".tmp"
+with open(tmp, "w") as f:
+    json.dump({"boot_id": boot_id, "windows_last_boot": win, "cause": cause,
+               "finished": finished == "true"}, f, ensure_ascii=False)
+os.replace(tmp, path)
+' "$BOOT_STATE" "$1" "$2" "$3" "$4" || log "boot: boot-state.json を書けなかった"
+}
+
+# 起動の種類: windows_reboot（Windows の最終起動時刻が前回と違う）/ wsl_restart（同じ）/ unknown（読めない・前回が無い）
+# 同じ boot_id の再実行は、最初に決めた種類をそのまま使う（自分の記録と比べて wsl_restart と取り違えない）
+classify_boot() {
+  local boot_id="$1" win="$2" prev_id prev_win
+  prev_id=$(boot_state_get boot_id)
+  if [ "$prev_id" = "$boot_id" ]; then
+    boot_state_get cause
+    return 0
+  fi
+  prev_win=$(boot_state_get windows_last_boot)
+  if [ -z "$win" ] || [ -z "$prev_win" ]; then
+    printf 'unknown'
+  elif [ "$win" = "$prev_win" ]; then
+    printf 'wsl_restart'
+  else
+    printf 'windows_reboot'
+  fi
+}
+
+# 持ち主が置いた実行ファイルを名前順に1本ずつ呼ぶ。1本の失敗・時間切れで残りを止めない。
+# 出力は boot.log へ。ロックの fd 9 は渡さない。環境変数は REBOOTCTL_BOOT_CAUSE / _BOOT_ID / _WINDOWS_LAST_BOOT
+run_boot_hooks() {
+  [ -d "$BOOT_D" ] || return 0
+  local LC_COLLATE=C f rc
+  for f in "$BOOT_D"/*; do
+    [ -f "$f" ] && [ -x "$f" ] || continue
+    log "boot: 差し込み口 ${f##*/} を呼ぶ（上限 ${HOOK_TIMEOUT} 秒）"
+    rc=0
+    REBOOTCTL_BOOT_CAUSE="$1" REBOOTCTL_BOOT_ID="$2" REBOOTCTL_WINDOWS_LAST_BOOT="$3" \
+      timeout -k 5 "$HOOK_TIMEOUT" "$f" </dev/null >>"$BOOT_LOG" 2>&1 9>&- || rc=$?
+    case "$rc" in
+      0) log "boot: 差し込み口 ${f##*/} 完了" ;;
+      124 | 137) log "boot: 差し込み口 ${f##*/} が時間切れ（続行）" ;;
+      *) log "boot: 差し込み口 ${f##*/} が失敗 (終了コード $rc)（続行）" ;;
+    esac
+  done
+}
+
 cmd_boot() {
-  local hold=0
-  [ "${1:-}" = "--hold" ] && hold=1
+  local hold=0 once=0 arg
+  for arg in "$@"; do
+    case "$arg" in
+      --hold) hold=1 ;;
+      --once-per-boot) once=1 ;;
+    esac
+  done
 
   # タスクから呼ばれると PATH が最小になりうる
   export PATH="$HOME/.local/bin:$HOME/bin:$PATH"
@@ -520,7 +600,23 @@ cmd_boot() {
     fi
   fi
 
-  log "boot: 開始 (boot_id=$(cat /proc/sys/kernel/random/boot_id 2>/dev/null || echo unknown))"
+  local boot_id win cause
+  boot_id=$(cat /proc/sys/kernel/random/boot_id 2>/dev/null || echo unknown)
+
+  if [ "$once" = 1 ] && [ "$(boot_state_get boot_id)" = "$boot_id" ] && [ "$(boot_state_get finished)" = True ]; then
+    log "boot: この起動 (boot_id=$boot_id) では実行済みなので何もしない"
+    [ "$hold" = 1 ] && hold_forever
+    return 0
+  fi
+
+  win=$(read_windows 2>/dev/null | sed -n 's/^last_boot=//p' | head -n1 || true)
+  cause=$(classify_boot "$boot_id" "$win")
+  # 読めなかったときは空のまま記録・受け渡しする（前回の値を残すと、次の判定が誤った種類になる）
+  boot_state_put "$boot_id" "$win" "$cause" false
+  log "boot: 開始 (boot_id=$boot_id, 起動の種類=$cause)"
+
+  # 起動時の差し込み口。会話の復元を待つより前に呼ぶ（GPU を早く埋めたい呼び先のため）
+  run_boot_hooks "$cause" "$boot_id" "$win"
 
   if ! command -v herdr >/dev/null 2>&1; then
     log "boot: herdr が見つからない。何もせず終える"
@@ -572,6 +668,7 @@ cmd_boot() {
     log "boot: 管制の会話を起こせなかった（続行）"
   fi
 
+  boot_state_put "$boot_id" "$win" "$cause" true
   log "boot: 終了"
   if [ "$hold" = 1 ]; then
     # wsl.exe を終わらせない（アイドル停止で WSL ごと落ちるのを防ぐ）。

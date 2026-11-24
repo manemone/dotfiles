@@ -9,6 +9,9 @@ powershell.exe / herdr / herdr-resume はスタブへ差し替え、実 Windows 
 - `watch` は再起動待ちでないとき・読めないときは管制の会話へ何も送らない。再起動待ちのときだけ送り、
   同じ `windows_last_boot` への予告は1回だけ。解けたら印を消し、送れなかったとき（承認待ち・作業中・管制なし）は
   印を書かない。`control-tower.json` のほかの鍵は壊さない
+- `boot` は boot_id が変わり Windows の最終起動時刻が同じなら WSL だけの起き直しと判定し、起動時の差し込み口を
+  名前順に呼ぶ（1本の失敗・時間切れで残りを止めない）。`--once-per-boot` は同じ起動で2回目以降、差し込み口も
+  管制への送信も繰り返さない
 - `status` は powershell.exe が無くても落ちず、「読めなかった」ことを出す
 - `status` の NAS の確認は、確認先が未設定なら飛ばし、Windows 側が読めないときは「確認できなかった」を
   「届かない」と取り違えず、UNC と WSL 経由を別々に出す
@@ -159,6 +162,59 @@ exit 0
         r = self.run_ctl("boot")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("boot: 終了", (self.state / "reboot-recovery" / "boot.log").read_text())
+
+    def test_boot_detects_wsl_only_restart_runs_hooks_and_skips_same_boot(self) -> None:
+        win = "2026-11-21T23:07:45+09:00"
+        write_stub(self.stubs / "powershell.exe", f"echo last_boot={win}\n")
+        state_dir = self.state / "reboot-recovery"
+        state_dir.mkdir(parents=True)
+        state_file = state_dir / "boot-state.json"
+        # 前回の起動の記録: boot_id は今と違い、Windows の最終起動時刻は同じ（WSL だけの起き直し）
+        state_file.write_text(json.dumps({"boot_id": "old", "windows_last_boot": win, "cause": "windows_reboot", "finished": True}))
+        hooks = self.tmp / "boot.d"
+        hooks.mkdir()
+        out = self.tmp / "hooks.out"
+        write_stub(hooks / "10-first", f'echo "first $REBOOTCTL_BOOT_CAUSE $REBOOTCTL_WINDOWS_LAST_BOOT" >> {out}\n')
+        write_stub(hooks / "20-fails", f"echo fails >> {out}\nexit 3\n")
+        write_stub(hooks / "30-hangs", f"echo hangs >> {out}\nexec sleep 30\n")
+        write_stub(hooks / "40-last", f"echo last >> {out}\n")
+        (hooks / "50-not-executable").write_text("#!/bin/sh\necho nope\n")
+        env = {"REBOOTCTL_BOOT_D": str(hooks), "REBOOTCTL_HOOK_TIMEOUT": "1"}
+
+        r = self.run_ctl("boot", "--once-per-boot", extra_env=env)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        # 1本が失敗・時間切れでも残りが呼ばれ、順は名前順、実行権の無いものは呼ばれない
+        self.assertEqual(
+            out.read_text().splitlines(),
+            [f"first wsl_restart {win}", "fails", "hangs", "last"],
+        )
+        record = json.loads(state_file.read_text())
+        self.assertEqual((record["cause"], record["finished"]), ("wsl_restart", True))
+        log = (state_dir / "boot.log").read_text()
+        self.assertIn("時間切れ", log)
+        self.assertIn("boot: 終了", log)
+        prompts_before = len(self.prompts())
+
+        # 同じ起動での再実行（タスクの繰り返し）は、差し込み口も管制への送信も繰り返さない
+        r = self.run_ctl("boot", "--once-per-boot", extra_env=env)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(len(out.read_text().splitlines()), 4)
+        self.assertEqual(len(self.prompts()), prompts_before)
+        self.assertEqual(json.loads(state_file.read_text())["cause"], "wsl_restart")
+
+        # Windows の最終起動時刻が前回と違えば、Windows の再起動
+        state_file.write_text(json.dumps({"boot_id": "old", "windows_last_boot": "2026-11-01T00:00:00+09:00", "cause": "x", "finished": True}))
+        r = self.run_ctl("boot", extra_env=env)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(json.loads(state_file.read_text())["cause"], "windows_reboot")
+
+        # Windows が読めなかった起動は、前回の値を残さず空で記録する（次の判定を誤らせない）
+        write_stub(self.stubs / "powershell.exe", "exit 1\n")
+        state_file.write_text(json.dumps({"boot_id": "old", "windows_last_boot": win, "cause": "x", "finished": True}))
+        r = self.run_ctl("boot", extra_env=env)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        record = json.loads(state_file.read_text())
+        self.assertEqual((record["cause"], record["windows_last_boot"]), ("unknown", ""))
 
     def watch_setup(self, reboot: str) -> None:
         """Windows の再起動待ちを reboot（True / False）にした powershell.exe のスタブへ差し替える"""
