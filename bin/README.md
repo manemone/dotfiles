@@ -991,7 +991,7 @@ rebootctl resume             # WSL の中から、起動タスクを有効に戻
 
 圧縮のあと WSL が止まっているときは、PowerShell で戻して WSL を起こす:
 `Enable-ScheduledTask -TaskName dotfiles-reboot-recovery; Start-ScheduledTask -TaskName dotfiles-reboot-recovery`
-（`Start` は手動で1回走らせて WSL を起こし、`boot` まで走らせる。5分おきの繰り返しは起動時トリガーが発火したときに始まるので、`Enable` と `Start` のあとも戻るとは限らず、実機では確かめていない。確実に戻すには、次の Windows の再起動か、`rebootctl setup` の出力を管理者 PowerShell に貼り直して登録し直す。戻ったかは、`wsl --shutdown` のあと5分以上待って WSL が起き直すかで見る）。`pause` / `resume` は決めた引数（`pause --shutdown` だけ）以外を、`--help` を含めて何もせず拒否する。呼ぶ実行ファイルは
+（`Start` は手動で1回走らせて WSL を起こし、`boot` まで走らせる。5分おきの繰り返しは起動時トリガーが発火したときに始まるので、`Enable` と `Start` のあとも戻るとは限らず、実機では確かめていない。確実に戻るのは次の Windows の再起動のあと（登録し直しても、起動時トリガーが発火するまで繰り返しが始まるとは限らない）。戻ったかは、`wsl --shutdown` のあと5分以上待って WSL が起き直すかで見る）。`pause` / `resume` は決めた引数（`pause --shutdown` だけ）以外を、`--help` を含めて何もせず拒否する。呼ぶ実行ファイルは
 `REBOOTCTL_POWERSHELL` / `REBOOTCTL_WSL_EXE` で差し替えられる（テストと手元の確かめは偽物で行い、本物のタスクを変えない）。
 `pause` は `Disable-ScheduledTask` を呼ぶだけで、権限が足りなければ
 失敗して理由と管理者 PowerShell で打つ形を表示し、そのときは WSL を止めない（実機での権限は未確認）。
