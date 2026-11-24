@@ -216,6 +216,31 @@ exit 0
         record = json.loads(state_file.read_text())
         self.assertEqual((record["cause"], record["windows_last_boot"]), ("unknown", ""))
 
+    def test_pause_and_resume_touch_only_the_task_and_shutdown_needs_the_flag(self) -> None:
+        write_stub(self.stubs / "wsl.exe", f'echo "wsl.exe $*" >> {self.calls}\n')
+        # 決めた引数以外（--help を含む）は、タスクにも WSL にも触れずに使い方を出して終わる
+        for bad in (("pause", "--help"), ("pause", "-h"), ("pause", "--shutdown", "x"), ("resume", "--help")):
+            r = self.run_ctl(*bad)
+            self.assertEqual(r.returncode, 2, bad)
+            self.assertIn("Usage", r.stderr)
+        self.assertEqual(self.calls_text(), "", "不正な引数でタスクか WSL に触れた")
+        r = self.run_ctl("pause")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("Disable-ScheduledTask", self.calls_text())
+        self.assertNotIn("wsl.exe", self.calls_text(), "--shutdown 無しで WSL を止めてはいけない")
+        r = self.run_ctl("resume")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("Enable-ScheduledTask", self.calls_text())
+        r = self.run_ctl("pause", "--shutdown")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("wsl.exe --shutdown", self.calls_text())
+        # タスクを無効にできなかったときは WSL を止めない
+        self.calls.write_text("")
+        write_stub(self.stubs / "powershell.exe", "echo denied; exit 1\n")
+        r = self.run_ctl("pause", "--shutdown")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertNotIn("wsl.exe", self.calls_text())
+
     def watch_setup(self, reboot: str) -> None:
         """Windows の再起動待ちを reboot（True / False）にした powershell.exe のスタブへ差し替える"""
         write_stub(

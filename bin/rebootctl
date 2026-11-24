@@ -7,6 +7,8 @@ set -euo pipefail
 #   rebootctl setup             人間が管理者 PowerShell に貼るコマンドを表示する（実行しない）
 #   rebootctl boot [--hold] [--once-per-boot]
 #                               WSL 起動後に Herdr を起こし、会話の再開を呼ぶ（冪等）
+#   rebootctl pause [--shutdown]  起動タスクを無効にする（WSL のイメージの圧縮などの前に。--shutdown で WSL も止める）
+#   rebootctl resume            起動タスクを有効に戻す
 #   rebootctl watch             再起動待ちのときだけ管制の会話へ予告を頼む（cron から1時間おきに呼ぶ）
 #
 # 設計と判断の根拠は ADR DOC-2611151248・DOC-2611242024（bin/README.md §3.7 に使い方）。
@@ -19,6 +21,9 @@ TASK_NAME="dotfiles-reboot-recovery"
 # WSL の cron は PATH に Windows 側を足さないので、powershell.exe の置き場所を自分で足す
 # （status も watch も同じ条件で読めるよう、全コマンドに効かせる）
 WIN_PS_DIR="${REBOOTCTL_WIN_PS_DIR:-/mnt/c/Windows/System32/WindowsPowerShell/v1.0}"
+# pause / resume が Windows のタスクを変えるために呼ぶ実行ファイル（試すときは偽物に差し替える）
+PAUSE_POWERSHELL="${REBOOTCTL_POWERSHELL:-powershell.exe}"
+PAUSE_WSL_EXE="${REBOOTCTL_WSL_EXE:-wsl.exe}"
 export PATH="$PATH:$WIN_PS_DIR"
 # 起動時の差し込み口（持ち主が置いた実行ファイルを boot の最初に名前順で呼ぶ。bin/README.md §3.7）
 BOOT_D="${REBOOTCTL_BOOT_D:-${XDG_CONFIG_HOME:-$HOME/.config}/reboot-recovery/boot.d}"
@@ -47,6 +52,11 @@ Usage: rebootctl <command>
                     Herdr サーバの生死・NAS に届くか（REBOOTCTL_NAS_MOUNT / REBOOTCTL_NAS_UNC が
                     設定されているとき）を読む（何も書き換えない）
   setup             管理者 PowerShell に貼るコマンドを表示する（このコマンドは何も実行しない）
+  pause [--shutdown]
+                    起動タスクを無効にする。WSL のイメージの圧縮・エクスポートの前に使う（無効のあいだは
+                    WSL が落ちても起き直らない）。--shutdown は、無効にできたあとで wsl.exe --shutdown も打つ
+                    （走っている会話・学習がすべて止まる。打つ時刻は自分で決めること）
+  resume            起動タスクを有効に戻す（WSL が止まっているときは、PowerShell で戻す。pause の表示を参照）
   watch             Windows が再起動待ちのときだけ、管制の会話（ラベル「管制」）へ予告の手順を送る。
                     再起動待ちでなければ何も送らず、モデルも呼ばない。同じ予告は1回だけ
                     （cron から1時間おきに呼ぶ。登録の1行は bin/README.md §3.7）
@@ -95,6 +105,7 @@ function V(\$path, \$name) {
 'reboot_required=' + (Test-Path -LiteralPath '$REBOOT_REQUIRED_KEY')
 'last_boot=' + (Get-CimInstance Win32_OperatingSystem).LastBootUpTime.ToString('o')
 'task_registered=' + [bool](Get-ScheduledTask -TaskName '$TASK_NAME')
+'task_state=' + (Get-ScheduledTask -TaskName '$TASK_NAME').State
 EOF
   )
   timeout 60 powershell.exe -NoProfile -NonInteractive -Command "$ps" 2>/dev/null | tr -d '\r'
@@ -183,7 +194,7 @@ cmd_status() {
     readable=false
     win=""
   fi
-  local au='' nar='' ahs='' ahe='' rr='' lb='' tr=''
+  local au='' nar='' ahs='' ahe='' rr='' lb='' tr='' ts=''
   local line key val
   while IFS= read -r line; do
     key=${line%%=*}
@@ -196,6 +207,7 @@ cmd_status() {
       reboot_required) rr=$val ;;
       last_boot) lb=$val ;;
       task_registered) tr=$val ;;
+      task_state) ts=$val ;;
     esac
   done <<<"$win"
 
@@ -230,8 +242,8 @@ cmd_status() {
         *) printf 'null' ;;
       esac
     }
-    printf '"windows_last_boot":%s,"boot_task_registered":%s,"wsl_boot_id":%s,"herdr_server":"%s",' \
-      "$(jv "$lb")" "$(jb "$tr")" "$(jv "$boot_id")" "$herdr"
+    printf '"windows_last_boot":%s,"boot_task_registered":%s,"boot_task_state":%s,"wsl_boot_id":%s,"herdr_server":"%s",' \
+      "$(jv "$lb")" "$(jb "$tr")" "$(jv "$ts")" "$(jv "$boot_id")" "$herdr"
     printf '"nas_wsl_mounted":%s,"nas_windows_unc_reachable":%s,"nas_windows_via_wsl_reachable":%s}\n' \
       "$(jn "$nas_mount")" "$(jn "$nas_unc")" "$(jn "$nas_via")"
     return 0
@@ -246,7 +258,10 @@ cmd_status() {
     printf '  アクティブ時間                    : %s 時 〜 %s 時\n' "${ahs:-?}" "${ahe:-?}"
     printf '  再起動待ち                        : %s\n' "${rr:-?}"
     printf '  最終起動時刻                      : %s\n' "${lb:-?}"
-    printf '  起動タスク (%s) : %s\n' "$TASK_NAME" "${tr:-?}"
+    printf '  起動タスク (%s) : %s（状態: %s）\n' "$TASK_NAME" "${tr:-?}" "${ts:-?}"
+    if [ "$ts" = Disabled ]; then
+      printf '  → 起動タスクが無効です（rebootctl pause のあと）。戻すには「rebootctl resume」\n'
+    fi
     if [ "$au" != 4 ] || [ "$nar" != 1 ]; then
       printf '  → 再起動止めのポリシーは未適用です。「rebootctl setup」を管理者 PowerShell に貼ってください\n'
     fi
@@ -321,6 +336,59 @@ Get-ScheduledTask -TaskName '$TASK_NAME' | Select-Object TaskName, State
 # 外すとき
 #   Unregister-ScheduledTask -TaskName '$TASK_NAME' -Confirm:\$false
 EOF
+}
+
+# ── pause / resume（起動タスクの無効化・有効化） ─────────────────
+# 失敗（タスクが無い・権限が足りない）は非0と理由で返す。タスクを触るだけで、WSL は止めない
+set_task_enabled() {
+  local verb="$1" out
+  command -v "$PAUSE_POWERSHELL" >/dev/null 2>&1 || {
+    printf 'rebootctl: %s が使えないので、起動タスクを触れません\n' "$PAUSE_POWERSHELL" >&2
+    return 1
+  }
+  out=$(timeout 60 "$PAUSE_POWERSHELL" -NoProfile -NonInteractive -Command \
+    "\$ErrorActionPreference='Stop'; try { $verb-ScheduledTask -TaskName '$TASK_NAME' | Out-Null } catch { Write-Output \$_.Exception.Message; exit 1 }" 2>&1 | tr -d '\r') || {
+    printf 'rebootctl: 起動タスクを %s できませんでした: %s\n' "$verb" "$out" >&2
+    printf '  管理者 PowerShell で「%s-ScheduledTask -TaskName %s」を打ってください\n' "$verb" "$TASK_NAME" >&2
+    return 1
+  }
+  log "$verb: 起動タスク $TASK_NAME を $verb した"
+}
+
+cmd_pause() {
+  local shutdown=0
+  # 決めた引数以外（--help を含む）は、何もせず使い方を出して終わる（タスクを触る前に弾く）
+  case "$#:${1:-}" in
+    0:) ;;
+    1:--shutdown) shutdown=1 ;;
+    *)
+      printf 'Usage: rebootctl pause [--shutdown]\n' >&2
+      return 2
+      ;;
+  esac
+  set_task_enabled Disable || return 1
+  printf '起動タスクを無効にしました。戻すまで、WSL が落ちても Windows が再起動しても、自動では起き直しません。\n'
+  if [ "$shutdown" = 1 ]; then
+    printf 'wsl.exe --shutdown を打ちます（この会話・学習を含め、WSL の中がすべて止まります）\n'
+    log "pause: wsl.exe --shutdown を打つ"
+    "$PAUSE_WSL_EXE" --shutdown
+    return 0
+  fi
+  cat <<EOT
+WSL を止めるには: PowerShell で wsl --shutdown（または rebootctl pause --shutdown）
+イメージの圧縮などのあと、PowerShell で戻すには:
+  Enable-ScheduledTask -TaskName '$TASK_NAME'; Start-ScheduledTask -TaskName '$TASK_NAME'
+  （Start は WSL を起こして boot まで走らせる。WSL の中からは rebootctl resume でタスクを有効に戻すだけ）
+EOT
+}
+
+cmd_resume() {
+  if [ "$#" -gt 0 ]; then
+    printf 'Usage: rebootctl resume\n' >&2
+    return 2
+  fi
+  set_task_enabled Enable || return 1
+  printf '起動タスクを有効に戻しました。5分おきの繰り返しが戻るかは確かめていません。確実に戻るのは、次の Windows の再起動のあとです（登録し直しても、起動時トリガーが発火するまで繰り返しが始まるとは限りません）。\n'
 }
 
 # ── boot ───────────────────────────────────────────────────────────
@@ -683,6 +751,8 @@ main() {
   case "$cmd" in
     status) cmd_status "$@" ;;
     setup) cmd_setup ;;
+    pause) cmd_pause "$@" ;;
+    resume) cmd_resume "$@" ;;
     watch) cmd_watch ;;
     boot) cmd_boot "$@" ;;
     -h | --help | help | "") usage ;;
