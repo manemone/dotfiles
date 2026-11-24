@@ -267,6 +267,10 @@ NAS に届かない件に、「Windows のプログラムには UNC でなく、
 - 2026-11-24: 学習ツールの側の傘の孫が dotfiles PR #249（`wc-04-task-pause-resume`、base は master、e65a128 の後から）を出した。
   `rebootctl pause [--shutdown]` / `resume` と、`status` の起動タスクの欄の状態（Disabled / Ready）を足す。`cmd_boot`・`cmd_setup`・
   `start_control_tower` とタスクの形は触らない。孫1（#248）とは `bin/rebootctl`・`bin/README.md`・`bin/tests/test_rebootctl.py` が重なる
+- 2026-11-24: 人間に何度も PowerShell を貼らせる段取りが負担になっていたので、司令官の判断で、マージ前の一時タスクの試験はやめた。
+  孫1 は自動テストで守れる範囲で仕上げてレビューへ進み、実機での確認は、人間が本番の登録コマンドを1回貼った後と次の再起動の
+  ときに、司令官が `boot.log` と `rebootctl status` で行う。人間の手が要るのは、master と他リポへのマージ、管理者 PowerShell への
+  本番の登録の1回、デプロイの指示だけにする
 
 ## 孫1用プロンプト:
 
