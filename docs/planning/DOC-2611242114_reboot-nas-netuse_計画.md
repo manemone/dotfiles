@@ -30,7 +30,7 @@ NAS に届かない件に、「Windows のプログラムには UNC でなく、
 
 | 孫 | リポ | ブランチ | 内容 | 状況 |
 |---|---|---|---|---|
-| 1 | dotfiles | `nn-01-boot-net-use` | 起動時タスクの最初に root で NAS へ `net use` する形にし（`setup` の表示）、管制の会話を専用のフォルダで起こし、`status` の NAS の表示と ADR を直した後の形に合わせる | 🔄 実装中 |
+| 1 | dotfiles | `nn-01-boot-net-use` | 起動時タスクの最初に root で NAS へ `net use` する形にし（`setup` の表示）、管制の会話を専用のフォルダで起こし、`status` の NAS の表示と ADR を直した後の形に合わせる | ✅ PR #248 マージ済 |
 | 2 | 学習ツール | `nn-02-nas-unc-direct` | 前の傘（学習ツール#608）で WSL の cifs 経由にした NAS 転送と、登録ツールへ渡すパスを、Windows から UNC で直接の形に戻す | ⏳ 人間のマージ待ち (PR 学習ツール#636) |
 | 3 | 画像生成ツール | `nn-03-nas-unc-direct` | 前の傘（画像生成ツール#468・#472）で入れた `\\wsl.localhost` の形の設定の書き方を、UNC 直接の形に戻す | ⏳ 人間のマージ待ち (PR 画像生成ツール#494) |
 | 4 | 登録ツール | `nn-04-nas-unc-direct` | 前の傘（登録ツール#152）で入れた `\\wsl.localhost` の形の設定の書き方を、UNC 直接の形に戻す | ⏳ 人間のマージ待ち (PR 登録ツール#155) |
@@ -275,6 +275,8 @@ NAS に届かない件に、「Windows のプログラムには UNC でなく、
   タスクで確かめられていたと分かった（そのまま呼んだ場合も `setsid nohup` で切り離した子からも UNC への `Test-Path` が True、
   16MB の `robocopy.exe` が約 0.7 秒）。未確認は、Herdr のサーバからの呼び出し・本物の再起動・256MB の本番の形。孫1 は #249 を
   取り込んだ傘へ rebase 済み（#248 の HEAD 837983f）で、3回目のレビュー中
+- 2026-11-24: 孫1 の PR #248 を司令官がマージした（HEAD 9c5f716 で承認、CI 4件 green）。傘で pre-commit・`bin/tests/lint.sh`・
+  unittest（516件）・`doc-id verify` が通った。孫2〜4 は人間のマージ待ちのまま、dotfiles の最終 PR を先に出す（依存の節）
 
 ## 孫1用プロンプト:
 
