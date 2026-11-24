@@ -388,7 +388,7 @@ cmd_resume() {
     return 2
   fi
   set_task_enabled Enable || return 1
-  printf '起動タスクを有効に戻しました。次の繰り返し（最大5分）か Windows の再起動で、必要なら WSL を起こします。\n'
+  printf '起動タスクを有効に戻しました。5分おきの繰り返しが戻るかは確かめていません。確実に戻すには、次の Windows の再起動か、rebootctl setup の出力を管理者 PowerShell に貼り直して登録し直してください。\n'
 }
 
 # ── boot ───────────────────────────────────────────────────────────

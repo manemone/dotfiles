@@ -991,14 +991,14 @@ rebootctl resume             # WSL の中から、起動タスクを有効に戻
 
 圧縮のあと WSL が止まっているときは、PowerShell で戻して WSL を起こす:
 `Enable-ScheduledTask -TaskName dotfiles-reboot-recovery; Start-ScheduledTask -TaskName dotfiles-reboot-recovery`
-（`Start` が WSL を起こして `boot` まで走らせる）。`pause` / `resume` は決めた引数（`pause --shutdown` だけ）以外を、`--help` を含めて何もせず拒否する。呼ぶ実行ファイルは
+（`Start` は手動で1回走らせて WSL を起こし、`boot` まで走らせる。5分おきの繰り返しは起動時トリガーが発火したときに始まるので、`Enable` と `Start` のあとも戻るとは限らず、実機では確かめていない。確実に戻すには、次の Windows の再起動か、`rebootctl setup` の出力を管理者 PowerShell に貼り直して登録し直す。戻ったかは、`wsl --shutdown` のあと5分以上待って WSL が起き直すかで見る）。`pause` / `resume` は決めた引数（`pause --shutdown` だけ）以外を、`--help` を含めて何もせず拒否する。呼ぶ実行ファイルは
 `REBOOTCTL_POWERSHELL` / `REBOOTCTL_WSL_EXE` で差し替えられる（テストと手元の確かめは偽物で行い、本物のタスクを変えない）。
 `pause` は `Disable-ScheduledTask` を呼ぶだけで、権限が足りなければ
 失敗して理由と管理者 PowerShell で打つ形を表示し、そのときは WSL を止めない（実機での権限は未確認）。
 **戻し忘れると、無効のタスクは起動時トリガーでも走らないので、Windows の再起動のあとも WSL・Herdr・管制の会話が起きず、
 再起動からの復帰がまるごと止まる。** `rebootctl status` の「起動タスク」の欄は登録の有無に加えて状態（`Disabled` / `Ready`）も出し、
 無効のときは戻す案内を出す。
-**タスクは登録し直しが要る**（`rebootctl setup` の出力を管理者 PowerShell に貼る。登録済みのタスクは古い形のまま動き続け、
+**タスクは登録し直しが要る**（`rebootctl setup` の出力を管理者 PowerShell に貼る。繰り返しは起動時トリガーの発火から始まるので、登録した直後から効くとは限らず、確実なのは次の Windows の再起動のあと。登録済みのタスクは古い形のまま動き続け、
 起動時には今までどおり走るが、WSL だけの起き直しは拾わない）。
 
 **起動時の差し込み口。** `boot` は最初（会話の復元を待つより前）に、次の置き場の実行ファイルを呼ぶ:
