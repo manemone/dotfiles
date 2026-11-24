@@ -972,7 +972,30 @@ Windows のプログラムに NAS を使わせるときは UNC でなく WSL 経
 
 `rebootctl boot` はタスクが呼ぶ入口で、手で叩いても安全（冪等）。Herdr のサーバが動いていなければ起動し、会話の復元を
 待ち、`herdr-resume` があれば `herdr-resume recover` を呼ぶ。記録は `${XDG_STATE_HOME:-~/.local/state}/reboot-recovery/boot.log`。
-`--hold` は最後に居座って WSL を落とさない（タスク専用）。
+`--hold` は最後に居座って WSL を落とさない（タスク専用）。`--once-per-boot` は、この起動で boot が最後まで終わっていれば何もしない（タスクの繰り返し用）。
+
+**WSL だけが起き直したとき。** `rebootctl setup` のタスクは、起動時に加えて5分おきにも走る。`boot --hold` は WSL が
+生きているあいだ居座るので、同時に2つは走らない（`IgnoreNew`）。WSL だけが落ちて `wsl.exe` が終わると、次の繰り返しが
+WSL ごと起こして `boot` を呼ぶ（最大5分で拾う。WSL が落ちたまま起き直さない場合もここで起こす）。拾えないのは
+Windows 自体が止まっているとき。起動の種類は `boot_id` が前回と違うときに決め、Windows の最終起動時刻が前回と同じなら
+WSL だけの起き直し、違えば Windows の再起動、読めない・前回が無ければ不明とする。記録は
+`${XDG_STATE_HOME:-~/.local/state}/reboot-recovery/boot-state.json`（`cause`）で、管制の会話が通知文に使う。
+**タスクは登録し直しが要る**（`rebootctl setup` の出力を管理者 PowerShell に貼る。登録済みのタスクは古い形のまま動き続け、
+起動時には今までどおり走るが、WSL だけの起き直しは拾わない）。
+
+**起動時の差し込み口。** `boot` は最初（会話の復元を待つより前）に、次の置き場の実行ファイルを呼ぶ:
+
+| 項目 | 決まり |
+|---|---|
+| 置き場 | `${XDG_CONFIG_HOME:-~/.config}/reboot-recovery/boot.d/`（`REBOOTCTL_BOOT_D` で差し替え） |
+| 呼ぶ対象 | 直下の、実行権のある通常ファイル（ドットで始まる名前・ディレクトリ・実行権の無いファイルは呼ばない） |
+| 呼ぶ順 | 名前順（`LC_COLLATE=C`）。`10-` `20-` のように数字を前に付けて順を決める |
+| 時間の上限 | 1本ごとに60秒（`REBOOTCTL_HOOK_TIMEOUT` で変更）。時間切れ・失敗でも次の1本と `boot` の続きは止まらない。常駐させたい処理は呼ばれた側で切り離して起動する |
+| 出力 | 標準出力・標準エラーとも `boot.log` へ。標準入力は空 |
+| 渡す環境変数 | `REBOOTCTL_BOOT_CAUSE`（`windows_reboot` / `wsl_restart` / `unknown`）・`REBOOTCTL_BOOT_ID`・`REBOOTCTL_WINDOWS_LAST_BOOT`（読めなければ空） |
+| 呼ばれる回数 | `boot` が走るたび。手で `boot` を叩いても、同じ起動で複数回呼ばれうる。**呼ばれる側は何度呼ばれても害が無いように作る** |
+
+設計の経緯は ADR DOC-2611242024。
 
 最後の手順4で**管制の会話**（スキル `control-tower`。ADR DOC-2611151326）を起こす。Herdr に、ラベル `管制`・cwd `$HOME` の
 ワークスペースを作り、`claude --model sonnet --name 再起動管制` を起動する。ラベル `管制` のワークスペースが既にあれば

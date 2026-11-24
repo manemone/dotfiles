@@ -15,6 +15,7 @@ description: "再起動の管制の会話（Herdr に常駐する Claude）の�
 |---|---|---|
 | `$ST/last-recovery.json` | `herdr-resume recover` | `boot_id`・`windows_last_boot`・`status`・`sent[]`・`not_sent[]`（`needs_human`・`reason`・`workspace`・`cwd`） |
 | `$ST/boot.log` | `rebootctl boot` | 起動の記録 |
+| `$ST/boot-state.json` | `rebootctl boot` | `boot_id`・`windows_last_boot`・`cause`（`windows_reboot` / `wsl_restart` / `unknown`）・`finished` |
 | `$ST/control-tower.json` | `notified_boot_id` はこの会話、`announced_reboot_for` は `rebootctl watch` | 通知済みの印（下記） |
 
 ## 1. 起動時の手順（この会話が立ち上がったら、まず1回）
@@ -30,7 +31,10 @@ description: "再起動の管制の会話（Herdr に常駐する Claude）の�
    - `status` が `in_progress` → recover の途中。20 秒おきに最大 9 回読み直す（それでも `in_progress` ならその時点の内容で知らせ、
      「送信の途中だった」と添える）
 4. `PushNotification` で**1回だけ**知らせる。文面は短く:
-   `再起動から戻った。再開N件・要確認M件（<要確認の会話の workspace 名を3つまで>）。Windows 起動 <windows_last_boot>`
+   `<起動の種類>から戻った。再開N件・要確認M件（<要確認の会話の workspace 名を3つまで>）。Windows 起動 <windows_last_boot>`
+   - 起動の種類は `$ST/boot-state.json` を読み、`boot_id` が今のものと同じときだけ `cause` で決める:
+     `windows_reboot` → `Windows の再起動`、`wsl_restart` → `WSL だけの起き直し（Windows は再起動していない）`、
+     それ以外・読めない → `再起動`
    - N = `sent` の件数（`result` が `unconfirmed` のものは「届いたか未確認」として別に数える）、M = `not_sent` のうち `needs_human: true` の件数
    - 要確認が0件なら名前は省く。報告が無いときは `起動した。再開の報告は無い` とだけ
    - 通知したら `$ST/control-tower.json` に `{"notified_boot_id": "<boot_id>"}` を書く（既にキーがあれば他のキーは残す）
