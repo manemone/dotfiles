@@ -12,7 +12,7 @@ powershell.exe / herdr / herdr-resume はスタブへ差し替え、実 Windows 
 - `boot` は boot_id が変わり Windows の最終起動時刻が同じなら WSL だけの起き直しと判定し、起動時の差し込み口を
   名前順に呼ぶ（1本の失敗・時間切れで残りを止めない）。`--once-per-boot` は同じ起動で2回目以降、差し込み口も
   管制への送信も繰り返さない
-- 起動時の `netuse`（root で NAS の資格情報から net use を張る）は、パスワードを標準出力・標準エラー・
+- 起動時の `netuse` / `netuse-boot`（root で NAS の資格情報から net use を張り、ユーザーへ切り替えて boot）は、パスワードを標準出力・標準エラー・
   boot.log のどこにも出さず、失敗しても資格情報が無くても 0 で終わる（後ろの boot を止めない）。
   `setup` は NAS の UNC が分かるときだけ net use の操作を足す
 - 管制の会話は `$HOME` でなく専用のフォルダで起こす（信頼を保存できないと毎回確認で止まる）
@@ -109,12 +109,14 @@ exit 0
 
     def test_setup_adds_netuse_action_only_when_unc_is_known(self) -> None:
         r = self.run_ctl("setup", extra_env={"REBOOTCTL_NAS_UNC": "\\\\nas\\share"})
-        self.assertIn("rebootctl netuse //nas/share'", r.stdout)
-        self.assertIn("@($netuse, $action)", r.stdout)
+        # 操作は1つで、root の netuse-boot（net use と boot を同じ wsl.exe の起動の中で走らせる）
+        self.assertIn("-u root -- env HOME=", r.stdout)
+        self.assertIn("rebootctl netuse-boot //nas/share ", r.stdout)
+        self.assertIn("-Action $action ", r.stdout)
         self.assertNotIn("password", r.stdout.lower())
         r = self.run_ctl("setup")
-        self.assertNotIn("rebootctl netuse", r.stdout.replace("`rebootctl netuse`", ""))
-        self.assertIn("@($action)", r.stdout)
+        self.assertNotIn("netuse-boot //", r.stdout)
+        self.assertIn("bash -lc", r.stdout)
         self.assertNotIn("powershell", self.calls_text())
 
     def test_netuse_never_leaks_password_and_never_fails_boot(self) -> None:
@@ -154,6 +156,10 @@ exit 0
             ((), env),
         ):
             self.assertEqual(self.run_ctl("netuse", *args, extra_env=e).returncode, 0)
+        # 切り替え先のユーザーが引けなくても 0 で終わり、boot を呼べなかったことを残す
+        r = self.run_ctl("netuse-boot", "//nas/share", "no-such-user-xyz", "--hold", extra_env=env)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("切り替えられない", (self.state / "reboot-recovery" / "boot.log").read_text())
         r = self.run_ctl("netuse", "//nas/share", path_only_stubs=True, extra_env=env)
         self.assertEqual(r.returncode, 0)
         log = (self.state / "reboot-recovery" / "boot.log").read_text()

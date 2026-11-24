@@ -61,7 +61,10 @@ Usage: rebootctl <command>
   resume            起動タスクを有効に戻す（WSL が止まっているときは、PowerShell で戻す。pause の表示を参照）
   netuse <//ホスト/共有>
                     root で呼ぶ。/etc/nas-credentials の資格情報で、Windows 側に NAS の UNC を
-                    net use で張る（起動時タスクの最初の操作。失敗しても 0 で終わる）
+                    net use で張る（失敗しても 0 で終わる）
+  netuse-boot <//ホスト/共有> <ユーザー名> [boot の引数...]
+                    root で呼ぶ。netuse のあと、同じ起動の中でユーザーに切り替えて boot を呼ぶ
+                    （起動時タスクの操作。切り替えで WSL_INTEROP を落とさない）
   watch             Windows が再起動待ちのときだけ、管制の会話（ラベル「管制」）へ予告の手順を送る。
                     再起動待ちでなければ何も送らず、モデルも呼ばない。同じ予告は1回だけ
                     （cron から1時間おきに呼ぶ。登録の1行は bin/README.md §3.7）
@@ -294,7 +297,7 @@ nas_line() {
   printf '  %s: %s\n' "$label" "$word"
 }
 
-# ── netuse（起動時タスクの1つ目の操作。root で呼ぶ） ───────────────
+# ── netuse（起動時タスクの中で root が呼ぶ） ───────────────
 # S4U のログオンには NAS の資格情報が無いので、/etc/nas-credentials の資格情報で Windows 側に UNC を張る
 # （このタスクのログオンの中の net use。同じタスクで起きる WSL から呼ぶ Windows のプログラムにも効く。ADR DOC-2611151248 §8）。
 # - パスワードはまず標準入力で渡す（net.exe の引数にならない）。通らなければ引数で渡し直す
@@ -350,21 +353,39 @@ cmd_netuse() {
   return 0
 }
 
+# 起動時タスクの操作（root で呼ぶ）。net use を張ったあと、同じ wsl.exe の起動の中でユーザーに切り替えて boot を続ける。
+# 呼ぶ先は REBOOTCTL_BOOT_CMD で差し替えられる（実機の試験用。既定は ~/bin/rebootctl boot）。
+# 切り替えで WSL_INTEROP 等の環境を捨てない（捨てると Windows のプログラムの呼び出しが別の口へ行く）。
+#   rebootctl netuse-boot <//ホスト/共有> <ユーザー名> [boot の引数...]
+cmd_netuse_boot() {
+  local unc=${1:-} user=${2:-} h
+  local login_script="if [ -n \"\${REBOOTCTL_BOOT_CMD:-}\" ]; then exec \"\$REBOOTCTL_BOOT_CMD\" \"\$@\"; fi; exec \"\$HOME/bin/rebootctl\" boot \"\$@\""
+  if [ "$#" -ge 2 ]; then shift 2; else shift "$#"; fi
+  cmd_netuse "$unc"
+  h=$(getent passwd "$user" 2>/dev/null | cut -d: -f6) || h=""
+  if [ -z "$user" ] || [ -z "$h" ] || ! command -v runuser >/dev/null 2>&1; then
+    netuse_log "netuse: ユーザー ($user) へ切り替えられないので boot は呼ばない"
+    return 0
+  fi
+  exec runuser -u "$user" -- env "HOME=$h" "USER=$user" "LOGNAME=$user" \
+    bash -lc "$login_script" rebootctl-boot "$@"
+}
+
 # ── setup（表示だけ。ここでは powershell.exe を呼ばない） ──────────
 cmd_setup() {
   local distro="${WSL_DISTRO_NAME:-Ubuntu}"
-  # NAS の UNC が分かるときだけ、root で net use する操作を足す（タスクは静的で、起動時に環境変数は読めない）。
+  # NAS の UNC が分かるときだけ、操作を「root で net use してからユーザーで boot」に変える
+  # （タスクは静的で、起動時に環境変数は読めない）。net use と、Windows のプログラムを呼ぶ boot は、
+  # 同じ wsl.exe の起動の中で走らせる必要がある（操作を分けると接続が届かない。ADR DOC-2611151248 §8）。
   # UNC は wsl.exe の引数でバックスラッシュが壊れないよう / 区切りで渡す（cmd_netuse が \ に戻す）
-  local netuse_note netuse_action netuse_ref=""
+  local netuse_note boot_arg
   if [ -n "$NAS_UNC" ]; then
     local unc_fwd=${NAS_UNC//\\//}
-    netuse_note="# 1つ目の操作: root で \`rebootctl netuse\`（NAS の資格情報で net use を張る。失敗しても2つ目は走る）"
-    netuse_action="\$netuse = New-ScheduledTaskAction -Execute 'wsl.exe' \`
-  -Argument '-d $distro -u root -- env HOME=$HOME $HOME/bin/rebootctl netuse $unc_fwd'"
-    netuse_ref="\$netuse, "
+    netuse_note="# root で \`rebootctl netuse-boot\`（NAS の資格情報で net use を張り、同じ wsl.exe の中でユーザーに切り替えて boot を続ける）"
+    boot_arg="-d $distro -u root -- env HOME=$HOME $HOME/bin/rebootctl netuse-boot $unc_fwd $(id -un) --hold --once-per-boot"
   else
-    netuse_note="# REBOOTCTL_NAS_UNC が未設定なので、NAS の net use の操作は含めていない。必要なら \`REBOOTCTL_NAS_UNC='\\\\<ホスト>\\<共有>' rebootctl setup\` で表示し直すこと"
-    netuse_action="# （net use の操作なし）"
+    netuse_note="# REBOOTCTL_NAS_UNC が未設定なので、NAS の net use は含めていない。必要なら \`REBOOTCTL_NAS_UNC='\\\\<ホスト>\\<共有>' rebootctl setup\` で表示し直すこと"
+    boot_arg="-d $distro -- bash -lc \"\$HOME/bin/rebootctl boot --hold --once-per-boot\""
   fi
   cat <<EOF
 # ============================================================
@@ -389,21 +410,19 @@ Get-ItemProperty \$au | Select-Object AUOptions, NoAutoRebootWithLoggedOnUsers
 # 同時に2つは走らない（IgnoreNew）ので、繰り返しが効くのは WSL だけが落ちて wsl.exe が終わったあと
 # （次の繰り返しで WSL ごと起こし直す）。--once-per-boot で、同じ起動では2回目以降は何もしない。
 # S4U のログオンにはネットワーク資格情報が無い。この WSL から呼ぶ Windows のプログラムも同じログオンで動くので、
-# 何もしないと NAS の UNC パスには届かない。そこで、1つ目の操作で root が /etc/nas-credentials の資格情報で
-# net use を張ってから、2つ目の操作で boot を走らせる（ADR DOC-2611151248 §8）。起動後に「rebootctl status」の NAS の欄で確認すること。
+# 何もしないと NAS の UNC パスには届かない。そこで root が /etc/nas-credentials の資格情報で net use を張り、
+# 同じ wsl.exe の中でユーザーに切り替えて boot を走らせる（ADR DOC-2611151248 §8）。起動後に「rebootctl status」の NAS の欄で確認すること。
 $netuse_note
 \$user = "\$env:USERDOMAIN\\\$env:USERNAME"
-$netuse_action
 \$action = New-ScheduledTaskAction -Execute 'wsl.exe' \`
-  -Argument '-d $distro -- bash -lc "\$HOME/bin/rebootctl boot --hold --once-per-boot"'
-\$actions = @($netuse_ref\$action)
+  -Argument '$boot_arg'
 \$trigger = New-ScheduledTaskTrigger -AtStartup
 \$trigger.Delay = 'PT30S'
 \$trigger.Repetition = (New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 5)).Repetition
 \$principal = New-ScheduledTaskPrincipal -UserId \$user -LogonType S4U -RunLevel Limited
 \$settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances IgnoreNew \`
   -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
-Register-ScheduledTask -TaskName '$TASK_NAME' -Action \$actions -Trigger \$trigger \`
+Register-ScheduledTask -TaskName '$TASK_NAME' -Action \$action -Trigger \$trigger \`
   -Principal \$principal -Settings \$settings -Force
 
 # 確かめ
@@ -837,6 +856,7 @@ main() {
     resume) cmd_resume "$@" ;;
     watch) cmd_watch ;;
     netuse) cmd_netuse "$@" ;;
+    netuse-boot) cmd_netuse_boot "$@" ;;
     boot) cmd_boot "$@" ;;
     -h | --help | help | "") usage ;;
     *)

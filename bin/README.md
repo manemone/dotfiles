@@ -942,8 +942,8 @@ rebootctl setup    # 表示だけ。何も実行しない
 ```
 
 出力を**管理者 PowerShell** に貼る。(1) 再起動止めのポリシー（`AUOptions=4` と `NoAutoRebootWithLoggedOnUsers=1`）と、
-(2) 起動時のタスク `dotfiles-reboot-recovery`（サインイン無しで、まず root で NAS へ `net use` し、続けて
-`rebootctl boot --hold` を走らせる）が入る。`net use` の操作は `REBOOTCTL_NAS_UNC` が設定されているときだけ表示に含まれる
+(2) 起動時のタスク `dotfiles-reboot-recovery`（サインイン無しで、1つの `wsl.exe -u root` の中で NAS へ `net use` し、
+同じ起動の中でユーザーに切り替えて `rebootctl boot --hold` を走らせる）が入る。`net use` の操作は `REBOOTCTL_NAS_UNC` が設定されているときだけ表示に含まれる
 （下の NAS の節。未設定なら含めず、その旨を出す）。
 タスクは配布された `~/bin/rebootctl` を呼ぶので、先に `deploy-all.sh` で配っておくこと。
 
@@ -979,8 +979,8 @@ rebootctl status
 ```
 
 出るのは、WSL の中のマウント・Windows のプログラムから UNC・Windows のプログラムから WSL のマウント経由（`wslpath -w`）の
-3つ。起動時タスク（S4U）のログオンには NAS の資格情報が無いので、タスクの最初の操作で root が `/etc/nas-credentials` の
-資格情報で `net use` を張る（`rebootctl netuse`。ADR DOC-2611151248 §8）。サインインしない再起動のあとも、3つとも「届く」が
+3つ。起動時タスク（S4U）のログオンには NAS の資格情報が無いので、タスクの root の操作が `/etc/nas-credentials` の
+資格情報で `net use` を張る（`rebootctl netuse-boot`。ADR DOC-2611151248 §8）。サインインしない再起動のあとも、3つとも「届く」が
 想定どおり。UNC だけ届かないときは、起動時の `net use` が失敗した可能性があるので `boot.log` の `netuse:` の行を見る。
 WSL 経由のパス（`\\wsl.localhost\...`）は 9P を経由して転送が大きく遅いので、Windows のプログラムには渡さず UNC で直接使う。
 
@@ -988,8 +988,9 @@ WSL 経由のパス（`\\wsl.localhost\...`）は 9P を経由して転送が大
 
 `rebootctl boot` はタスクが呼ぶ入口で、手で叩いても安全（冪等）。Herdr のサーバが動いていなければ起動し、会話の復元を
 待ち、`herdr-resume` があれば `herdr-resume recover` を呼ぶ。記録は `${XDG_STATE_HOME:-~/.local/state}/reboot-recovery/boot.log`。
-`--hold` は最後に居座って WSL を落とさない（タスク専用）。起動時の `net use` は `boot` の中ではなく、タスクの1つ目の操作
-（`rebootctl netuse //<ホスト>/<共有>`、root で呼ぶ）が行う。失敗しても 0 で終わり、パスワードは `boot.log` にもコマンドの出力にも出さない。`--once-per-boot` は、この起動で boot が最後まで終わっていれば何もしない（タスクの繰り返し用）。
+`--hold` は最後に居座って WSL を落とさない（タスク専用）。起動時の `net use` は `boot` の中ではなく、タスクの操作
+（`rebootctl netuse-boot //<ホスト>/<共有> <ユーザー名> ...`、root で呼ぶ。`net use` のあと、同じ `wsl.exe` の起動の中で
+ユーザーに切り替えて `boot` を呼ぶ）が行う。操作を分けると接続が届かない。失敗しても 0 で終わり、パスワードは `boot.log` にもコマンドの出力にも出さない。`--once-per-boot` は、この起動で boot が最後まで終わっていれば何もしない（タスクの繰り返し用）。
 
 **WSL だけが起き直したとき。** `rebootctl setup` のタスクは、起動時に加えて5分おきにも走る。`boot --hold` は WSL が
 生きているあいだ居座るので、同時に2つは走らない（`IgnoreNew`）。WSL だけが落ちて `wsl.exe` が終わると、次の繰り返しが
