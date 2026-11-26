@@ -27,8 +27,8 @@ ADR DOC-2609121719・フック `claude/hooks/git-guard.sh`・スキル `pr-revie
 | 孫 | ブランチ | 内容 | 状況 |
 |---|---|---|---|
 | 1 | `dam-01-adr` | 線引きを改訂する ADR（許可の書き場所・条件・マージする主体・フックの担保範囲） | ⏳ CI待ち (PR #251) |
-| 2 | `dam-02-hook` | `git-guard.sh` を許可のあるリポでだけ既定ブランチ向きのマージを通す形にし、テスト・`AGENTS.md` の記述・settings との関係を合わせる | ⬜ 待機中 |
-| 3 | `dam-03-skills` | `pr-review-loop` と `umbrella-orchestrator` に、許可のあるリポで既定ブランチへマージする手順を足す | ⬜ 待機中 |
+| 2 | `dam-02-hook` | `git-guard.sh` を許可のあるリポでだけ既定ブランチ向きのマージを通す形にし、テスト・`AGENTS.md` の記述・settings との関係を合わせる | 🔄 実装中 |
+| 3 | `dam-03-skills` | `pr-review-loop` と `umbrella-orchestrator` に、許可のあるリポで既定ブランチへマージする手順を足す | 🔄 実装中 |
 
 依存: 孫2・孫3 は孫1（ADR）のマージを待つ（設計を ADR で先に確定させ、フックとスキルを同じ決定に揃えるため）。
 孫2 と孫3 は触るファイルが重ならない（孫2: `claude/hooks/`・`tests/git_guard_test.sh`・`claude/settings.json`・`AGENTS.md`・
