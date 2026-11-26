@@ -286,8 +286,8 @@ export GIT_GUARD_TEST_DECL="default_branch_merge: auto"
 assert_decision \
   "-R 指定の別リポの宣言ありは allow" \
   "allow" "$(run_hook "gh pr merge 7 -R other/repo --squash" | extract_decision)"
-if grep -q 'repos/other/repo/contents/' "$GH_ARGS_FILE" \
-  && ! grep -q 'repos/own/cwd-repo/' "$GH_ARGS_FILE"; then
+if grep -q 'repos/other/repo/contents/' "$GH_ARGS_FILE" &&
+  ! grep -q 'repos/own/cwd-repo/' "$GH_ARGS_FILE"; then
   pass "-R 指定のとき宣言は対象リポから読まれる"
 else
   fail "-R 指定の宣言の読み取り先が違う (args: $(cat "$GH_ARGS_FILE"))"
