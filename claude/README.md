@@ -294,12 +294,17 @@ statusLine が描画のたびに呼ばれても書き込みが肥大しない。
 （**次回 `./deploy-all.sh` 実行時に `claude/settings.json` の内容で再度上書きされる**ので、
 恒久的に無効化したい場合はリポジトリ側の `claude/settings.json` から `statusLine` を削除すること）。
 
-### 3.5 git-guard フック — `gh pr merge` の base だけを見る最小ガード
+### 3.5 git-guard フック — `gh pr merge` の base と、保護ブランチ向きの宣言だけを見る最小ガード
 
 `~/.claude/hooks/git-guard.sh`（`claude/hooks/git-guard.sh` から symlink される
-PreToolUse フック）が担保するのは**1点だけ**である。
+PreToolUse フック）が担保するのは次の点だけである。
 
-> `gh pr merge` のマージ先（base）が `main` / `master` なら **deny**。
+> `gh pr merge` のマージ先（base）が `main` / `master` なら **deny**。ただし、リモートの base 上の
+> `.claude/pr-review.yml` に `default_branch_merge: auto` の宣言（リポごとの opt-in）があれば **allow**。
+> 宣言が無い・確認に失敗したときは deny のまま。
+
+承認・CI green・人間の「待て」の確認はフックに持ち込まず、スキル（`pr-review-loop`）の責務である。
+宣言の設計は ADR [DOC-2611261545](../docs/adr/DOC-2611261545_default-branch-merge-opt-in.md)。
 
 **それ以外は何も言わない。判定できない入力も何も言わない**（`ask` に倒さない）。
 設計の根拠・破棄した初版の設計・受け入れた残余リスクは ADR
@@ -315,13 +320,16 @@ PreToolUse フック）が担保するのは**1点だけ**である。
 
 | 対象コマンド | 判定 |
 |---|---|
-| `gh pr merge`（PR 番号 / URL / 省略＝現ブランチ）で base が `main`/`master` | **deny** |
+| `gh pr merge`（PR 番号 / URL / 省略＝現ブランチ）で base が `main`/`master`、宣言あり | **allow** |
+| 同じく base が `main`/`master`、宣言なし（404・キー無し・値が `auto` 以外）または確認の失敗 | **deny** |
 | `gh pr merge` で base がそれ以外だと確定できた | **allow**（孫→傘のマージを無音で通す） |
 | `gh pr merge` だが base を解決できない（`gh` 実行失敗・PR 不明・解釈不能） | **何も言わない** |
 | 上記以外のすべて（`git push` / `git merge` / `chmod` / `rm` / 連結コマンド / `git -C` …） | **何も言わない** |
 
 `-R` / `--repo` は `gh pr view` 側へ引き継ぐ（別リポジトリの PR を手元のブランチ
-構成で判定しないため）。`--repo` は `gh pr` の inherited flag なので、`gh` の直後
+構成で判定しないため）。宣言は `gh pr view` が返す PR の URL のリポから `gh api` で読む
+（`ref=<base>`。作業ツリーや PR の head は見ない）。`gh` の待ち時間は base の解決 12 秒 +
+宣言の読み取り 8 秒で、フックの `timeout` は 25 秒。`--repo` は `gh pr` の inherited flag なので、`gh` の直後
 （`gh -R o/r pr merge 7`）と `pr merge` の後ろ（`gh pr merge 7 -R o/r`）の両方を見る。
 
 拾う `gh` は**コマンド位置にあるものだけ**（行頭、または直前が `&&` / `||` / `;` /

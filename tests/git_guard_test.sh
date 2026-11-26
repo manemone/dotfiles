@@ -47,13 +47,25 @@ trap cleanup EXIT
 STUB_DIR="$(mktemp -d)"
 GH_ARGS_FILE="$STUB_DIR/gh-args"
 
-# gh スタブ: `gh [<グローバルオプション>] pr view [<target>] --json baseRefName -q ...`
-# に応答する。受け取った引数を $GH_ARGS_FILE に記録するので、フックが
-# `-R <owner/repo>` を引き継いだかを検証できる。
-# GIT_GUARD_TEST_BASE_REF（export 必須）が空なら失敗する（base 解決不能を模擬）。
+# gh スタブ: `gh [<グローバルオプション>] pr view [<target>] --json baseRefName,url -q ...`
+# （base と PR の URL を1行ずつ返す）と、宣言の読み取り `gh api ... <path>` に応答する。
+# 受け取った引数を $GH_ARGS_FILE に追記するので、フックが `-R <owner/repo>` を
+# 引き継いだか・宣言を対象リポの base から読んだかを検証できる。
+# GIT_GUARD_TEST_BASE_REF（export 必須）が空なら pr view は失敗する（base 解決不能を模擬）。
+# 宣言（gh api）の応答は GIT_GUARD_TEST_DECL: 未設定=404 相当の失敗 / FAIL=失敗 /
+# それ以外=ファイル本文として出力。
 cat >"$STUB_DIR/gh" <<'STUB'
 #!/bin/sh
-printf '%s\n' "$*" >"$GH_ARGS_FILE"
+printf '%s\n' "$*" >>"$GH_ARGS_FILE"
+case " $* " in
+  *" api "*)
+    case "${GIT_GUARD_TEST_DECL:-FAIL}" in
+      FAIL) exit 1 ;;
+      *) printf '%s\n' "$GIT_GUARD_TEST_DECL" ;;
+    esac
+    exit 0
+    ;;
+esac
 if [ -z "${GIT_GUARD_TEST_BASE_REF:-}" ]; then
   exit 1
 fi
@@ -64,7 +76,21 @@ for arg in "$@"; do
     '#'*) exit 1 ;;
   esac
 done
+# 対象リポは -R / --repo の値、無ければ cwd 相当の own/cwd-repo。
+repo="own/cwd-repo"
+prev=""
+for arg in "$@"; do
+  case "$prev" in
+    -R | --repo) repo="$arg" ;;
+  esac
+  case "$arg" in
+    --repo=*) repo="${arg#--repo=}" ;;
+    -R?*) repo="${arg#-R}" ;;
+  esac
+  prev="$arg"
+done
 printf '%s\n' "$GIT_GUARD_TEST_BASE_REF"
+printf 'https://github.com/%s/pull/7\n' "$repo"
 exit 0
 STUB
 chmod +x "$STUB_DIR/gh"
@@ -220,10 +246,65 @@ assert_decision \
   "gh pr merge: base=main は deny" \
   "deny" "$(run_hook "gh pr merge --squash" | extract_decision)"
 
+# 宣言（opt-in）。保護ブランチ向きでも、リモートの base 上の
+# .claude/pr-review.yml に宣言があれば allow。宣言なし・確認の失敗は deny のまま
+# （ADR DOC-2611261545 §2.5）。ここまでの deny テストは GIT_GUARD_TEST_DECL 未設定
+# （= 宣言の読み取りが失敗）で走るので、確認失敗の deny も固定されている。
+log "--- 保護ブランチ向きの宣言（opt-in） ---"
+export GIT_GUARD_TEST_BASE_REF="master"
+export GIT_GUARD_TEST_DECL="default_branch_merge: auto"
+assert_decision \
+  "宣言あり（base=master）は allow" \
+  "allow" "$(run_hook "gh pr merge 1 --squash --delete-branch" | extract_decision)"
+: >"$GH_ARGS_FILE"
+run_hook "gh pr merge 1 --squash" >/dev/null
+if grep -q 'repos/own/cwd-repo/contents/.claude/pr-review.yml?ref=master' "$GH_ARGS_FILE"; then
+  pass "宣言は base（ref=master）のリモートの版から読まれる"
+else
+  fail "宣言の読み取り先が想定と違う (args: $(cat "$GH_ARGS_FILE"))"
+fi
+export GIT_GUARD_TEST_DECL="# コメント
+other: 1
+default_branch_merge: \"auto\"  # 全 PR 対象"
+assert_decision \
+  "宣言あり（引用符・行末コメント・他のキー同居）は allow" \
+  "allow" "$(run_hook "gh pr merge 1 --squash" | extract_decision)"
+for decl in "default_branch_merge: manual" "  default_branch_merge: auto" \
+  "other: 1" "default_branch_merge: automatic"; do
+  export GIT_GUARD_TEST_DECL="$decl"
+  assert_decision \
+    "宣言なし扱い（${decl}）は deny" \
+    "deny" "$(run_hook "gh pr merge 1 --squash" | extract_decision)"
+done
+export GIT_GUARD_TEST_DECL="FAIL"
+assert_decision \
+  "宣言の読み取りが失敗（404・gh 失敗・タイムアウト相当）は deny" \
+  "deny" "$(run_hook "gh pr merge 1 --squash" | extract_decision)"
+# -R で別リポの PR を指すとき、宣言は cwd のリポでなくそのリポから読む。
+export GIT_GUARD_TEST_DECL="default_branch_merge: auto"
+: >"$GH_ARGS_FILE"
+assert_decision \
+  "-R 指定の別リポの宣言ありは allow" \
+  "allow" "$(run_hook "gh pr merge 7 -R other/repo --squash" | extract_decision)"
+if grep -q 'repos/other/repo/contents/' "$GH_ARGS_FILE" &&
+  ! grep -q 'repos/own/cwd-repo/' "$GH_ARGS_FILE"; then
+  pass "-R 指定のとき宣言は対象リポから読まれる"
+else
+  fail "-R 指定の宣言の読み取り先が違う (args: $(cat "$GH_ARGS_FILE"))"
+fi
+unset GIT_GUARD_TEST_DECL
+
 export GIT_GUARD_TEST_BASE_REF="git-guard-regressions"
 assert_decision \
   "gh pr merge: base=傘ブランチは allow（孫→傘のマージは無音で通す）" \
   "allow" "$(run_hook "gh pr merge 12 --squash --delete-branch" | extract_decision)"
+: >"$GH_ARGS_FILE"
+run_hook "gh pr merge 12 --squash" >/dev/null
+if grep -q ' api ' "$GH_ARGS_FILE"; then
+  fail "非保護 base で宣言を読みに行っている（gh 呼び出しが増えている）"
+else
+  pass "非保護 base では宣言を読みに行かない"
+fi
 unset GIT_GUARD_TEST_BASE_REF
 
 # GIT_GUARD_TEST_BASE_REF 未設定 → gh スタブが失敗 → base 解決不能。

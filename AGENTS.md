@@ -41,9 +41,14 @@
     ブランチを問わず引き続き人間の承認が要る
   - `claude/hooks/git-guard.sh`（PreToolUse フック。ADR
     [DOC-2609121719](docs/adr/DOC-2609121719_git-operation-permission-policy.md)
-    参照）が機械的に担保するのは**`gh pr merge` の base が保護ブランチかどうか、
-    その1点だけ**である。base は PR 側の属性でコマンド文字列に現れず、
-    `permissions` のグロブで表現できないため。`main`/`master` への `git push` は
+    参照）が機械的に担保するのは、**`gh pr merge` の base が保護ブランチかどうか**と、
+    保護ブランチ向きのときの**リモートの base 上の宣言（opt-in）の有無**
+    （`.claude/pr-review.yml` の `default_branch_merge: auto`。ADR
+    [DOC-2611261545](docs/adr/DOC-2611261545_default-branch-merge-opt-in.md) 参照）だけ
+    である。宣言が無い・確認できないときは `deny` のまま（dotfiles 自身は宣言しない）。
+    base も宣言も PR 側・リモート側の属性でコマンド文字列に現れず、
+    `permissions` のグロブで表現できないため。承認・CI green・「待て」の確認はフックの
+    対象外でスキル側の責務。`main`/`master` への `git push` は
     `claude/settings.json` の `permissions.ask` グロブが受け持つ。
     **それ以外——`git pull` を AI の判断で使わないこと・孫→傘のマージをレビュー承認済みPRに
     限ること・ローカルの `git merge` の向き先——はフックの対象外であり、
