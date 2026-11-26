@@ -26,9 +26,9 @@ ADR DOC-2609121719・フック `claude/hooks/git-guard.sh`・スキル `pr-revie
 
 | 孫 | ブランチ | 内容 | 状況 |
 |---|---|---|---|
-| 1 | `dam-01-adr` | 線引きを改訂する ADR（許可の書き場所・条件・マージする主体・フックの担保範囲） | ⏳ CI待ち (PR #251) |
-| 2 | `dam-02-hook` | `git-guard.sh` を許可のあるリポでだけ既定ブランチ向きのマージを通す形にし、テスト・`AGENTS.md` の記述・settings との関係を合わせる | 🔄 実装中 |
-| 3 | `dam-03-skills` | `pr-review-loop` と `umbrella-orchestrator` に、許可のあるリポで既定ブランチへマージする手順を足す | ⏳ CI待ち (PR #252) |
+| 1 | `dam-01-adr` | 線引きを改訂する ADR（許可の書き場所・条件・マージする主体・フックの担保範囲） | ✅ PR #251 マージ済 |
+| 2 | `dam-02-hook` | `git-guard.sh` を許可のあるリポでだけ既定ブランチ向きのマージを通す形にし、テスト・`AGENTS.md` の記述・settings との関係を合わせる | ✅ PR #253 マージ済 |
+| 3 | `dam-03-skills` | `pr-review-loop` と `umbrella-orchestrator` に、許可のあるリポで既定ブランチへマージする手順を足す | ✅ PR #252 マージ済 |
 
 依存: 孫2・孫3 は孫1（ADR）のマージを待つ（設計を ADR で先に確定させ、フックとスキルを同じ決定に揃えるため）。
 孫2 と孫3 は触るファイルが重ならない（孫2: `claude/hooks/`・`tests/git_guard_test.sh`・`claude/settings.json`・`AGENTS.md`・
@@ -164,6 +164,11 @@ ADR の孫が最終的に決める。司令官の推奨は叩き台であり、�
 ## 進行記録
 
 - 2026-11-26: 司令官が計画書を起草。孫1 を spawn
+- 2026-11-26: 孫1 PR #251・孫3 PR #252・孫2 PR #253 を傘へマージ。傘での検証は `tests/git_guard_test.sh`・`bin/tests/lint.sh`・
+  `doc-id verify`・pre-commit が通った。`bin/tests` の unittest は手元（macOS・Herdr のペイン内）で `test_ocw` の Herdr まわり3件と
+  Linux 向けの分岐2件が落ち、master の版でも同じ3件が落ちるため傘より前からの手元の環境の問題と判断した（傘は `bin/` を変えておらず、
+  各 PR の CI の `bin-tests` は green）
+- 2026-11-26: 孫2 の実装AIが、修正の push 直後にマシンのスリープで API エラーになり約4時間止まった。司令官が続きを指示して復帰
 
 ## 孫1用プロンプト:
 
