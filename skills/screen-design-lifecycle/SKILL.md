@@ -49,7 +49,7 @@ Figma の作り込みそのものの手順は `figma-design-workflow` が持つ�
 | 2 決めと記録 | 決めの文書・定義の文書・記録（`DEC-` の番号） | 決めの候補がある | 決めの文書に書かれ、ユーザーが確認した | 同上 |
 | 3 Figma の作り込み | Figma の画面・記録・点検の結果 | 決めの文書と定義の文書がある | 点検が0件で、記録が PR で承認された | `figma-design-workflow` |
 | 4 実装への申し送り | 申し送りの文書の組 | 画面の構成が固まった | 実装の担当が、入口の1枚から読み始められる | [references/handoff-docs.md](references/handoff-docs.md) |
-| 5 差分の洗い出しと分担ボード | 差分の表（`GAP-` の番号）・分担ボードの issue | 申し送りがある | 差分が束になり、取る人が名乗れる | `figma-design-workflow` の `references/handoff-to-impl.md` |
+| 5 差分の洗い出しと分担ボード | 差分の表（`GAP-` の番号。束の頭文字つき）・分担ボードの issue | 申し送りがある | 差分が束になり、取る人が名乗れる | `figma-design-workflow` の `references/handoff-to-impl.md` |
 | 6 デモ後の受け口 | 受け口とボードを兼ねた issue（`BD-` の番号） | 実装がデモできる状態 | ボードの行が「済み」になる | [references/after-demo.md](references/after-demo.md) |
 
 工程は一方通行ではない。デモ後の気づきが決めの変更になれば、工程 2・3 へ戻る。ただし戻り先でも、同じ手順（決めの文書を先に直す、記録を1件1PR で残す）を使う。
