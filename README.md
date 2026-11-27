@@ -169,6 +169,7 @@ for details. `bin/` changes should additionally be verified with
 │   ├── umbrella-orchestrator/ # Umbrella-branch grandchild lifecycle
 │   ├── umbrella-handoff/      # Consultation-to-commander handoff automation
 │   ├── figma-design-workflow/ # Working an external Figma source in an umbrella: roles, per-item flow, safety, patterns, audit script, handoff to implementation
+│   ├── screen-design-lifecycle/ # Stages around the Figma work: starting a screen, feedback intake, decisions and numbering, handoff documents, post-demo inbox
 │   ├── repo-baseline/         # Applying the repo-baseline copier template
 │   ├── ocw/                   # Points AI agents to `ocw help <topic>` instead of reading bin/ocw
 │   ├── worktree-cleanup/      # Scope-aware worktree cleanup with human approval before deletion
