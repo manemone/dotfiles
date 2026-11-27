@@ -2,9 +2,14 @@
 #
 # claude/hooks/git-guard.sh — PreToolUse フック。
 #
-# 担保するのは**1点だけ**:
+# 担保するのは、`gh pr merge` のマージ先（base）が保護ブランチ（main / master）
+# のときの次の1点:
 #
-#   `gh pr merge` のマージ先（base）が保護ブランチ（main / master）なら deny。
+#   リモートの base 上の `.claude/pr-review.yml` に `default_branch_merge: auto`
+#   の宣言が無ければ deny（宣言があれば allow）。宣言が確認できなくても deny。
+#
+# 承認・CI・「待て」の確認はフックに持ち込まない（スキル側の責務。ADR
+# DOC-2611261545 §3.3）。
 #
 # それ以外は何も言わない（既存の `permissions` に委ねる）。**判定できない入力も
 # 何も言わない。** 「判定できなければ ask に倒す」という初版（PR #94）の設計思想は
@@ -20,7 +25,8 @@
 # ローカルの `git merge` は push しなければ巻き戻せるため対象外。
 #
 # 設計の根拠・却下案・受け入れた残余リスクは
-# docs/adr/DOC-2609121719_git-operation-permission-policy.md を参照。
+# docs/adr/DOC-2609121719_git-operation-permission-policy.md と、保護ブランチ向きに
+# 宣言（opt-in）を足した docs/adr/DOC-2611261545_default-branch-merge-opt-in.md を参照。
 
 # 保護ブランチの定義はここ1箇所のみ。
 GIT_GUARD_PROTECTED_BRANCHES="main master"
@@ -41,16 +47,30 @@ command -v python3 >/dev/null 2>&1 || exit 0
 GIT_GUARD_PROTECTED_BRANCHES="$GIT_GUARD_PROTECTED_BRANCHES" python3 - "$INPUT" <<'PYEOF'
 import json
 import os
+import re
 import shlex
 import subprocess
 import sys
+import urllib.parse
 
 PROTECTED = set(os.environ.get("GIT_GUARD_PROTECTED_BRANCHES", "main master").split())
-# `claude/settings.json` のフック側 timeout（15秒）より短くしておく。ただし
+# `claude/settings.json` のフック側 timeout（25秒）より短くしておく。ただし
 # 「gh は生きているが遅い」状態ではフックだけが先に諦めて無音になり、後続の
 # `gh pr merge` 本体（タイムアウト無し）は成功しうる。この窓は ADR §7 に
 # 残余リスクとして明記してある。
 GH_TIMEOUT = 12
+# 宣言の読み取り（保護ブランチ向きと確定した後だけ）。超えたら deny。
+# GH_TIMEOUT + これ = 20秒 < フックの timeout 25秒（ADR DOC-2611261545 §2.6）。
+GH_TIMEOUT_DECLARATION = 8
+
+# 宣言の値の解釈。先頭の階層（インデント無し）の1行だけを見る（YAML パーサは
+# 前提にしない）。形が違うものは宣言なし（ADR DOC-2611261545 §2.1 / §2.5）。
+# YAML のとおり、コロンの後ろは空白が必須、引用符は対で閉じる、コメントの `#` の
+# 前も空白が必須（`auto#x` は値が `auto#x`、`key:auto` はマッピングではない）。
+DECLARATION_RE = re.compile(
+    r"""^default_branch_merge:[ \t]+(?:auto|"auto"|'auto')(?:[ \t]+#.*)?[ \t]*$"""
+)
+PR_URL_RE = re.compile(r"^https?://([^/]+)/([^/]+)/([^/]+)/pull/[0-9]+")
 
 # `gh pr merge` のうち、値をスペース区切りで取るオプション。次のトークンを
 # マージ対象（PR 番号 / URL / ブランチ名）と取り違えないために読み飛ばす。
@@ -262,20 +282,55 @@ def scan_merge_args(rest):
 
 
 def resolve_base(repo_args, target, cwd):
+    # (base, PR の URL) を返す。base を解決できなければ (None, None)。URL は
+    # 宣言の読み取りに使う対象リポ（owner/name）の唯一の取得元（ADR
+    # DOC-2611261545 §2.5）。`-R` や URL 指定の PR でも対象 PR 自身のリポを指す。
     cmd = ["gh"] + repo_args + ["pr", "view"]
     if target is not None:
         cmd.append(target)
-    cmd += ["--json", "baseRefName", "-q", ".baseRefName"]
+    cmd += ["--json", "baseRefName,url", "-q", ".baseRefName, .url"]
     try:
         proc = subprocess.run(
             cmd, cwd=cwd, capture_output=True, text=True, timeout=GH_TIMEOUT
         )
     except Exception:
-        return None
+        return None, None
     if proc.returncode != 0:
-        return None
-    base = proc.stdout.strip()
-    return base or None
+        return None, None
+    lines = proc.stdout.split("\n")
+    base = lines[0].strip()
+    url = lines[1].strip() if len(lines) > 1 else None
+    return (base or None), (url or None)
+
+
+def has_declaration(url, base, cwd):
+    # リモートの base 上の .claude/pr-review.yml に宣言があるか。PR の head や
+    # 作業ツリーの版は見ない（宣言を足した PR 自身が自分を許可できないように）。
+    # 確認できない（URL 不明・gh の失敗・タイムアウト・404）はすべて False。
+    match = PR_URL_RE.match(url or "")
+    if match is None:
+        return False
+    host, owner, name = match.groups()
+    path = (
+        f"repos/{owner}/{name}/contents/.claude/pr-review.yml"
+        f"?ref={urllib.parse.quote(base, safe='')}"
+    )
+    cmd = [
+        "gh", "api", "--hostname", host,
+        "-H", "Accept: application/vnd.github.raw", path,
+    ]
+    try:
+        proc = subprocess.run(
+            cmd, cwd=cwd, capture_output=True, text=True,
+            timeout=GH_TIMEOUT_DECLARATION,
+        )
+    except Exception:
+        return False
+    if proc.returncode != 0:
+        return False
+    return any(
+        DECLARATION_RE.match(line.rstrip("\r")) for line in proc.stdout.split("\n")
+    )
 
 
 def main():
@@ -304,12 +359,15 @@ def main():
         say_nothing()
 
     repo_args, target = found
-    base = resolve_base(repo_args, target, payload.get("cwd") or None)
+    cwd = payload.get("cwd") or None
+    base, url = resolve_base(repo_args, target, cwd)
     if base is None:
         # base を解決できない（gh の実行失敗・PR 不明）。ask には倒さない。
         say_nothing()
 
     if base in PROTECTED:
+        if has_declaration(url, base, cwd):
+            emit("allow")
         emit(
             "deny",
             f"git-guard: この PR の base は '{base}' です。"
