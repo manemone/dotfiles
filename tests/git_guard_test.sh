@@ -269,8 +269,13 @@ default_branch_merge: \"auto\"  # 全 PR 対象"
 assert_decision \
   "宣言あり（引用符・行末コメント・他のキー同居）は allow" \
   "allow" "$(run_hook "gh pr merge 1 --squash" | extract_decision)"
+# 設定ミスの形（値が `auto#disabled`・コロン直後に空白無し・閉じていない引用符・
+# 対にならない引用符）が宣言として通ると、deny が設定ミスだけで外れる。
 for decl in "default_branch_merge: manual" "  default_branch_merge: auto" \
-  "other: 1" "default_branch_merge: automatic"; do
+  "other: 1" "default_branch_merge: automatic" \
+  "default_branch_merge: auto#disabled" "default_branch_merge:auto" \
+  "default_branch_merge: \"auto" "default_branch_merge: auto\"" \
+  "default_branch_merge: \"auto'"; do
   export GIT_GUARD_TEST_DECL="$decl"
   assert_decision \
     "宣言なし扱い（${decl}）は deny" \

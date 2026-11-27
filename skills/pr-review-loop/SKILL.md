@@ -1593,9 +1593,13 @@ herdr agent prompt "$REVIEWER_PANE" "以下を読んでPRレビューを実行�
 - **CI が実行中**（承認後の push など）・**赤** → マージしない。人間に「承認済み。CI が green でないのでマージしていない」と
   伝えて止まる。実行中を待ってマージする手順は無い。赤で承認が誤りだったと分かったときは、従来どおり承認した
   レビュワーに知らせて Phase 5 へ戻る
-- マージは `gh pr merge <PR番号> --squash --delete-branch`。**`--admin`・`--auto`・保護の回避は使わない。**
-  squash が許されない・必須レビューや保護の設定で拒否されるなど `gh` が失敗したら、別の方法（`--merge` / `--rebase`）へ
-  切り替えず、人間に報告して止まる
+- マージは `gh pr merge <PR番号> --squash --delete-branch --match-head-commit <確認済みの完全なSHA>`。
+  `<確認済みの完全なSHA>` は、条件3・4・5で承認と CI の green を確認した対象 HEAD の完全な 40 桁の SHA
+  （`gh pr view <PR番号> --json headRefOid` で取り直した値。短縮 SHA は使わない）。確認から実行までの間に
+  別の人や自動処理が push すると、`gh` は HEAD の不一致でマージを拒否する。その場合はマージせず、新しい HEAD の
+  レビュー（承認と CI）からやり直す。**`--admin`・`--auto`・保護の回避は使わない。**
+  squash が許されない・必須レビューや保護の設定で拒否されるなど `gh` が失敗したら（HEAD の不一致は上のとおりレビューからやり直す）、別の方法
+  （`--merge` / `--rebase`、`--match-head-commit` を外す）へ切り替えず、人間に報告して止まる
 - 分類器や許可に止められたら、形を変えて試し直さず、人間に知らせて止まる（同じ PR で毎回通知しない）
 - `--delete-branch` のローカル削除はワークツリーがブランチを掴んでいると失敗するが、マージは成功する。
   終了コードでなく `gh pr view <PR番号> --json state,mergedAt` で確認する

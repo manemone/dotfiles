@@ -94,7 +94,11 @@ ADR [DOC-2610130212](DOC-2610130212_commander-merges-grandchildren.md) の「傘
 
 ### 2.4 マージの方法と、マージが失敗したとき
 
-- 方法: `gh pr merge <PR番号> --squash --delete-branch`（孫→傘のマージと同じ）。**リポ固有の別の方法を宣言するキーは
+- 方法: `gh pr merge <PR番号> --squash --delete-branch --match-head-commit <確認済みの完全なSHA>`
+  （孫→傘のマージに `--match-head-commit` を足した形）。`<確認済みの完全なSHA>` は、承認の対象 HEAD と CI の green を
+  確認した完全な 40 桁の SHA。確認から実行までの間に別の人や自動処理が push しても、`gh` は HEAD が一致しないと
+  マージを拒否するので、承認も CI も受けていない HEAD が入らない。拒否されたら、マージせず新しい HEAD のレビューから
+  やり直す（`--merge` などへ切り替えない）。**リポ固有の別の方法を宣言するキーは
   足さない。** squash が許されないリポなどで `gh` が失敗したら、別の方法（`--merge` / `--rebase`）に切り替えず、
   人間に報告して止まる
 - `--admin`・`--auto`・branch protection を回避する手段は使わない。必須レビューや保護の設定でマージが拒否されたら、
@@ -127,9 +131,9 @@ ADR [DOC-2610130212](DOC-2610130212_commander-merges-grandchildren.md) の「傘
   読まれる。`gh repo view --json nameWithOwner` は cwd のリポを返し、URL 指定の別リポの PR を cwd のリポの宣言で
   allow しうるうえ、§2.6 の時間配分の外に `gh` の呼び出しが増えるので使わない。フック内の `gh` 呼び出しは
   base 解決と宣言の読み取りの2回だけである
-- 宣言の値の解釈は、`^default_branch_merge:[ \t]*["']?auto["']?[ \t]*(#.*)?$` に一致する行が先頭の階層にあるか、で行う
+- 宣言の値の解釈は、`^default_branch_merge:[ \t]+(?:auto|"auto"|'auto')(?:[ \t]+#.*)?[ \t]*$` に一致する行が先頭の階層にあるか、で行う
   （フックは POSIX sh + 標準の python3 で、YAML パーサを前提にしない）。判定を満たさない形（インデント付き・複数行の
-  形・別の値）は宣言なしになる
+  形・別の値・コロンの後ろに空白が無い・閉じていない引用符・`auto#…` のように `#` の前に空白が無いもの）は宣言なしになる
 
 ### 2.6 `timeout` の配分
 

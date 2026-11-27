@@ -65,7 +65,11 @@ GH_TIMEOUT_DECLARATION = 8
 
 # 宣言の値の解釈。先頭の階層（インデント無し）の1行だけを見る（YAML パーサは
 # 前提にしない）。形が違うものは宣言なし（ADR DOC-2611261545 §2.1 / §2.5）。
-DECLARATION_RE = re.compile(r"""^default_branch_merge:[ \t]*["']?auto["']?[ \t]*(#.*)?$""")
+# YAML のとおり、コロンの後ろは空白が必須、引用符は対で閉じる、コメントの `#` の
+# 前も空白が必須（`auto#x` は値が `auto#x`、`key:auto` はマッピングではない）。
+DECLARATION_RE = re.compile(
+    r"""^default_branch_merge:[ \t]+(?:auto|"auto"|'auto')(?:[ \t]+#.*)?[ \t]*$"""
+)
 PR_URL_RE = re.compile(r"^https?://([^/]+)/([^/]+)/([^/]+)/pull/[0-9]+")
 
 # `gh pr merge` のうち、値をスペース区切りで取るオプション。次のトークンを
